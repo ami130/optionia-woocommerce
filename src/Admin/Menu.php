@@ -37,6 +37,8 @@ final class Menu {
 	private SettingsPage $settings_page;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param SystemStatus $status        Diagnostics report.
 	 * @param SettingsPage $settings_page Settings screen.
 	 */

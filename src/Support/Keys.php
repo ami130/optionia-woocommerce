@@ -30,9 +30,7 @@ final class Keys {
 	 */
 	public const TEXT_DOMAIN = 'optionia';
 
-	/* ---------------------------------------------------------------------
-	 * wp_options
-	 * ------------------------------------------------------------------ */
+	// wp_options.
 
 	/** Schema version of the plugin's own custom tables. */
 	public const OPTION_DB_VERSION = 'optionia_db_version';
@@ -49,7 +47,7 @@ final class Keys {
 	/** Metadata about the cached config: version, fetched_at, schema_version. */
 	public const OPTION_CONFIG_META = 'optionia_config_meta';
 
-	/** product_id => option set ids index, built at config write time. */
+	/** Index of product_id to option set ids, built at config write time. */
 	public const OPTION_PRODUCT_INDEX = 'optionia_product_index';
 
 	/** Store credential returned by the connection handshake. Autoload OFF. */
@@ -61,21 +59,17 @@ final class Keys {
 	/** Circuit breaker state for the API client. */
 	public const OPTION_CIRCUIT_STATE = 'optionia_circuit_state';
 
-	/* ---------------------------------------------------------------------
-	 * Settings keys (inside OPTION_SETTINGS)
-	 * ------------------------------------------------------------------ */
+	// Settings keys (inside OPTION_SETTINGS).
 
-	public const SETTING_DEBUG_LOGGING = 'debug_logging';
+	public const SETTING_DEBUG_LOGGING       = 'debug_logging';
 	public const SETTING_DELETE_ON_UNINSTALL = 'delete_on_uninstall';
-	public const SETTING_API_BASE_URL = 'api_base_url';
+	public const SETTING_API_BASE_URL        = 'api_base_url';
 
-	/* ---------------------------------------------------------------------
-	 * Order / cart item meta
-	 *
-	 * Visible keys are human-readable because WooCommerce renders them into
-	 * emails, packing slips and PDF invoices (see M12.6b). Hidden keys carry
-	 * machine data and are underscore-prefixed.
-	 * ------------------------------------------------------------------ */
+	// Order / cart item meta.
+	//
+	// Visible keys are human-readable because WooCommerce renders them into
+	// emails, packing slips and PDF invoices (see M12.6b). Hidden keys carry
+	// machine data and are underscore-prefixed.
 
 	/** Hidden: the full selection payload for a line item. */
 	public const META_SELECTIONS = '_optionia_selections';
@@ -92,9 +86,7 @@ final class Keys {
 	/** Cart item data key under which all Optionia state is nested. */
 	public const CART_ITEM_KEY = 'optionia';
 
-	/* ---------------------------------------------------------------------
-	 * Cron
-	 * ------------------------------------------------------------------ */
+	// Cron.
 
 	/** Recurring configuration sync. */
 	public const CRON_SYNC_CONFIG = 'optionia_cron_sync_config';
@@ -102,43 +94,33 @@ final class Keys {
 	/** Custom schedule name for the sync interval. */
 	public const CRON_SCHEDULE_QUARTER_HOUR = 'optionia_quarter_hour';
 
-	/* ---------------------------------------------------------------------
-	 * Nonce actions
-	 * ------------------------------------------------------------------ */
+	// Nonce actions.
 
-	public const NONCE_SETTINGS = 'optionia_settings';
-	public const NONCE_CONNECT = 'optionia_connect';
+	public const NONCE_SETTINGS   = 'optionia_settings';
+	public const NONCE_CONNECT    = 'optionia_connect';
 	public const NONCE_DISCONNECT = 'optionia_disconnect';
-	public const NONCE_SYNC_NOW = 'optionia_sync_now';
+	public const NONCE_SYNC_NOW   = 'optionia_sync_now';
 
-	/* ---------------------------------------------------------------------
-	 * Capabilities
-	 *
-	 * `manage_woocommerce` is the correct gate — it is held by shop managers
-	 * and administrators. `manage_options` would exclude shop managers.
-	 * ------------------------------------------------------------------ */
+	// Capabilities.
+	//
+	// `manage_woocommerce` is the correct gate — it is held by shop managers
+	// and administrators. `manage_options` would exclude shop managers.
 
 	public const CAP_MANAGE = 'manage_woocommerce';
 
-	/* ---------------------------------------------------------------------
-	 * Admin
-	 * ------------------------------------------------------------------ */
+	// Admin.
 
-	public const MENU_SLUG = 'optionia';
+	public const MENU_SLUG          = 'optionia';
 	public const MENU_SLUG_SETTINGS = 'optionia-settings';
 
-	/* ---------------------------------------------------------------------
-	 * Asset handles
-	 * ------------------------------------------------------------------ */
+	// Asset handles.
 
-	public const ASSET_FRONTEND_JS = 'optionia-frontend';
+	public const ASSET_FRONTEND_JS  = 'optionia-frontend';
 	public const ASSET_FRONTEND_CSS = 'optionia-frontend';
-	public const ASSET_ADMIN_JS = 'optionia-admin';
-	public const ASSET_ADMIN_CSS = 'optionia-admin';
+	public const ASSET_ADMIN_JS     = 'optionia-admin';
+	public const ASSET_ADMIN_CSS    = 'optionia-admin';
 
-	/* ---------------------------------------------------------------------
-	 * Custom tables (unprefixed — see Activation\Activator::table_name()).
-	 * ------------------------------------------------------------------ */
+	// Custom tables (unprefixed — see Activation\Activator::table_name())..
 
 	public const TABLE_SYNC_LOG = 'optionia_sync_log';
 

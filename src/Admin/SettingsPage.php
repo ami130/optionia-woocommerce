@@ -39,6 +39,8 @@ final class SettingsPage {
 	private string $notice = '';
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Settings $settings Settings.
 	 */
 	public function __construct( Settings $settings ) {

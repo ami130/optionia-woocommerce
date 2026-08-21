@@ -61,11 +61,33 @@
 		<exclude-pattern>/src/*</exclude-pattern>
 	</rule>
 
-	<!-- Tests may use looser documentation rules. -->
+	<!--
+		Test-suite exemptions.
+
+		PHPUnit discovers tests by the `*Test.php` suffix and requires the class
+		name to match the file, so WordPress's file-naming convention cannot
+		apply here. Documentation rules are relaxed because a test method's name
+		is its description.
+	-->
 	<rule ref="Squiz.Commenting.FunctionComment">
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 	<rule ref="Squiz.Commenting.ClassComment">
 		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.Files.FileName.NotHyphenatedLowercase">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.Files.FileName.InvalidClassFileName">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
+	<!--
+		The test bootstrap defines ABSPATH and stubs a few WooCommerce functions
+		so the pure layer can be tested without WordPress. Those names must match
+		WordPress's exactly, so they cannot carry our prefix.
+	-->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
 	</rule>
 </ruleset>

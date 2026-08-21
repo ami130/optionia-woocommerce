@@ -48,6 +48,8 @@ final class SystemStatus {
 	private Settings $settings;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Environment $environment Environment probe.
 	 * @param Repository  $config      Configuration cache.
 	 * @param Settings    $settings    Settings.
@@ -99,14 +101,14 @@ final class SystemStatus {
 		$summary = $this->environment->summary();
 
 		return array(
-			__( 'Plugin version', 'optionia' )  => $summary['plugin_version'],
-			__( 'PHP', 'optionia' )             => $summary['php'],
-			__( 'WordPress', 'optionia' )       => $summary['wordpress'],
-			__( 'WooCommerce', 'optionia' )     => $summary['woocommerce'],
-			__( 'HPOS', 'optionia' )            => $summary['hpos'],
-			__( 'Cart block', 'optionia' )      => $summary['cart_block'],
-			__( 'Checkout block', 'optionia' )  => $summary['checkout_block'],
-			__( 'Multisite', 'optionia' )       => is_multisite() ? 'yes' : 'no',
+			__( 'Plugin version', 'optionia' ) => $summary['plugin_version'],
+			__( 'PHP', 'optionia' )            => $summary['php'],
+			__( 'WordPress', 'optionia' )      => $summary['wordpress'],
+			__( 'WooCommerce', 'optionia' )    => $summary['woocommerce'],
+			__( 'HPOS', 'optionia' )           => $summary['hpos'],
+			__( 'Cart block', 'optionia' )     => $summary['cart_block'],
+			__( 'Checkout block', 'optionia' ) => $summary['checkout_block'],
+			__( 'Multisite', 'optionia' )      => is_multisite() ? 'yes' : 'no',
 		);
 	}
 
@@ -123,8 +125,8 @@ final class SystemStatus {
 		$state = get_option( Keys::OPTION_CONNECTION_STATE, 'disconnected' );
 
 		return array(
-			__( 'State', 'optionia' )       => is_string( $state ) ? $state : 'unknown',
-			__( 'Credential', 'optionia' )  => ( is_string( $token ) && '' !== $token )
+			__( 'State', 'optionia' )        => is_string( $state ) ? $state : 'unknown',
+			__( 'Credential', 'optionia' )   => ( is_string( $token ) && '' !== $token )
 				? __( 'present', 'optionia' )
 				: __( 'absent', 'optionia' ),
 			__( 'API base URL', 'optionia' ) => $this->settings->api_base_url(),

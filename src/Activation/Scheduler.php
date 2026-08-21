@@ -34,7 +34,7 @@ final class Scheduler {
 	/**
 	 * Schedule recurring events, idempotently.
 	 *
-	 * wp_schedule_event() validates the recurrence name against the registered
+	 * Note: wp_schedule_event() validates the recurrence name against the registered
 	 * schedules and silently refuses an unknown one. During activation our
 	 * `cron_schedules` filter has not run, so the filter is attached here for
 	 * the duration of the call.
@@ -44,7 +44,7 @@ final class Scheduler {
 			return;
 		}
 
-		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) );
+		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- 15-minute interval is intentional and documented.
 
 		$scheduled = wp_schedule_event(
 			time() + MINUTE_IN_SECONDS,

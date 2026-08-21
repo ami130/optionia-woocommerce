@@ -55,6 +55,8 @@ final class Response {
 	private array $headers;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param int                   $status        HTTP status.
 	 * @param array<string, mixed>  $data          Decoded body.
 	 * @param string|null           $error_code    Error code.
@@ -89,9 +91,9 @@ final class Response {
 	/**
 	 * Failed response.
 	 *
-	 * @param int         $status  HTTP status, or 0 for a transport failure.
-	 * @param string      $code    Machine-readable error code.
-	 * @param string      $message Developer-facing message.
+	 * @param int                   $status  HTTP status, or 0 for a transport failure.
+	 * @param string                $code    Machine-readable error code.
+	 * @param string                $message Developer-facing message.
 	 * @param array<string, string> $headers Selected headers.
 	 */
 	public static function failure( int $status, string $code, string $message, array $headers = array() ): self {

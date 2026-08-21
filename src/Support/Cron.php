@@ -29,6 +29,8 @@ final class Cron {
 	private Logger $logger;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Logger $logger Logger.
 	 */
 	public function __construct( Logger $logger ) {

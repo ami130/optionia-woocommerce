@@ -60,7 +60,8 @@ final class Assert {
 		}
 
 		if ( self::is_debug() ) {
-			throw new InvariantViolation( $message );
+			// Exception messages are developer-facing and never rendered to a page.
+			throw new InvariantViolation( $message ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
 		}
 
 		if ( self::$logger instanceof Logger ) {

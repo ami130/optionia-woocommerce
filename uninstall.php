@@ -8,7 +8,8 @@
  * test a theme conflict would be unrecoverable for them.
  *
  * Cannot rely on the autoloader or any plugin class being available here — this
- * file is loaded in isolation by WordPress, so it is deliberately self-contained.
+ * file is loaded in isolation by WordPress, so it is deliberately
+ * self-contained.
  *
  * @package Optionia
  */
@@ -23,7 +24,7 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
  * @param string $prefix Database prefix for the site being cleaned.
  */
 function optionia_uninstall_site( string $prefix ): void {
-	global $wpdb;
+	global $wpdb; // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- WordPress core global.
 
 	$options = array(
 		'optionia_db_version',
@@ -43,10 +44,13 @@ function optionia_uninstall_site( string $prefix ): void {
 
 	wp_clear_scheduled_hook( 'optionia_cron_sync_config' );
 
-	// Custom tables. Table names are built from a hardcoded suffix and the
-	// trusted $wpdb prefix, so there is no user input in this statement.
 	$table = $prefix . 'optionia_sync_log';
-	$wpdb->query( "DROP TABLE IF EXISTS `{$table}`" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+	// Table identifiers cannot be bound as placeholders. The name is built from
+	// a hardcoded suffix and the trusted $wpdb->prefix, so no user input reaches
+	// this statement.
+	// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.DirectDatabaseQuery.NoCaching
+	$wpdb->query( "DROP TABLE IF EXISTS `{$table}`" );
 }
 
 /**
@@ -60,12 +64,26 @@ function optionia_should_delete(): bool {
 		&& (bool) $settings['delete_on_uninstall'];
 }
 
-global $wpdb;
+/**
+ * Entry point.
+ *
+ * Wrapped in a function so loop variables stay out of the global scope — code
+ * executed at file level would otherwise define a global for each one.
+ */
+function optionia_run_uninstall(): void {
+	global $wpdb; // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- WordPress core global.
 
-if ( is_multisite() ) {
+	if ( ! is_multisite() ) {
+		if ( optionia_should_delete() ) {
+			optionia_uninstall_site( $wpdb->prefix );
+		}
+
+		return;
+	}
+
 	// Each site holds its own settings, so each site's opt-in is respected
-	// independently. A network admin deleting the plugin must not wipe a
-	// subsite that never agreed to it.
+	// independently. A network admin deleting the plugin must not wipe a subsite
+	// that never agreed to it.
 	$site_ids = get_sites(
 		array(
 			'fields'   => 'ids',
@@ -85,6 +103,6 @@ if ( is_multisite() ) {
 
 		restore_current_blog();
 	}
-} elseif ( optionia_should_delete() ) {
-	optionia_uninstall_site( $wpdb->prefix );
 }
+
+optionia_run_uninstall();

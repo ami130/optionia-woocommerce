@@ -50,6 +50,8 @@ final class Repository {
 	private ?array $cache = null;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Logger $logger Logger.
 	 */
 	public function __construct( Logger $logger ) {

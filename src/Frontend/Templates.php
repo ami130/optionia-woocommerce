@@ -51,6 +51,8 @@ final class Templates {
 	private array $resolved = array();
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Logger $logger Logger.
 	 */
 	public function __construct( Logger $logger ) {
@@ -64,7 +66,7 @@ final class Templates {
 	 * a missing partial should cost one option group, never a fatal error on a
 	 * merchant's storefront (Principle 7).
 	 *
-	 * @param string              $template Template path relative to templates/, e.g. 'options/text.php'.
+	 * @param string               $template Template path relative to templates/, e.g. 'options/text.php'.
 	 * @param array<string, mixed> $data     View-model exposed to the template.
 	 */
 	public function render( string $template, array $data = array() ): string {
@@ -95,7 +97,7 @@ final class Templates {
 	/**
 	 * Echo a template.
 	 *
-	 * @param string              $template Template path relative to templates/.
+	 * @param string               $template Template path relative to templates/.
 	 * @param array<string, mixed> $data     View-model.
 	 */
 	public function output( string $template, array $data = array() ): void {

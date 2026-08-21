@@ -72,6 +72,8 @@ final class Client {
 	private ResponseValidator $validator;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Settings          $settings  Settings.
 	 * @param Logger            $logger    Logger.
 	 * @param CircuitBreaker    $breaker   Circuit breaker.
@@ -140,12 +142,12 @@ final class Client {
 		$url = $this->build_url( $path, $query );
 
 		$args = array(
-			'method'     => $method,
-			'timeout'    => self::TIMEOUT,
+			'method'      => $method,
+			'timeout'     => self::TIMEOUT,
 			'redirection' => 0,
-			'sslverify'  => true,
-			'headers'    => $this->build_headers( $headers ),
-			'user-agent' => $this->user_agent(),
+			'sslverify'   => true,
+			'headers'     => $this->build_headers( $headers ),
+			'user-agent'  => $this->user_agent(),
 		);
 
 		if ( null !== $body && array() !== $body ) {
@@ -248,8 +250,7 @@ final class Client {
 			return Response::failure( $status, 'invalid_response', 'Response body was not valid JSON.', $headers );
 		}
 
-		/** @var array<string, mixed> $data */
-		$data = $validated->value( array() );
+		$data = (array) $validated->value( array() );
 
 		return Response::success( $status, $data, $headers );
 	}
@@ -319,8 +320,8 @@ final class Client {
 	 */
 	private function build_headers( array $extra ): array {
 		$headers = array(
-			'Accept'              => 'application/json',
-			'Content-Type'        => 'application/json',
+			'Accept'             => 'application/json',
+			'Content-Type'       => 'application/json',
 			'X-Optionia-Version' => OPTIONIA_VERSION,
 			'X-Optionia-Site'    => home_url( '/' ),
 			'X-Optionia-WP'      => get_bloginfo( 'version' ),

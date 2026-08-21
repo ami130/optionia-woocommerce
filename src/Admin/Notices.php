@@ -38,8 +38,10 @@ final class Notices {
 	private Environment $environment;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param array<int, array{code: string, context: array<string, string>}> $problems    Unmet requirements.
-	 * @param Environment                                                    $environment Environment probe.
+	 * @param Environment                                                     $environment Environment probe.
 	 */
 	public function __construct( array $problems, Environment $environment ) {
 		$this->problems    = $problems;

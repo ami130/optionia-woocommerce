@@ -43,6 +43,8 @@ final class Money {
 	private int $decimals;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param int $minor    Amount in minor units.
 	 * @param int $decimals Decimal places for the currency (0, 2 or 3 in practice).
 	 */
@@ -131,8 +133,8 @@ final class Money {
 	 * floating-point error downstream.
 	 */
 	public function to_decimal_string(): string {
-		$sign  = $this->minor < 0 ? '-' : '';
-		$abs   = (string) abs( $this->minor );
+		$sign = $this->minor < 0 ? '-' : '';
+		$abs  = (string) abs( $this->minor );
 
 		if ( 0 === $this->decimals ) {
 			return $sign . $abs;
@@ -243,6 +245,7 @@ final class Money {
 	 */
 	private function assert_same_scale( Money $other ): void {
 		if ( $this->decimals !== $other->decimals ) {
+			// phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
 			throw new \InvalidArgumentException(
 				sprintf(
 					'Cannot combine Money with %d decimals and Money with %d decimals.',
@@ -250,6 +253,7 @@ final class Money {
 					$other->decimals
 				)
 			);
+			// phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
 		}
 	}
 }

@@ -31,6 +31,8 @@ final class Migrator {
 	private Logger $logger;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Logger $logger Logger.
 	 */
 	public function __construct( Logger $logger ) {
@@ -74,8 +76,8 @@ final class Migrator {
 	/**
 	 * Bring custom tables up to the current definition.
 	 *
-	 * dbDelta is safe to re-run: it diffs the live schema against the target and
-	 * issues only the necessary ALTERs.
+	 * Note: dbDelta is safe to re-run — it diffs the live schema against the
+	 * target and issues only the necessary ALTERs.
 	 */
 	private function upgrade_schema(): void {
 		$stored = (string) get_option( Keys::OPTION_DB_VERSION, '0' );

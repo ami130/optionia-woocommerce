@@ -62,13 +62,15 @@ final class Container {
 		}
 
 		if ( ! isset( $this->factories[ $id ] ) ) {
-			throw new InvariantViolation( sprintf( 'Service "%s" is not registered.', $id ) );
+			// Exception messages are developer-facing and never rendered to a page.
+			throw new InvariantViolation( sprintf( 'Service "%s" is not registered.', $id ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
 		}
 
 		$service = ( $this->factories[ $id ] )( $this );
 
 		if ( ! is_object( $service ) ) {
-			throw new InvariantViolation( sprintf( 'Factory for "%s" did not return an object.', $id ) );
+			// Exception messages are developer-facing and never rendered to a page.
+			throw new InvariantViolation( sprintf( 'Factory for "%s" did not return an object.', $id ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
 		}
 
 		$this->instances[ $id ] = $service;

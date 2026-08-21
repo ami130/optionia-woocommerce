@@ -263,7 +263,7 @@ final class Plugin {
 		// are loaded. Two cases this covers that activation cannot:
 		// - a plugin *update*, which replaces files without firing activation;
 		// - a schedule cleared while the plugin was inactive but WooCommerce was
-		//   being toggled, leaving Optionia active with no scheduled sync.
+		// being toggled, leaving Optionia active with no scheduled sync.
 		add_action( 'init', array( $this, 'ensure_deferred_setup' ) );
 
 		if ( is_admin() ) {
@@ -336,8 +336,8 @@ final class Plugin {
 	 * Logger shortcut.
 	 */
 	private function logger(): Logger {
-		/** @var Logger $logger */
 		$logger = $this->container->get( Logger::class );
+		assert( $logger instanceof Logger );
 
 		return $logger;
 	}

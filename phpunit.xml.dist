@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<phpunit
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+	bootstrap="tests/bootstrap.php"
+	colors="true"
+	beStrictAboutOutputDuringTests="true"
+	failOnWarning="true"
+	failOnRisky="true"
+	>
+	<testsuites>
+		<!--
+			Unit: pure PHP, no WordPress. Runs in milliseconds. Everything in
+			src/Engine/ and src/Support/ that does not touch WordPress belongs
+			here — that is the point of Principle 1's layering.
+		-->
+		<testsuite name="unit">
+			<directory suffix="Test.php">tests/unit</directory>
+		</testsuite>
+
+		<!--
+			Integration: requires the WordPress test suite. Hooks, cart, orders.
+		-->
+		<testsuite name="integration">
+			<directory suffix="Test.php">tests/integration</directory>
+		</testsuite>
+	</testsuites>
+
+	<coverage>
+		<include>
+			<directory suffix=".php">src</directory>
+		</include>
+	</coverage>
+</phpunit>

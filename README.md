@@ -38,12 +38,24 @@ suite with them, so the two implementations cannot drift.
 
 ## Development
 
+Run every quality gate with one command — it finds a PHP binary automatically,
+falling back to the one bundled with WordPress Studio:
+
 ```bash
-composer install
-composer lint                # PHPCS, WordPress-Extra + Docs
+bash bin/check.sh
+```
+
+That runs, in order: `php -l` on every file, the architecture guards, PHPCS
+(WordPress-Extra + Docs), and the unit suite.
+
+Individual gates:
+
+```bash
+composer install              # once, to get PHPCS and PHPUnit
+composer lint                 # PHPCS
+composer lint:fix             # PHPCBF, auto-fixes formatting
 composer check:architecture   # layering guards
-composer test                 # PHPUnit
-composer check                # all of the above
+composer test:unit            # PHPUnit, no WordPress needed
 ```
 
 `bin/check-architecture.sh` enforces the invariants above in CI. A convention

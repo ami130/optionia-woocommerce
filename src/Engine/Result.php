@@ -51,8 +51,10 @@ final class Result {
 	private array $errors;
 
 	/**
-	 * @param bool                            $ok     Success flag.
-	 * @param mixed                           $value  Result value.
+	 * Constructor.
+	 *
+	 * @param bool                             $ok     Success flag.
+	 * @param mixed                            $value  Result value.
 	 * @param array<int, array<string, mixed>> $errors Structured errors.
 	 */
 	private function __construct( bool $ok, $value, array $errors ) {

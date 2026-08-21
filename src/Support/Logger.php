@@ -55,6 +55,8 @@ final class Logger {
 	private Settings $settings;
 
 	/**
+	 * Constructor.
+	 *
 	 * @param Settings $settings Merchant settings.
 	 */
 	public function __construct( Settings $settings ) {
@@ -129,7 +131,7 @@ final class Logger {
 		}
 
 		if ( array() !== $context ) {
-			$encoded = wp_json_encode( self::redact( $context ) );
+			$encoded  = wp_json_encode( self::redact( $context ) );
 			$message .= ' ' . ( false === $encoded ? '[context could not be encoded]' : $encoded );
 		}
 

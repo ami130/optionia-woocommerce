@@ -74,12 +74,12 @@ final class Request {
 	 * Callers must have verified the request first; this only sanitises.
 	 *
 	 * @param string $key     Field name.
-	 * @param string $default Returned when absent.
+	 * @param string $fallback Returned when absent.
 	 */
-	public static function post_text( string $key, string $default = '' ): string {
+	public static function post_text( string $key, string $fallback = '' ): string {
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified by require_post().
 		if ( ! isset( $_POST[ $key ] ) ) {
-			return $default;
+			return $fallback;
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified by require_post().
