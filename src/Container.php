@@ -40,6 +40,17 @@ final class Container {
 	private array $instances = array();
 
 	/**
+	 * Service ids currently being constructed, in resolution order.
+	 *
+	 * Used to detect circular dependencies. Without this a cycle recurses until
+	 * the stack is exhausted, producing a fatal error with no indication of
+	 * which services are involved.
+	 *
+	 * @var string[]
+	 */
+	private array $resolving = array();
+
+	/**
 	 * Register a factory.
 	 *
 	 * @param string   $id      Service id, conventionally a class name.
@@ -54,7 +65,7 @@ final class Container {
 	 *
 	 * @param string $id Service id.
 	 * @return object
-	 * @throws InvariantViolation When the id was never registered.
+	 * @throws InvariantViolation When the id is unregistered or the graph is circular.
 	 */
 	public function get( string $id ): object {
 		if ( isset( $this->instances[ $id ] ) ) {
@@ -62,15 +73,30 @@ final class Container {
 		}
 
 		if ( ! isset( $this->factories[ $id ] ) ) {
-			// Exception messages are developer-facing and never rendered to a page.
-			throw new InvariantViolation( sprintf( 'Service "%s" is not registered.', $id ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			throw new InvariantViolation( sprintf( 'Service "%s" is not registered.', $id ) );
 		}
 
-		$service = ( $this->factories[ $id ] )( $this );
+		if ( in_array( $id, $this->resolving, true ) ) {
+			$cycle = implode( ' -> ', array_merge( $this->resolving, array( $id ) ) );
+
+			$this->resolving = array();
+
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			throw new InvariantViolation( sprintf( 'Circular service dependency: %s.', $cycle ) );
+		}
+
+		$this->resolving[] = $id;
+
+		try {
+			$service = ( $this->factories[ $id ] )( $this );
+		} finally {
+			array_pop( $this->resolving );
+		}
 
 		if ( ! is_object( $service ) ) {
-			// Exception messages are developer-facing and never rendered to a page.
-			throw new InvariantViolation( sprintf( 'Factory for "%s" did not return an object.', $id ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			throw new InvariantViolation( sprintf( 'Factory for "%s" did not return an object.', $id ) );
 		}
 
 		$this->instances[ $id ] = $service;

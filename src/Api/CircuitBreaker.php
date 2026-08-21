@@ -68,7 +68,22 @@ final class CircuitBreaker {
 			return true;
 		}
 
-		return ( time() - $state['opened_at'] ) >= self::COOLDOWN;
+		if ( ( time() - $state['opened_at'] ) < self::COOLDOWN ) {
+			return false;
+		}
+
+		// Cooldown elapsed: let exactly one probe through by re-stamping the
+		// clock now. If the probe fails, record_failure() leaves opened_at
+		// alone and the next cooldown runs from here. If it succeeds,
+		// record_success() closes the circuit.
+		$this->save(
+			array(
+				'failures'  => $state['failures'],
+				'opened_at' => time(),
+			)
+		);
+
+		return true;
 	}
 
 	/**
@@ -91,15 +106,28 @@ final class CircuitBreaker {
 
 	/**
 	 * Record a failure, opening the circuit at the threshold.
+	 *
+	 * Read-modify-write on an option is not atomic, so two concurrent failures
+	 * can both read the same count and both write count+1 — losing one. The
+	 * consequence is under-counting, which delays the circuit opening rather
+	 * than opening it early, so it is safe in the conservative direction.
+	 *
+	 * `wp_cache_delete()` before reading avoids compounding the problem with a
+	 * stale object-cache value, which on a persistent cache could otherwise
+	 * pin the count indefinitely.
 	 */
 	public function record_failure(): void {
+		wp_cache_delete( Keys::OPTION_CIRCUIT_STATE, 'options' );
+
 		$state    = $this->state();
 		$failures = $state['failures'] + 1;
 
 		$this->save(
 			array(
 				'failures'  => $failures,
-				'opened_at' => self::THRESHOLD === $failures ? time() : $state['opened_at'],
+				'opened_at' => $failures >= self::THRESHOLD && 0 === $state['opened_at']
+					? time()
+					: $state['opened_at'],
 			)
 		);
 

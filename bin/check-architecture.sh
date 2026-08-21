@@ -49,13 +49,16 @@ else
 fi
 
 # --- Principle 5: no float money -------------------------------------------
+# Money must never be a float. Time, byte counts and ratios legitimately are,
+# so the check targets money-shaped identifiers rather than every float cast.
 FLOAT_HITS=$(grep -rInE '\(float\)|\(double\)|floatval' src --include='*.php' \
-             | grep -v 'src/Support/Money.php' || true)
+             | grep -v 'src/Support/Money.php' \
+             | grep -iE 'price|amount|total|cost|money|delta|subtotal|fee' || true)
 if [ -n "$FLOAT_HITS" ]; then
   fail "money must use Support\\Money, not floats (Principle 5):"
   echo "$FLOAT_HITS" | sed 's/^/        /'
 else
-  pass "no float casts outside Support/Money.php"
+  pass "no float used for money outside Support/Money.php"
 fi
 
 # --- Principle 2: logging has one owner ------------------------------------

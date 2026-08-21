@@ -78,36 +78,117 @@ final class Money {
 	/**
 	 * Build from a decimal string or number, as WooCommerce stores prices.
 	 *
-	 * Uses string arithmetic rather than `(float) $value * 100` so that a price
-	 * of "19.99" cannot become 1998 through binary rounding.
+	 * Strict by design. A malformed price must not become a plausible-looking
+	 * wrong number, because the result is what a customer is charged. Verified
+	 * failure modes of a permissive parser:
+	 *
+	 *   '19,99' -> 1900     European decimal comma read as a thousands separator
+	 *   '1e3'   -> 100000   scientific notation silently accepted
+	 *   'abc'   -> 0        garbage becomes free
+	 *
+	 * Each of those is now a TypeError. Callers that legitimately handle
+	 * untrusted input should use {@see self::try_from_decimal()} and decide what
+	 * an unparseable value means in their context.
+	 *
+	 * Uses string arithmetic rather than `(float) $value * 100` so a price of
+	 * "19.99" cannot become 1998 through binary rounding.
+	 *
+	 * @param string|int|float $amount   Decimal amount, e.g. "19.99".
+	 * @param int|null         $decimals Currency decimals; defaults to store setting.
+	 * @throws \InvalidArgumentException When the value is not a well-formed decimal.
+	 */
+	public static function from_decimal( $amount, ?int $decimals = null ): self {
+		$money = self::try_from_decimal( $amount, $decimals );
+
+		if ( null === $money ) {
+			// phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+			throw new \InvalidArgumentException(
+				sprintf(
+					'Not a well-formed decimal amount: %s.',
+					is_scalar( $amount ) ? '"' . (string) $amount . '"' : gettype( $amount )
+				)
+			);
+			// phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
+		}
+
+		return $money;
+	}
+
+	/**
+	 * Build from a decimal value, or return null when it cannot be parsed.
+	 *
+	 * The non-throwing counterpart to {@see self::from_decimal()}, for parsing
+	 * values that may legitimately be absent or malformed — a config document
+	 * from the network, or a merchant-entered field.
 	 *
 	 * @param string|int|float $amount   Decimal amount, e.g. "19.99".
 	 * @param int|null         $decimals Currency decimals; defaults to store setting.
 	 */
-	public static function from_decimal( $amount, ?int $decimals = null ): self {
+	public static function try_from_decimal( $amount, ?int $decimals = null ): ?self {
 		$decimals = $decimals ?? self::store_decimals();
 
-		// Normalise to a plain decimal string. wc_format_decimal() strips
-		// thousand separators and localised decimal marks.
-		$normalised = function_exists( 'wc_format_decimal' )
-			? (string) wc_format_decimal( $amount, $decimals )
-			: number_format( (float) $amount, $decimals, '.', '' );
-
-		if ( '' === $normalised ) {
-			$normalised = '0';
+		if ( is_int( $amount ) ) {
+			return new self( $amount * ( 10 ** $decimals ), $decimals );
 		}
 
-		$negative   = 0 === strpos( $normalised, '-' );
-		$normalised = ltrim( $normalised, '+-' );
+		if ( ! is_string( $amount ) && ! is_float( $amount ) ) {
+			return null;
+		}
 
-		$parts    = explode( '.', $normalised, 2 );
+		if ( is_float( $amount ) ) {
+			if ( ! is_finite( $amount ) ) {
+				return null;
+			}
+
+			// Render at full precision first so the string path below, not a
+			// float multiplication, performs the scaling.
+			$amount = number_format( $amount, $decimals + 1, '.', '' );
+		}
+
+		$candidate = trim( $amount );
+
+		// Exactly: optional sign, digits, optional single dot and digits.
+		// Deliberately rejects thousands separators, exponents, hex, whitespace
+		// inside the number, and the empty string.
+		if ( 1 !== preg_match( '/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/', $candidate ) ) {
+			return null;
+		}
+
+		$negative  = 0 === strpos( $candidate, '-' );
+		$candidate = ltrim( $candidate, '+-' );
+
+		$parts    = explode( '.', $candidate, 2 );
 		$whole    = '' === $parts[0] ? '0' : $parts[0];
 		$fraction = $parts[1] ?? '';
 
-		// Pad or truncate the fraction to exactly $decimals digits.
-		$fraction = substr( str_pad( $fraction, $decimals, '0' ), 0, $decimals );
+		// Round half up at the currency's precision rather than truncating, so
+		// 0.005 becomes 0.01 and not 0.00.
+		$round_up = false;
 
-		$minor = (int) ( $whole . $fraction );
+		if ( strlen( $fraction ) > $decimals ) {
+			$next     = (int) substr( $fraction, $decimals, 1 );
+			$round_up = $next >= 5;
+			$fraction = substr( $fraction, 0, $decimals );
+		}
+
+		$fraction = str_pad( $fraction, $decimals, '0' );
+		$digits   = ltrim( $whole . $fraction, '0' );
+
+		if ( '' === $digits ) {
+			$digits = '0';
+		}
+
+		// Guard against silently wrapping past PHP_INT_MAX, which would turn a
+		// very large price into a negative one.
+		if ( ! self::fits_in_int( $digits ) ) {
+			return null;
+		}
+
+		$minor = (int) $digits;
+
+		if ( $round_up ) {
+			++$minor;
+		}
 
 		return new self( $negative ? -$minor : $minor, $decimals );
 	}
@@ -152,9 +233,11 @@ final class Money {
 	 *
 	 * @param Money $other Amount to add.
 	 * @throws \InvalidArgumentException When decimal scales differ.
+	 * @throws \RangeException When the result overflows the integer range.
 	 */
 	public function plus( Money $other ): self {
 		$this->assert_same_scale( $other );
+		self::assert_in_range( (float) $this->minor + (float) $other->minor );
 
 		return new self( $this->minor + $other->minor, $this->decimals );
 	}
@@ -164,9 +247,11 @@ final class Money {
 	 *
 	 * @param Money $other Amount to subtract.
 	 * @throws \InvalidArgumentException When decimal scales differ.
+	 * @throws \RangeException When the result overflows the integer range.
 	 */
 	public function minus( Money $other ): self {
 		$this->assert_same_scale( $other );
+		self::assert_in_range( (float) $this->minor - (float) $other->minor );
 
 		return new self( $this->minor - $other->minor, $this->decimals );
 	}
@@ -175,8 +260,11 @@ final class Money {
 	 * Multiply by an integer factor — quantity, character count, unit count.
 	 *
 	 * @param int $factor Integer multiplier.
+	 * @throws \RangeException When the result overflows the integer range.
 	 */
 	public function times( int $factor ): self {
+		self::assert_in_range( (float) $this->minor * (float) $factor );
+
 		return new self( $this->minor * $factor, $this->decimals );
 	}
 
@@ -188,8 +276,11 @@ final class Money {
 	 * in integer space: minor * basis_points / 10000.
 	 *
 	 * @param int $basis_points Percentage in basis points (1000 = 10%).
+	 * @throws \RangeException When the intermediate overflows the integer range.
 	 */
 	public function percentage( int $basis_points ): self {
+		self::assert_in_range( (float) $this->minor * (float) $basis_points );
+
 		$numerator = $this->minor * $basis_points;
 		$divisor   = 10000;
 
@@ -235,6 +326,43 @@ final class Money {
 	 */
 	private static function store_decimals(): int {
 		return function_exists( 'wc_get_price_decimals' ) ? (int) wc_get_price_decimals() : 2;
+	}
+
+	/**
+	 * Whether a digit string fits in a PHP integer.
+	 *
+	 * PHP wraps silently past PHP_INT_MAX, which would turn a very large price
+	 * into a negative one. Compared as strings to avoid the very overflow being
+	 * guarded against.
+	 *
+	 * @param string $digits Digits only, no sign.
+	 */
+	private static function fits_in_int( string $digits ): bool {
+		$max = (string) PHP_INT_MAX;
+
+		if ( strlen( $digits ) !== strlen( $max ) ) {
+			return strlen( $digits ) < strlen( $max );
+		}
+
+		return strcmp( $digits, $max ) <= 0;
+	}
+
+	/**
+	 * Guard an arithmetic result against integer overflow.
+	 *
+	 * @param float $exact Result computed in float space, for range checking only.
+	 * @throws \RangeException When the result cannot be represented exactly.
+	 */
+	private static function assert_in_range( float $exact ): void {
+		if ( abs( $exact ) <= (float) PHP_INT_MAX ) {
+			return;
+		}
+
+		// phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered to a page.
+		throw new \RangeException(
+			'Money arithmetic overflowed the platform integer range.'
+		);
+		// phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
 	}
 
 	/**

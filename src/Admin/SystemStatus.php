@@ -14,7 +14,9 @@ declare( strict_types=1 );
 
 namespace Optionia\Admin;
 
+use Optionia\Api\CircuitBreaker;
 use Optionia\Config\Repository;
+use Optionia\Support\Cron;
 use Optionia\Support\Environment;
 use Optionia\Support\Keys;
 use Optionia\Support\Settings;
@@ -48,16 +50,40 @@ final class SystemStatus {
 	private Settings $settings;
 
 	/**
+	 * Scheduling diagnostics.
+	 *
+	 * @var Cron
+	 */
+	private Cron $cron;
+
+	/**
+	 * API circuit breaker.
+	 *
+	 * @var CircuitBreaker
+	 */
+	private CircuitBreaker $breaker;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param Environment $environment Environment probe.
-	 * @param Repository  $config      Configuration cache.
-	 * @param Settings    $settings    Settings.
+	 * @param Environment    $environment Environment probe.
+	 * @param Repository     $config      Configuration cache.
+	 * @param Settings       $settings    Settings.
+	 * @param Cron           $cron        Scheduling diagnostics.
+	 * @param CircuitBreaker $breaker     API circuit breaker.
 	 */
-	public function __construct( Environment $environment, Repository $config, Settings $settings ) {
+	public function __construct(
+		Environment $environment,
+		Repository $config,
+		Settings $settings,
+		Cron $cron,
+		CircuitBreaker $breaker
+	) {
 		$this->environment = $environment;
 		$this->config      = $config;
 		$this->settings    = $settings;
+		$this->cron        = $cron;
+		$this->breaker     = $breaker;
 	}
 
 	/**
@@ -70,6 +96,7 @@ final class SystemStatus {
 			__( 'Environment', 'optionia' )   => $this->environment_section(),
 			__( 'Connection', 'optionia' )    => $this->connection_section(),
 			__( 'Configuration', 'optionia' ) => $this->configuration_section(),
+			__( 'Scheduling', 'optionia' )    => $this->scheduling_section(),
 			__( 'Settings', 'optionia' )      => $this->settings_section(),
 		);
 	}
@@ -161,6 +188,34 @@ final class SystemStatus {
 					human_time_diff( $fetched_at )
 				),
 			__( 'Cache size', 'optionia' )     => size_format( $this->config->size_bytes() ),
+		);
+	}
+
+	/**
+	 * Scheduling and API health.
+	 *
+	 * The single most useful section for the most common support question:
+	 * "why aren't my changes appearing on the storefront?". WP-Cron being
+	 * disabled, a schedule that never registered, or an open circuit each
+	 * produce exactly that symptom.
+	 *
+	 * @return array<string, string>
+	 */
+	private function scheduling_section(): array {
+		$next = $this->cron->next_sync();
+
+		return array(
+			__( 'Next sync', 'optionia' )   => null === $next
+				? __( 'not scheduled', 'optionia' )
+				: sprintf(
+					/* translators: %s: human-readable time difference */
+					__( 'in %s', 'optionia' ),
+					human_time_diff( time(), $next )
+				),
+			__( 'WP-Cron', 'optionia' )     => $this->cron->is_wp_cron_disabled()
+				? __( 'disabled (DISABLE_WP_CRON) — a real cron must be configured', 'optionia' )
+				: __( 'enabled', 'optionia' ),
+			__( 'API circuit', 'optionia' ) => $this->breaker->describe(),
 		);
 	}
 

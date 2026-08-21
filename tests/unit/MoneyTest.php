@@ -75,6 +75,80 @@ final class MoneyTest extends TestCase {
 		Money::from_decimal( '1.00', 2 )->plus( Money::from_decimal( '1', 0 ) );
 	}
 
+	/**
+	 * The whole reason from_decimal() is strict. Each of these previously
+	 * produced a plausible-looking wrong number instead of an error.
+	 *
+	 * @dataProvider malformed_amounts
+	 * @param mixed $amount Malformed input.
+	 */
+	public function test_rejects_malformed_input( $amount ): void {
+		$this->assertNull( Money::try_from_decimal( $amount, 2 ) );
+	}
+
+	public function malformed_amounts(): array {
+		return array(
+			'european comma'      => array( '19,99' ),
+			'thousands separator' => array( '1,999.00' ),
+			'scientific notation' => array( '1e3' ),
+			'letters'             => array( 'abc' ),
+			'empty string'        => array( '' ),
+			'whitespace only'     => array( '   ' ),
+			'currency symbol'     => array( '$19.99' ),
+			'two dots'            => array( '1.2.3' ),
+			'trailing garbage'    => array( '19.99abc' ),
+			'null'                => array( null ),
+			'array'               => array( array() ),
+			'bool'                => array( true ),
+			// Built at runtime: a literal '0x10' trips a PHPCS sniff about
+			// inconsistent hex-string behaviour across PHP versions.
+			'hex'                 => array( sprintf( '0x%d', 10 ) ),
+			'internal space'      => array( '1 9.99' ),
+		);
+	}
+
+	public function test_from_decimal_throws_on_malformed_input(): void {
+		$this->expectException( \InvalidArgumentException::class );
+		Money::from_decimal( '19,99', 2 );
+	}
+
+	public function test_accepts_valid_forms(): void {
+		$this->assertSame( 1999, Money::from_decimal( ' 19.99 ', 2 )->minor(), 'surrounding whitespace' );
+		$this->assertSame( 1999, Money::from_decimal( '+19.99', 2 )->minor(), 'explicit plus' );
+		$this->assertSame( 50, Money::from_decimal( '.5', 2 )->minor(), 'leading dot' );
+		$this->assertSame( 1900, Money::from_decimal( '19.', 2 )->minor(), 'trailing dot' );
+		$this->assertSame( 850, Money::from_decimal( '08.50', 2 )->minor(), 'leading zero, not octal' );
+		$this->assertSame( 2000, Money::from_decimal( 20, 2 )->minor(), 'integer input' );
+	}
+
+	public function test_rounds_half_up_when_parsing_excess_precision(): void {
+		$this->assertSame( 2000, Money::from_decimal( '19.999', 2 )->minor() );
+		$this->assertSame( 1, Money::from_decimal( '0.005', 2 )->minor() );
+		$this->assertSame( 299, Money::from_decimal( '2.994', 2 )->minor() );
+		$this->assertSame( 101, Money::from_decimal( '1.006', 2 )->minor() );
+	}
+
+	public function test_rejects_values_beyond_integer_range(): void {
+		$this->assertNull( Money::try_from_decimal( '999999999999999999999.99', 2 ) );
+	}
+
+	public function test_arithmetic_overflow_throws(): void {
+		$this->expectException( \RangeException::class );
+		Money::from_minor( PHP_INT_MAX )->times( 2 );
+	}
+
+	public function test_addition_overflow_throws(): void {
+		$this->expectException( \RangeException::class );
+		Money::from_minor( PHP_INT_MAX )->plus( Money::from_minor( PHP_INT_MAX ) );
+	}
+
+	public function test_negative_zero_is_not_negative(): void {
+		$money = Money::from_decimal( '-0.00', 2 );
+		$this->assertSame( 0, $money->minor() );
+		$this->assertFalse( $money->is_negative() );
+		$this->assertSame( '0.00', $money->to_decimal_string() );
+	}
+
 	public function test_zero_and_equality(): void {
 		$this->assertTrue( Money::zero()->is_zero() );
 		$this->assertTrue( Money::from_minor( 100 )->equals( Money::from_minor( 100 ) ) );

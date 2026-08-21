@@ -32,11 +32,9 @@ final class SettingsPage {
 	private Settings $settings;
 
 	/**
-	 * Notice to show after a save, if any.
-	 *
-	 * @var string
+	 * Query argument signalling a successful save after the redirect.
 	 */
-	private string $notice = '';
+	private const SAVED_FLAG = 'optionia-saved';
 
 	/**
 	 * Constructor.
@@ -50,8 +48,8 @@ final class SettingsPage {
 	/**
 	 * Register hooks.
 	 *
-	 * Saving happens on `admin_init`, before any output, so a redirect is still
-	 * possible and the POST does not survive a refresh.
+	 * Saving runs on `admin_init`, before any output, so the redirect below is
+	 * still possible.
 	 */
 	public function register(): void {
 		add_action( 'admin_init', array( $this, 'maybe_save' ) );
@@ -76,7 +74,21 @@ final class SettingsPage {
 			)
 		);
 
-		$this->notice = __( 'Settings saved.', 'optionia' );
+		// Post/redirect/get. Without the redirect the POST body survives in the
+		// browser, so a refresh silently re-submits the form — and the browser
+		// warns the merchant about resubmission on a screen where nothing was
+		// wrong.
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'           => Keys::MENU_SLUG_SETTINGS,
+					self::SAVED_FLAG => '1',
+				),
+				admin_url( 'admin.php' )
+			)
+		);
+
+		exit;
 	}
 
 	/**
@@ -92,10 +104,13 @@ final class SettingsPage {
 		echo '<div class="wrap optionia-wrap">';
 		printf( '<h1>%s</h1>', esc_html__( 'Optionia Settings', 'optionia' ) );
 
-		if ( '' !== $this->notice ) {
+		// A read-only flag on a capability-gated screen: worth no nonce, and
+		// showing a stale success notice is harmless.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( isset( $_GET[ self::SAVED_FLAG ] ) ) {
 			printf(
 				'<div class="notice notice-success is-dismissible"><p>%s</p></div>',
-				esc_html( $this->notice )
+				esc_html__( 'Settings saved.', 'optionia' )
 			);
 		}
 

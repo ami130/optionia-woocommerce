@@ -27,15 +27,30 @@ defined( 'ABSPATH' ) || exit;
 final class Client {
 
 	/**
-	 * Seconds to wait for the whole request. Deliberately short: this must never
-	 * be long enough to matter to a human waiting on a page.
+	 * Seconds to wait for a single HTTP attempt. Deliberately short: this must
+	 * never be long enough to matter to a human waiting on a page.
 	 */
-	private const TIMEOUT = 10;
+	private const TIMEOUT = 8;
 
 	/**
 	 * Attempts for retryable failures, including the first.
 	 */
 	private const MAX_ATTEMPTS = 3;
+
+	/**
+	 * Hard ceiling, in seconds, on the total time one request() call may consume
+	 * including every retry and every sleep.
+	 *
+	 * Per-attempt timeouts alone are not enough. Three 8-second attempts plus two
+	 * server-dictated `Retry-After: 30` sleeps would block for 84 seconds, which
+	 * exceeds PHP's default 30-second max_execution_time. The process would then
+	 * be killed mid-flight — potentially between writing the config and writing
+	 * its metadata, leaving the cache describing itself incorrectly.
+	 *
+	 * 20 seconds leaves headroom under a 30-second limit for the caller's own
+	 * work, and is checked before every sleep and every retry.
+	 */
+	private const MAX_TOTAL_SECONDS = 20;
 
 	/**
 	 * Largest response we will read, in bytes. A hostile or malfunctioning
@@ -160,7 +175,8 @@ final class Client {
 			$args['body'] = $encoded;
 		}
 
-		$last = Response::failure( 0, 'not_attempted', 'No attempt was made.' );
+		$last     = Response::failure( 0, 'not_attempted', 'No attempt was made.' );
+		$deadline = microtime( true ) + self::MAX_TOTAL_SECONDS;
 
 		for ( $attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++ ) {
 			$last = $this->attempt( $url, $args, $path );
@@ -179,9 +195,30 @@ final class Client {
 				return $last;
 			}
 
-			if ( $attempt < self::MAX_ATTEMPTS ) {
-				$this->wait_before_retry( $attempt, $last );
+			if ( $attempt >= self::MAX_ATTEMPTS ) {
+				break;
 			}
+
+			// Only sleep and retry if both the sleep and a further attempt fit
+			// inside the remaining budget. Otherwise stop now: exceeding the
+			// budget risks the process being killed mid-write.
+			$remaining = $deadline - microtime( true );
+			$delay     = $this->retry_delay( $attempt, $last );
+
+			if ( $remaining <= ( $delay + self::TIMEOUT ) ) {
+				$this->logger->debug(
+					'Abandoning retries to stay inside the request budget.',
+					array(
+						'path'      => $path,
+						'attempt'   => $attempt,
+						'remaining' => round( $remaining, 2 ),
+					)
+				);
+
+				break;
+			}
+
+			usleep( (int) round( $delay * 1000000 ) );
 		}
 
 		$this->breaker->record_failure();
@@ -274,27 +311,31 @@ final class Client {
 	}
 
 	/**
-	 * Sleep before the next attempt.
+	 * How long to wait before the next attempt, in seconds.
 	 *
-	 * Honours Retry-After when present; otherwise exponential backoff with
-	 * jitter, so a thousand stores recovering from an outage do not retry in
-	 * lockstep and immediately re-overload the API.
+	 * Honours `Retry-After` when the server sends one, otherwise exponential
+	 * backoff with jitter — so that a thousand stores recovering from an outage
+	 * do not retry in lockstep and immediately re-overload the API.
+	 *
+	 * The cap is deliberately low. A server-supplied `Retry-After: 3600` is
+	 * information, not an instruction we can obey inside one PHP request; the
+	 * circuit breaker is the mechanism for honouring long backoffs across
+	 * requests.
 	 *
 	 * @param int      $attempt  Attempt number just completed.
 	 * @param Response $response Failed response.
 	 */
-	private function wait_before_retry( int $attempt, Response $response ): void {
+	private function retry_delay( int $attempt, Response $response ): float {
 		$retry_after = $response->header( 'retry-after' );
 
 		if ( null !== $retry_after && ctype_digit( $retry_after ) ) {
-			$seconds = min( 30, max( 1, (int) $retry_after ) );
-		} else {
-			$base    = 2 ** ( $attempt - 1 );
-			$jitter  = wp_rand( 0, 1000 ) / 1000;
-			$seconds = min( 8, $base + $jitter );
+			return (float) min( 5, max( 1, (int) $retry_after ) );
 		}
 
-		usleep( (int) round( $seconds * 1000000 ) );
+		$base   = 2 ** ( $attempt - 1 );
+		$jitter = wp_rand( 0, 1000 ) / 1000;
+
+		return (float) min( 5, $base + $jitter );
 	}
 
 	/**

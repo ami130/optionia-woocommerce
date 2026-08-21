@@ -231,7 +231,9 @@ final class Plugin {
 			static fn ( Container $c ): SystemStatus => new SystemStatus(
 				$c->get( Environment::class ),
 				$c->get( Repository::class ),
-				$c->get( Settings::class )
+				$c->get( Settings::class ),
+				$c->get( Cron::class ),
+				$c->get( CircuitBreaker::class )
 			)
 		);
 
