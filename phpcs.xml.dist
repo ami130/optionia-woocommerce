@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<ruleset name="Optionia">
+	<description>Coding standards for the Optionia WooCommerce plugin.</description>
+
+	<file>.</file>
+
+	<exclude-pattern>/vendor/*</exclude-pattern>
+	<exclude-pattern>/node_modules/*</exclude-pattern>
+	<exclude-pattern>/assets/js/*.min.js</exclude-pattern>
+
+	<arg name="basepath" value="."/>
+	<arg name="colors"/>
+	<arg name="extensions" value="php"/>
+	<arg value="sp"/>
+	<arg name="parallel" value="8"/>
+
+	<!-- WordPress standards, plus documentation requirements. -->
+	<rule ref="WordPress-Extra"/>
+	<rule ref="WordPress-Docs"/>
+
+	<!--
+		Direct file access guard. Every PHP file must bail when loaded outside
+		WordPress; without it a file is requestable over HTTP and any code with
+		side effects runs outside the WordPress context.
+	-->
+	<rule ref="Generic.PHP.RequireStrictTypes"/>
+
+	<!-- Prefix and text domain enforcement. -->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="optionia"/>
+				<element value="Optionia"/>
+				<element value="OPTIONIA"/>
+			</property>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="optionia"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Minimum supported PHP, checked against the compatibility ruleset. -->
+	<config name="testVersion" value="7.4-"/>
+	<rule ref="PHPCompatibilityWP"/>
+
+	<!-- Minimum supported WordPress, for deprecation checks. -->
+	<config name="minimum_wp_version" value="6.0"/>
+
+	<!--
+		Class-per-file is not enforced for templates: they are procedural views
+		by design, and the WordPress convention for template files differs from
+		that for class files.
+	-->
+	<rule ref="WordPress.Files.FileName">
+		<exclude-pattern>/templates/*</exclude-pattern>
+		<exclude-pattern>/src/*</exclude-pattern>
+	</rule>
+
+	<!-- Tests may use looser documentation rules. -->
+	<rule ref="Squiz.Commenting.FunctionComment">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="Squiz.Commenting.ClassComment">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+</ruleset>

@@ -1,0 +1,27 @@
+# Dependencies
+/vendor/
+/node_modules/
+
+# Build output
+/build/
+/dist/
+*.zip
+
+# PHPCS / PHPUnit
+/.phpcs-cache
+/.phpunit.result.cache
+/phpcs.xml
+/phpunit.xml
+/coverage/
+
+# Environment — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp
