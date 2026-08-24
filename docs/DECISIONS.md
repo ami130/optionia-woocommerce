@@ -286,7 +286,7 @@ should not have to track API versions.
 |---|---|
 | Support window | N and N−1 supported concurrently. A version is never removed while a supported plugin release depends on it. |
 | Notice period | **12 months minimum** before a version is switched off. |
-| Signalling | A deprecated version returns `Deprecation` and `Sunset` headers (RFC 8594), and `meta.deprecation` in the envelope. |
+| Signalling | A deprecated version returns `Deprecation` and `Sunset` headers (RFC 8594), and `meta.deprecation` in the envelope. ⏳ **Policy only** — the `DeprecationMeta` type exists; nothing emits it yet, because there is nothing deprecated. Implement with the first deprecation, not before. |
 | Breaking change | Anything that removes a field, narrows a type, tightens validation, or changes an error code. Adding an optional field is not breaking. |
 
 **Reasoning.** The window exists because of the plugin, not the dashboard. The
@@ -301,3 +301,27 @@ annually still see a warning before anything breaks.
 (M7.5, M9.5), which lets an old plugin refuse a document it cannot parse rather
 than rendering it wrongly. API version and config schema version move
 independently.
+
+---
+
+## ADR-012 — What is configured but not yet proven
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+Some Step 1 behaviour is correctly configured and cannot be exercised until a
+later milestone supplies something to exercise it against. Recorded here so it is
+never mistaken for verified.
+
+| Behaviour | State | Proven when |
+|---|---|---|
+| `ValidationPipe` rejects unknown fields | Configured — `whitelist`, `forbidNonWhitelisted`, `transform` set | Phase 6 adds the first DTO endpoint |
+| `Deprecation` / `Sunset` headers | Type exists, nothing emits | The first deprecation |
+| Per-tenant rate limiting | Deliberately absent | Phase 6, alongside `TenantGuard` |
+
+**Reasoning.** `forbidNonWhitelisted` closes mass assignment as a class of bug —
+a caller cannot smuggle `isAdmin` or `tenantId` into a DTO and hope something
+binds it. But no endpoint currently accepts a body, so the rejection has never
+fired. Claiming it verified would be claiming a test that does not exist.
+
+**Action.** Phase 6's first DTO endpoint must include a negative test asserting
+that an unknown field returns `VALIDATION_FAILED`, not a silent discard.

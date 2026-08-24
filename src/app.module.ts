@@ -7,6 +7,7 @@ import { buildDataSourceOptions } from './config/data-source';
 import { loadConfig } from './config/env';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
+import { LoggingModule } from './common/logging/logging.module';
 import { HealthModule } from './health/health.module';
 
 /**
@@ -19,6 +20,10 @@ import { HealthModule } from './health/health.module';
  */
 @Module({
   imports: [
+    // First, so anything logged during later module initialisation is already
+    // structured.
+    LoggingModule,
+
     TypeOrmModule.forRootAsync({
       // Configuration is validated once, at boot, by loadConfig(). The same
       // function serves the TypeORM CLI, so there is exactly one place an

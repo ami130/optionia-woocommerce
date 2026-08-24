@@ -3,6 +3,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { config as loadDotenv } from 'dotenv';
 import helmet from 'helmet';
+import { Logger as PinoLogger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
@@ -42,6 +43,10 @@ async function bootstrap(): Promise<void> {
     // Buffer startup logs so nothing is written before the logger is configured.
     bufferLogs: true,
   });
+
+  // Replace Nest's default logger, so framework messages and application
+  // messages share one structured stream rather than two formats.
+  app.useLogger(app.get(PinoLogger));
 
   /**
    * Correlation id first, before ANY other middleware.
