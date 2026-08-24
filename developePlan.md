@@ -1972,6 +1972,39 @@ A full clean-database rehearsal was run end to end — drop, `migration:run`,
 new developer does on day one and it had never been executed as one unbroken
 sequence.
 
+**Carried forward — `@nestjs/config` is installed and never used.** Zero
+references in `src/`. Env handling is bespoke: `loadConfig()` in
+[`src/config/env.ts`](../optioniaWooCommerceBackend/src/config/env.ts) validates
+every variable at boot and throws on a missing one, with no fallback defaults —
+which `ConfigModule` does not do by default, and that difference is the reason
+the package was dropped.
+
+This is the same shape as the pino incident in Phase 3: a dependency installed,
+never wired, and left in `package.json` reading as though it were in use. The
+rationale for the bespoke loader is also not recorded in an ADR, which is why the
+package survived — nothing said it had been replaced.
+
+Trivial to remove, deliberately left for [Phase 6](#phase-6--tenancy--auth):
+`@nestjs/config` is the conventional place to put JWT secrets and mail settings,
+so the decision to keep rejecting it belongs in the phase that adds them, and
+should be written down as an ADR at that point rather than re-derived.
+
+**Carried forward — `/health` reports `version: "unknown"` under Docker.** The
+M5.1 deliverable above is "database connectivity and build version". Connectivity
+works everywhere; the version does not.
+
+`health.controller.ts` reads `process.env.npm_package_version`, which **npm** sets
+when it runs a script. `npm run start:prod` therefore reports `0.1.0`, but
+`node dist/main.js` — what a Dockerfile `CMD`, a systemd unit or PM2 actually
+runs — reports `unknown`. Verified both ways during the Phase 5 audit.
+
+It is latent rather than broken: nothing consumes the field yet. It becomes real
+at [Phase 33](#phase-33--deployment), when "which build is live?" is answered
+during an incident, and at [M31.4](#phase-31--observability) if a dashboard
+groups errors by release. The fix belongs with the Dockerfile that exposes it —
+read the version from `package.json` at build time, or inject it as an explicit
+env var — rather than here, where there is no container to test against.
+
 **Two coverage gaps found in the Phase 5 audit, both now closed.** Measured with
 `jest --coverage`: **15.7% → 23.6% statements, 58.5% → 69.6% branches**.
 
