@@ -5,6 +5,8 @@ import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { AuthThrottlerGuard } from './auth-throttler.guard';
 import { AuthService } from './auth.service';
+import { AuthJwtService } from './jwt.service';
+import { Public } from './guards/public.decorator';
 import { SessionsService } from './sessions.service';
 import {
   LoginDto,
@@ -28,12 +30,14 @@ import {
  * 300/minute, which are sane API limits and useless here — 300 login attempts a
  * minute is a credential-stuffing surface, not a rate limit.
  */
+@Public()
 @Controller('auth')
 @UseGuards(AuthThrottlerGuard)
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly sessions: SessionsService,
+    private readonly jwt: AuthJwtService,
   ) {}
 
   /**
@@ -108,7 +112,14 @@ export class AuthController {
   async login(
     @Body() dto: LoginDto,
     @Ip() ip: string,
-  ): Promise<{ userId: string; emailVerified: boolean; refreshToken: string }> {
+  ): Promise<{
+    userId: string;
+    emailVerified: boolean;
+    accessToken: string;
+    refreshToken: string;
+    tenantId: string;
+    role: string;
+  }> {
     const user = await this.auth.validateCredentials(dto.email, dto.password);
 
     if (!user) {
@@ -132,9 +143,32 @@ export class AuthController {
     // The user agent is not read here: 6g adds the request context that carries
     // it, and reading the raw header in a controller would be a second source of
     // truth for the same value.
-    const refreshToken = await this.sessions.issue(user.id, ip, '');
+    const membership = await this.auth.primaryMembership(user.id);
 
-    return { userId: user.id, emailVerified: true, refreshToken };
+    if (membership === null) {
+      // Registration provisions a tenant in the same transaction, so this means
+      // every membership was revoked — the account exists but has nowhere to act.
+      throw new DomainException(
+        ErrorCode.FORBIDDEN,
+        'This account is not a member of any workspace.',
+      );
+    }
+
+    const refreshToken = await this.sessions.issue(user.id, ip, '');
+    const accessToken = this.jwt.signTenantAccess(
+      user.id,
+      membership.tenantId,
+      membership.role,
+    );
+
+    return {
+      userId: user.id,
+      emailVerified: true,
+      accessToken,
+      refreshToken,
+      tenantId: membership.tenantId,
+      role: membership.role,
+    };
   }
 
   /**

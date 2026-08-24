@@ -55,6 +55,16 @@ describe('auth endpoints (e2e)', () => {
   const post = (path: string, body: Record<string, unknown>) =>
     request(app.getHttpServer()).post(`/v1/auth/${path}`).send(body);
 
+  /** Register, verify, and log in — returning the whole login payload. */
+  async function loginPayload(): Promise<Record<string, string>> {
+    await post('register', { email: EMAIL, password: PASSWORD, name: 'Sam' });
+    await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [EMAIL]);
+
+    const response = await post('login', { email: EMAIL, password: PASSWORD });
+
+    return response.body.data as Record<string, string>;
+  }
+
   describe('validation', () => {
     it('rejects a malformed address', async () => {
       const response = await post('register', { email: 'nope', password: PASSWORD, name: 'A' });
@@ -226,6 +236,38 @@ describe('auth endpoints (e2e)', () => {
 
       expect(response.status).toBe(204);
     });
+  });
+
+  describe('access tokens (6g)', () => {
+    it('issues an access token naming the tenant and role', async () => {
+      const payload = await loginPayload();
+
+      expect(typeof payload.accessToken).toBe('string');
+      expect(payload.tenantId).toBeTruthy();
+      expect(payload.role).toBe('owner');
+    }, 30_000);
+
+    /**
+     * The token must be readable enough to route on, and carry nothing else.
+     * Anything secret in a JWT payload is public — it is signed, not encrypted.
+     */
+    it('carries only routing claims, and marks the tenant realm', async () => {
+      const payload = await loginPayload();
+      const claims = JSON.parse(
+        Buffer.from(payload.accessToken.split('.')[1], 'base64url').toString(),
+      );
+
+      expect(claims.aud).toBe('tenant');
+      expect(claims.tid).toBe(payload.tenantId);
+      expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'role', 'sub', 'tid']);
+    }, 30_000);
+
+    /** The access token and the refresh token are different credentials. */
+    it('issues an access token distinct from the refresh token', async () => {
+      const payload = await loginPayload();
+
+      expect(payload.accessToken).not.toBe(payload.refreshToken);
+    }, 30_000);
   });
 
   describe('password reset', () => {

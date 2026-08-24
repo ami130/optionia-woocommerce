@@ -17,6 +17,37 @@ export interface RequestContext {
 
   /** When the request started, for duration logging. */
   readonly startedAt: number;
+
+  /**
+   * The authenticated user, once a guard has resolved one.
+   *
+   * Mutable because authentication happens after the context is created: the
+   * middleware that opens it runs before any guard, so that a malformed body
+   * still gets a correlation id.
+   */
+  userId?: string;
+
+  /**
+   * The tenant this request acts within.
+   *
+   * Set by `TenantGuard` and read by the scoped repository layer (M6.4). It is
+   * deliberately not on the request object: a repository reaching into an HTTP
+   * request would tie the data layer to a transport, and a background job would
+   * have no way to scope itself.
+   */
+  tenantId?: string;
+
+  /** The caller's role in that tenant, for the permission matrix (M6.5). */
+  tenantRole?: string;
+
+  /**
+   * Which identity realm authenticated this request.
+   *
+   * Three realms exist and must never blur: platform staff, tenant members, and
+   * store tokens. Recording it here means a guard can refuse a token from the
+   * wrong realm without re-parsing it.
+   */
+  realm?: 'platform' | 'tenant' | 'store';
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -45,4 +76,40 @@ export function getContext(): RequestContext | null {
  */
 export function getRequestId(): string {
   return storage.getStore()?.requestId ?? 'no-request-context';
+}
+
+/**
+ * The tenant this request acts within.
+ *
+ * **Throws when there is none.** That is the entire point: the scoped repository
+ * layer calls this on every query, and a version returning `null` would let a
+ * missing tenant become an unscoped query — every row in the table, silently,
+ * with no error anywhere. A thrown exception is a 500; a silent unscoped read is
+ * a cross-tenant data leak.
+ *
+ * Code that legitimately runs without a tenant — migrations, seeds, platform
+ * admin routes — must not call this. It uses `getContext()` and handles the
+ * absence explicitly.
+ */
+export function requireTenantId(): string {
+  const tenantId = storage.getStore()?.tenantId;
+
+  if (!tenantId) {
+    throw new Error(
+      'No tenant in the request context. A tenant-scoped query cannot run ' +
+        'without one — this is a missing TenantGuard, not a condition to handle.',
+    );
+  }
+
+  return tenantId;
+}
+
+/** The current tenant, or null. For code that legitimately may have none. */
+export function getTenantId(): string | null {
+  return storage.getStore()?.tenantId ?? null;
+}
+
+/** The authenticated user, or null outside an authenticated request. */
+export function getUserId(): string | null {
+  return storage.getStore()?.userId ?? null;
 }

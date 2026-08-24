@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { JwtModule, JwtService } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -13,6 +14,9 @@ import { User } from '../users/entities/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { AuthTokensService } from './auth-tokens.service';
+import { AuthJwtService } from './jwt.service';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { TenantGuard } from './guards/tenant.guard';
 import { parseDuration, SessionsService } from './sessions.service';
 import { EmailVerificationToken } from './entities/email-verification-token.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
@@ -36,11 +40,29 @@ import { RefreshToken } from './entities/refresh-token.entity';
       RefreshToken,
     ]),
     MailModule,
+    // Registered here rather than globally: the signing secret belongs to auth,
+    // and a module that can mint tokens should be one that obviously does.
+    JwtModule.register({ secret: loadConfig().security.jwtSecret }),
   ],
   controllers: [AuthController],
   providers: [
     AuthTokensService,
     TenantProvisioningService,
+    JwtAuthGuard,
+    TenantGuard,
+    {
+      provide: AuthJwtService,
+      inject: [JwtService],
+      useFactory: (jwt: JwtService): AuthJwtService => {
+        // Seconds, parsed once. Passing `15m` straight through would be rejected
+        // by the library's duration type, and parsing at each call site is how a
+        // unit mistake gets made twice.
+        const FIFTEEN_MINUTES_MS = 900_000;
+        const ms = parseDuration(loadConfig().security.jwtAccessTtl, FIFTEEN_MINUTES_MS);
+
+        return new AuthJwtService(jwt, Math.floor(ms / 1000));
+      },
+    },
     {
       provide: SessionsService,
       inject: [getRepositoryToken(RefreshToken)],
@@ -71,6 +93,6 @@ import { RefreshToken } from './entities/refresh-token.entity';
         new AuthService(users, tokens, mail, dataSource, sessions, tenants, loadConfig().appUrl),
     },
   ],
-  exports: [AuthService, AuthTokensService, SessionsService],
+  exports: [AuthService, AuthTokensService, SessionsService, AuthJwtService, JwtAuthGuard, TenantGuard],
 })
 export class AuthModule {}

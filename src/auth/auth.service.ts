@@ -248,6 +248,26 @@ export class AuthService {
     return matches && user ? user : null;
   }
 
+  /**
+   * The tenant a user acts within, and their role in it.
+   *
+   * Returns the earliest membership. Multi-tenant switching is M6.5b — until
+   * then a merchant has exactly one, and picking deterministically means a login
+   * cannot land somewhere different on a retry.
+   */
+  async primaryMembership(
+    userId: string,
+  ): Promise<{ tenantId: string; role: string } | null> {
+    const rows: Array<{ tenantId: string; role: string }> = await this.dataSource.query(
+      `SELECT tenantId, role FROM tenant_members
+        WHERE userId = ? AND revokedAt IS NULL
+        ORDER BY createdAt ASC LIMIT 1`,
+      [userId],
+    );
+
+    return rows[0] ?? null;
+  }
+
   private async sendVerification(address: string, name: string, plaintext: string): Promise<void> {
     const rendered = verifyEmail(name, this.link('verify-email', plaintext), VERIFICATION_TTL_MINUTES / 60);
 
