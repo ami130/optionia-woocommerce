@@ -10,6 +10,7 @@ import { User } from '../users/entities/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { AuthTokensService } from './auth-tokens.service';
+import { parseDuration, SessionsService } from './sessions.service';
 import { EmailVerificationToken } from './entities/email-verification-token.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -30,19 +31,34 @@ import { RefreshToken } from './entities/refresh-token.entity';
   providers: [
     AuthTokensService,
     {
+      provide: SessionsService,
+      inject: [getRepositoryToken(RefreshToken)],
+      useFactory: (tokens: Repository<RefreshToken>): SessionsService => {
+        // Parsed by unit rather than by parseInt: `720h` would otherwise become
+        // 720 days, turning a tightening into a two-year token.
+        const THIRTY_DAYS_MS = 30 * 86_400_000;
+
+        return new SessionsService(
+          tokens,
+          parseDuration(loadConfig().security.jwtRefreshTtl, THIRTY_DAYS_MS),
+        );
+      },
+    },
+    {
       provide: AuthService,
-      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource],
+      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource, SessionsService],
       useFactory: (
         users: Repository<User>,
         tokens: AuthTokensService,
         mail: MailService,
         dataSource: DataSource,
+        sessions: SessionsService,
       ): AuthService =>
         // The app URL is read once, here, so no flow builds a link from a value
         // it guessed. Links in mail must point at the dashboard, not the API.
-        new AuthService(users, tokens, mail, dataSource, loadConfig().appUrl),
+        new AuthService(users, tokens, mail, dataSource, sessions, loadConfig().appUrl),
     },
   ],
-  exports: [AuthService, AuthTokensService],
+  exports: [AuthService, AuthTokensService, SessionsService],
 })
 export class AuthModule {}

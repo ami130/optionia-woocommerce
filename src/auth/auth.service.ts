@@ -8,6 +8,7 @@ import { normaliseAddress } from '../mail/mail.service';
 import { passwordChanged, passwordReset, verifyEmail } from '../mail/templates/auth.templates';
 import { User } from '../users/entities/user.entity';
 import { AuthTokensService, RESET_TTL_MINUTES, VERIFICATION_TTL_MINUTES } from './auth-tokens.service';
+import { RevokeReason, SessionsService } from './sessions.service';
 
 /**
  * Registration, verification, and password reset.
@@ -26,6 +27,7 @@ export class AuthService {
     private readonly tokens: AuthTokensService,
     private readonly mail: MailService,
     private readonly dataSource: DataSource,
+    private readonly sessions: SessionsService,
     private readonly appUrl: string,
   ) {}
 
@@ -179,6 +181,11 @@ export class AuthService {
 
     await this.users.update({ id: token.userId }, { passwordHash });
     await this.tokens.revokeResets(token.userId);
+
+    // Whoever knew the old password may still hold a refresh token. Changing the
+    // password has to be enough to lock them out, or a reset prompted by a
+    // suspected compromise leaves the attacker signed in.
+    await this.sessions.revokeAllForUser(token.userId, RevokeReason.PASSWORD_CHANGED);
 
     const user = await this.users.findOne({ where: { id: token.userId } });
 

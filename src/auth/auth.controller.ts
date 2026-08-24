@@ -5,8 +5,10 @@ import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { AuthThrottlerGuard } from './auth-throttler.guard';
 import { AuthService } from './auth.service';
+import { SessionsService } from './sessions.service';
 import {
   LoginDto,
+  RefreshDto,
   RegisterDto,
   RequestPasswordResetDto,
   ResendVerificationDto,
@@ -29,7 +31,10 @@ import {
 @Controller('auth')
 @UseGuards(AuthThrottlerGuard)
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly sessions: SessionsService,
+  ) {}
 
   /**
    * Register.
@@ -100,7 +105,10 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 900_000 } })
-  async login(@Body() dto: LoginDto): Promise<{ userId: string; emailVerified: boolean }> {
+  async login(
+    @Body() dto: LoginDto,
+    @Ip() ip: string,
+  ): Promise<{ userId: string; emailVerified: boolean; refreshToken: string }> {
     const user = await this.auth.validateCredentials(dto.email, dto.password);
 
     if (!user) {
@@ -121,10 +129,55 @@ export class AuthController {
       );
     }
 
-    // Session issuance lands in 6e, with refresh rotation. Until then this
-    // endpoint proves credentials and nothing more — it deliberately does not
-    // mint a token it cannot yet revoke.
-    return { userId: user.id, emailVerified: true };
+    // The user agent is not read here: 6g adds the request context that carries
+    // it, and reading the raw header in a controller would be a second source of
+    // truth for the same value.
+    const refreshToken = await this.sessions.issue(user.id, ip, '');
+
+    return { userId: user.id, emailVerified: true, refreshToken };
+  }
+
+  /**
+   * Exchange a refresh token for a new one.
+   *
+   * Every failure returns the same 401. Distinguishing "reused" from "expired"
+   * would tell an attacker holding a stolen token that it was once valid and that
+   * their replay was noticed — which is exactly what they would want to know.
+   *
+   * The reuse case is not silent internally: it revokes the whole family and logs
+   * a warning, so the signal reaches operations rather than the attacker.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  async refresh(
+    @Body() dto: RefreshDto,
+    @Ip() ip: string,
+  ): Promise<{ refreshToken: string }> {
+    const outcome = await this.sessions.rotate(dto.refreshToken ?? '', ip, '');
+
+    if (outcome.failure !== null || outcome.token === null) {
+      throw new DomainException(
+        ErrorCode.TOKEN_INVALID,
+        'That session is no longer valid. Sign in again.',
+      );
+    }
+
+    return { refreshToken: outcome.token };
+  }
+
+  /**
+   * End a session.
+   *
+   * Returns 204 whether or not the token was live, for the same reason the other
+   * endpoints are uniform: a different answer for an unknown token confirms which
+   * tokens exist.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  async logout(@Body() dto: RefreshDto): Promise<void> {
+    await this.sessions.revoke(dto.refreshToken ?? '');
   }
 
   /**

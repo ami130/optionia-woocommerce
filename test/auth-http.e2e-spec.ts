@@ -18,7 +18,11 @@ describe('auth endpoints (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
 
-  const EMAIL = 'http-auth@example.com';
+  // Each e2e suite owns a distinct address namespace. Jest runs suites in
+  // parallel, and a shared `%@example.com` cleanup meant each suite deleted the
+  // other's user mid-test — which passed when run alone and failed together.
+  const NS = 'httpauth';
+  const EMAIL = `${NS}-user@example.com`;
   const PASSWORD = 'a-sufficiently-long-password';
 
   beforeAll(async () => {
@@ -39,13 +43,13 @@ describe('auth endpoints (e2e)', () => {
   }, 60_000);
 
   afterAll(async () => {
-    await dataSource?.query(`DELETE FROM users WHERE email LIKE '%@example.com'`);
-    await dataSource?.query(`DELETE FROM email_deliveries WHERE recipient LIKE '%@example.com'`);
+    await dataSource?.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
+    await dataSource?.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${NS}-%'`);
     await app?.close();
   });
 
   beforeEach(async () => {
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '%@example.com'`);
+    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
   });
 
   const post = (path: string, body: Record<string, unknown>) =>
@@ -126,7 +130,7 @@ describe('auth endpoints (e2e)', () => {
     it('gives one answer for a wrong password and an unknown address', async () => {
       const wrong = await post('login', { email: EMAIL, password: 'wrong-but-long-enough' });
       const unknown = await post('login', {
-        email: 'nobody@example.com',
+        email: `${NS}-nobody@example.com`,
         password: PASSWORD,
       });
 
@@ -156,12 +160,80 @@ describe('auth endpoints (e2e)', () => {
     }, 20_000);
   });
 
+  describe('sessions', () => {
+    async function verifiedLogin(): Promise<string> {
+      await post('register', { email: EMAIL, password: PASSWORD, name: 'Sam' });
+      await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [
+        EMAIL,
+      ]);
+
+      const response = await post('login', { email: EMAIL, password: PASSWORD });
+
+      if (!response.body?.data) {
+        throw new Error(
+          `login failed: ${response.status} ${JSON.stringify(response.body)}`,
+        );
+      }
+
+      return response.body.data.refreshToken as string;
+    }
+
+    it('issues a refresh token on a verified login', async () => {
+      const token = await verifiedLogin();
+
+      expect(typeof token).toBe('string');
+      expect(token.length).toBeGreaterThanOrEqual(43);
+    }, 30_000);
+
+    it('exchanges a refresh token for a new one', async () => {
+      const first = await verifiedLogin();
+
+      const response = await post('refresh', { refreshToken: first });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.refreshToken).not.toBe(first);
+    }, 30_000);
+
+    /**
+     * The reuse response must be indistinguishable from any other failure.
+     * Telling an attacker their replay was noticed is telling them the token was
+     * real — the detection is for operations, not for the caller.
+     */
+    it('answers a replayed token exactly like an unknown one', async () => {
+      const first = await verifiedLogin();
+      await post('refresh', { refreshToken: first });
+
+      const replay = await post('refresh', { refreshToken: first });
+      const unknown = await post('refresh', { refreshToken: 'x'.repeat(43) });
+
+      expect(replay.status).toBe(unknown.status);
+      expect(replay.body.error?.code).toBe(unknown.body.error?.code);
+      expect(replay.body.error?.message).toBe(unknown.body.error?.message);
+    }, 30_000);
+
+    it('logs out, and the token stops working', async () => {
+      const token = await verifiedLogin();
+
+      const logout = await post('logout', { refreshToken: token });
+      expect(logout.status).toBe(204);
+
+      expect((await post('refresh', { refreshToken: token })).status).toBe(401);
+    }, 30_000);
+
+    /** A different answer for an unknown token would confirm which exist. */
+    it('returns 204 for an unknown token too', async () => {
+      const response = await post('logout', { refreshToken: 'x'.repeat(43) });
+
+      expect(response.status).toBe(204);
+    });
+  });
+
   describe('password reset', () => {
     it('answers identically for a known and unknown address', async () => {
       await post('register', { email: EMAIL, password: PASSWORD, name: 'Sam' });
 
       const known = await post('request-password-reset', { email: EMAIL });
-      const unknown = await post('request-password-reset', { email: 'nobody@example.com' });
+      const unknown = await post('request-password-reset', { email: `${NS}-nobody@example.com` });
 
       expect(unknown.status).toBe(known.status);
       expect(unknown.body.data).toEqual(known.body.data);

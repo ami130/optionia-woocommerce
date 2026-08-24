@@ -3,6 +3,8 @@ import { DataSource } from 'typeorm';
 
 import { AuthService } from '../src/auth/auth.service';
 import { AuthTokensService } from '../src/auth/auth-tokens.service';
+import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
+import { SessionsService } from '../src/auth/sessions.service';
 import { EmailVerificationToken } from '../src/auth/entities/email-verification-token.entity';
 import { PasswordResetToken } from '../src/auth/entities/password-reset-token.entity';
 import { buildDataSourceOptions } from '../src/config/data-source';
@@ -27,7 +29,10 @@ describe('AuthService (integration)', () => {
   let service: AuthService;
   let sentTemplates: string[];
 
-  const EMAIL = 'auth-flow@example.com';
+  // Distinct from the HTTP suite's namespace: Jest runs them in parallel and a
+  // shared cleanup pattern made each delete the other's rows.
+  const NS = 'authsvc';
+  const EMAIL = `${NS}-flow@example.com`;
   const PASSWORD = 'a-sufficiently-long-password';
 
   beforeAll(async () => {
@@ -58,6 +63,7 @@ describe('AuthService (integration)', () => {
       ),
       mail,
       dataSource,
+      new SessionsService(dataSource.getRepository(RefreshToken), 30 * 86_400_000),
       'https://app.example.com',
     );
   }, 30_000);
@@ -68,8 +74,8 @@ describe('AuthService (integration)', () => {
   });
 
   async function cleanup(): Promise<void> {
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '%@example.com'`);
-    await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '%@example.com'`);
+    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
+    await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${NS}-%'`);
   }
 
   beforeEach(async () => {
@@ -137,7 +143,7 @@ describe('AuthService (integration)', () => {
     }, 30_000);
 
     it('normalises the address, so case cannot create a second account', async () => {
-      await service.register('  Auth-Flow@Example.COM ', PASSWORD, 'Sam');
+      await service.register(`  ${NS}-Flow@Example.COM `, PASSWORD, 'Sam');
 
       const user = await userRow();
       expect(user).toBeDefined();
@@ -192,7 +198,7 @@ describe('AuthService (integration)', () => {
      * strongest evidence is that nothing at all is written for an unknown one.
      */
     it('writes no row and sends no mail for an unknown address', async () => {
-      await service.requestPasswordReset('nobody@example.com', '1.2.3.4', 'agent');
+      await service.requestPasswordReset(`${NS}-nobody@example.com`, '1.2.3.4', 'agent');
 
       const [row] = await dataSource.query(`SELECT COUNT(*) AS n FROM password_reset_tokens`);
 
@@ -214,9 +220,45 @@ describe('AuthService (integration)', () => {
 
       await expect(service.requestPasswordReset(EMAIL, '1.2.3.4', 'a')).resolves.toBeUndefined();
       await expect(
-        service.requestPasswordReset('nobody@example.com', '1.2.3.4', 'a'),
+        service.requestPasswordReset(`${NS}-nobody@example.com`, '1.2.3.4', 'a'),
       ).resolves.toBeUndefined();
     }, 20_000);
+  });
+
+  describe('resetPassword', () => {
+    /**
+     * Whoever knew the old password may still hold a refresh token. A reset
+     * prompted by a suspected compromise has to lock the attacker out, or it
+     * achieves nothing.
+     */
+    it('ends every session for the user', async () => {
+      await service.register(EMAIL, PASSWORD, 'Sam');
+
+      const [user] = await dataSource.query(`SELECT id FROM users WHERE email = ?`, [EMAIL]);
+
+      const sessions = new SessionsService(
+        dataSource.getRepository(RefreshToken),
+        30 * 86_400_000,
+      );
+      await sessions.issue(user.id, '1.2.3.4', 'phone');
+      await sessions.issue(user.id, '5.6.7.8', 'laptop');
+
+      // Redeem a real reset token rather than reaching past the flow.
+      const tokens = new AuthTokensService(
+        dataSource.getRepository(EmailVerificationToken),
+        dataSource.getRepository(PasswordResetToken),
+      );
+      const resetToken = await tokens.issueReset(user.id, '1.2.3.4', 'agent');
+
+      await service.resetPassword(resetToken, 'a-brand-new-long-password', '1.2.3.4');
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM refresh_tokens WHERE userId = ? AND revokedAt IS NULL`,
+        [user.id],
+      );
+
+      expect(Number(row.n)).toBe(0);
+    }, 30_000);
   });
 
   describe('validateCredentials', () => {
@@ -233,7 +275,7 @@ describe('AuthService (integration)', () => {
     }, 20_000);
 
     it('rejects an unknown address', async () => {
-      await expect(service.validateCredentials('nobody@example.com', PASSWORD)).resolves.toBeNull();
+      await expect(service.validateCredentials(`${NS}-nobody@example.com`, PASSWORD)).resolves.toBeNull();
     }, 20_000);
 
     /**
@@ -251,7 +293,7 @@ describe('AuthService (integration)', () => {
       };
 
       const unknown = await time(() =>
-        service.validateCredentials('nobody@example.com', PASSWORD),
+        service.validateCredentials(`${NS}-nobody@example.com`, PASSWORD),
       );
       const wrong = await time(() => service.validateCredentials(EMAIL, 'wrong-but-long-enough'));
 
