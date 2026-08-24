@@ -725,3 +725,53 @@ This generalises a pattern the phase arrived at three times over: `check-secrets
 `check-scripts.sh`, and the seed tests all exist because something was verified
 once by hand and had no guard afterwards. The rule now stated plainly: **a
 guarantee verified manually is a guarantee with no guard.**
+
+---
+
+## ADR-021 — Coverage is measured, or it is not a guarantee
+
+**Status:** accepted
+**Date:** Phase 5, audit
+
+### Context
+
+ADR-020 stated the rule this project keeps rediscovering: a guarantee verified
+manually is a guarantee with no guard. It then failed to apply it to the tests
+themselves.
+
+An audit asking "what has branching logic and no test?" found three things:
+
+- `bigint.transformer.ts` at **0%** — its `throw` on an unsafe integer has never
+  executed, in a file used by four entities including `usage_records.value`, which
+  Phase 24 bills against
+- `super-admin.seed.ts` with **3 of 4 branches unreachable in CI** — including the
+  12-character password minimum, on the account that can impersonate any merchant
+- **no coverage threshold anywhere**, and coverage never measured in CI
+
+The third explains the first two. `npm run check` reports success at 15.7%
+statement coverage exactly as it would at 90%, so nothing ever said otherwise.
+
+The claim that Phase 5 was verified was not false — 90 unit tests and 28 e2e
+tests do pass, `money.transformer.ts` is at 100% and `env.ts` at 97.9%. It was
+narrower than it sounded. "The tests pass" and "the code is tested" are different
+statements, and only the first had evidence.
+
+### Decision
+
+Coverage is measured in CI with a floor that fails the build. The floor is set
+from the current honest number rather than an aspiration, and raised as gaps
+close — a threshold that fails on day one gets removed, not met.
+
+Files are exempted explicitly and with a reason, never by being quietly absent.
+Entities, migrations and module wiring are declaration rather than logic; a test
+asserting a decorator's presence restates it.
+
+### Consequences
+
+The number will be low at first, and it should be — the alternative is the number
+nobody knows, which is what this project had.
+
+This is the fourth time the same failure has appeared: broken npm scripts, CI on
+branches that did not exist, documentation drift, and now untested branches.
+Each was found by asking what nothing checks. That question is worth asking at
+the close of every phase, not only when something feels wrong.
