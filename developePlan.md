@@ -2468,6 +2468,38 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Carried forward from the 6a–6g audit
+
+Three findings, one of them a defect. All were found by probing behaviour rather
+than re-reading the code, and none is visible in a passing test suite — which is
+why the suite passing was not the answer to "does this work".
+
+**1. `TenantGuard` cannot be used by any other module.** It injects
+`TenantMember`'s repository, but `AuthModule` exports the guard without exporting
+`TypeOrmModule.forFeature`. Any module applying it fails at boot with *"Nest can't
+resolve dependencies of the TenantGuard"*. Confirmed with a probe controller.
+
+This is a real defect rather than missing wiring: the guard is exported, so it
+reads as ready to use, and the failure appears in the *consuming* module rather
+than here. `AuthService`, `AuthTokensService` and `SessionsService` are unaffected
+because factories build them inside `AuthModule` — `TenantGuard` is the only
+export Nest constructs elsewhere. Fix in 6h, which is the first consumer.
+
+**2. Neither guard is applied to anything.** `JwtAuthGuard` works — a probe route
+returns 401 for a missing and a malformed token — but nothing registers it, so
+"authentication is opt-out and a new endpoint is protected by default" is not yet
+true. Nothing is exposed today because no tenant-scoped route exists, and 6h adds
+the first. The global `APP_GUARD` registration belongs with it, not before.
+
+**3. Validation errors name no field.** Every entry in `error.details` has
+`field: ""`, including one whose message is *"property bogus should not exist"*.
+[ADR-009](../optioniaWooCommerceBackend/docs/DECISIONS.md) promises per-field
+details so a dashboard can highlight the offending input; the exception filter
+never maps `class-validator`'s `property` onto `field`.
+
+Cosmetic in an API test and not cosmetic in a form: the client is told something
+is wrong and not what. Fix belongs with the filter, and is small.
+
 #### Carried forward from the 6a–6c audit
 
 Three files added in 6b have **0% coverage**, all in the mail transport layer.
