@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  quality:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4 is the floor declared in the plugin header; merchants on shared
+        # hosting genuinely still run it. 8.4 is what development runs on.
+        # Testing only one makes the other an untested claim.
+        php: ['7.4', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json') }}
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # Syntax, architecture guards, coding standards, unit tests. The same
+      # four gates `bash bin/check.sh` runs locally.
+      #
+      # These matter more here than in the backend: this plugin runs on
+      # merchant infrastructure we do not control, and its owner does not read
+      # PHP. Automated enforcement is the review.
+      - name: All gates
+        run: bash bin/check.sh
