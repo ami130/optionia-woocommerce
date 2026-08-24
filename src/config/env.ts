@@ -162,6 +162,15 @@ export interface AppConfig {
     } | null;
   };
 
+  /**
+   * Where the dashboard lives.
+   *
+   * Every link in an email is built from this. It is **not** the API's own
+   * address: a verification link must open the dashboard, and a merchant who
+   * lands on a JSON endpoint has hit a dead end that looks like a broken product.
+   */
+  readonly appUrl: string;
+
   readonly logLevel: string;
 }
 
@@ -270,6 +279,11 @@ export function loadConfig(): AppConfig {
       jwtRefreshTtl: optional('JWT_REFRESH_TTL', '30d'),
       corsOrigins: originList('CORS_ORIGINS'),
     },
+
+    // Defaulted for development, where the dashboard is the usual Next.js port.
+    // Production is not allowed to guess — a wrong host in a verification link
+    // is a link that cannot be clicked.
+    appUrl: isProduction ? required('APP_URL') : optional('APP_URL', 'http://localhost:3000'),
 
     mail: loadMailConfig(isProduction),
 

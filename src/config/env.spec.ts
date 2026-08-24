@@ -83,6 +83,7 @@ describe('loadConfig', () => {
       withEnv({
         NODE_ENV: 'production',
         DB_SSL: 'true',
+        APP_URL: 'https://app.example.com',
         JWT_SECRET: `changeme-${'x'.repeat(40)}`,
       });
 
@@ -126,6 +127,7 @@ describe('loadConfig', () => {
       withEnv({
         NODE_ENV: 'production',
         DB_SSL: 'true',
+        APP_URL: 'https://app.example.com',
         SMTP_HOST: 'smtp.example.com',
         SMTP_PORT: '587',
         SMTP_USER: 'sender@example.com',
@@ -216,13 +218,13 @@ describe('loadConfig', () => {
      * receiving one — so it is a boot failure, not a fallback.
      */
     it('refuses to boot in production without SMTP', () => {
-      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', SMTP_HOST: undefined });
+      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', APP_URL: 'https://app.example.com', SMTP_HOST: undefined });
 
       expect(() => loadConfig()).toThrow(/SMTP_HOST is required/);
     });
 
     it('explains why, rather than only stating the rule', () => {
-      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', SMTP_HOST: undefined });
+      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', APP_URL: 'https://app.example.com', SMTP_HOST: undefined });
 
       expect(() => loadConfig()).toThrow(/silently discarded/);
     });
@@ -231,6 +233,7 @@ describe('loadConfig', () => {
       withEnv({
         NODE_ENV: 'production',
         DB_SSL: 'true',
+        APP_URL: 'https://app.example.com',
         SMTP_HOST: 'smtp.example.com',
         SMTP_PORT: '587',
         SMTP_USER: 'sender@example.com',
@@ -246,6 +249,43 @@ describe('loadConfig', () => {
 
       withEnv({ MAIL_FROM: 'Support <help@example.com>' });
       expect(loadConfig().mail.from).toBe('Support <help@example.com>');
+    });
+  });
+
+  describe('appUrl', () => {
+    /**
+     * Every link in an email is built from this. Development may default it,
+     * because a wrong value there costs a developer one confused click.
+     */
+    it('defaults to the dashboard dev port outside production', () => {
+      withEnv({ APP_URL: undefined });
+
+      expect(loadConfig().appUrl).toBe('http://localhost:3000');
+    });
+
+    it('uses the configured value when given', () => {
+      withEnv({ APP_URL: 'https://app.optionia.test' });
+
+      expect(loadConfig().appUrl).toBe('https://app.optionia.test');
+    });
+
+    /**
+     * Production may not guess. A verification link built from the wrong host is
+     * a link the merchant cannot click, and the failure is silent — the email
+     * sends successfully and simply does not work.
+     */
+    it('refuses to boot in production without it', () => {
+      withEnv({
+        NODE_ENV: 'production',
+        DB_SSL: 'true',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+        APP_URL: undefined,
+      });
+
+      expect(() => loadConfig()).toThrow(/APP_URL/);
     });
   });
 

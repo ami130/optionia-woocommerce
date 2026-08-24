@@ -312,12 +312,18 @@ describe('seeds (integration)', () => {
       process.env.SMTP_USER = 'sender@example.com';
       process.env.SMTP_PASS = 'app-password';
 
+      // Production also requires APP_URL, and that check runs before the seed
+      // guard. Without it this test would pass on the wrong error — which is how
+      // a test keeps passing after the guarantee it describes has been deleted.
+      process.env.APP_URL = 'https://app.example.com';
+
       try {
         await expect(openSeedConnection('db:seed')).rejects.toThrow(/refuses to run/);
       } finally {
         process.env.NODE_ENV = original;
         process.env.DB_SSL = originalSsl;
         process.env.SMTP_HOST = originalSmtp;
+        delete process.env.APP_URL;
         delete process.env.SMTP_PORT;
         delete process.env.SMTP_USER;
         delete process.env.SMTP_PASS;
