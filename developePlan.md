@@ -463,8 +463,17 @@ places, one of them is wrong. Before writing a helper, find its existing owner.
 - `TypeOrmExceptionFilter` for DB errors
 - `synchronize: false` **always**. Schema changes only via `npm run migration:generate`
 - Guards compose: `JwtAuthGuard` → `TenantGuard` → `RolesGuard`/`PermissionGuard`
-- Money as `DECIMAL(12,4)` in MySQL, **integer minor units in application code**. Never
-  a JS float for money.
+- Money as **`BIGINT` minor units** in MySQL, columns named `*_minor`. Never a JS float,
+  and never `DECIMAL`.
+
+  ⚠️ **Superseded guidance.** An earlier draft specified `DECIMAL(12,4)`. Step 2 rejected
+  it: integer minor units are already the representation in the plugin's `Support\Money`,
+  on the wire in the config document (`"amount": 1000`), and in the backend's money kernel.
+  `DECIMAL` would make the database the only place a conversion happens, and conversions
+  are where rounding bugs live — in a pricing engine that is a customer charged the wrong
+  amount on a merchant's store. `DECIMAL(12,4)` also assumes a scale the product does not
+  hold: four places suits USD, is wrong for JPY (zero) and merely tolerable for KWD
+  (three). Full reasoning in ADR-013.
 
 **WordPress plugin (`optioniaWooCommercePlugin`)**
 - WordPress Coding Standards, enforced by PHPCS + `WordPress-Extra` + `WordPress-Docs`
@@ -1909,7 +1918,10 @@ populated environment in one command.
 [ ] optioniaWooCommerceBackend boots on its own database with no secrets in source
 [ ] All migrations run forward and revert cleanly
 [ ] Every tenant-scoped table has a tenant_id or an FK path to one
-[ ] Money columns are DECIMAL(12,4); app layer uses integer minor units
+[ ] Money columns are BIGINT minor units, named *_minor (ADR-013 supersedes the
+    earlier DECIMAL(12,4) guidance — see the reasoning below)
+[ ] Every FK declares ON DELETE behaviour; audit_logs.user_id is SET NULL so
+    GDPR user erasure is possible
 [ ] docs/DATABASE.md written with an ERD
 [ ] Seeds produce a working demo tenant
 ```
