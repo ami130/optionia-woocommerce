@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from '../common/crypto/password';
 import { MailService } from '../mail/mail.service';
 import { normaliseAddress } from '../mail/mail.service';
 import { passwordChanged, passwordReset, verifyEmail } from '../mail/templates/auth.templates';
+import { TenantProvisioningService } from '../tenants/tenant-provisioning.service';
 import { User } from '../users/entities/user.entity';
 import { AuthTokensService, RESET_TTL_MINUTES, VERIFICATION_TTL_MINUTES } from './auth-tokens.service';
 import { RevokeReason, SessionsService } from './sessions.service';
@@ -28,6 +29,7 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly dataSource: DataSource,
     private readonly sessions: SessionsService,
+    private readonly tenants: TenantProvisioningService,
     private readonly appUrl: string,
   ) {}
 
@@ -45,7 +47,12 @@ export class AuthService {
    * support cost of that is far higher than a failed registration the merchant
    * simply retries.
    */
-  async register(email: string, password: string, name: string): Promise<void> {
+  async register(
+    email: string,
+    password: string,
+    name: string,
+    tenantName = '',
+  ): Promise<void> {
     const address = normaliseAddress(email);
 
     if (!address) {
@@ -77,6 +84,11 @@ export class AuthService {
           locale: 'en',
         }),
       );
+
+      // Provisioned in the same transaction. A user without a tenant cannot do
+      // anything, and a tenant without an owner is unreachable — either half
+      // alone is a broken account someone has to repair by hand (M6.2).
+      await this.tenants.provision(manager, user.id, tenantName || name);
 
       plaintext = await this.tokens.issueVerification(user.id, address, manager);
     });

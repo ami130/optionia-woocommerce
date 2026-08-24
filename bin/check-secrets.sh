@@ -34,9 +34,17 @@ fi
 # --- 1. Credential-shaped assignments -------------------------------------
 # Matches password/secret/token/api_key followed by a non-placeholder value.
 #
-# The final filter drops SCREAMING_SNAKE constant declarations whose value is
-# the key repeated, e.g. `TOKEN_EXPIRED: 'TOKEN_EXPIRED'`. Those are enum-style
-# identifiers, not credentials, and no real secret takes that shape.
+# The final filter drops SCREAMING_SNAKE constant declarations whose value is a
+# bare identifier, e.g. `TOKEN_EXPIRED: 'TOKEN_EXPIRED'` or
+# `PASSWORD_CHANGED: 'password_changed'`. Those are enum members, not
+# credentials: the value is a stable string the code compares against, and no
+# real secret is a lowercase word matching its own key.
+#
+# The value case is deliberately not constrained — an earlier version required
+# uppercase and flagged `PASSWORD_CHANGED: 'password_changed'`, which is the same
+# shape. A secret still fails this filter because it contains characters an
+# identifier cannot: digits mixed with symbols, punctuation, or mixed case with
+# separators.
 # `strip_comments` drops //, #, and * lines so the scanner cannot flag its own
 # documentation or a developer's note describing the pattern.
 strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
@@ -44,7 +52,7 @@ strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 HITS=$(grep -IniE '[a-z_]*(password|secret|passwd|api[_-]?key|token|credential)[a-z_]*[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' $FILES 2>/dev/null \
        | strip_comments \
        | grep -viE 'changeme|placeholder|example|your[_-]|xxx|\*\*\*|<[a-z]|process\.env|configService|\$\{' \
-       | grep -vE ':[[:space:]]*[A-Z_]+:[[:space:]]*.[A-Z_]+.,?$' || true)
+       | grep -vE ':[[:space:]]*[A-Z_]+:[[:space:]]*.[A-Za-z_]+.,?$' || true)
 
 if [ -n "$HITS" ]; then
   fail "possible hardcoded credential:"

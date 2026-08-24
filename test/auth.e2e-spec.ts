@@ -5,6 +5,7 @@ import { AuthService } from '../src/auth/auth.service';
 import { AuthTokensService } from '../src/auth/auth-tokens.service';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
 import { SessionsService } from '../src/auth/sessions.service';
+import { TenantProvisioningService } from '../src/tenants/tenant-provisioning.service';
 import { EmailVerificationToken } from '../src/auth/entities/email-verification-token.entity';
 import { PasswordResetToken } from '../src/auth/entities/password-reset-token.entity';
 import { buildDataSourceOptions } from '../src/config/data-source';
@@ -28,6 +29,7 @@ describe('AuthService (integration)', () => {
   let dataSource: DataSource;
   let service: AuthService;
   let sentTemplates: string[];
+  let mailService: MailService;
 
   // Distinct from the HTTP suite's namespace: Jest runs them in parallel and a
   // shared cleanup pattern made each delete the other's rows.
@@ -55,6 +57,8 @@ describe('AuthService (integration)', () => {
       return originalSend(outgoing);
     };
 
+    mailService = mail;
+
     service = new AuthService(
       dataSource.getRepository(User),
       new AuthTokensService(
@@ -64,6 +68,7 @@ describe('AuthService (integration)', () => {
       mail,
       dataSource,
       new SessionsService(dataSource.getRepository(RefreshToken), 30 * 86_400_000),
+      new TenantProvisioningService(),
       'https://app.example.com',
     );
   }, 30_000);
@@ -74,6 +79,15 @@ describe('AuthService (integration)', () => {
   });
 
   async function cleanup(): Promise<void> {
+    // Registration now provisions a tenant, so removing the user is no longer
+    // enough — tenants.plan_id is RESTRICT and members reference both.
+    await dataSource.query(
+      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId
+        WHERE u.email LIKE '${NS}-%'`,
+    );
+    await dataSource.query(
+      `DELETE t FROM tenants t WHERE t.slug LIKE '${NS}-%' OR t.name LIKE '${NS}-%'`,
+    );
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${NS}-%'`);
   }
@@ -169,6 +183,114 @@ describe('AuthService (integration)', () => {
       );
 
       expect(token).toBeDefined();
+    }, 20_000);
+  });
+
+  describe('tenant provisioning (M6.2)', () => {
+    /**
+     * A user without a tenant cannot do anything, and a tenant without an owner
+     * is unreachable. Both must exist after registration or neither should.
+     */
+    it('creates a tenant and makes the registrant its owner', async () => {
+      await service.register(EMAIL, PASSWORD, 'Sam Merchant');
+
+      const [row] = await dataSource.query(
+        `SELECT t.id, t.name, t.slug, t.status, t.trialEndsAt, t.planId, tm.role
+           FROM tenants t
+           JOIN tenant_members tm ON tm.tenantId = t.id
+           JOIN users u ON u.id = tm.userId
+          WHERE u.email = ?`,
+        [EMAIL],
+      );
+
+      expect(row).toBeDefined();
+      expect(row.role).toBe('owner');
+      expect(row.status).toBe('active');
+    }, 20_000);
+
+    /**
+     * The trial is carried by `trialEndsAt`, not by a status value — a lapsed
+     * trial keeps working at free limits rather than changing state.
+     */
+    it('starts a trial and puts the tenant on the free plan', async () => {
+      await service.register(EMAIL, PASSWORD, 'Sam Merchant');
+
+      const [row] = await dataSource.query(
+        `SELECT t.trialEndsAt, p.code FROM tenants t
+           JOIN plans p ON p.id = t.planId
+           JOIN tenant_members tm ON tm.tenantId = t.id
+           JOIN users u ON u.id = tm.userId
+          WHERE u.email = ?`,
+        [EMAIL],
+      );
+
+      expect(row.code).toBe('free');
+      expect(new Date(row.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
+    }, 20_000);
+
+    /** The owner created the tenant, so nobody invited them. */
+    it('records the owner as un-invited', async () => {
+      await service.register(EMAIL, PASSWORD, 'Sam Merchant');
+
+      const [row] = await dataSource.query(
+        `SELECT tm.invitedBy, tm.acceptedAt FROM tenant_members tm
+           JOIN users u ON u.id = tm.userId WHERE u.email = ?`,
+        [EMAIL],
+      );
+
+      expect(row.invitedBy).toBeNull();
+      expect(row.acceptedAt).not.toBeNull();
+    }, 20_000);
+
+    /**
+     * "My Store" is not an unusual name. A collision must not fail the
+     * registration.
+     */
+    it('gives colliding names distinct slugs', async () => {
+      await service.register(EMAIL, PASSWORD, 'My Store');
+      await service.register(`${NS}-second@example.com`, PASSWORD, 'My Store');
+
+      const rows = await dataSource.query(
+        `SELECT DISTINCT t.slug FROM tenants t
+           JOIN tenant_members tm ON tm.tenantId = t.id
+           JOIN users u ON u.id = tm.userId
+          WHERE u.email LIKE '${NS}-%'`,
+      );
+
+      const slugs = rows.map((r: { slug: string }) => r.slug);
+      expect(new Set(slugs).size).toBe(slugs.length);
+      expect(slugs.length).toBe(2);
+    }, 40_000);
+
+    /**
+     * The whole point of one transaction. If provisioning fails, the user must
+     * not survive — a registered account with no tenant is a support ticket.
+     */
+    it('leaves no user behind when provisioning fails', async () => {
+      const broken = new AuthService(
+        dataSource.getRepository(User),
+        new AuthTokensService(
+          dataSource.getRepository(EmailVerificationToken),
+          dataSource.getRepository(PasswordResetToken),
+        ),
+        mailService,
+        dataSource,
+        new SessionsService(dataSource.getRepository(RefreshToken), 30 * 86_400_000),
+        {
+          provision: () => Promise.reject(new Error('provisioning failed')),
+        } as unknown as TenantProvisioningService,
+        'https://app.example.com',
+      );
+
+      await expect(broken.register(EMAIL, PASSWORD, 'Sam')).rejects.toThrow(
+        /provisioning failed/,
+      );
+
+      const [row] = await dataSource.query(`SELECT COUNT(*) AS n FROM users WHERE email = ?`, [
+        EMAIL,
+      ]);
+
+      expect(Number(row.n)).toBe(0);
     }, 20_000);
   });
 

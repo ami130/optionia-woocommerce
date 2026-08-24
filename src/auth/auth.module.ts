@@ -6,6 +6,9 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { loadConfig } from '../config/env';
 import { MailModule } from '../mail/mail.module';
 import { MailService } from '../mail/mail.service';
+import { Tenant } from '../tenants/entities/tenant.entity';
+import { TenantMember } from '../tenants/entities/tenant-member.entity';
+import { TenantProvisioningService } from '../tenants/tenant-provisioning.service';
 import { User } from '../users/entities/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -24,12 +27,20 @@ import { RefreshToken } from './entities/refresh-token.entity';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, EmailVerificationToken, PasswordResetToken, RefreshToken]),
+    TypeOrmModule.forFeature([
+      User,
+      Tenant,
+      TenantMember,
+      EmailVerificationToken,
+      PasswordResetToken,
+      RefreshToken,
+    ]),
     MailModule,
   ],
   controllers: [AuthController],
   providers: [
     AuthTokensService,
+    TenantProvisioningService,
     {
       provide: SessionsService,
       inject: [getRepositoryToken(RefreshToken)],
@@ -46,17 +57,18 @@ import { RefreshToken } from './entities/refresh-token.entity';
     },
     {
       provide: AuthService,
-      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource, SessionsService],
+      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource, SessionsService, TenantProvisioningService],
       useFactory: (
         users: Repository<User>,
         tokens: AuthTokensService,
         mail: MailService,
         dataSource: DataSource,
         sessions: SessionsService,
+        tenants: TenantProvisioningService,
       ): AuthService =>
         // The app URL is read once, here, so no flow builds a link from a value
         // it guessed. Links in mail must point at the dashboard, not the API.
-        new AuthService(users, tokens, mail, dataSource, sessions, loadConfig().appUrl),
+        new AuthService(users, tokens, mail, dataSource, sessions, tenants, loadConfig().appUrl),
     },
   ],
   exports: [AuthService, AuthTokensService, SessionsService],

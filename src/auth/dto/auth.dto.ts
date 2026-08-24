@@ -34,6 +34,16 @@ export class RegisterDto {
   @IsString()
   @MaxLength(255)
   name: string;
+
+  /**
+   * Optional. Falls back to the person's name, because a merchant registering
+   * before they have decided on a store name should not be blocked on it — and
+   * renaming a tenant later is an update, not a migration.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  tenantName?: string;
 }
 
 export class LoginDto {

@@ -46,7 +46,7 @@ export class AuthController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
   async register(@Body() dto: RegisterDto): Promise<{ message: string }> {
-    await this.auth.register(dto.email, dto.password, dto.name);
+    await this.auth.register(dto.email, dto.password, dto.name, dto.tenantName ?? '');
 
     // 202, not 201: whether a user was created is exactly what this endpoint
     // must not disclose. The wording is true either way.
