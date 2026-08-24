@@ -2454,6 +2454,29 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Carried forward from the 6a–6c audit
+
+Three files added in 6b have **0% coverage**, all in the mail transport layer.
+Each was verified by hand during the audit and each behaves correctly — which is
+exactly the state ADR-021 warns about, since nothing re-checks it.
+
+- **`smtp.transport.ts`** — never constructed by any test. Its constructor guard
+  rejects a null config, and a send to an unreachable host wraps the failure in a
+  `MailDeliveryError` carrying the transport name and the original cause. Both
+  confirmed manually against a closed port.
+- **`log.transport.ts`** — exercised indirectly through `MailService`, never
+  asserted. It is the transport the whole test suite runs on, so a regression here
+  would be silent everywhere.
+- **`mail.module.ts`** — the transport choice is made here and nowhere else, so
+  "no SMTP host means nothing is sent" is a property of this factory. No test
+  covers the selection.
+
+**Fixed in 6d**, not deferred to Phase 30: 6d is the first milestone that sends a
+real message, so a transport bug becomes a merchant who never receives a
+verification email. The transports are also the seam where the production provider
+replaces SMTP (D4), and a seam with no tests is one that cannot be swapped
+confidently.
+
 #### What could go wrong, and the guard against it
 
 - **A guard that silently passes.** The failure mode from Phase 5's doc checker —
