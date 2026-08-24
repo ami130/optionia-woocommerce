@@ -1972,6 +1972,19 @@ A full clean-database rehearsal was run end to end — drop, `migration:run`,
 new developer does on day one and it had never been executed as one unbroken
 sequence.
 
+**Carried forward — fixture coverage gap.** `uq_options_group_key` is
+`(option_group_id, key, deleted_at)`, so the same option key in a *different*
+group is permitted by design — that is what lets two option sets both have a
+`size`. The fixture never exercises it: every key in the demo data is unique
+across all 44 options, so the permitted case has no regression guard.
+
+Verified by hand during the Phase 5 audit — inserting the same key into two
+groups succeeds, and a third insert into the first group is rejected by MySQL
+with `ER_DUP_ENTRY`. The constraint is correct; only the coverage is thin.
+[M6.6](#m66--tenant-isolation-test-suite) is the right place to fix it, since
+that suite already builds a second tenant and the interesting case is two tenants
+using identical keys.
+
 **Carried forward:** conditional rules are absent from the fixture. The rule
 engine is [Phase 17](#phase-17--conditional-logic-engine), so a seeded condition
 tree could not be validated, evaluated, or shown to be cycle-free — see ADR-018.
