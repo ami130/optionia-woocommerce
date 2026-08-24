@@ -1972,6 +1972,36 @@ A full clean-database rehearsal was run end to end — drop, `migration:run`,
 new developer does on day one and it had never been executed as one unbroken
 sequence.
 
+**Carried forward — three test-coverage gaps found in the Phase 5 audit.**
+Measured, not estimated: `jest --coverage` reports **15.7% statements / 58.5%
+branches** across `src/`. The files that were claimed to be guarded are guarded —
+`money.transformer.ts` is at 100% and `env.ts` at 97.9% — but three are not.
+
+1. **`bigint.transformer.ts` — 0%, lines 14–30 uncovered.** It throws on a value
+   that is not a safe integer, and that throw has never executed. It is used by
+   four entities: `option_sets.published_config_version`, `stores.config_version`,
+   `order_selections.config_version` and `usage_records.value`. Those are the
+   numbers [AC1](#ac1--optionia-cloud-is-the-source-of-truth-the-plugin-is-a-projection)
+   projects to the plugin and the ones [Phase 24](#phase-24--plan-limits-and-usage)
+   bills against. Its own comment names the bug it prevents — a version counter
+   arriving as a string, so `configVersion + 1` becomes `"421"`.
+
+2. **`super-admin.seed.ts` — 3 of 4 branches never execute.** CI runs the seed but
+   sets no `SEED_ADMIN_*` variables, so only the skip path is taken. The
+   12-character password minimum, the user-creation path and the staff-grant path
+   have never run in any automated check — on the one account that can impersonate
+   any merchant.
+
+3. **No coverage threshold, and coverage is never measured in CI.** This is the
+   reason the other two went unnoticed, and it is the same failure as the
+   documentation drift (ADR-020): a guarantee with no guard. `npm run check`
+   passes at 15.7% exactly as it would at 90%.
+
+Assigned to [Phase 30](#phase-30--test-suite), which owns the test strategy, with
+the transformer and the password guard pulled forward into
+[M6.6](#m66--tenant-isolation-test-suite) — both are small, and the second is a
+security control on the most privileged account in the system.
+
 **Carried forward — fixture coverage gap.** `uq_options_group_key` is
 `(option_group_id, key, deleted_at)`, so the same option key in a *different*
 group is permitted by design — that is what lets two option sets both have a
