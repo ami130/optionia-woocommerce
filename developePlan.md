@@ -2468,38 +2468,6 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
-#### Carried forward from the 6a–6g audit
-
-Three findings, one of them a defect. All were found by probing behaviour rather
-than re-reading the code, and none is visible in a passing test suite — which is
-why the suite passing was not the answer to "does this work".
-
-**1. `TenantGuard` cannot be used by any other module.** It injects
-`TenantMember`'s repository, but `AuthModule` exports the guard without exporting
-`TypeOrmModule.forFeature`. Any module applying it fails at boot with *"Nest can't
-resolve dependencies of the TenantGuard"*. Confirmed with a probe controller.
-
-This is a real defect rather than missing wiring: the guard is exported, so it
-reads as ready to use, and the failure appears in the *consuming* module rather
-than here. `AuthService`, `AuthTokensService` and `SessionsService` are unaffected
-because factories build them inside `AuthModule` — `TenantGuard` is the only
-export Nest constructs elsewhere. Fix in 6h, which is the first consumer.
-
-**2. Neither guard is applied to anything.** `JwtAuthGuard` works — a probe route
-returns 401 for a missing and a malformed token — but nothing registers it, so
-"authentication is opt-out and a new endpoint is protected by default" is not yet
-true. Nothing is exposed today because no tenant-scoped route exists, and 6h adds
-the first. The global `APP_GUARD` registration belongs with it, not before.
-
-**3. Validation errors name no field.** Every entry in `error.details` has
-`field: ""`, including one whose message is *"property bogus should not exist"*.
-[ADR-009](../optioniaWooCommerceBackend/docs/DECISIONS.md) promises per-field
-details so a dashboard can highlight the offending input; the exception filter
-never maps `class-validator`'s `property` onto `field`.
-
-Cosmetic in an API test and not cosmetic in a form: the client is told something
-is wrong and not what. Fix belongs with the filter, and is small.
-
 #### Carried forward from the 6a–6c audit
 
 Three files added in 6b have **0% coverage**, all in the mail transport layer.
@@ -2539,17 +2507,40 @@ confidently.
 ### Phase 6 exit criteria
 
 ```text
-[ ] Full auth lifecycle working with email verification
-[ ] TenantGuard enforced on all tenant routes
-[ ] Tenant-scoped repository layer in place and throwing without context
-[ ] Cross-tenant access impossible — proven by tests, not asserted
-[ ] Three identity realms separated; cross-realm token is a 401
-[ ] Full permission matrix enforced server-side with negative tests per capability
-[ ] editor cannot publish; admin cannot change roles; no platform role can edit config
-[ ] Last-owner protection working
+[x] Full auth lifecycle working with email verification
+[x] TenantGuard enforced on all tenant routes
+[x] Tenant-scoped repository layer in place and throwing without context
+[x] Cross-tenant access impossible — proven by tests, not asserted
+[x] Three identity realms separated; cross-realm token is a 401
+[x] Full permission matrix enforced server-side with negative tests per capability
+[x] editor cannot publish; admin cannot change roles; no platform role can edit config
+[x] Last-owner protection working
 [ ] Impersonation consented, time-boxed, audit-logged
 [ ] Audit log capturing auth, role, publish, and billing events
 ```
+
+**Eight of ten met.** Evidence, and what the last two wait for.
+
+| Criterion | Evidence |
+| --- | --- |
+| Auth lifecycle | Register → verify → login → refresh → logout → reset, over HTTP. Registration and its verification token are one transaction; a provisioning failure leaves no user |
+| `TenantGuard` | Applied through a probe controller in its own module. It reads the **stored** membership row, so a demotion or removal takes effect on the next request rather than when the access token expires |
+| Scoped repository | `requireTenantId()` throws; four mutations — merge order, OR branches, the `tenantId` strip, and the throw itself — each fail tests |
+| Cross-tenant access | 19 e2e tests over all eight vectors M6.6 names. Three mutations that remove a predicate each fail it |
+| Three realms | `aud` claim checked at both the library and the explicit layer; a cross-realm token is a 401 |
+| Permission matrix | 138 unit assertions covering **every cell** of both tables, plus 7 e2e tests through real requests |
+| The three separations | `editor` cannot publish, `admin` cannot change roles or billing, and no platform role can write merchant config — the capability is absent from the vocabulary entirely |
+| Last-owner protection | Counted per tenant, excluding revoked rows; relaxing the check fails four tests |
+
+**Impersonation and the audit log are deliberately open.** `impersonation_sessions`
+and `audit_logs` were built in Phase 5 with every column both need, so neither is
+blocked on schema. What they lack is the platform admin surface that would use
+them — [Phase 26](#phase-26--platform-admin) — and building consent, time-boxing
+and a visible banner without the screens that display them would produce controls
+nobody can see working.
+
+They move to Phase 26 with their columns already in place, which is the cheap
+half of the work.
 
 ---
 
