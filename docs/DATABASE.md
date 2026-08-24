@@ -586,8 +586,9 @@ platform_staff one super_admin, from env — never a hardcoded credential
 
 ```text
 1 tenant · 1 connected store (mock) · 30 store_products
-4 option_sets covering every shipped option type
-   including one with a cascading rule and one with ~40 options
+5 option_sets — 4 with a single radio option each, plus one draft
+   carrying 40 options across 4 groups for builder performance
+   (conditional rules deferred to Phase 17 — see ADR-018)
 50 order_events, each with 2–4 order_selections
 ```
 

@@ -146,6 +146,15 @@ const PRODUCT_COUNT = 30;
 const ORDER_COUNT = 50;
 
 /**
+ * Options in the builder stress-test set.
+ *
+ * A builder that feels responsive with four options is the reason M28.5 requires
+ * testing with a hundred. Without a large set in the fixture, the first person
+ * to notice the builder crawling is a merchant with a real made-to-order product.
+ */
+const STRESS_OPTION_COUNT = 40;
+
+/**
  * Build the demo tenant.
  *
  * Idempotent by deletion: an existing demo tenant is removed and rebuilt, so
@@ -158,7 +167,16 @@ export async function seedDemo(dataSource: DataSource): Promise<void> {
 
   await resetExistingDemo(dataSource);
 
-  const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'pro' } });
+  const plan = await dataSource.getRepository(Plan).findOne({ where: { code: 'pro' } });
+
+  if (!plan) {
+    // findOneOrFail would say `Could not find any entity of type "Plan"`, which
+    // tells a developer nothing about what to do next.
+    throw new Error(
+      'No "pro" plan found. Run `npm run db:seed` first — the demo tenant needs a ' +
+        'plan to subscribe to.',
+    );
+  }
 
   const tenant = await dataSource.getRepository(Tenant).save(
     dataSource.getRepository(Tenant).create({
@@ -190,9 +208,10 @@ export async function seedDemo(dataSource: DataSource): Promise<void> {
   const products = await seedProducts(dataSource, store.id, random);
   const sets = await seedOptionSets(dataSource, tenant.id, store.id, products);
 
+  await seedStressOptionSet(dataSource, tenant.id, store.id);
   await seedOrders(dataSource, store.id, products, random);
 
-  report('option sets', sets, 0);
+  report('option sets', sets + 1, 0);
 }
 
 /** Remove a previous demo tenant so re-running rebuilds rather than accumulates. */
@@ -351,6 +370,87 @@ async function seedOptionSets(
   }
 
   return OPTION_SETS.length;
+}
+
+/**
+ * A deliberately large option set, for builder performance.
+ *
+ * Not assigned to any product: its purpose is to load the builder, not to render
+ * on a storefront. Kept as a draft so it cannot reach the config document.
+ */
+async function seedStressOptionSet(
+  dataSource: DataSource,
+  tenantId: string,
+  storeId: string,
+): Promise<void> {
+  const sets = dataSource.getRepository(OptionSet);
+  const groups = dataSource.getRepository(OptionGroup);
+  const options = dataSource.getRepository(Option);
+  const values = dataSource.getRepository(OptionValue);
+
+  const set = await sets.save(
+    sets.create({
+      tenantId,
+      storeId,
+      name: 'Made-to-Order Configuration (large)',
+      status: OptionSetStatus.DRAFT,
+      version: 0,
+      rowVersion: 1,
+      publishedConfigVersion: 0,
+    }),
+  );
+
+  // Four groups, so the fixture also exercises grouping rather than one flat
+  // list of forty.
+  const groupLabels = ['Dimensions', 'Materials', 'Finishing', 'Delivery'];
+  const created: OptionGroup[] = [];
+
+  for (const [index, label] of groupLabels.entries()) {
+    created.push(
+      await groups.save(
+        groups.create({
+          optionSetId: set.id,
+          label,
+          displayType: GroupDisplayType.ACCORDION,
+          sortOrder: index,
+          isCollapsible: true,
+        }),
+      ),
+    );
+  }
+
+  for (let index = 0; index < STRESS_OPTION_COUNT; index += 1) {
+    const group = created[index % created.length];
+
+    const option = await options.save(
+      options.create({
+        optionGroupId: group.id,
+        key: `spec_${String(index + 1).padStart(2, '0')}`,
+        valueKind: ValueKind.CHOICE,
+        cardinality: Cardinality.ONE,
+        presentation: Presentation.RADIO,
+        label: `Specification ${index + 1}`,
+        isRequired: index % 5 === 0,
+        sortOrder: index,
+      }),
+    );
+
+    await values.save(
+      Array.from({ length: 3 }, (_unused, position) =>
+        values.create({
+          optionId: option.id,
+          valueKey: `choice_${position + 1}`,
+          label: `Choice ${position + 1}`,
+          sortOrder: position,
+          priceType: PriceType.FIXED,
+          priceAmountMinor: position * 500,
+          isDefault: position === 0,
+        }),
+      ),
+    );
+  }
+
+  report('stress option set', STRESS_OPTION_COUNT, 0);
 }
 
 /**

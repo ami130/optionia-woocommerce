@@ -602,6 +602,39 @@ against real data rather than looking speculative against three hand-typed rows.
 **Phase 14 extends this fixture** as each option type becomes real, adding the
 seven artifacts that make a type genuinely shipped.
 
+### Correction — this record was itself incomplete
+
+The first version of this ADR documented the option-type deferral and silently
+omitted two further items from the same paragraph of `docs/DATABASE.md`:
+
+> *"4 option_sets covering every shipped option type, **including one with a
+> cascading rule and one with ~40 options**"*
+
+Neither existed. `option_rules` held zero rows and the largest option group held
+one option.
+
+The 40-option set mattered most, and the reasoning against omitting it was
+already written in that same document: *"a builder that feels responsive with
+four options is the reason M28.5 requires testing with a hundred."* Without it,
+the first person to notice the builder crawling is a merchant with a real
+made-to-order product.
+
+**Resolved.** A fifth option set — "Made-to-Order Configuration (large)" — now
+carries 40 options across 4 accordion groups, kept as a draft and assigned to no
+product, because its purpose is to load the builder rather than render on a
+storefront. Asserted in `test/seeds.e2e-spec.ts`.
+
+**Conditional rules remain deferred, now with a stated reason.** The rule engine
+is Phase 17, so a seeded condition tree could not be validated, evaluated, or
+shown to be cycle-free — it would be JSON nobody can prove is meaningful, which
+is the same failure as seeding an option type that does not exist. Phase 17 adds
+them alongside the evaluator that gives them meaning.
+
+This is the second ADR in this project whose purpose was honest accounting and
+which was itself incomplete (see ADR-012). Both were caught by an audit rather
+than by writing them, which suggests the record needs checking against its source
+document rather than against memory.
+
 ---
 
 ## ADR-019 — Plan limits are seeded provisionally

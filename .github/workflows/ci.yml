@@ -97,10 +97,29 @@ jobs:
           JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
           CORS_ORIGINS: http://localhost:3000
 
+      # Seeds must be idempotent and must refuse production. Both were
+      # previously verified by hand, once — so a regression would have passed CI
+      # and been found by a developer discovering six plans.
+      - name: Seed the database
+        run: |
+          npm run db:seed
+          npm run db:seed:demo
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
       # Schema constraints live in MySQL and no unit test can observe them.
       # A delete rule regressing to RESTRICT would make GDPR user erasure
       # impossible, and migration:run would still pass.
-      - name: Schema guarantees
+      - name: Schema and seed guarantees
         run: npm run test:e2e
         env:
           NODE_ENV: test
