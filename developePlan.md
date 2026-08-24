@@ -2468,6 +2468,46 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Carried forward from the Phase 6 deep audit
+
+The three fixed findings above are verified working. This pass attacked the auth
+stack rather than reading it, and found **no security defect** — but three
+operational gaps that become real at scale rather than at review.
+
+**1. Rate limits are per-process and reset on deploy.** `ThrottlerModule` uses its
+in-memory store. Two consequences, both invisible in development: every limit is
+multiplied by the instance count once the API runs on more than one, and a deploy
+clears every counter — so an attacker throttled at 10 attempts gets a fresh
+budget whenever we ship.
+
+Not a defect today (one instance, and the limits work), but the fix belongs with
+[M34](#phase-34--infrastructure) where Redis arrives, and it is the difference
+between a limit and the appearance of one.
+
+**2. `refresh_tokens` is never pruned.** A 15-minute access token means a refresh
+every 15 minutes: roughly **2,880 rows per active session per month**, and none
+is ever deleted. At a thousand merchants that is ~2.9M rows a month.
+
+Lookups stay fast — `tokenHash` is uniquely indexed — so this is storage and
+**GDPR** rather than performance: `ip` and `userAgent` are personal data retained
+indefinitely with no stated retention period. A scheduled prune of rows past
+`expiresAt` belongs with the worker in [M34.1](#m341--infrastructure-topology).
+
+**3. Logout does not revoke the access token, by design and undocumented.** The
+refresh family dies immediately; the access token keeps working until it expires.
+That is the trade `AuthJwtService` makes deliberately — revocation lives with the
+stored refresh token — but nothing states the window, and "I logged out and it
+still worked for twelve minutes" is a support ticket nobody can answer.
+
+Options are a shorter access TTL, or a deny-list checked per request, which
+reintroduces the state the stateless token exists to avoid. **Decide before
+Phase 33**, and record the answer rather than leaving it implicit.
+
+**Attacks that were tried and defended.** A validly-signed token naming a tenant
+the user does not belong to is a 401 — membership is read, not trusted. A token
+claiming `owner` resolves to the stored `viewer` role. An `alg=none` forgery is
+rejected. Passwords never appear in logs, and no error returns a stack trace.
+
 #### Carried forward from the Phase 6 close audit
 
 Three findings, all found by probing behaviour. **335 unit and 170 e2e tests pass
