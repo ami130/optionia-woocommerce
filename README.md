@@ -29,17 +29,43 @@ is the source of truth for what a customer is *charged*.
 Requires Node 20+ and MySQL 8+.
 
 ```bash
-mysql -u root -e "CREATE DATABASE optionia_woo_dev CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+# 1. Databases. utf8mb4, not utf8 — see docs/ENVIRONMENTS.md for why.
+mysql -u root -e "CREATE DATABASE optionia_woo_dev  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -e "CREATE DATABASE optionia_woo_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
+# 2. A least-privilege user. Do not develop as root.
+mysql -u root -e "
+  CREATE USER 'optionia_dev'@'localhost' IDENTIFIED BY 'choose-a-password';
+  GRANT ALL PRIVILEGES ON optionia_woo_dev.*  TO 'optionia_dev'@'localhost';
+  GRANT ALL PRIVILEGES ON optionia_woo_test.* TO 'optionia_dev'@'localhost';
+  FLUSH PRIVILEGES;"
+
+# 3. Configuration. Every value is required; there are no defaults.
 cp .env.example .env
-# fill in DB_USER, DB_PASSWORD, and: openssl rand -base64 48  -> JWT_SECRET
+openssl rand -base64 48      # paste into JWT_SECRET
 
+# 4. Install and verify.
 npm install
-npm run migration:run
-npm run start:dev
+npm run check                # secrets, lint, typecheck, tests
+npm run migration:run        # no migrations yet; confirms the connection works
 ```
 
 Full detail in [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md).
+
+### Current state
+
+The application itself does not exist yet — `src/main.ts` and the domain modules
+arrive with their milestones. What is present and working:
+
+| | |
+|---|---|
+| Configuration | Validated at boot, throws on anything missing (25 tests) |
+| Database | Connects; migrations run and revert |
+| Quality gates | `npm run check` — secrets, lint, typecheck, tests |
+| CI | Runs migrations up, down, and up again |
+
+`npm start` will fail until [Step 1](../developePlan.md#m51--bootstrap-optioniawoocommercebackend)
+creates the Nest bootstrap. That is expected.
 
 ---
 

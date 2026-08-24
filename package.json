@@ -20,17 +20,16 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",
     "migration:generate": "npm run typeorm -- migration:generate -d ./src/config/data-source.ts",
     "migration:create": "npx typeorm-ts-node-commonjs migration:create",
     "migration:run": "npm run typeorm -- migration:run -d ./src/config/data-source.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d ./src/config/data-source.ts",
     "migration:show": "npm run typeorm -- migration:show -d ./src/config/data-source.ts",
     "typeorm": "npx ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
-    "db:seed": "ts-node -r tsconfig-paths/register src/seeds/run-seeds.ts",
-    "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts",
     "check:secrets": "bash bin/check-secrets.sh",
-    "check": "npm run check:secrets && npm run lint && npm run typecheck && npm run test"
+    "check": "npm run check:secrets && npm run check:scripts && npm run lint && npm run typecheck && npm run test",
+    "check:scripts": "bash bin/check-scripts.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -40,6 +39,7 @@
     "@nestjs/typeorm": "^11.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "dotenv": "^17.4.2",
     "helmet": "^8.0.0",
     "mysql2": "^3.15.3",
     "reflect-metadata": "^0.2.2",
