@@ -1,0 +1,29 @@
+# Dependencies
+/node_modules/
+
+# Build output
+/dist/
+/build/
+*.tsbuildinfo
+
+# Environment — NEVER commit a real credential.
+# .env.example is tracked and must contain placeholders only.
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+/coverage/
+/.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp

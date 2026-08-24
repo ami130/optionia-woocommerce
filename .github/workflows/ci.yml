@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # Runs first and independently: a leaked credential must fail the build even
+  # if every other check would pass.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-secrets.sh
+
+  verify:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: optionia_woo_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+      # Migrations must run forward AND back. An irreversible migration is a
+      # production incident waiting for a bad deploy.
+      - name: Migrations up and down
+        run: |
+          npm run migration:run
+          npm run migration:revert
+          npm run migration:run
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      - run: npm run test
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
