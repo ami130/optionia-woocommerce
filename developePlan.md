@@ -292,6 +292,37 @@ code.
 
 ---
 
+### D4 — Transactional email provider
+
+**Blocks:** [M6.0](#m60--transactional-email-infrastructure), and through it every
+flow that sends mail — email verification, password reset, team invitations,
+dunning. **Raised during the Phase 6 audit**, where it turned out to be the first
+milestone's hard prerequisite and was not tracked anywhere.
+
+**The decision.** Which transactional provider — Postmark, Resend, SES, or
+equivalent — and on which sending domain. Explicitly *not* SMTP through a shared
+host and never the application server's own mailer: deliverability is the entire
+point, and a merchant who never receives a verification email never becomes a
+customer.
+
+**Why it needs you rather than engineering.** It requires an account in the
+company's name, a billing relationship, a sending subdomain, and SPF, DKIM and
+DMARC records published on the real domain. None of those can be chosen from the
+code.
+
+**What it does not block.** The `Mailer` interface, the template catalogue, and the
+delivery and suppression tables are provider-agnostic by design — that is what the
+abstraction is for ([M22.2](#m222--billingprovider-abstraction) uses the same
+reasoning for billing). Development proceeds against a `LogMailer` that writes to
+the ops log. What waits is only M6.0's final acceptance criterion: delivery of each
+template confirmed to a real inbox.
+
+**Recommendation.** Postmark or Resend for a product at this stage — both have
+straightforward APIs, delivery webhooks for the bounce and complaint handling M6.0
+requires, and no AWS identity setup. SES is materially cheaper at volume and worth
+revisiting once send volume is known, which is why the `Mailer` abstraction exists.
+
+
 ## S2. Architecture Contract
 
 Non-negotiable invariants. Any PR violating one of these is rejected regardless of
@@ -2272,6 +2303,116 @@ direct ID access, list endpoints, nested resources, update, delete, bulk operati
 filter/search parameters, and sort parameters.
 
 **Acceptance:** every tenant-scoped endpoint has a passing negative test.
+
+### Phase 6 execution plan
+
+Written after auditing what Phase 5 actually left behind, not from the milestone
+list alone. Three findings shape the order below.
+
+**Finding 1 — five tables do not exist.** `refresh_tokens`,
+`email_verification_tokens`, `password_reset_tokens`, `email_deliveries` and
+`email_suppressions` were never created. M6.1 requires "rotating refresh tokens,
+refresh-token reuse detection", and reuse detection is *impossible* without
+server-side storage of issued tokens — a stateless JWT cannot be detected as
+replayed. So Phase 6 opens with a migration, not with a controller.
+
+**Finding 2 — `audit_logs` and `impersonation_sessions` are already complete.**
+`audit_logs` carries `tenantId, userId, action, resourceType, resourceId, changes,
+ip, userAgent` — every field M6.5 rule 3 demands. `impersonation_sessions` carries
+`consentedAt, startedAt, endsAt, endedAt, reason` — every field rule 4 demands.
+Both role enums already match the matrix exactly (`owner admin editor viewer
+billing`, `super_admin support billing_ops read_only`). M6.5 is therefore
+enforcement work, not schema work.
+
+**Finding 3 — rate limiting is wired, but not for auth.** `ThrottlerModule` is
+global at 20/second and 300/minute. Those are sane API limits and useless as auth
+limits: 300 login attempts per minute is a credential-stuffing surface. M6.1 needs
+tight per-endpoint limits *and* per-account tracking, which an IP-based throttler
+cannot do alone.
+
+#### Blocking decision — D4, the email provider
+
+M6.0 is the first milestone and cannot finish without one. It needs a provider
+chosen, an account, a sending subdomain, and SPF/DKIM/DMARC records that only the
+domain owner can publish. It is not currently tracked as a decision, which is why
+it is being raised here as **D4** rather than discovered halfway through the phase.
+
+It does not block *starting*: the `Mailer` interface, the template catalogue and
+the delivery/suppression tables are all provider-agnostic by design — that is the
+point of the abstraction. A `LogMailer` that writes to the ops log stands in until
+a provider exists, and the acceptance criterion "delivery confirmed to a real
+inbox" is what waits.
+
+#### Order of work, and why this order
+
+Each step is a commit, gated the way Phase 5 was: a file with branching logic gets
+a unit test in the same commit, and a security control gets a negative test that is
+proven to fail when the control is removed.
+
+```text
+6a  Auth schema migration          the 5 missing tables + a users column review
+6b  Mailer abstraction + templates M6.0 minus the provider (D4)
+6c  Password + token primitives    hashing, generation, hashed-at-rest storage
+6d  Register → verify → login      M6.1 core, with auth-specific rate limits
+6e  Refresh rotation + reuse       the part that needs 6a's table
+6f  Tenant provisioning            M6.2, one transaction
+6g  RequestContext + TenantGuard   M6.3, extending the existing context
+6h  TenantScopedRepository         M6.4 — the AC5 core
+6i  Roles, matrix, realm guards    M6.5, the largest step
+6j  Team flows                     M6.5b schema/API; UI deferred per S4
+6k  Isolation + matrix test suite  M6.6, permanent in CI
+```
+
+**Why the schema goes first.** Building auth against tables that do not exist means
+either stubbing storage and rewriting it, or discovering mid-flow that reuse
+detection has nowhere to live. Phase 5 proved the cheaper order: get the constraint
+into MySQL, then build on something that cannot silently drift.
+
+**Why the mailer precedes registration.** M6.0 states it plainly — "we'll wire up
+email later" makes verification untestable. Registration that cannot send a
+verification email is a flow with a hole in the middle, and the hole is exactly
+where the security control lives.
+
+**Why 6g and 6h are separate.** `TenantGuard` resolves *who* the tenant is;
+`TenantScopedRepository` makes forgetting the predicate *impossible*. Landing them
+together would leave no commit at which the guard alone can be tested — and the
+repository is the AC5 control, so it deserves its own proof.
+
+**Why the test suite is last but written throughout.** M6.6 is a permanent suite,
+not a closing chore. Each negative test lands with the capability it guards; 6k
+assembles them into the tenants-A-and-B matrix and closes the gaps.
+
+#### Design decisions to settle inside the phase
+
+These are engineering calls, recorded as ADRs when made rather than left implicit:
+
+- **Refresh token storage.** Follow the `store_credentials` precedent already in the
+  schema — `char(64)` SHA-256 hash plus a `char(8)` prefix for lookup, indexed on
+  the hash, never the raw token. Reuse detection then means: presented token hashes
+  to a row already marked rotated → revoke the whole family.
+- **Realm separation in the token.** M6.5 requires a cross-realm token to be a
+  **401, not a 403**. An `aud` claim of `platform` / `tenant` / `store`, checked
+  before any role logic, so the route never admits it exists.
+- **Per-account rate limiting.** The global throttler keys on IP. Auth endpoints
+  need a second key — the submitted email — so that distributed credential stuffing
+  against one account is caught.
+- **`@nestjs/config`.** Still installed and unused. Phase 6 adds JWT secrets and
+  mail settings, which is where it would conventionally be used. Either adopt it or
+  remove it, with the reasoning recorded — `loadConfig()` throws on a missing
+  variable with no fallback defaults, and `ConfigModule` does not.
+
+#### What could go wrong, and the guard against it
+
+- **A guard that silently passes.** The failure mode from Phase 5's doc checker —
+  a control that reports success while inspecting nothing. Every guard gets a test
+  that removes it and proves the test fails.
+- **A capability in the matrix with no endpoint, or an endpoint with no matrix row.**
+  Deny-by-default makes the second safe and the first invisible. 6k asserts the two
+  lists against each other rather than trusting the table.
+- **Coverage decay.** Currently 23.6% statements, with no CI floor (ADR-021). Phase
+  6 is where the untested code would be a security control, so the floor question
+  gets answered here rather than at Phase 30 — that deferral was made when the
+  untested code was a transformer.
 
 ### Phase 6 exit criteria
 
