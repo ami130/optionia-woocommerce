@@ -775,3 +775,25 @@ This is the fourth time the same failure has appeared: broken npm scripts, CI on
 branches that did not exist, documentation drift, and now untested branches.
 Each was found by asking what nothing checks. That question is worth asking at
 the close of every phase, not only when something feels wrong.
+
+### Update — two of the three gaps are closed
+
+`bigint.transformer.ts` is at 100% (13 tests) and `super-admin.seed.ts` at 61.5%
+statements with every guard covered — 8 unit tests for the two checks that run
+before any database work, and 3 e2e tests for the creation path. The uncovered
+remainder is the repository code those e2e tests exercise but Jest's unit run
+does not instrument.
+
+Both were mutation-tested rather than assumed: disabling the safe-integer check
+fails 5 tests, and weakening the password minimum from 12 to 4 fails 3. A test
+that has never failed is a test nobody knows works.
+
+Overall coverage moved from 15.7% to 23.6% statements and 58.5% to 69.6%
+branches.
+
+**The threshold itself remains unbuilt, deliberately.** Setting a floor now would
+encode 23.6% as the standard at the moment the number is least meaningful. It
+belongs with the test strategy in Phase 30, where the exemption list — entities,
+migrations, module wiring — can be argued rather than assumed. The risk of
+waiting is real and is recorded here rather than left implicit: until that floor
+exists, coverage can fall and nothing will say so.

@@ -5,6 +5,7 @@ import { buildDataSourceOptions } from '../src/config/data-source';
 import { loadConfig } from '../src/config/env';
 import { seedDemo } from '../src/seeds/demo.seed';
 import { seedPlans } from '../src/seeds/plans.seed';
+import { seedSuperAdmin } from '../src/seeds/super-admin.seed';
 
 /**
  * Seeds, asserted against a real database.
@@ -179,6 +180,109 @@ describe('seeds (integration)', () => {
 
       expect(second).toEqual(first);
     }, 60_000);
+  });
+
+  /**
+   * The account creation path, which no test reached before.
+   *
+   * `seedSuperAdmin` is the only seed that writes a credential, and CI runs it
+   * with no `SEED_ADMIN_*` set — so the branch that actually creates the account
+   * had never executed in an automated check (ADR-021). The password guard is
+   * unit-tested; this covers what happens after it passes.
+   */
+  describe('db:seed — super admin', () => {
+    const original = { ...process.env };
+    const ADMIN_EMAIL = 'audit-admin@example.com';
+
+    /**
+     * Remove the account this suite creates. A test that leaves a super admin
+     * behind makes any later "how many staff exist" assertion depend on whether
+     * this file ran first.
+     */
+    async function removeSeededAdmin(): Promise<void> {
+      await dataSource.query(
+        `DELETE ps FROM platform_staff ps JOIN users u ON u.id = ps.userId WHERE u.email = ?`,
+        [ADMIN_EMAIL],
+      );
+      await dataSource.query(`DELETE FROM users WHERE email = ?`, [ADMIN_EMAIL]);
+    }
+
+    afterEach(async () => {
+      process.env = { ...original };
+      await removeSeededAdmin();
+    });
+
+    it('creates a verified user and grants the super_admin role', async () => {
+      process.env.SEED_ADMIN_EMAIL = 'audit-admin@example.com';
+      process.env.SEED_ADMIN_PASSWORD = 'a-sufficiently-long-password';
+
+      await seedSuperAdmin(dataSource);
+
+      const [user] = await dataSource.query(
+        `SELECT id, email, emailVerifiedAt, passwordHash FROM users WHERE email = ?`,
+        ['audit-admin@example.com'],
+      );
+
+      expect(user).toBeDefined();
+
+      // Pre-verified: whoever controls the environment created it, so an email
+      // round-trip proves nothing extra.
+      expect(user.emailVerifiedAt).not.toBeNull();
+
+      // The password must never be recoverable from the row.
+      expect(user.passwordHash).not.toContain('a-sufficiently-long-password');
+      expect(user.passwordHash.startsWith('$2')).toBe(true);
+
+      const [staff] = await dataSource.query(
+        `SELECT role FROM platform_staff WHERE userId = ?`,
+        [user.id],
+      );
+
+      expect(staff?.role).toBe('super_admin');
+    }, 30_000);
+
+    /**
+     * Re-running must not create a second account or a duplicate staff grant —
+     * `db:seed` is run repeatedly in development.
+     */
+    it('is idempotent', async () => {
+      process.env.SEED_ADMIN_EMAIL = 'audit-admin@example.com';
+      process.env.SEED_ADMIN_PASSWORD = 'a-sufficiently-long-password';
+
+      await seedSuperAdmin(dataSource);
+      await seedSuperAdmin(dataSource);
+
+      const [{ n: users }] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM users WHERE email = ?`,
+        ['audit-admin@example.com'],
+      );
+      const [{ n: staff }] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM platform_staff ps
+           JOIN users u ON u.id = ps.userId WHERE u.email = ?`,
+        ['audit-admin@example.com'],
+      );
+
+      expect(Number(users)).toBe(1);
+      expect(Number(staff)).toBe(1);
+    }, 30_000);
+
+    /**
+     * The email is normalised, so the same person cannot end up with two
+     * accounts differing only in case.
+     */
+    it('normalises the email to lower case', async () => {
+      process.env.SEED_ADMIN_EMAIL = '  AUDIT-Admin@Example.COM  ';
+      process.env.SEED_ADMIN_PASSWORD = 'a-sufficiently-long-password';
+
+      await seedSuperAdmin(dataSource);
+
+      const [{ n }] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM users WHERE email = ?`,
+        ['audit-admin@example.com'],
+      );
+
+      expect(Number(n)).toBe(1);
+    }, 30_000);
   });
 
   describe('safety', () => {
