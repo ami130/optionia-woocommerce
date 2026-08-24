@@ -1494,15 +1494,22 @@ behind the findings above and useful fixtures for [Phase 12](#phase-12--cart-che
 ### Probe location and disposal
 
 ```text
-~/Studio/optionia-woocommerce/wp-content/plugins/optionia-phase4-probe/
+tools/phase4-probe/                     ← source of truth, versioned
+~/Studio/.../plugins/optionia-phase4-probe/   ← the running copy
 ```
 
-Kept **outside** the plugin repository so Phase 3's tree stays clean. Deactivated but not
-deleted, because [Phase 10](#phase-10--storefront-renderer) benefits from being able to
-re-run it while building the real renderer.
+Kept **outside the plugin repository** so Phase 3's tree stays clean, but **inside this
+repository** so it survives a Studio site rebuild. The running copy lives in a disposable
+WordPress install; the tracked copy is what makes it recoverable.
 
-**Delete it at the end of Phase 10.** The path is recorded here because ten phases later
-nobody will remember where it lives.
+Deactivated but not deleted, because [Phase 10](#phase-10--storefront-renderer) benefits
+from re-running it while building the real renderer — comparing a known-good hook trace
+against new code is faster than reasoning about why options fail to appear.
+
+`tools/phase4-probe/README.md` records how to run it, the two environment settings that
+silently prevent testing, and the hardcoded product ids.
+
+**Delete `tools/phase4-probe/` at the end of Phase 10.**
 
 ### Phase 4 result
 
@@ -2719,7 +2726,7 @@ disabled add-to-cart with an explanation while invalid — always re-checked ser
 [ ] Simple and variable products fully working
 [ ] Zero synchronous API calls on page load
 [ ] Accessibility: keyboard navigable, screen-reader labelled
-[ ] Phase 4 prototype deleted — `wp-content/plugins/optionia-phase4-probe/`
+[ ] Phase 4 prototype deleted — `tools/phase4-probe/` and the Studio copy
 [ ] Verified on Storefront + Twenty Twenty-Five + one page builder
 ```
 
@@ -4924,7 +4931,7 @@ Every roadmap phase is accounted for. Nothing was dropped.
 | 1 — Environment ✅ | Complete; context in [Phase 2](#phase-2--woocommerce-competence) |
 | 2 — Learn WooCommerce | [Phase 2](#phase-2--woocommerce-competence) (+ M2.8 block themes) |
 | 3 — Plugin fundamentals | [Phase 3](#phase-3--plugin-skeleton) |
-| 4 — Option prototype | [Phase 4](#phase-4--throwaway-prototype) (explicitly disposable) |
+| 4 — Option prototype | [Phase 4](#phase-4--throwaway-prototype) (explicitly disposable; **narrowed** — see note below) |
 | 5 — Option engine | [Phase 7](#phase-7--option-authoring-api) (cloud) + [14](#phase-14--option-type-library) |
 | 6 — Pricing engine | [Phase 11](#phase-11--pricing-engine) + [16](#phase-16--advanced-pricing) |
 | 7 — Conditional logic | [Phase 17](#phase-17--conditional-logic-engine) |
@@ -4956,6 +4963,31 @@ Every roadmap phase is accounted for. Nothing was dropped.
 | 33 — Production | [Phase 34](#phase-34--production-deploy) |
 | 34 — Distribution | [Phase 35](#phase-35--plugin-distribution) |
 | — | **New:** [15](#phase-15--file-upload-subsystem) file uploads, [26](#phase-26--super-admin) super admin, [M1.5](#m15--competitive-teardown) competitive teardown |
+
+#### Note — Phase 4 was deliberately narrowed
+
+`OptioniaWooCommerceDeveloperMasterMilestone.md` specifies a broader Phase 4 than what was
+built, and the difference is intentional:
+
+| | Master Milestone M4.2–M4.3 | Built in Phase 4 |
+|---|---|---|
+| Input types | radio, checkbox, select, text, number | **radio only** |
+| Validation | required, min/max length, min/max value | **whitelist only** |
+
+**Reasoning.** The throwaway's purpose is to learn the *data path* — render → validate →
+price → cart → session → checkout → order → fulfilment output — not to cover option types.
+Five input types would have exercised five renderers against the same single data path,
+adding time without adding information.
+
+Type coverage properly belongs to [Phase 14](#phase-14--option-type-library), where the
+three-axis model ([M5.4b](#m54b--type-model-kind-cardinality-and-presentation-as-separate-axes))
+makes each type a registry entry rather than a bespoke build. Validation rules belong to
+[M14.4](#m144--per-type-validation), which specifies the full catalogue including the regex
+complexity limits that a Phase 4 prototype could not meaningfully test.
+
+The narrowing was the right call: one option type through the real lifecycle found **four
+wrong assumptions**. Five option types through a shallower lifecycle would have found
+fewer.
 
 ### Also mapped from `OptioniaWooCommerceDeveloperMasterMilestone.md`
 
