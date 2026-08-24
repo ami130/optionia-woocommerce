@@ -419,6 +419,94 @@ under GDPR — subject to the retention policy in Phase 26b.
 
 ---
 
+## 9. Auth and mail (M6.0, M6.1)
+
+Added in Phase 6. The three token tables exist because **a stateless JWT cannot be
+detected as replayed** — it carries only what was signed at issue time, and nothing
+about it changes when presented. M6.1 requires refresh-token reuse detection, so
+the fact that a token has been spent has to live where the server can read it.
+
+Every token is stored as a **SHA-256 hash**, following the `store_credentials`
+precedent. A database read must never yield a working credential. Not bcrypt:
+these values are high-entropy and random, so there is nothing to brute-force, and
+a work factor would be paid on every refresh for no benefit.
+
+### refresh_tokens
+
+One issued refresh token. Rotation mints a new row and stamps `rotated_at` on the
+old one, linking forward through `replaced_by_id`. All rows descended from one
+login share a `family_id`.
+
+**Reuse detection.** A token hashing to a row that already carries `rotated_at`
+was presented twice. The honest reading is theft: the legitimate holder has the
+newer token, so whoever sent the old one is not them. The response revokes the
+**entire family**, not just that row — the thief may hold the newest token, and
+revoking only the replayed one logs out the victim while leaving the attacker
+signed in.
+
+`token_hash` is UNIQUE, because two rows sharing a hash would make that lookup
+ambiguous. `rotated_at` and `revoked_at` are distinct states: rotated was spent
+legitimately, revoked must never be honoured again.
+
+### email_verification_tokens
+
+Single-use proof of control over an address. Stores `email` rather than reading it
+from the user row, because an email *change* must verify the new address before it
+replaces the old — until then the user record still holds the previous one.
+
+`consumed_at` enforces single use rather than deleting the row, so a second click
+can answer "already verified" instead of "invalid link" — which matters when a
+mail client pre-fetches URLs.
+
+### password_reset_tokens
+
+The most dangerous token in the system: a complete account takeover in one URL.
+Short-lived, single-use, and any outstanding token for the same user is
+invalidated by a successful reset — otherwise two concurrent requests leave a
+second working link after the first is used.
+
+`ip` and `user_agent` are recorded for the notification sent after a successful
+change. "Your password was changed from this location" is how a victim learns of a
+takeover.
+
+### email_deliveries
+
+Answers **"did they get it?"**, which support is asked constantly and cannot
+answer from a provider dashboard, because the dashboard does not know which tenant
+or which flow a message belonged to.
+
+`tenant_id` and `user_id` are nullable and **deliberately unconstrained** —
+verification mail is sent before provisioning completes, and a reset for a user in
+several tenants belongs to none of them. A constraint would let a tenant deletion
+cascade away the record of what was sent.
+
+**Status is only as honest as the transport.** SMTP reports handoff to the relay,
+not delivery to an inbox, so `sent` is the terminal state today. `bounced` and
+`complained` exist so that replacing SMTP with a webhook-capable provider
+([D4](../../developePlan.md)) needs no migration — they are simply never written
+yet.
+
+### email_suppressions
+
+Addresses that must not be mailed again. Sending to a known-bad address damages
+delivery **for everyone else**: providers score a sender on bounce and complaint
+rates, so continuing to mail an address that hard-bounced degrades reachability
+for merchants who are reachable.
+
+Keyed on the address, not the user — someone who complains has made a decision
+about that address, and it must hold even if they later register a second account
+with it.
+
+`reason` decides whether it can be lifted. A hard bounce may clear if the address
+starts working; a complaint may not, because re-mailing someone who reported spam
+is how a sending domain gets blocked. Lifting sets `lifted_at` rather than
+deleting, so "this was suppressed and someone cleared it" stays answerable.
+
+**Not yet fed.** SMTP has no delivery webhook, so nothing writes a bounce row
+today. The table exists now because the `Mailer` must consult it from the first
+send — a suppression check retrofitted later is one that was absent for every
+message sent in between.
+
 ## Referential integrity
 
 Every foreign key declares its delete behaviour. MySQL defaults to `RESTRICT`,
@@ -487,7 +575,26 @@ webhook_deliveries.store_id → stores(id)            ON DELETE CASCADE
 sync_jobs.store_id          → stores(id)            ON DELETE CASCADE
 audit_logs.tenant_id        → tenants(id)           ON DELETE SET NULL
 audit_logs.user_id          → users(id)             ON DELETE SET NULL
+
+-- Auth ---------------------------------------------------------------------
+refresh_tokens.user_id      → users(id)             ON DELETE CASCADE
+email_verification_tokens.user_id → users(id)       ON DELETE CASCADE
+password_reset_tokens.user_id → users(id)           ON DELETE CASCADE
 ```
+
+**All three auth tables cascade, and that is deliberate.** A deleted user's
+credentials must not outlive them — a refresh token that survived its owner would
+authenticate a session for an account that no longer exists. This is the opposite
+choice from `audit_logs`, and for the opposite reason: the audit trail is evidence
+about what happened and must survive erasure, while a token is a live capability
+and must not.
+
+`email_deliveries` and `email_suppressions` carry **no foreign key at all**.
+Delivery records predate the tenant they belong to — verification mail is sent
+before provisioning completes — and a suppression is a fact about an address
+rather than about a user. Constraining either would mean a tenant deletion could
+cascade away the record of what was sent to whom, which is exactly the history
+support needs after an incident.
 
 ### The four that would bite
 

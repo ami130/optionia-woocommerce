@@ -257,6 +257,92 @@ describe('schema (integration)', () => {
     });
   });
 
+  describe('auth tokens (M6.1)', () => {
+    /**
+     * Reuse detection depends on a hash identifying exactly one issuance. Two
+     * rows sharing a hash would make "has this been spent?" ambiguous, and the
+     * ambiguity would resolve silently in favour of the attacker.
+     */
+    it('every token hash is unique', async () => {
+      for (const table of [
+        'refresh_tokens',
+        'email_verification_tokens',
+        'password_reset_tokens',
+      ]) {
+        const rows: Array<{ n: number }> = await dataSource.query(
+          `SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+              AND COLUMN_NAME = 'tokenHash' AND NON_UNIQUE = 0`,
+          [schema, table],
+        );
+
+        expect({ table, unique: Number(rows[0].n) }).toEqual({ table, unique: 1 });
+      }
+    });
+
+    /**
+     * A credential must not outlive its owner. A refresh token surviving a
+     * deleted user would authenticate a session for an account that no longer
+     * exists — the opposite of `audit_logs`, which must survive erasure because
+     * it is evidence rather than capability.
+     */
+    it('tokens cascade when their user is deleted', async () => {
+      const rows: Array<{ t: string; d: string }> = await dataSource.query(
+        `SELECT r.TABLE_NAME AS t, r.DELETE_RULE AS d
+           FROM information_schema.REFERENTIAL_CONSTRAINTS r
+          WHERE r.CONSTRAINT_SCHEMA = ?
+            AND r.TABLE_NAME IN ('refresh_tokens','email_verification_tokens','password_reset_tokens')`,
+        [schema],
+      );
+
+      expect(rows).toHaveLength(3);
+      rows.forEach((row) => expect({ t: row.t, d: row.d }).toEqual({ t: row.t, d: 'CASCADE' }));
+    });
+
+    /**
+     * The plaintext is never stored, so the column must be exactly a SHA-256
+     * hex digest. A wider column would let a raw token be written without any
+     * error, which is the failure this check exists to make impossible.
+     */
+    it('stores hashes, not tokens', async () => {
+      const rows: Array<{ t: string; ct: string }> = await dataSource.query(
+        `SELECT TABLE_NAME AS t, COLUMN_TYPE AS ct FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND COLUMN_NAME = 'tokenHash'`,
+        [schema],
+      );
+
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+      rows.forEach((row) => expect({ t: row.t, ct: row.ct }).toEqual({ t: row.t, ct: 'char(64)' }));
+    });
+
+    /**
+     * Delivery history must survive the tenant it describes, so these tables
+     * deliberately carry no foreign key at all.
+     */
+    it('mail tables have no foreign key that could cascade history away', async () => {
+      const rows: Array<{ n: number }> = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM information_schema.REFERENTIAL_CONSTRAINTS
+          WHERE CONSTRAINT_SCHEMA = ?
+            AND TABLE_NAME IN ('email_deliveries','email_suppressions')`,
+        [schema],
+      );
+
+      expect(Number(rows[0].n)).toBe(0);
+    });
+
+    /** One suppression per address — the list is keyed on the address itself. */
+    it('suppresses each address at most once', async () => {
+      const rows: Array<{ n: number }> = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'email_suppressions'
+            AND COLUMN_NAME = 'email' AND NON_UNIQUE = 0`,
+        [schema],
+      );
+
+      expect(Number(rows[0].n)).toBe(1);
+    });
+  });
+
   describe('tenant scoping', () => {
     /**
      * The Phase 5 exit criterion. Four tables are outside tenant scope by
@@ -270,6 +356,23 @@ describe('schema (integration)', () => {
       'users', // one person, several tenants
       'billing_events', // arrives before the tenant is resolved
       'migrations', // TypeORM's own
+
+      // Auth tokens belong to a *user*, who may be a member of several tenants.
+      // Scoping them to one would make a token valid in one tenant and not
+      // another, which is not what a login is.
+      'refresh_tokens',
+      'email_verification_tokens',
+      'password_reset_tokens',
+
+      // Mail predates the tenant it concerns: a verification message is sent
+      // before provisioning completes. `email_deliveries.tenantId` exists but is
+      // nullable and unconstrained on purpose, so a tenant deletion cannot erase
+      // the record of what was sent.
+      'email_deliveries',
+
+      // A suppression is a fact about an address, not about a tenant or a user —
+      // it must hold even if the person registers again.
+      'email_suppressions',
     ]);
 
     it('every other table reaches a tenant', async () => {
