@@ -26,16 +26,20 @@ inline.
 makes the scoped repository (M6.4) possible: a query with no tenant context
 throws rather than returning unscoped rows.
 
-Three tables are **deliberately global** and carry no tenant path:
+**Five tables are deliberately outside tenant scope:**
 
-| Table | Why global |
+| Table | Why |
 |---|---|
-| `plans` | Product catalogue. Every tenant reads the same rows |
-| `users` | A person may belong to several tenants; membership lives in `tenant_members` |
-| `billing_events` | Provider webhooks arrive before the tenant is resolved, and must be recorded even when resolution fails |
+| `tenants` | **Is** the tenant. There is nothing to scope it to |
+| `platform_staff` | The other identity realm. Deliberately separate so no row shape can express "merchant who is also super_admin" ([M6.5](../../developePlan.md#m65--roles-and-permission-matrix)) |
+| `plans` | Global product catalogue. Every tenant reads the same rows |
+| `users` | One person may belong to several tenants; membership lives in `tenant_members` |
+| `billing_events` | A provider webhook arrives before the tenant is resolved, and must be recorded even when resolution fails |
 
-These are excluded from the scoped repository by name rather than by omission, so
-a future table cannot escape scoping by accident.
+These are excluded **by name**, not by omission — the scoped repository holds
+this list, and `test/schema.e2e-spec.ts` asserts that every other table reaches a
+tenant through some foreign-key path. A new table cannot escape scoping by
+accident: it either has a path or it fails the test.
 
 ---
 
@@ -539,6 +543,29 @@ INDEX (status, next_retry_at)             ON webhook_deliveries
 INDEX (tenant_id, created_at)             ON audit_logs
 INDEX (last_seen_at)                      ON stores
 ```
+
+---
+
+## How this design is protected
+
+Everything above is a claim about MySQL, and MySQL is the only place these
+constraints exist. `migration:run` proves the migration executes — not that it
+produced the intended schema.
+
+`test/schema.e2e-spec.ts` asserts the guarantees against a live database, and
+runs in CI alongside the migration cycle:
+
+| Asserted | Why it would otherwise regress silently |
+|---|---|
+| The four critical delete rules | A flip to `RESTRICT` on `audit_logs.userId` makes GDPR user erasure **impossible**, and nothing fails until Phase 26b |
+| `deletedAt` NOT NULL with the sentinel, on all 7 soft-deletable tables | A nullable column makes the uniqueness constraint enforce nothing |
+| A duplicate live key is rejected, and reusable after deletion | The behaviour the sentinel exists to produce, exercised rather than inferred |
+| Every `*Minor` column is `BIGINT`, and no `DECIMAL` exists | ADR-013 held at design time; nothing kept it held |
+| The three idempotency constraints | Without them a retried webhook is a second charge |
+| Every table reaches a tenant, bar the five listed above | A new table could otherwise escape scoping unnoticed |
+
+Verified by introducing the regression deliberately: flipping
+`audit_logs.userId` to `RESTRICT` failed the suite, and restoring it passed.
 
 ---
 
