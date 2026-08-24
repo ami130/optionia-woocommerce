@@ -31,10 +31,22 @@ export abstract class BaseEntity {
   @PrimaryColumn({ type: 'char', length: 36 })
   id: string;
 
-  @CreateDateColumn({ type: 'datetime', precision: 3 })
+  /**
+   * Precision is declared on both the column and its default.
+   *
+   * TypeORM emits `CURRENT_TIMESTAMP(6)` regardless of the column's precision,
+   * and MySQL rejects a `datetime(3)` column defaulting to a 6-digit timestamp
+   * with `Invalid default value`. Stating it explicitly keeps the two in step.
+   */
+  @CreateDateColumn({ type: 'datetime', precision: 3, default: () => 'CURRENT_TIMESTAMP(3)' })
   createdAt: Date;
 
-  @UpdateDateColumn({ type: 'datetime', precision: 3 })
+  @UpdateDateColumn({
+    type: 'datetime',
+    precision: 3,
+    default: () => 'CURRENT_TIMESTAMP(3)',
+    onUpdate: 'CURRENT_TIMESTAMP(3)',
+  })
   updatedAt: Date;
 
   /**
