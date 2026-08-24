@@ -299,15 +299,28 @@ describe('seeds (integration)', () => {
 
       const original = process.env.NODE_ENV;
       const originalSsl = process.env.DB_SSL;
+      const originalSmtp = process.env.SMTP_HOST;
 
       process.env.NODE_ENV = 'production';
       process.env.DB_SSL = 'true';
+
+      // `loadConfig` also refuses production without SMTP, and that guard runs
+      // first. Without a host here the seed would be rejected for the wrong
+      // reason and this test would prove nothing about the seed guard.
+      process.env.SMTP_HOST = 'smtp.example.com';
+      process.env.SMTP_PORT = '587';
+      process.env.SMTP_USER = 'sender@example.com';
+      process.env.SMTP_PASS = 'app-password';
 
       try {
         await expect(openSeedConnection('db:seed')).rejects.toThrow(/refuses to run/);
       } finally {
         process.env.NODE_ENV = original;
         process.env.DB_SSL = originalSsl;
+        process.env.SMTP_HOST = originalSmtp;
+        delete process.env.SMTP_PORT;
+        delete process.env.SMTP_USER;
+        delete process.env.SMTP_PASS;
       }
     });
   });

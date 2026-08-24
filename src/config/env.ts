@@ -108,6 +108,14 @@ function originList(key: string): string[] {
 }
 
 /** Validated application configuration. */
+/** How mail leaves the process. See `AppConfig['mail']`. */
+export const MailTransport = {
+  SMTP: 'smtp',
+  LOG: 'log',
+} as const;
+
+export type MailTransport = (typeof MailTransport)[keyof typeof MailTransport];
+
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
   readonly isProduction: boolean;
@@ -129,7 +137,77 @@ export interface AppConfig {
     readonly corsOrigins: string[];
   };
 
+  /**
+   * Transactional mail.
+   *
+   * `transport` is the decision, not an implementation detail. `smtp` sends for
+   * real; `log` writes the rendered message to the ops log and is what runs in
+   * tests and in a checkout with no credentials — a developer running the suite
+   * must never send a live email to a real address.
+   *
+   * Production may not use `log`: a merchant who never receives a verification
+   * email never becomes a customer, and silent success is the worst possible
+   * failure here. `loadConfig` enforces that.
+   */
+  readonly mail: {
+    readonly transport: MailTransport;
+    readonly from: string;
+    readonly smtp: {
+      readonly host: string;
+      readonly port: number;
+      readonly user: string;
+      readonly password: string;
+      /** STARTTLS on 587, implicit TLS on 465. */
+      readonly secure: boolean;
+    } | null;
+  };
+
   readonly logLevel: string;
+}
+
+/**
+ * Resolve the mail transport.
+ *
+ * Absence is meaningful rather than an error: a developer running the test suite
+ * or booting without credentials gets the `log` transport, which renders the
+ * message to the ops log and sends nothing. Requiring SMTP everywhere would mean
+ * either checked-in credentials or a suite that cannot run.
+ *
+ * The one place that reasoning does not apply is production, where a silently
+ * discarded verification email is indistinguishable from a working system until
+ * a merchant reports never receiving one. There it is a boot failure.
+ */
+function loadMailConfig(isProduction: boolean): AppConfig['mail'] {
+  const host = process.env.SMTP_HOST?.trim();
+  const from = optional('MAIL_FROM', 'Optionia <no-reply@parselab.com>');
+
+  if (!host) {
+    if (isProduction) {
+      throw new ConfigurationError(
+        'SMTP_HOST is required when NODE_ENV=production. Without it every ' +
+          'verification, reset and invitation email is written to the log and ' +
+          'silently discarded, which looks identical to a working system.',
+      );
+    }
+
+    return { transport: MailTransport.LOG, from, smtp: null };
+  }
+
+  const port = requiredInt('SMTP_PORT', 1, 65535);
+
+  return {
+    transport: MailTransport.SMTP,
+    from,
+    smtp: {
+      host,
+      port,
+      user: required('SMTP_USER'),
+      password: required('SMTP_PASS'),
+      // 465 is implicit TLS; 587 upgrades via STARTTLS. Anything else must say
+      // so explicitly rather than being guessed from the port number.
+      secure: bool('SMTP_SECURE', port === 465),
+    },
+  };
 }
 
 /**
@@ -192,6 +270,8 @@ export function loadConfig(): AppConfig {
       jwtRefreshTtl: optional('JWT_REFRESH_TTL', '30d'),
       corsOrigins: originList('CORS_ORIGINS'),
     },
+
+    mail: loadMailConfig(isProduction),
 
     logLevel: optional('LOG_LEVEL', isProduction ? 'info' : 'debug'),
   };

@@ -117,13 +117,135 @@ describe('loadConfig', () => {
       expect(() => loadConfig()).toThrow(/DB_SSL must be true in production/);
     });
 
+    /**
+     * Production also requires SMTP now, so this case must supply it. Without
+     * that it would fail for the mail guard rather than proving anything about
+     * TLS — the assertion it exists to make.
+     */
     it('accepts production with TLS enabled', () => {
-      withEnv({ NODE_ENV: 'production', DB_SSL: 'true' });
+      withEnv({
+        NODE_ENV: 'production',
+        DB_SSL: 'true',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+      });
 
       const config = loadConfig();
 
       expect(config.isProduction).toBe(true);
       expect(config.database.ssl).toBe(true);
+    });
+  });
+
+  describe('mail', () => {
+    /**
+     * Absence is meaningful. A developer running the suite with no credentials
+     * must get a transport that sends nothing, or the first person to run
+     * `npm test` mails a stranger.
+     */
+    it('falls back to the log transport when SMTP is not configured', () => {
+      withEnv({});
+
+      const config = loadConfig();
+
+      expect(config.mail.transport).toBe('log');
+      expect(config.mail.smtp).toBeNull();
+    });
+
+    it('uses SMTP when a host is configured', () => {
+      withEnv({
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+      });
+
+      const config = loadConfig();
+
+      expect(config.mail.transport).toBe('smtp');
+      expect(config.mail.smtp?.host).toBe('smtp.example.com');
+      expect(config.mail.smtp?.port).toBe(587);
+    });
+
+    /**
+     * A host with no credentials is a misconfiguration, not a reason to fall
+     * back — falling back would send nothing while appearing configured.
+     */
+    it('rejects a host without credentials rather than falling back', () => {
+      withEnv({ SMTP_HOST: 'smtp.example.com', SMTP_PORT: '587', SMTP_USER: undefined });
+
+      expect(() => loadConfig()).toThrow(/SMTP_USER/);
+    });
+
+    /**
+     * 465 is implicit TLS, 587 upgrades via STARTTLS. Getting this wrong fails
+     * at connection time with an error that does not mention TLS.
+     */
+    it('infers TLS from the port, and lets it be overridden', () => {
+      withEnv({
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '465',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+      });
+      expect(loadConfig().mail.smtp?.secure).toBe(true);
+
+      withEnv({
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+      });
+      expect(loadConfig().mail.smtp?.secure).toBe(false);
+
+      withEnv({
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+        SMTP_SECURE: 'true',
+      });
+      expect(loadConfig().mail.smtp?.secure).toBe(true);
+    });
+
+    /**
+     * The security control. In production a discarded verification email is
+     * indistinguishable from a working system until a merchant reports never
+     * receiving one — so it is a boot failure, not a fallback.
+     */
+    it('refuses to boot in production without SMTP', () => {
+      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', SMTP_HOST: undefined });
+
+      expect(() => loadConfig()).toThrow(/SMTP_HOST is required/);
+    });
+
+    it('explains why, rather than only stating the rule', () => {
+      withEnv({ NODE_ENV: 'production', DB_SSL: 'true', SMTP_HOST: undefined });
+
+      expect(() => loadConfig()).toThrow(/silently discarded/);
+    });
+
+    it('boots in production when SMTP is configured', () => {
+      withEnv({
+        NODE_ENV: 'production',
+        DB_SSL: 'true',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASS: 'app-password',
+      });
+
+      expect(loadConfig().mail.transport).toBe('smtp');
+    });
+
+    it('defaults the From address and allows an override', () => {
+      withEnv({});
+      expect(loadConfig().mail.from).toContain('@');
+
+      withEnv({ MAIL_FROM: 'Support <help@example.com>' });
+      expect(loadConfig().mail.from).toBe('Support <help@example.com>');
     });
   });
 

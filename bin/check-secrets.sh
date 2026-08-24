@@ -53,6 +53,29 @@ else
   pass "no hardcoded credentials"
 fi
 
+# --- 1b. Credentials in env files ------------------------------------------
+# Check 1 requires a quoted value, because that is how a credential appears in
+# source. In a .env file values are bare — `SMTP_PASS=hooxpxetwpspbzwv` — so it
+# matched nothing, while this script's own header claimed it caught "a credential
+# in a committed .env.example". It did not, and that was verified by pasting a
+# real app password into the file and watching the scan pass.
+#
+# Any tracked env file must have empty values for credential-shaped keys. The
+# committed file is a template; the real values live in an untracked .env.
+ENV_FILES=$(echo "$FILES" | grep -E '\.env(\.|$)|\.env\.example$' || true)
+
+if [ -n "$ENV_FILES" ]; then
+  HITS=$(grep -InE '^[A-Z_]*(PASSWORD|PASS|SECRET|TOKEN|API[_-]?KEY|CREDENTIAL)[A-Z_]*=.+' $ENV_FILES 2>/dev/null \
+         | grep -viE '=[[:space:]]*$|changeme|placeholder|example|your[_-]|xxx|\*\*\*|<[a-z]' || true)
+
+  if [ -n "$HITS" ]; then
+    fail "credential with a value in a tracked env file (templates must be empty):"
+    echo "$HITS" | sed 's/^/        /'
+  else
+    pass "tracked env files carry no credential values"
+  fi
+fi
+
 # --- 2. Fallback defaults on env reads ------------------------------------
 # `process.env.X || 'literal'` is how a local process silently reaches prod.
 HITS=$(grep -InE "(process\.env\.[A-Z_]+|configService\.get<?[^>]*>?\([^)]+\))[[:space:]]*(\|\||\?\?)[[:space:]]*['\"][^'\"]+['\"]" $FILES 2>/dev/null \
