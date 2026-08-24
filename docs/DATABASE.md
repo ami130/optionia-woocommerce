@@ -26,6 +26,17 @@ inline.
 makes the scoped repository (M6.4) possible: a query with no tenant context
 throws rather than returning unscoped rows.
 
+Three tables are **deliberately global** and carry no tenant path:
+
+| Table | Why global |
+|---|---|
+| `plans` | Product catalogue. Every tenant reads the same rows |
+| `users` | A person may belong to several tenants; membership lives in `tenant_members` |
+| `billing_events` | Provider webhooks arrive before the tenant is resolved, and must be recorded even when resolution fails |
+
+These are excluded from the scoped repository by name rather than by omission, so
+a future table cannot escape scoping by accident.
+
 ---
 
 ## The shape
@@ -397,6 +408,101 @@ under GDPR — subject to the retention policy in Phase 26b.
 
 ---
 
+## Referential integrity
+
+Every foreign key declares its delete behaviour. MySQL defaults to `RESTRICT`,
+which fails safe but fails *late* — the wrong default surfaces as a blocked
+deletion twenty phases from now, in the middle of a GDPR erasure request.
+
+Four rules, chosen by what the row *is*:
+
+| Rule | Applies to | Reasoning |
+|---|---|---|
+| `CASCADE` | Structural children that cannot exist alone | An `option_value` without its `option` is orphaned data nothing can read |
+| `RESTRICT` | Anything financial or legally retained | Deleting must be a deliberate act with the children handled first |
+| `SET NULL` | Actor references on records that outlive the actor | An audit log must survive the user it describes |
+| *(none)* | Denormalized historical facts | No foreign key at all — see [ADR-016](DECISIONS.md#adr-016--option_key-outlives-its-option-by-design) |
+
+### The full map
+
+```sql
+-- Tenancy ------------------------------------------------------------------
+tenants.plan_id            → plans(id)              ON DELETE RESTRICT
+tenant_members.tenant_id   → tenants(id)            ON DELETE CASCADE
+tenant_members.user_id     → users(id)              ON DELETE CASCADE
+tenant_members.invited_by  → users(id)              ON DELETE SET NULL
+tenant_invitations.tenant_id → tenants(id)          ON DELETE CASCADE
+tenant_invitations.invited_by → users(id)           ON DELETE SET NULL
+platform_staff.user_id     → users(id)              ON DELETE CASCADE
+platform_staff.granted_by  → users(id)              ON DELETE SET NULL
+impersonation_sessions.staff_user_id → users(id)    ON DELETE RESTRICT
+impersonation_sessions.tenant_id     → tenants(id)  ON DELETE RESTRICT
+
+-- Stores -------------------------------------------------------------------
+stores.tenant_id           → tenants(id)            ON DELETE RESTRICT
+store_credentials.store_id → stores(id)             ON DELETE CASCADE
+store_products.store_id    → stores(id)             ON DELETE CASCADE
+
+-- Option domain ------------------------------------------------------------
+option_sets.tenant_id      → tenants(id)            ON DELETE RESTRICT
+option_sets.store_id       → stores(id)             ON DELETE CASCADE
+option_groups.option_set_id       → option_sets(id) ON DELETE CASCADE
+options.option_group_id           → option_groups(id) ON DELETE CASCADE
+option_values.option_id           → options(id)     ON DELETE CASCADE
+presentational_items.option_group_id → option_groups(id) ON DELETE CASCADE
+option_rules.option_set_id        → option_sets(id) ON DELETE CASCADE
+option_set_assignments.option_set_id → option_sets(id) ON DELETE CASCADE
+option_set_versions.option_set_id → option_sets(id) ON DELETE CASCADE
+option_set_versions.published_by  → users(id)       ON DELETE SET NULL
+
+-- Order facts --------------------------------------------------------------
+order_events.store_id      → stores(id)             ON DELETE RESTRICT
+order_selections.order_event_id → order_events(id)  ON DELETE CASCADE
+order_selections.option_key     → (no FK — ADR-016)
+
+-- Billing ------------------------------------------------------------------
+subscriptions.tenant_id    → tenants(id)            ON DELETE RESTRICT
+subscriptions.plan_id      → plans(id)              ON DELETE RESTRICT
+usage_records.tenant_id    → tenants(id)            ON DELETE CASCADE
+
+-- Operational --------------------------------------------------------------
+webhook_deliveries.store_id → stores(id)            ON DELETE CASCADE
+sync_jobs.store_id          → stores(id)            ON DELETE CASCADE
+audit_logs.tenant_id        → tenants(id)           ON DELETE SET NULL
+audit_logs.user_id          → users(id)             ON DELETE SET NULL
+```
+
+### The four that would bite
+
+**`audit_logs.user_id` is `SET NULL`, not `RESTRICT`.** Under `RESTRICT`, deleting
+a user would be *impossible* while any audit entry referenced them — and Phase 26b
+requires erasing a user on request. The log must record that an action happened
+even after the actor is gone; the `action`, `resource_id` and `changes` columns
+carry the meaning, and the identity is the part being erased.
+
+**`order_events.store_id` is `RESTRICT`.** These are financial records. Disconnecting
+a store must not silently take its revenue history with it — a merchant
+reconnecting later, or an accountant asking about last quarter, both depend on
+those rows surviving.
+
+**`stores.tenant_id` is `RESTRICT`, but `option_sets.store_id` is `CASCADE`.**
+Deleting a tenant with connected stores should fail loudly rather than quietly
+disconnecting live storefronts. But once a *store* is genuinely deleted, its
+option sets have nothing left to render on.
+
+**`impersonation_sessions` is `RESTRICT` on both sides.** This is the record of
+staff acting as a merchant. It must not be removable by deleting either party.
+
+### Where soft delete sits
+
+`ON DELETE` governs *hard* deletes only. Merchant-facing deletion is
+[soft](DECISIONS.md#adr-014--soft-delete-applies-to-merchant-content-only) —
+setting `deleted_at`, which no foreign key sees. `CASCADE` on the option domain is
+therefore a safety net for genuine row removal (a purge, a test teardown), not the
+mechanism a merchant's "delete" button uses.
+
+---
+
 ## Index plan
 
 The hot path is config generation: every merchant store polls it, and it is the
@@ -425,6 +531,54 @@ INDEX (status, next_retry_at)             ON webhook_deliveries
 INDEX (tenant_id, created_at)             ON audit_logs
 INDEX (last_seen_at)                      ON stores
 ```
+
+---
+
+## Seed and fixture shape
+
+M5.10 requires two seeding paths, and their shape has consequences for this
+design rather than being purely a Step 4 concern.
+
+**`db:seed`** — idempotent, safe to re-run, required for the application to
+function:
+
+```text
+plans          Free / Pro / Business with the real limits from M22.1
+platform_staff one super_admin, from env — never a hardcoded credential
+```
+
+**`db:seed:demo`** — a realistic tenant for development and E2E:
+
+```text
+1 tenant · 1 connected store (mock) · 30 store_products
+4 option_sets covering every shipped option type
+   including one with a cascading rule and one with ~40 options
+50 order_events, each with 2–4 order_selections
+```
+
+### Why the volume matters to the schema
+
+Fifty orders with two to four selections each produces **100–200
+`order_selections` rows**, which is what makes the analytics queries in Phase 25
+meaningful instead of returning a single row. Those queries group by
+`option_key` and sum `price_delta_minor` across a store's whole history, so
+`order_selections` needs:
+
+```sql
+INDEX (order_event_id)                    -- the FK join
+INDEX (option_key, value_key)             -- "most selected values"
+```
+
+Without realistic fixture volume the second index looks unnecessary — every
+query is fast against three rows. It stops being fast at a merchant's real order
+history, in front of a merchant.
+
+The same argument applies to the ~40-option set: a builder that feels responsive
+with four options is the reason M28.5 requires testing with a hundred.
+
+**Seed data is never soft-deleted state.** A fixture with `deleted_at` set would
+mean every developer's local database silently exercises a code path nothing
+tested deliberately.
 
 ---
 
