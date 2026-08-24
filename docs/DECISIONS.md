@@ -571,3 +571,62 @@ against an empty database, than later against merchant data.
 | `analytics_rollups` | 25 | Rollup shape follows the questions merchants actually ask. Designing it before beta means designing the wrong aggregate. |
 
 Both are recorded here so their absence is a decision rather than an omission.
+
+---
+
+## ADR-018 — Demo fixtures seed the shape, not unbuilt semantics
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+`db:seed:demo` creates option sets using **one option type — `radio`** — rather
+than the "4 option sets covering every shipped option type" M5.10 asks for.
+
+**Reasoning.** Zero option types have shipped. The type registry is Phase 7
+(radio) and Phase 14 (the rest); `presentation` is currently a `VARCHAR` with no
+validator, renderer or pricing behaviour behind it.
+
+A fixture asserting `presentation: 'date_picker'` before a date picker exists is
+a claim the code cannot honour — the same failure as a script pointing at a file
+that does not exist, or a dependency installed and never wired. Both happened
+earlier in this project, and both were caught only by an audit.
+
+**What is seeded instead:** 30 products, 4 option sets across 14 values, and 50
+orders producing **147 order selections**. That volume is the part with real
+value and no dependency on unbuilt code — it is what makes Phase 25's analytics
+meaningful rather than returning a single row.
+
+Verified with a live query: `GROUP BY optionKey, valueKey` uses a **covering
+index scan** on `ix_order_selections_analytics`, so the index earns its place
+against real data rather than looking speculative against three hand-typed rows.
+
+**Phase 14 extends this fixture** as each option type becomes real, adding the
+seven artifacts that make a type genuinely shipped.
+
+---
+
+## ADR-019 — Plan limits are seeded provisionally
+
+**Date:** 2026-08-24 · **Status:** Open
+
+`db:seed` creates Free, Pro and Business with concrete limits, marked
+provisional in the seed source.
+
+**Alternatives.** Seeding `null` limits was rejected: Phase 24 builds limit
+enforcement, and enforcement needs limits to enforce. Null would short-circuit
+every check, so those code paths would never run and their tests would prove
+nothing — deferring a decision by disabling a feature.
+
+Deciding D2 now was also rejected. The free-tier shape depends on the competitive
+teardown and on what beta merchants actually balk at, neither of which has
+happened. A guess recorded as a decision is worse than a placeholder that says it
+is one.
+
+**Why deferring is cheap.** `plans.limits` is a JSON column and
+`subscriptions.provider` is a plain string, both chosen so either answer fits
+without a migration. Changing these is an `UPDATE`.
+
+**Required before Phase 22.** Reconcile these numbers against the live pricing
+page, which currently advertises "All Option Types (30+)" and "Edit Options in
+Cart" — neither in MVP scope (M1.6). The risk is not that the numbers are
+provisional; it is that they quietly become real without anyone checking them
+against what is being sold.

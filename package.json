@@ -29,7 +29,9 @@
     "typeorm": "npx ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
     "check:secrets": "bash bin/check-secrets.sh",
     "check": "npm run check:secrets && npm run check:scripts && npm run lint && npm run typecheck && npm run test && npm run test:e2e",
-    "check:scripts": "bash bin/check-scripts.sh"
+    "check:scripts": "bash bin/check-scripts.sh",
+    "db:seed": "ts-node -r tsconfig-paths/register src/seeds/run-seeds.ts",
+    "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -39,6 +41,8 @@
     "@nestjs/terminus": "^11.1.1",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
+    "@types/bcrypt": "^6.0.0",
+    "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dotenv": "^17.4.2",

@@ -46,9 +46,21 @@ openssl rand -base64 48      # paste into JWT_SECRET
 
 # 4. Install and verify.
 npm install
-npm run check                # secrets, lint, typecheck, tests
-npm run migration:run        # no migrations yet; confirms the connection works
+npm run check                # secrets, scripts, lint, typecheck, tests
+npm run migration:run        # creates the schema
+npm run db:seed              # plans and, optionally, a super-admin
+npm run db:seed:demo         # a realistic merchant for development
 ```
+
+`db:seed` is idempotent — re-running updates plans rather than duplicating them.
+`db:seed:demo` rebuilds its tenant from scratch, so it never accumulates rows.
+Both refuse to run with `NODE_ENV=production`: they insert fabricated data, which
+in a merchant's database is corruption rather than a mess to clean up.
+
+To create the first platform administrator, set `SEED_ADMIN_EMAIL` and
+`SEED_ADMIN_PASSWORD` before running `db:seed`. There is no default — a default
+admin password in seed source is a default admin password in every deployment
+that forgot to change it, and this account can impersonate any merchant.
 
 Full detail in [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md).
 
