@@ -9,3 +9,6 @@ Thumbs.db
 
 # The plugin is its own repository — see optioniaWooCommercePlugin/.git
 /optioniaWooCommercePlugin/
+
+# The backend is its own repository — see optioniaWooCommerceBackend/.git
+/optioniaWooCommerceBackend/

@@ -1566,6 +1566,18 @@ validated or corrected, at a point where correction is still cheap.
 
 ## Phase 5 — Data Model & Migrations
 
+> **Sequencing note.** Phases 2–4 ran ahead of Phase 1 because they are
+> WooCommerce-side work that needs no cloud decisions. Phase 5 is where that catches up:
+> its **Step 0** executed [M1.1](#m11--repository-and-tooling-setup),
+> [M1.2](#m12--environment-topology) and [M1.7](#m17--decision-log) — repository, CI,
+> secret scanning, environment topology, and the decision log.
+>
+> [M1.3](#m13--decide-d1-billing-provider) and [M1.4](#m14--decide-d2-and-d3-free-tier-and-positioning)
+> remain open: they need business input, not engineering judgement, and neither blocks the
+> schema. `subscriptions.provider` is a string and plan limits are data, so either answer
+> fits without migration. [M1.5](#m15--competitive-teardown) is deferred to before
+> Phase 14 — see ADR-006.
+
 **Depends on:** Phase 1 ([D1](#s0-project-scope-and-starting-point), [D3](#ac1--optionia-cloud-is-the-source-of-truth-the-plugin-is-a-projection))
 **Blocks:** Phases 6–13
 **Repo:** new — `optioniaWooCommerceBackend`
@@ -5018,7 +5030,8 @@ OPTIONIA FOR WOOCOMMERCE
 ════════════════════════════════════════════════
 
 STAGE 0 — FOUNDATIONS
-[ ] Phase 1  — Foundations & Decisions      (repos · CI · D1–D3 · teardown)
+[~] Phase 1  — Foundations & Decisions      (M1.1/M1.2/M1.7 done in Phase 5 Step 0;
+                                            D1/D2/D3 deferred — need business input)
 
 STAGE 1 — LEARN THE PLATFORM
 [x] Phase 2  — WooCommerce Competence      (M2.7b practice plugin skipped)
