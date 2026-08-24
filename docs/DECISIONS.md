@@ -325,3 +325,26 @@ fired. Claiming it verified would be claiming a test that does not exist.
 
 **Action.** Phase 6's first DTO endpoint must include a negative test asserting
 that an unknown field returns `VALIDATION_FAILED`, not a silent discard.
+
+### Correction — this record was itself incomplete
+
+The first version of this ADR listed three unproven behaviours and missed a
+fourth: the exception filter's leak-prevention rule had fourteen branch points
+and no unit test.
+
+That is the rule stopping a `QueryFailedError` from putting table and column
+names in a response body — a security control, and the one piece of Step 1 with
+zero coverage. Runtime verification had exercised 404, 429 and malformed JSON,
+all `HttpException` paths; the database-error path was never reached, because
+triggering it requires a real database failure.
+
+A document whose purpose is honest accounting, and which is itself incomplete, is
+worse than no document: it invites trust it has not earned.
+
+**Resolved.** Both files now have unit tests — 13 for the filter, 11 for the
+interceptor — asserting among other things that a query, a table name and a
+column name never appear in a serialised response.
+
+**Rule going forward:** a file with branching logic gets a unit test in the same
+commit that creates it. Runtime verification proves the paths taken, not the
+paths guarded against, and security controls are guards.
