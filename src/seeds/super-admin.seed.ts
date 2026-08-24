@@ -1,7 +1,7 @@
-import * as bcrypt from 'bcrypt';
 import type { DataSource } from 'typeorm';
 
 import { PlatformStaff } from '../admin/entities/platform-staff.entity';
+import { hashPassword, MIN_PASSWORD_LENGTH } from '../common/crypto/password';
 import { StaffRole } from '../common/database/enums';
 import { User } from '../users/entities/user.entity';
 import { report } from './seed-context';
@@ -16,8 +16,6 @@ import { report } from './seed-context';
  * Skipped silently when the variables are absent, so `db:seed` remains useful
  * for a developer who only wants plans.
  */
-const BCRYPT_COST = 12;
-
 export async function seedSuperAdmin(dataSource: DataSource): Promise<void> {
   const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.SEED_ADMIN_PASSWORD;
@@ -30,10 +28,13 @@ export async function seedSuperAdmin(dataSource: DataSource): Promise<void> {
     return;
   }
 
-  if (password.length < 12) {
+  // Checked here rather than left to hashPassword so the message names the
+  // variable and says why the rule is stricter than a formality — this account
+  // can impersonate any merchant.
+  if (password.length < MIN_PASSWORD_LENGTH) {
     throw new Error(
-      'SEED_ADMIN_PASSWORD must be at least 12 characters. This account can ' +
-        'impersonate any merchant.',
+      `SEED_ADMIN_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters. ` +
+        'This account can impersonate any merchant.',
     );
   }
 
@@ -47,7 +48,7 @@ export async function seedSuperAdmin(dataSource: DataSource): Promise<void> {
     user = await users.save(
       users.create({
         email,
-        passwordHash: await bcrypt.hash(password, BCRYPT_COST),
+        passwordHash: await hashPassword(password),
         // Pre-verified: this account is created by whoever controls the
         // environment, so an email round-trip proves nothing extra.
         emailVerifiedAt: new Date(),
