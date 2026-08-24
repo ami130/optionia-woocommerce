@@ -417,11 +417,53 @@ deleted ones forever makes the operations queue slower for no benefit.
 product deleted in WooCommerce should vanish here, and reconciliation
 (M19.3) rebuilds it if that was wrong.
 
-**Unique constraints must include `deleted_at`.** Otherwise a merchant who
-deletes an option named `size` can never create another named `size`, because the
-soft-deleted row still holds the key. MySQL treats NULLs as distinct in a unique
-index, so `UNIQUE (option_group_id, key, deleted_at)` permits many deleted rows
-with the same key and exactly one live row.
+**Unique constraints must include `deleted_at`, and `deleted_at` must never be
+NULL.** Otherwise a merchant who deletes an option named `size` can never create
+another named `size`, because the soft-deleted row still holds the key.
+
+⚠️ **Correction.** The first version of this ADR specified
+`UNIQUE (option_group_id, key, deleted_at)` with a nullable `deleted_at`, on the
+reasoning that MySQL treats NULLs as distinct so only one live row could hold a
+key. **That reasoning is backwards, and the constraint enforces nothing.**
+
+Tested against MySQL 9.6:
+
+```sql
+CREATE TABLE t (k VARCHAR(10), deleted_at DATETIME(3) NULL, UNIQUE KEY (k, deleted_at));
+INSERT INTO t VALUES ('size', NULL);   -- ok
+INSERT INTO t VALUES ('size', NULL);   -- ALSO OK
+
+SELECT COUNT(*) FROM t WHERE deleted_at IS NULL;   →  2
+```
+
+Because `NULL != NULL`, every live row is distinct from every other live row. The
+index permits **unlimited live duplicates** — precisely the case it was meant to
+prevent.
+
+**The working form uses a sentinel instead of NULL:**
+
+```sql
+deleted_at DATETIME(3) NOT NULL DEFAULT '1970-01-01 00:00:00.000'
+UNIQUE KEY (option_group_id, `key`, deleted_at)
+```
+
+Verified: a second live `size` returns
+`Duplicate entry 'size-1970-01-01 00:00:00.000'`, and after soft-deleting the
+first row the key can be reused.
+
+**The cost, accepted knowingly.** TypeORM's `@DeleteDateColumn` writes NULL on
+soft-delete, so the sentinel needs explicit handling — a custom base entity and a
+`softDelete` that writes a timestamp rather than relying on the built-in.
+
+Two alternatives were rejected:
+
+| Option | Why not |
+|---|---|
+| Enforce uniqueness in application code | A race between two concurrent creates produces duplicates. A constraint the database holds beats one the application remembers |
+| Generated column `is_live` | Clean, but adds a column and a MySQL 8+ dependency to solve what a default value solves |
+
+**Reading rows:** "live" is `deleted_at = '1970-01-01'`, not `deleted_at IS NULL`.
+Every query and index in `docs/DATABASE.md` reflects that.
 
 **This conflicts with GDPR erasure, deliberately.** Phase 26b requires
 *irreversible* deletion of personal data on request. Soft delete is the opposite.

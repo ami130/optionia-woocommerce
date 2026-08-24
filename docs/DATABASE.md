@@ -17,7 +17,7 @@ inline.
 | **Primary key** | `CHAR(36)` UUIDv7 on tenant-scoped tables | Non-enumerable, time-sortable. [ADR-004](DECISIONS.md#adr-004--uuidv7-primary-keys-for-tenant-scoped-entities) |
 | **Money** | `BIGINT` minor units, column named `*_minor` | Matches `Support\Money` exactly; no conversion. [ADR-013](DECISIONS.md#adr-013--money-is-stored-as-bigint-minor-units-not-decimal) |
 | **Timestamps** | `DATETIME(3)` UTC, `created_at` + `updated_at` | Millisecond precision; ordering within a request matters for audit |
-| **Soft delete** | `deleted_at DATETIME(3) NULL` on merchant content only | [ADR-014](DECISIONS.md#adr-014--soft-delete-applies-to-merchant-content-only) |
+| **Soft delete** | `deleted_at DATETIME(3) NOT NULL DEFAULT '1970-01-01'` on merchant content only. **Never nullable** | [ADR-014](DECISIONS.md#adr-014--soft-delete-applies-to-merchant-content-only) |
 | **Charset** | `utf8mb4` | MySQL's `utf8` is 3-byte and cannot store "🎁 Gift wrap" |
 | **Enums** | `VARCHAR` + application validation, not MySQL `ENUM` | Adding a value to a MySQL `ENUM` is an `ALTER TABLE` on a live table |
 | **JSON** | Only for per-type config; every column has a Zod schema | [ADR-015](DECISIONS.md#adr-015--what-belongs-in-a-json-column) |
@@ -227,10 +227,17 @@ compromised credential's usage history survives its revocation.
 | `validation`, `pricing`, `display` | JSON | Per-type; Zod-validated |
 | `deleted_at` | DATETIME(3) NULL | |
 
-`UNIQUE (option_group_id, key, deleted_at)` — the `deleted_at` component lets a
-merchant reuse a key after deleting the option that held it. MySQL treats NULLs
-as distinct, so many deleted rows may share a key while exactly one live row
-holds it.
+`UNIQUE (option_group_id, `key`, deleted_at)` — the `deleted_at` component lets a
+merchant reuse a key after deleting the option that held it.
+
+⚠️ **`deleted_at` is `NOT NULL DEFAULT '1970-01-01 00:00:00.000'`, not nullable.**
+With a nullable column the constraint enforces nothing: `NULL != NULL` in a MySQL
+unique index, so every live row is distinct from every other and unlimited
+duplicates are accepted. Verified and corrected — see
+[ADR-014](DECISIONS.md#adr-014--soft-delete-applies-to-merchant-content-only).
+
+A row is **live** when `deleted_at = '1970-01-01 00:00:00.000'`, never
+`deleted_at IS NULL`.
 
 **Three axes, not one type enum** ([M5.4b](../../developePlan.md#m54b--type-model-kind-cardinality-and-presentation-as-separate-axes)):
 a single-select and multi-select colour swatch are one type with different
@@ -244,7 +251,7 @@ cardinality, not two types. Same renderer, same validator, same pricing path.
 `image_url`, `color_hex`, `sku_suffix`, `weight_delta_grams`, `is_default`,
 `deleted_at`.
 
-`UNIQUE (option_id, value_key, deleted_at)`.
+`UNIQUE (option_id, value_key, deleted_at)` — same sentinel rule.
 
 **Price type and amount are real columns, not JSON** — analytics, plan limits and
 "which values cost more than X" all filter on them ([ADR-015](DECISIONS.md#adr-015--what-belongs-in-a-json-column)).
@@ -497,7 +504,8 @@ staff acting as a merchant. It must not be removable by deleting either party.
 
 `ON DELETE` governs *hard* deletes only. Merchant-facing deletion is
 [soft](DECISIONS.md#adr-014--soft-delete-applies-to-merchant-content-only) —
-setting `deleted_at`, which no foreign key sees. `CASCADE` on the option domain is
+moving `deleted_at` off its sentinel to a real timestamp, which no foreign key
+sees. `CASCADE` on the option domain is
 therefore a safety net for genuine row removal (a purge, a test teardown), not the
 mechanism a merchant's "delete" button uses.
 
