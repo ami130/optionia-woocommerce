@@ -317,11 +317,50 @@ reasoning for billing). Development proceeds against a `LogMailer` that writes t
 the ops log. What waits is only M6.0's final acceptance criterion: delivery of each
 template confirmed to a real inbox.
 
-**Recommendation.** Postmark or Resend for a product at this stage — both have
-straightforward APIs, delivery webhooks for the bounce and complaint handling M6.0
-requires, and no AWS identity setup. SES is materially cheaper at volume and worth
-revisiting once send volume is known, which is why the `Mailer` abstraction exists.
+**Resolved for development — SMTP, with the production choice still open.**
+Development and the closed beta send through authenticated SMTP on
+`parselab.com`. This unblocks every flow that needs mail, immediately.
 
+It is deliberately *not* the production answer, for reasons that are specific
+rather than stylistic:
+
+- **Volume.** Gmail-class SMTP caps around 500 messages a day and throttles
+  bursts. Verification plus invitations plus dunning crosses that quietly as the
+  merchant base grows.
+- **No delivery webhooks.** M6.0 requires that "a hard bounce marks the address
+  undeliverable and surfaces it in the dashboard". SMTP provides no callback, so
+  `email_deliveries` and `email_suppressions` have nothing to populate them.
+  **This is a stated milestone requirement, and it is not met by SMTP.**
+- **Shared sending domain.** M6.0 asks for a dedicated transactional subdomain so
+  a marketing send cannot damage transactional reputation. Sending through the
+  company's ordinary mailbox couples the two.
+
+**Therefore M6.0's acceptance criterion is amended**, so this does not later read
+as though it were fully satisfied:
+
+```text
+was:  delivery for each template confirmed to a real inbox
+now:  delivery for each template confirmed to a real inbox via SMTP;
+      bounce and complaint handling deferred with the production provider,
+      and the suppression tables built but not yet fed
+```
+
+**The cost of deferring is close to zero**, which is why this is the right order.
+The `Mailer` interface, the template catalogue and the delivery tables are
+provider-agnostic by design, so adopting Postmark, Resend or SES later is one
+adapter and a set of DNS records — not a rewrite. That is the same reasoning
+[M22.2](#m222--billingprovider-abstraction) applies to billing providers.
+
+**When it must be revisited:** before [Phase 33](#phase-33--closed-beta) opens to
+merchants outside the beta, or the first time a bounce goes unnoticed — whichever
+comes first.
+
+**Recommendation when it is.** Postmark or Resend at this stage — straightforward
+APIs, delivery webhooks for the bounce handling M6.0 requires, and no AWS identity
+setup. SES is materially cheaper at volume and worth revisiting once send volume
+is known.
+
+---
 
 ## S2. Architecture Contract
 
@@ -2134,8 +2173,22 @@ failing forever.
 authenticates without expiry. Verification and reset links are single-use and
 time-limited.
 
-**Acceptance:** every template renders in both formats; SPF/DKIM/DMARC verified; a send
-failure is visible in the ops queue; delivery for each template confirmed to a real inbox.
+**Acceptance:** every template renders in both formats; a send failure is visible in the
+ops queue; delivery for each template confirmed to a real inbox.
+
+> **Amended by [D4](#d4--transactional-email-provider).** Development and the closed beta
+> send through authenticated SMTP, so two clauses of this milestone are explicitly not met
+> yet and are tracked rather than quietly dropped:
+>
+> - **SPF/DKIM/DMARC on a dedicated sending subdomain** — waits for the production
+>   provider; SMTP through an existing mailbox cannot satisfy it.
+> - **Bounce and complaint handling** — SMTP has no delivery webhook, so
+>   `email_deliveries` and `email_suppressions` are built to shape and populated on send,
+>   but nothing yet marks an address undeliverable.
+>
+> Both are cheap to add later precisely because the `Mailer` interface and those tables are
+> provider-agnostic. Neither may be forgotten: they are re-checked before
+> [Phase 33](#phase-33--closed-beta) opens beyond the beta.
 
 ### M6.1 — Merchant authentication
 
