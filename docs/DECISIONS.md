@@ -177,3 +177,127 @@ reports the other version.
 
 **Revisit** when a floor is raised — dropping Node 20 or PHP 7.4 is a
 compatibility decision with merchant impact, not a convenience.
+
+---
+
+## ADR-009 — Every response is wrapped in an envelope
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+Success and failure share one shape. Controllers return domain objects; a global
+interceptor wraps them.
+
+```jsonc
+// success
+{
+  "data": { "id": "...", "name": "..." },
+  "meta": { "requestId": "01J...", "timestamp": "2026-08-24T10:00:00.000Z" }
+}
+
+// success, paginated — meta carries the cursor, data stays a clean array
+{
+  "data": [ /* ... */ ],
+  "meta": { "requestId": "...", "timestamp": "...",
+            "pagination": { "cursor": "...", "hasMore": true, "limit": 50 } }
+}
+
+// failure — same envelope, `error` replaces `data`
+{
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Human-readable summary.",
+    "details": [ { "field": "label", "code": "TOO_LONG", "params": { "max": 60 } } ]
+  },
+  "meta": { "requestId": "...", "timestamp": "..." }
+}
+```
+
+**Alternatives.** Returning the resource directly (no wrapper) is simpler for
+clients and was rejected.
+
+**Reasoning.** The decisive factor is that one client **cannot be redeployed on
+demand**. The WooCommerce plugin runs on merchant infrastructure we do not
+control; a merchant may run a two-year-old version indefinitely. Adding a field
+to a bare response body risks breaking a parser we cannot update.
+
+An envelope gives a permanent place to add `meta` — pagination, deprecation
+warnings, rate-limit state — without ever changing the shape of `data`. The cost
+is that every client unwraps `.data` forever. That is a small, one-time cost paid
+against an open-ended benefit.
+
+`meta.requestId` appears on every response, including errors, so a merchant
+support ticket can quote one value that ties their symptom to a server log line.
+
+**Consequence.** No controller ever constructs a response shape. The plugin's
+`Api\ResponseValidator` and the dashboard's API client both unwrap centrally.
+
+---
+
+## ADR-010 — Error codes are a public contract
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+`error.code` is `SCREAMING_SNAKE_CASE`, stable, and versioned with the API.
+Messages are for humans and may change freely; codes are for machines and may
+not.
+
+**Taxonomy.** Codes are grouped by cause, and the group determines the HTTP
+status:
+
+| Group | HTTP | Examples |
+|---|---|---|
+| Validation | 400 | `VALIDATION_FAILED`, `MALFORMED_JSON` |
+| Authentication | 401 | `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `TOKEN_INVALID` |
+| Authorization | 403 | `FORBIDDEN`, `INSUFFICIENT_ROLE` |
+| Not found | 404 | `NOT_FOUND` |
+| Conflict | 409 | `CONFLICT`, `ALREADY_EXISTS`, `VERSION_MISMATCH` |
+| Limits | 429 | `RATE_LIMITED`, `PLAN_LIMIT_EXCEEDED` |
+| Server | 500 | `INTERNAL_ERROR` |
+| Dependency | 503 | `SERVICE_UNAVAILABLE` |
+
+**Two rules that are security decisions, not style:**
+
+1. **A cross-tenant access attempt returns `NOT_FOUND`, never `FORBIDDEN`.**
+   `FORBIDDEN` confirms the resource exists, which turns an authorization boundary
+   into an enumeration oracle. From outside the tenant, the resource does not
+   exist.
+
+2. **`INTERNAL_ERROR` never carries detail.** Stack traces, SQL fragments and
+   driver messages are logged with the `requestId` and never returned. A
+   `QueryFailedError` reaching a client leaks schema.
+
+**Field-level detail** lives in `error.details[]` as structured entries — `field`,
+`code`, `params` — not as pre-formatted English. The dashboard needs to render
+these next to form fields and translate them; a sentence cannot be localised
+after the fact.
+
+---
+
+## ADR-011 — API versioning and deprecation
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+All routes are prefixed `/v1`. `/health` is deliberately unversioned — monitoring
+should not have to track API versions.
+
+**Deprecation policy.**
+
+| | Commitment |
+|---|---|
+| Support window | N and N−1 supported concurrently. A version is never removed while a supported plugin release depends on it. |
+| Notice period | **12 months minimum** before a version is switched off. |
+| Signalling | A deprecated version returns `Deprecation` and `Sunset` headers (RFC 8594), and `meta.deprecation` in the envelope. |
+| Breaking change | Anything that removes a field, narrows a type, tightens validation, or changes an error code. Adding an optional field is not breaking. |
+
+**Reasoning.** The window exists because of the plugin, not the dashboard. The
+dashboard is deployed by us and always current. The plugin is installed on
+merchant sites that may never update — WordPress plugins routinely run years
+behind — so a version switched off is a merchant's storefront losing its options.
+
+12 months is the shortest period that lets a merchant who checks their site
+annually still see a warning before anything breaks.
+
+**Related but separate:** the config document carries its own `schema_version`
+(M7.5, M9.5), which lets an old plugin refuse a document it cannot parse rather
+than rendering it wrongly. API version and config schema version move
+independently.

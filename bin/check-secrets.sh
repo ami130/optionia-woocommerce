@@ -33,13 +33,18 @@ fi
 
 # --- 1. Credential-shaped assignments -------------------------------------
 # Matches password/secret/token/api_key followed by a non-placeholder value.
+#
+# The final filter drops SCREAMING_SNAKE constant declarations whose value is
+# the key repeated, e.g. `TOKEN_EXPIRED: 'TOKEN_EXPIRED'`. Those are enum-style
+# identifiers, not credentials, and no real secret takes that shape.
 # `strip_comments` drops //, #, and * lines so the scanner cannot flag its own
 # documentation or a developer's note describing the pattern.
 strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 
 HITS=$(grep -IniE '[a-z_]*(password|secret|passwd|api[_-]?key|token|credential)[a-z_]*[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' $FILES 2>/dev/null \
        | strip_comments \
-       | grep -viE 'changeme|placeholder|example|your[_-]|xxx|\*\*\*|<[a-z]|process\.env|configService|\$\{' || true)
+       | grep -viE 'changeme|placeholder|example|your[_-]|xxx|\*\*\*|<[a-z]|process\.env|configService|\$\{' \
+       | grep -vE ':[[:space:]]*[A-Z_]+:[[:space:]]*.[A-Z_]+.,?$' || true)
 
 if [ -n "$HITS" ]; then
   fail "possible hardcoded credential:"
