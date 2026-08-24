@@ -1,7 +1,7 @@
 {
   "name": "optionia-woocommerce-backend",
   "version": "0.1.0",
-  "description": "Optionia for WooCommerce \u2014 SaaS API. Authoring, tenancy, billing.",
+  "description": "Optionia for WooCommerce — SaaS API. Authoring, tenancy, billing.",
   "license": "UNLICENSED",
   "private": true,
   "engines": {
@@ -31,7 +31,8 @@
     "check": "npm run check:secrets && npm run check:scripts && npm run lint && npm run typecheck && npm run test && npm run test:e2e",
     "check:scripts": "bash bin/check-scripts.sh",
     "db:seed": "ts-node -r tsconfig-paths/register src/seeds/run-seeds.ts",
-    "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts"
+    "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts",
+    "check:docs": "bash bin/check-docs.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

@@ -663,3 +663,65 @@ page, which currently advertises "All Option Types (30+)" and "Edit Options in
 Cart" — neither in MVP scope (M1.6). The risk is not that the numbers are
 provisional; it is that they quietly become real without anyone checking them
 against what is being sold.
+
+---
+
+## ADR-020 — Documentation that states a guarantee is checked mechanically
+
+**Status:** accepted
+**Date:** Phase 5, Step 5
+
+### Context
+
+`docs/DATABASE.md` drifted from the schema twice in a single phase. It promised a
+fixture with a cascading rule and one with roughly forty options; for a while
+`option_rules` held zero rows and the largest option group held one option. Both
+times the gap was found by a person reading the document and comparing it against
+the database by hand.
+
+That is the slowest and least reliable detector available, and it only works when
+someone happens to look. The document is not decoration: its delete-rule table is
+the reference someone consults when asking whether GDPR erasure is possible. A
+wrong answer there is acted upon.
+
+### Decision
+
+Where documentation states something a query can verify, a check verifies it.
+`bin/check-docs.sh` compares the documented tables against the tables migrations
+create, and every `ON DELETE` rule the document asserts against
+`information_schema`. It runs in CI after `migration:run`, because it needs a
+migrated database to compare against.
+
+It deliberately does not check prose. A document can pass this and still explain
+a column badly; the goal is narrower — it cannot silently describe a schema that
+no longer exists.
+
+Two properties matter more than the check itself:
+
+**It fails when it stops covering anything.** If a foreign key exists with no
+stated rule in the document, the check fails rather than quietly verifying the
+remainder. The first version of this check reported `All doc checks passed` while
+comparing **zero** rules: the document writes columns in `snake_case` and the
+schema uses `camelCase`, so every comparison fell through a `continue` that was
+meant to skip prose. A green check that inspects nothing is worse than no check,
+because it stops anyone from looking.
+
+**It was proven against real regressions.** Three were introduced deliberately: a
+rule changed from RESTRICT to CASCADE in the document, a table documented that no
+migration creates, and a rule line deleted. Each was caught, and the third — the
+coverage floor — is the one that would have hidden the original defect.
+
+### Consequences
+
+Adding a table or a foreign key now requires updating `docs/DATABASE.md` in the
+same commit, or CI fails. That is the intended cost: the alternative is a document
+that is trusted and wrong.
+
+The `camelCase`/`snake_case` normalisation is a known fragility. It is acceptable
+only because the coverage floor makes silent failure loud — if normalisation ever
+breaks, the count drops and the check fails rather than passing vacuously.
+
+This generalises a pattern the phase arrived at three times over: `check-secrets.sh`,
+`check-scripts.sh`, and the seed tests all exist because something was verified
+once by hand and had no guard afterwards. The rule now stated plainly: **a
+guarantee verified manually is a guarantee with no guard.**

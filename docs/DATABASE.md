@@ -436,6 +436,12 @@ Four rules, chosen by what the row *is*:
 
 ### The full map
 
+Every rule below is compared against `information_schema` by `bin/check-docs.sh`
+in CI, and the check fails if any foreign key here is missing or disagrees with
+the schema ([ADR-020](DECISIONS.md#adr-020--documentation-that-states-a-guarantee-is-checked-mechanically)).
+This table is consulted to answer whether GDPR erasure is possible, so a wrong
+answer here gets acted upon — it is checked rather than trusted.
+
 ```sql
 -- Tenancy ------------------------------------------------------------------
 tenants.plan_id            → plans(id)              ON DELETE RESTRICT
