@@ -2468,6 +2468,41 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Carried forward from the Phase 6 close audit
+
+Three findings, all found by probing behaviour. **335 unit and 170 e2e tests pass
+with every one of them true**, which is the reason the audit ran at all.
+
+**1. Rate limiting does not work. Any of it.** Twenty-five registrations against a
+declared limit of 5/hour all returned 202; twelve logins against a limit of 10 per
+15 minutes all returned 401 with no 429. `ThrottlerGuard` and `AuthThrottlerGuard`
+are both wired, and neither fires.
+
+This is the most serious finding in the phase. M6.1 names these endpoints as the
+credential-stuffing and email-bombing surface, and the per-account keying built in
+6d has never actually rejected a request. **No test covers it** — the limits were
+declared and assumed.
+
+**2. A route that forgets `@RequireCapability` is unprotected.** A `viewer`
+reached a publish route and got 200. `CapabilityGuard` returns `true` when no
+capability is declared, which is defensible — but the comment beside that line
+says *"M6.6 asserts that every mutating route declares one, so a missing decorator
+fails a test rather than passing silently"*, and **no such test exists**.
+
+Same shape as the doc checker that reported success while comparing zero delete
+rules: a claim written as though it were verified.
+
+**3. Nothing writes to `audit_logs`.** M6.5 rule 3 requires auditing every
+privileged action — role changes, publishes, billing changes, deletions.
+`TeamService.changeRole` and `remove` are exactly that and write no row. The table
+has every column it needs.
+
+Distinct from the impersonation deferral: that waits on a platform surface, this
+is a table sitting unused beside code that should be filling it.
+
+**All three are Phase 6 work, not Phase 7 work.** They are the difference between
+controls that exist and controls that operate.
+
 #### Carried forward from the 6a–6c audit
 
 Three files added in 6b have **0% coverage**, all in the mail transport layer.
