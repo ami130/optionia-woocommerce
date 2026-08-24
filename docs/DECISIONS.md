@@ -137,3 +137,43 @@ is already known.
 
 **Revisit before Phase 14**, where type coverage and parity claims actually
 matter.
+
+---
+
+## ADR-007 — Branch strategy: `main` and `develop`
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+All three repositories use `main` (release) and `develop` (integration), with
+`feature/*` and `fix/*` branched from `develop`.
+
+**Reasoning.** Git's default `master` was in place while the CI workflows
+triggered on `main` and `develop`. The consequence was not a failing build but no
+build at all — CI never fired, and a repository with no enforcement looks
+identical to one that is passing.
+
+The names were already specified in the plan's git strategy; the repositories had
+simply never been aligned with it.
+
+**Consequence.** Work happens on `develop`. `main` is fast-forwarded from
+`develop` at a release point, so the two never diverge silently.
+
+---
+
+## ADR-008 — CI tests the supported version range, not one version
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+The backend tests Node 20 and 24. The plugin tests PHP 7.4 and 8.4.
+
+**Reasoning.** Development ran Node 24 while CI pinned 20, and `package.json`
+declared `>=20` — so nothing complained, and a Node 24 API used locally would
+have failed only in CI. The same applies to the plugin: 7.4 is the floor in its
+header, and merchants on shared hosting genuinely still run it.
+
+Declaring support for a version and never testing it makes the support a claim
+rather than a fact. Both matrices use `fail-fast: false` so one failure still
+reports the other version.
+
+**Revisit** when a floor is raised — dropping Node 20 or PHP 7.4 is a
+compatibility decision with merchant impact, not a convenience.
