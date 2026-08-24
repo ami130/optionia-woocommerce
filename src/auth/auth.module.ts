@@ -9,6 +9,8 @@ import { MailModule } from '../mail/mail.module';
 import { MailService } from '../mail/mail.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantMember } from '../tenants/entities/tenant-member.entity';
+import { TenantInvitation } from '../tenants/entities/tenant-invitation.entity';
+import { TeamService } from '../tenants/team.service';
 import { TenantProvisioningService } from '../tenants/tenant-provisioning.service';
 import { User } from '../users/entities/user.entity';
 import { AuthController } from './auth.controller';
@@ -36,6 +38,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
       User,
       Tenant,
       TenantMember,
+      TenantInvitation,
       EmailVerificationToken,
       PasswordResetToken,
       RefreshToken,
@@ -49,6 +52,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
   providers: [
     AuthTokensService,
     TenantProvisioningService,
+    TeamService,
     JwtAuthGuard,
     TenantGuard,
     CapabilityGuard,
@@ -100,6 +104,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
     AuthTokensService,
     SessionsService,
     AuthJwtService,
+    TeamService,
     JwtAuthGuard,
     TenantGuard,
     CapabilityGuard,

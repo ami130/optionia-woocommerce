@@ -32,7 +32,12 @@ if [ -z "$FILES" ]; then
 fi
 
 # --- 1. Credential-shaped assignments -------------------------------------
-# Matches password/secret/token/api_key followed by a non-placeholder value.
+# Matches password/secret/pass/token/api_key followed by a non-placeholder value.
+#
+# `pass` is listed separately from `password`. Without it `SMTP_PASS` — the exact
+# name this project uses for its mail credential — matched nothing, and a real
+# Gmail app password pasted there passed the scan. Found by testing the scanner
+# against four credential shapes rather than one.
 #
 # The final filter drops SCREAMING_SNAKE constant declarations whose value is a
 # bare identifier, e.g. `TOKEN_EXPIRED: 'TOKEN_EXPIRED'` or
@@ -49,10 +54,40 @@ fi
 # documentation or a developer's note describing the pattern.
 strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 
-HITS=$(grep -IniE '[a-z_]*(password|secret|passwd|api[_-]?key|token|credential)[a-z_]*[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' $FILES 2>/dev/null \
+# Drop enum members whose value echoes their key.
+#
+# `TOKEN_EXPIRED: 'TOKEN_EXPIRED'`, `PASSWORD_CHANGED: 'password_changed'` and
+# `STORES_ROTATE_CREDENTIAL: 'stores:rotate_credential'` are all the same shape:
+# a constant whose value is its own name, differing only in case and separator.
+#
+# This is checked rather than approximated. An earlier version allowed any
+# identifier-shaped value, which was tested against real leaks and let three of
+# four through — `sk_live_51H8xQ2eZvKYlo2C` and a Gmail app password are both
+# pure identifier characters. A secret cannot echo its key, so this comparison
+# is safe in a way a character-class rule is not.
+strip_enum_members() {
+  awk -F: '
+    {
+      line = $0
+      # key: the SCREAMING_SNAKE identifier before the colon-quote
+      if (match(line, /[A-Z][A-Z0-9_]*[[:space:]]*:[[:space:]]*["'"'"']/)) {
+        key = substr(line, RSTART, RLENGTH)
+        gsub(/[^A-Za-z0-9]/, "", key)
+        # value: the quoted literal
+        if (match(line, /["'"'"'][^"'"'"']+["'"'"']/)) {
+          val = substr(line, RSTART + 1, RLENGTH - 2)
+          gsub(/[^A-Za-z0-9]/, "", val)
+          if (toupper(key) == toupper(val)) next
+        }
+      }
+      print line
+    }'
+}
+
+HITS=$(grep -IniE '[a-z_]*(password|secret|passwd|pass|api[_-]?key|token|credential)[a-z_]*[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' $FILES 2>/dev/null \
        | strip_comments \
        | grep -viE 'changeme|placeholder|example|your[_-]|xxx|\*\*\*|<[a-z]|process\.env|configService|\$\{' \
-       | grep -vE ':[[:space:]]*[A-Z_]+:[[:space:]]*.[A-Za-z_]+.,?$' || true)
+       | strip_enum_members || true)
 
 if [ -n "$HITS" ]; then
   fail "possible hardcoded credential:"
