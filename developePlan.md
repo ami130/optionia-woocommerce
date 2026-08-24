@@ -2209,8 +2209,22 @@ rate-limited and do not leak whether an address is registered.
 
 ### M6.2 — Tenant provisioning
 
-On registration: create tenant, add user as `owner`, start trial, seed a default empty
-option set. One atomic transaction.
+On registration: create tenant, add user as `owner`, start trial. One atomic transaction.
+
+> **Amended during 6f.** This milestone also said "seed a default empty option set". That
+> is not possible here and the schema is right, not the plan: `option_sets.store_id` is
+> `NOT NULL` with `ON DELETE CASCADE`, because an option set describes options *on a
+> storefront* — a set belonging to no store has nothing to render on and no lifecycle.
+>
+> A merchant has no store at registration; connecting one is
+> [Phase 8](#phase-8--woocommerce-store-connection). Making the column nullable to satisfy
+> this line would weaken a constraint that is load-bearing for
+> [AC5](#ac5--tenant-isolation-is-enforced-at-the-data-access-layer), so the default set is
+> created **when the first store is connected** (M8.x) rather than at registration.
+>
+> The onboarding intent behind the line is preserved — a merchant still finds something to
+> edit rather than an empty builder — it just happens one step later, at the first moment
+> it can mean anything.
 
 ### M6.3 — `TenantGuard` and request context
 
