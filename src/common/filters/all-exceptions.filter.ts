@@ -13,6 +13,12 @@ import { getRequestId } from '../context/request-context';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes';
 import type { ApiError, ApiErrorResponse, ErrorDetail } from '../http/api-response.types';
 
+/** What `main.ts`'s exceptionFactory emits for each failed constraint. */
+interface ValidationMessage {
+  readonly field: string;
+  readonly message: string;
+}
+
 /**
  * Converts every thrown value into the error envelope. See ADR-009, ADR-010.
  *
@@ -162,13 +168,49 @@ export class AllExceptionsFilter implements ExceptionFilter {
    * the conventional prefix and the rest kept as the message. Domain code
    * should throw `DomainException.validation()` with real details instead.
    */
-  private toValidationDetails(messages: string[]): ErrorDetail[] {
+  /**
+   * Turn the ValidationPipe's payload into per-field details.
+   *
+   * **The field name is the point.** ADR-009 promises structured details so a
+   * form can highlight the input at fault; without a field the client can only
+   * say "something is wrong", which is the least useful thing an API can tell a
+   * user filling in a form.
+   *
+   * Two shapes arrive here. `main.ts` configures an `exceptionFactory` that
+   * emits `{ field, message }` objects, which is the accurate path. Plain
+   * strings still occur — a `BadRequestException` thrown by hand, or a pipe
+   * configured elsewhere — so they are handled rather than dropped, with the
+   * field recovered from the message where class-validator names it first.
+   */
+  private toValidationDetails(messages: Array<string | ValidationMessage>): ErrorDetail[] {
     return messages.map((raw) => {
-      const [field, ...rest] = raw.split(' - ');
+      if (typeof raw === 'object' && raw !== null && 'field' in raw) {
+        return {
+          field: String(raw.field),
+          code: 'INVALID',
+          params: { message: String(raw.message) },
+        };
+      }
 
-      return rest.length > 0
-        ? { field: field.trim(), code: 'INVALID', params: { message: rest.join(' - ').trim() } }
-        : { field: '', code: 'INVALID', params: { message: raw } };
+      const text = String(raw);
+
+      // The historical `field - message` form, still produced by anything that
+      // throws a BadRequestException by hand.
+      const [head, ...rest] = text.split(' - ');
+
+      if (rest.length > 0) {
+        return {
+          field: head.trim(),
+          code: 'INVALID',
+          params: { message: rest.join(' - ').trim() },
+        };
+      }
+
+      // Otherwise the field is unknown. Guessing from the first word would
+      // label "something went wrong" as a field called `something`, which is
+      // worse than admitting we do not know — a form would highlight nothing
+      // and the message would look like a bug.
+      return { field: '', code: 'INVALID', params: { message: text } };
     });
   }
 

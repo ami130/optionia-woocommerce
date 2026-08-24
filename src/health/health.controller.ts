@@ -1,4 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
+
+import { Public } from '../auth/guards/public.decorator';
 import {
   HealthCheck,
   HealthCheckService,
@@ -16,6 +18,18 @@ import {
  * Also excluded from the response envelope — Terminus returns a flat body that
  * probes expect, and wrapping it would break them for no benefit.
  */
+/**
+ * Unauthenticated, deliberately.
+ *
+ * Authentication is global (`APP_GUARD`), so this marker is what keeps the probe
+ * reachable. A load balancer has no credentials, and a health check returning 401
+ * is indistinguishable from one returning 500 — the orchestrator restarts a
+ * healthy service in a loop.
+ *
+ * The body is safe to expose: connectivity, a version and a Node version. It
+ * reveals nothing about tenants or data.
+ */
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

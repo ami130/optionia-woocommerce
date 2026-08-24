@@ -93,6 +93,21 @@ import { RefreshToken } from './entities/refresh-token.entity';
         new AuthService(users, tokens, mail, dataSource, sessions, tenants, loadConfig().appUrl),
     },
   ],
-  exports: [AuthService, AuthTokensService, SessionsService, AuthJwtService, JwtAuthGuard, TenantGuard],
+  exports: [
+    AuthService,
+    AuthTokensService,
+    SessionsService,
+    AuthJwtService,
+    JwtAuthGuard,
+    TenantGuard,
+    // `TenantGuard` is a plain class, so Nest constructs it in whichever module
+    // applies it — and that module needs the repository it injects. Exporting
+    // the guard without this makes every consumer fail at boot, in a message
+    // naming the consumer rather than the cause.
+    //
+    // The services above are unaffected: factories build them here, so they
+    // arrive fully constructed.
+    TypeOrmModule,
+  ],
 })
 export class AuthModule {}

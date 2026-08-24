@@ -6,6 +6,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { buildDataSourceOptions } from './config/data-source';
 import { loadConfig } from './config/env';
 import { AuthModule } from './auth/auth.module';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MailModule } from './mail/mail.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
@@ -62,6 +63,18 @@ import { HealthModule } from './health/health.module';
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ApiResponseInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+
+    /**
+     * Authentication is global, and routes opt **out** with `@Public()`.
+     *
+     * The inverse — applying the guard per controller — makes forgetting it a
+     * silent hole rather than a 401 during development. Every unauthenticated
+     * route is now visible in a single grep for the decorator.
+     *
+     * Ordered after the throttler so an unauthenticated flood is rejected before
+     * it costs a signature verification.
+     */
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })
 export class AppModule {}

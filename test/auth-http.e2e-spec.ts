@@ -1,4 +1,4 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { config as loadDotenv } from 'dotenv';
 import * as request from 'supertest';
@@ -35,7 +35,22 @@ describe('auth endpoints (e2e)', () => {
     // pipe the validation tests would pass for the wrong reason.
     app.setGlobalPrefix('v1', { exclude: ['health'] });
     app.useGlobalPipes(
-      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        // Mirrors main.ts. Without it these tests would assert on a shape the
+        // application does not produce.
+        exceptionFactory: (errors) =>
+          new BadRequestException(
+            errors.flatMap((error) =>
+              Object.values(error.constraints ?? {}).map((message) => ({
+                field: error.property,
+                message,
+              })),
+            ),
+          ),
+      }),
     );
     await app.init();
 
@@ -102,6 +117,52 @@ describe('auth endpoints (e2e)', () => {
       });
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe('validation details name the field (ADR-009)', () => {
+    /**
+     * A detail with no field tells a form that something is wrong and not what,
+     * which is the least useful thing an API can say to someone filling one in.
+     * Every entry was previously `field: ''`, including one whose own message
+     * named the property.
+     */
+    it('names the field for each failed constraint', async () => {
+      const response = await post('register', {
+        email: 'a@b.com',
+        password: 'short',
+        name: 'x',
+      });
+
+      expect(response.status).toBe(400);
+
+      const fields = (response.body.error?.details ?? []).map(
+        (d: { field: string }) => d.field,
+      );
+
+      expect(fields).toContain('password');
+      expect(fields.every((f: string) => f.length > 0)).toBe(true);
+    });
+
+    it('names the field on an invalid email', async () => {
+      const response = await post('register', {
+        email: 'not-an-address',
+        password: PASSWORD,
+        name: 'x',
+      });
+
+      const fields = (response.body.error?.details ?? []).map(
+        (d: { field: string }) => d.field,
+      );
+
+      expect(fields).toContain('email');
+    });
+
+    /** One field can fail several rules, and each is a separate thing to fix. */
+    it('reports every failed constraint, not just the first', async () => {
+      const response = await post('register', { email: 'nope', password: 'x', name: 'y' });
+
+      expect((response.body.error?.details ?? []).length).toBeGreaterThanOrEqual(2);
     });
   });
 

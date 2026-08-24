@@ -1,5 +1,6 @@
 import 'reflect-metadata';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
+import type { ValidationError } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { config as loadDotenv } from 'dotenv';
 import helmet from 'helmet';
@@ -82,6 +83,21 @@ async function bootstrap(): Promise<void> {
       // Constraint names would tell a caller which validators run on which
       // fields. Useful in development, unnecessary detail in production.
       disableErrorMessages: config.isProduction,
+
+      /**
+       * Emit `{ field, message }` rather than flat strings.
+       *
+       * By default the pipe produces sentences like "password must be longer
+       * than or equal to 12 characters", and the filter had no reliable way to
+       * recover the property from one — so every detail arrived with an empty
+       * `field`, and a form could highlight nothing. ADR-009 promises per-field
+       * details; this is what makes them true rather than aspirational.
+       *
+       * Nested properties are joined with a dot (`address.postcode`), which is
+       * the path a client already uses to find the input.
+       */
+      exceptionFactory: (errors) =>
+        new BadRequestException(flattenValidationErrors(errors)),
     }),
   );
 
@@ -117,3 +133,29 @@ async function bootstrap(): Promise<void> {
 }
 
 void bootstrap();
+
+/**
+ * Flatten class-validator's tree into one entry per failed constraint.
+ *
+ * A single field can fail several constraints, and each is a separate thing the
+ * user has to fix — collapsing them would hide all but one.
+ */
+function flattenValidationErrors(
+  errors: ValidationError[],
+  parentPath = '',
+): Array<{ field: string; message: string }> {
+  return errors.flatMap((error) => {
+    const path = parentPath ? `${parentPath}.${error.property}` : error.property;
+
+    const own = Object.values(error.constraints ?? {}).map((message) => ({
+      field: path,
+      message,
+    }));
+
+    const nested = error.children?.length
+      ? flattenValidationErrors(error.children, path)
+      : [];
+
+    return [...own, ...nested];
+  });
+}
