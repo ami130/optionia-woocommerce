@@ -348,3 +348,184 @@ column name never appear in a serialised response.
 **Rule going forward:** a file with branching logic gets a unit test in the same
 commit that creates it. Runtime verification proves the paths taken, not the
 paths guarded against, and security controls are guards.
+
+---
+
+## ADR-013 — Money is stored as `BIGINT` minor units, not `DECIMAL`
+
+**Date:** 2026-08-24 · **Status:** Accepted · **Supersedes** the `DECIMAL(12,4)`
+line in `developePlan.md`
+
+Every money column is `BIGINT` holding integer minor units — cents for USD, yen
+for JPY, fils for KWD. The currency's decimal count comes from the store's
+WooCommerce settings, not from the column type.
+
+**Alternative.** The plan specifies `DECIMAL(12,4)` in MySQL with integer minor
+units in application code. Rejected.
+
+**Reasoning.** Integer minor units are already the representation *everywhere
+else*:
+
+```text
+plugin   Support\Money        int $minor          e.g. 1000
+wire     config document      "amount": 1000
+backend  common/money         number (integer)    1000
+database DECIMAL(12,4)        10.0000             ← the only conversion
+```
+
+Storing decimals means converting at every read and write. Conversions are
+exactly where rounding bugs live, and this is a pricing engine — a rounding bug
+is a customer charged the wrong amount on a merchant's store.
+
+`DECIMAL(12,4)` also encodes an assumption the product does not hold: four
+decimal places suits currencies with two, and is wrong for JPY (zero) and
+merely tolerable for KWD (three). `BIGINT` carries no scale, so the scale lives
+in one place — the store's currency setting — rather than being implied by a
+column type that cannot be changed per tenant.
+
+`BIGINT` holds ±9.2 × 10¹⁸ minor units. At two decimal places that is ninety
+quadrillion units of currency, which is not a limit any merchant reaches.
+
+**Consequence.** A raw `SELECT` shows `1000` rather than `10.0000`, so anyone
+reading the database directly must know the convention. Recorded in
+`docs/DATABASE.md`, and every money column is named with a `_minor` suffix so
+the unit is visible at the point of use.
+
+**Enforcement.** `Support\Money` on the plugin side and `common/money` on the
+backend share the fixture suite in M11.4, so a divergence in either
+representation fails CI.
+
+---
+
+## ADR-014 — Soft delete applies to merchant content only
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+Merchant-authored content carries `deleted_at`. Operational and platform tables
+hard-delete.
+
+| Soft delete | Hard delete |
+|---|---|
+| `option_sets`, `option_groups`, `options`, `option_values`, `option_rules`, `presentational_items`, `option_set_assignments` | `webhook_deliveries`, `sync_jobs`, `audit_logs`, `usage_records`, `billing_events`, `store_products`, `tenant_invitations` |
+
+**Reasoning.** The two categories fail differently. A merchant deleting an option
+set at 9pm and wanting it back is a support request that should take one query.
+A stale webhook-delivery row has no such value — it is a log line, and keeping
+deleted ones forever makes the operations queue slower for no benefit.
+
+`store_products` hard-deletes because it is a *mirror*, not a source of truth: a
+product deleted in WooCommerce should vanish here, and reconciliation
+(M19.3) rebuilds it if that was wrong.
+
+**Unique constraints must include `deleted_at`.** Otherwise a merchant who
+deletes an option named `size` can never create another named `size`, because the
+soft-deleted row still holds the key. MySQL treats NULLs as distinct in a unique
+index, so `UNIQUE (option_group_id, key, deleted_at)` permits many deleted rows
+with the same key and exactly one live row.
+
+**This conflicts with GDPR erasure, deliberately.** Phase 26b requires
+*irreversible* deletion of personal data on request. Soft delete is the opposite.
+They are reconciled by scope rather than by mechanism:
+
+- **Soft delete** applies to *configuration* — an option's label, its price, its
+  rules. None of that is personal data.
+- **Hard erasure** applies to *customer* data — `order_selections` values, uploaded
+  files. Those are erased in place, not flagged.
+
+The rule: **if a column can contain something a customer typed, it is never soft
+deleted.** A `deleted_at` on a row holding an engraving message would be a GDPR
+failure wearing a compliance-shaped mask.
+
+---
+
+## ADR-015 — What belongs in a JSON column
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+JSON columns hold **per-type configuration whose shape varies by option type**.
+Everything filtered, sorted, aggregated, or joined gets a real column.
+
+| JSON | Real column |
+|---|---|
+| `options.validation` — min/max length for text, blackout dates for a date picker, allowed MIME types for a file | `options.type`, `options.is_required`, `options.sort_order` |
+| `options.display` — swatch size, column count, help text placement | `option_values.price_amount_minor`, `price_type` |
+| `option_rules.conditions` — an arbitrary condition tree | `option_rules.action`, `target_type`, `target_id` |
+| `option_set_versions.snapshot` — an immutable published document | `option_sets.status`, `version`, `published_at` |
+
+**Reasoning.** JSON buys schema flexibility and costs queryability. A `text`
+option's validation has nothing in common with a `date` option's, so modelling
+both as columns means a table of mostly-NULLs that grows a column per type — the
+exact opposite of ADR-002's "adding a type touches three files".
+
+But `price_amount_minor` inside a JSON blob makes *"which option values cost more
+than $50?"* a full scan with JSON extraction, and pricing is the thing analytics
+and plan limits both need to see.
+
+**The test:** if a query would ever filter, sort, sum, or join on a value, it is
+a column. If it is only ever read alongside its parent row and interpreted by the
+type registry, it is JSON.
+
+**Every JSON column has a versioned Zod schema** validating it at the API
+boundary. A JSON column with no schema is an untyped bag, and MySQL will not
+help — it validates syntax, not shape.
+
+---
+
+## ADR-016 — `option_key` outlives its option, by design
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+`order_selections` stores `option_key`, `option_label`, `value_key`,
+`value_label` and `price_delta_minor` as **denormalized values with no foreign
+key** to `options` or `option_values`.
+
+**Reasoning.** Phase 4 proved the failure this prevents. An option was deleted
+from configuration while it sat in a customer's cart, and checkout completed:
+
+```text
+Order #32   HTTP 200   status: processing
+Total:      $100.00
+Line meta:  "Finish: Luxury"      ← the option no longer existed
+```
+
+An order is a historical fact. What the customer selected, what they were shown,
+and what they were charged do not change because a merchant later renamed or
+deleted the option. A foreign key would either block the deletion or cascade the
+order record away — both wrong.
+
+Labels are snapshotted for the same reason: a merchant renaming "Luxury" to
+"Premium" must not rewrite what a past customer saw on their receipt.
+
+**Consequence.** `order_selections` cannot be joined to current configuration to
+answer *"is this option still valid?"* — which is correct, because the answer is
+irrelevant to a completed order. Live validation happens at checkout
+(M12.4), against the config document, before the order exists.
+
+**Corollary for reorder.** Phase 4 also proved reorder reads selections from
+order meta rather than `$_POST`. Because those keys are denormalized, a reorder
+referencing a deleted option must be re-validated against current config, not
+trusted from the stored row. See M12.8.
+
+---
+
+## ADR-017 — `option_set_versions` belongs to Phase 5
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+The table is created in Phase 5 with the rest of the schema, though nothing
+writes to it until M7.4.
+
+**Reasoning.** The plan specifies it inside Phase 7, which would mean a schema
+migration the moment publish-and-rollback is built. Adding a table to a live
+database is not difficult, but the Phase 5 exit criteria require every migration
+to run forward and revert cleanly — and that verification is cheaper done once,
+against an empty database, than later against merchant data.
+
+**Two tables remain deliberately deferred:**
+
+| Table | Phase | Why deferred |
+|---|---|---|
+| `uploaded_files` | 15 | Its shape depends on the storage decision in M15.1, which is not yet made. Designing it now would guess. |
+| `analytics_rollups` | 25 | Rollup shape follows the questions merchants actually ask. Designing it before beta means designing the wrong aggregate. |
+
+Both are recorded here so their absence is a decision rather than an omission.
