@@ -1888,19 +1888,46 @@ in both directions. No data-destroying migration without an explicit, reviewed d
 
 ```text
 plans           Free / Pro / Business with real limits from M22.1
-roles           platform-staff and tenant roles with permission mappings
 super-admin     from env, never a hardcoded credential
 ```
+
+> **Corrected during Phase 5 closure.** This list originally carried a third
+> entry — `roles`, with permission mappings. There is nothing to seed: roles are
+> enum columns on `tenant_members` and `platform_staff` (`TenantRole`,
+> `StaffRole`), not rows in a `roles` table, and the permission matrix those
+> roles map to is [M6.5](#m65--roles-and-permission-matrix).
+>
+> Seeding it here would have meant inventing a permission model one phase before
+> the milestone that designs it — the same mistake as seeding a conditional rule
+> the engine cannot yet evaluate (ADR-018). The line predates the M6.5 split and
+> was never removed.
 
 **Development fixtures** — a `db:seed:demo` command producing a realistic tenant:
 
 ```text
 1 tenant · 1 connected store (mock) · 30 products
-4 option sets covering every shipped option type
-conditional rules incl. a cascading case
+5 option sets covering every shipped option type
+   → 4 published, plus 1 draft carrying 40 options across 4 groups
 50 historical orders with option selections spread across values
    → so analytics screens have something real to render
 ```
+
+> **Delivered, with one deferral.** The fixture produces 5 option sets (44
+> options, 134 values), 30 products, 50 orders and 147 selections spread across
+> more than five distinct values, all from a seeded PRNG so the data is identical
+> on every machine.
+>
+> The 40-option draft is the "200-option builder" case this milestone names below:
+> a builder that feels responsive with four options is why
+> [M28.5](#phase-28--performance) tests with a hundred. It is kept as a draft and
+> assigned to no product, because its purpose is to load the builder rather than
+> render on a storefront.
+>
+> **Conditional rules are not seeded.** This line originally asked for a cascading
+> case. The rule engine is [Phase 17](#phase-17--conditional-logic-engine), so a
+> seeded condition tree could not be validated, evaluated, or shown to be
+> cycle-free — JSON nobody can prove is meaningful. Deferred with the reason
+> recorded in ADR-018 rather than fabricated here.
 
 This matters more than it sounds. Without realistic fixtures, every developer builds
 against three hand-typed records, and the screens that break under real data — analytics,
@@ -1915,16 +1942,41 @@ populated environment in one command.
 ### Phase 5 exit criteria
 
 ```text
-[ ] optioniaWooCommerceBackend boots on its own database with no secrets in source
-[ ] All migrations run forward and revert cleanly
-[ ] Every tenant-scoped table has a tenant_id or an FK path to one
-[ ] Money columns are BIGINT minor units, named *_minor (ADR-013 supersedes the
+[x] optioniaWooCommerceBackend boots on its own database with no secrets in source
+[x] All migrations run forward and revert cleanly
+[x] Every tenant-scoped table has a tenant_id or an FK path to one
+[x] Money columns are BIGINT minor units, named *_minor (ADR-013 supersedes the
     earlier DECIMAL(12,4) guidance — see the reasoning below)
-[ ] Every FK declares ON DELETE behaviour; audit_logs.user_id is SET NULL so
+[x] Every FK declares ON DELETE behaviour; audit_logs.user_id is SET NULL so
     GDPR user erasure is possible
-[ ] docs/DATABASE.md written with an ERD
-[ ] Seeds produce a working demo tenant
+[x] docs/DATABASE.md written with an ERD
+[x] Seeds produce a working demo tenant
 ```
+
+**Phase 5 complete.** Evidence for each criterion, from a live database rather
+than from memory — several of this phase's defects existed because intent was
+recorded as if it were verification.
+
+| Criterion | Evidence |
+| --- | --- |
+| Boots, no secrets | Boots on :4000 with `Found 0 errors`; `/health` returns 200 with `database: up`. `check-secrets.sh` passes four checks, including that `.env` is untracked |
+| Migrations reversible | `migration:revert` succeeded with seed data present, then `migration:run` rebuilt from an empty database |
+| Tenant path | 8 tables carry `tenantId` directly, 15 reach one through an FK, 3 are deliberately global (`plans`, `users`, `billing_events`) |
+| Money columns | 9 money columns, every one `BIGINT` and named `*Minor`. `priceConfig` (json) and `priceType` (varchar) are a config blob and a discriminator, not money |
+| Delete rules | 32 FKs, **zero** reported as `NO ACTION` by MySQL: 18 CASCADE, 8 RESTRICT, 6 SET NULL. Both `audit_logs.userId` and `audit_logs.tenantId` are SET NULL, so erasure never destroys the audit trail |
+| `docs/DATABASE.md` | 26 documented tables against 26 live domain tables, and all 32 stated delete rules compared against `information_schema` — now enforced by `bin/check-docs.sh` in CI |
+| Seeds | 3 plans, 1 tenant, 30 products, 5 option sets (44 options, 134 values), 50 orders, 147 selections. 9 e2e tests cover idempotency, volume, determinism and the production guard |
+
+A full clean-database rehearsal was run end to end — drop, `migration:run`,
+`db:seed`, `db:seed:demo`, 28 e2e tests, boot, `/health` — because that is what a
+new developer does on day one and it had never been executed as one unbroken
+sequence.
+
+**Carried forward:** conditional rules are absent from the fixture. The rule
+engine is [Phase 17](#phase-17--conditional-logic-engine), so a seeded condition
+tree could not be validated, evaluated, or shown to be cycle-free — see ADR-018.
+Plan limits are provisional pending **D2**; `limits` is a JSON column, so
+revising them is an `UPDATE` rather than a migration.
 
 ---
 
