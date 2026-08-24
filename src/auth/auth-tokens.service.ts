@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 
 import { expiresIn, generateToken, hasExpired, hashToken } from '../common/crypto/tokens';
 import { EmailVerificationToken } from './entities/email-verification-token.entity';
@@ -51,19 +51,28 @@ export class AuthTokensService {
    * merchant who clicks "resend" three times leaves three working links, and the
    * two they abandoned stay valid for a day.
    */
-  async issueVerification(userId: string, email: string): Promise<string> {
+  async issueVerification(
+    userId: string,
+    email: string,
+    manager?: EntityManager,
+  ): Promise<string> {
+    // Must run on the caller's transaction when there is one. A repository bound
+    // to the outer connection would wait on a row lock the uncommitted
+    // transaction holds, and registration would deadlock until the pool timed
+    // out — which is exactly what happened before this parameter existed.
+    const repository = manager
+      ? manager.getRepository(EmailVerificationToken)
+      : this.verifications;
+
     // `IsNull()`, not `null`. TypeORM renders a bare null as `= NULL`, which is
     // never true in SQL — the update would match nothing and every resend would
     // leave the previous link working.
-    await this.verifications.update(
-      { userId, consumedAt: IsNull() },
-      { consumedAt: new Date() },
-    );
+    await repository.update({ userId, consumedAt: IsNull() }, { consumedAt: new Date() });
 
     const token = generateToken();
 
-    await this.verifications.save(
-      this.verifications.create({
+    await repository.save(
+      repository.create({
         userId,
         email,
         tokenHash: token.hash,
