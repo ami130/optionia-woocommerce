@@ -6,6 +6,8 @@ import { buildDataSourceOptions } from '../src/config/data-source';
 import { loadConfig } from '../src/config/env';
 import { TenantInvitation } from '../src/tenants/entities/tenant-invitation.entity';
 import { TenantMember } from '../src/tenants/entities/tenant-member.entity';
+import { AuditLog } from '../src/audit/entities/audit-log.entity';
+import { AuditService } from '../src/audit/audit.service';
 import { TeamService } from '../src/tenants/team.service';
 
 /**
@@ -37,6 +39,7 @@ describe('TeamService (integration)', () => {
       dataSource.getRepository(TenantMember),
       dataSource.getRepository(TenantInvitation),
       dataSource,
+      new AuditService(dataSource.getRepository(AuditLog)),
     );
   }, 30_000);
 
@@ -46,6 +49,7 @@ describe('TeamService (integration)', () => {
   });
 
   async function cleanup(): Promise<void> {
+    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM tenant_invitations WHERE tenantId LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM tenant_members WHERE tenantId LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM users WHERE id LIKE '${NS}-%'`);
@@ -286,6 +290,86 @@ describe('TeamService (integration)', () => {
       await expect(team.remove(TENANT, await memberId(OWNER))).rejects.toThrow(
         /at least one owner/,
       );
+    });
+  });
+
+  describe('privileged actions are audited (M6.5 rule 3)', () => {
+    async function entries(action: string): Promise<Array<Record<string, unknown>>> {
+      return dataSource.query(
+        `SELECT userId, resourceId, changes FROM audit_logs
+          WHERE tenantId = ? AND action = ?`,
+        [TENANT, action],
+      );
+    }
+
+    /**
+     * "Who made this person an owner" is the question asked after an incident,
+     * and before/after is what answers it. The table existed from Phase 5 and
+     * nothing wrote to it, which made the rule documentation rather than a
+     * control.
+     */
+    it('records a role change with what it changed from and to', async () => {
+      await dataSource.query(
+        `INSERT INTO tenant_members (id, tenantId, userId, role, acceptedAt, createdAt, updatedAt)
+         VALUES (?, ?, ?, 'owner', NOW(3), NOW(3), NOW(3))`,
+        [`${TENANT}-${SECOND_OWNER}`, TENANT, SECOND_OWNER],
+      );
+
+      await team.changeRole(TENANT, await memberId(OWNER), TenantRole.ADMIN);
+
+      const [row] = await entries('member.role_changed');
+      const changes =
+        typeof row.changes === 'string'
+          ? (JSON.parse(row.changes) as Record<string, { from: string; to: string }>)
+          : (row.changes as Record<string, { from: string; to: string }>);
+
+      expect(changes.role.from).toBe('owner');
+      expect(changes.role.to).toBe('admin');
+    });
+
+    it('records a removal, naming who was removed', async () => {
+      await team.remove(TENANT, await memberId(ADMIN));
+
+      const [row] = await entries('member.removed');
+      const changes =
+        typeof row.changes === 'string'
+          ? (JSON.parse(row.changes) as Record<string, string>)
+          : (row.changes as Record<string, string>);
+
+      expect(changes.userId).toBe(ADMIN);
+      expect(changes.role).toBe('admin');
+    });
+
+    it('records an invitation, attributed to the inviter', async () => {
+      await team.invite(TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR);
+
+      const [row] = await entries('member.invited');
+
+      expect(row.userId).toBe(OWNER);
+    });
+
+    /**
+     * The trail must never break the action. A row that cannot be written is an
+     * operations problem; a role change that fails because of one is the
+     * merchant's problem, and worse.
+     */
+    it('does not fail the action when the trail cannot be written', async () => {
+      // The swallow lives in AuditService, so this breaks the repository it
+      // writes through rather than the service itself — which is how the failure
+      // actually arrives: a full disk, a lock timeout, a dropped connection.
+      const failing = new AuditService({
+        create: (row: unknown) => row,
+        save: () => Promise.reject(new Error('audit storage unavailable')),
+      } as never);
+
+      const broken = new TeamService(
+        dataSource.getRepository(TenantMember),
+        dataSource.getRepository(TenantInvitation),
+        dataSource,
+        failing,
+      );
+
+      await expect(broken.remove(TENANT, await memberId(ADMIN))).resolves.toBeUndefined();
     });
   });
 

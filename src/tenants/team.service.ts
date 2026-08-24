@@ -6,6 +6,7 @@ import { expiresIn, generateToken, hashToken, hasExpired } from '../common/crypt
 import { TenantRole } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
+import { AuditAction, AuditService } from '../audit/audit.service';
 import { TenantInvitation } from './entities/tenant-invitation.entity';
 import { TenantMember } from './entities/tenant-member.entity';
 
@@ -28,6 +29,7 @@ export class TeamService {
     @InjectRepository(TenantInvitation)
     private readonly invitations: Repository<TenantInvitation>,
     private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -82,6 +84,14 @@ export class TeamService {
         expiresAt: expiresIn(INVITATION_TTL_MINUTES),
       }),
     );
+
+    await this.audit.record({
+      action: AuditAction.MEMBER_INVITED,
+      resourceType: 'tenant_invitation',
+      changes: { email: address, role },
+      tenantId,
+      userId: inviterUserId,
+    });
 
     return token.plaintext;
   }
@@ -168,6 +178,17 @@ export class TeamService {
     }
 
     await this.members.update({ id: member.id }, { role });
+
+    // Recorded after the change, so a failed update leaves no entry claiming it
+    // happened. Before/after is the whole value: "who made this person an owner"
+    // is the question asked after an incident.
+    await this.audit.record({
+      action: AuditAction.MEMBER_ROLE_CHANGED,
+      resourceType: 'tenant_member',
+      resourceId: member.id,
+      changes: { role: { from: member.role, to: role } },
+      tenantId,
+    });
   }
 
   /**
@@ -184,6 +205,14 @@ export class TeamService {
     }
 
     await this.members.update({ id: member.id }, { revokedAt: new Date() });
+
+    await this.audit.record({
+      action: AuditAction.MEMBER_REMOVED,
+      resourceType: 'tenant_member',
+      resourceId: member.id,
+      changes: { userId: member.userId, role: member.role },
+      tenantId,
+    });
   }
 
   /** Cancel an outstanding invitation. */

@@ -22,7 +22,22 @@ describe('auth endpoints (e2e)', () => {
   // parallel, and a shared `%@example.com` cleanup meant each suite deleted the
   // other's user mid-test — which passed when run alone and failed together.
   const NS = 'httpauth';
-  const EMAIL = `${NS}-user@example.com`;
+
+  /**
+   * A distinct address per test.
+   *
+   * Rate limiting is keyed on the submitted account and now actually works, so a
+   * shared address means later tests in the file are throttled by earlier ones.
+   * The counter shape mirrors reality — real users do not register the same
+   * address twelve times — rather than working around the limiter.
+   */
+  let sequence = 0;
+  let EMAIL = `${NS}-user-0@example.com`;
+
+  beforeEach(() => {
+    sequence += 1;
+    EMAIL = `${NS}-user-${sequence}@example.com`;
+  });
   const PASSWORD = 'a-sufficiently-long-password';
 
   beforeAll(async () => {

@@ -1,9 +1,8 @@
-import { Body, Controller, HttpCode, HttpStatus, Ip, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Ip, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
-import { AuthThrottlerGuard } from './auth-throttler.guard';
 import { AuthService } from './auth.service';
 import { AuthJwtService } from './jwt.service';
 import { Public } from './guards/public.decorator';
@@ -32,7 +31,6 @@ import {
  */
 @Public()
 @Controller('auth')
-@UseGuards(AuthThrottlerGuard)
 export class AuthController {
   constructor(
     private readonly auth: AuthService,

@@ -1,5 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 
+import { SkipThrottle } from '@nestjs/throttler';
+
 import { Public } from '../auth/guards/public.decorator';
 import {
   HealthCheck,
@@ -30,6 +32,22 @@ import {
  * reveals nothing about tenants or data.
  */
 @Public()
+/**
+ * Never rate limited.
+ *
+ * A liveness probe polls continuously and has no credentials, so it trips the
+ * burst bucket within seconds. A 429 there is indistinguishable from a 500 to an
+ * orchestrator, which restarts a healthy service in a loop — the same failure the
+ * `@Public()` marker above prevents, arriving by a different route.
+ *
+ * Safe to exempt: the endpoint reads one connection and returns three constants.
+ *
+ * Every bucket is named explicitly. `@SkipThrottle()` with no argument sets the
+ * skip for `default` alone — the guard checks the flag per named bucket — so the
+ * bare form left `short` and `sustained` active and 10 of 30 probes were still
+ * rejected.
+ */
+@SkipThrottle({ default: true, short: true, sustained: true })
 @Controller('health')
 export class HealthController {
   constructor(

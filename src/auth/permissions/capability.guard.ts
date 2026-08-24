@@ -29,11 +29,20 @@ export class CapabilityGuard implements CanActivate {
     );
 
     if (!required) {
-      // No declaration means no capability check. That is not a hole: the route
-      // is still behind JwtAuthGuard and TenantGuard, and M6.6 asserts that every
-      // mutating route declares one, so a missing decorator fails a test rather
-      // than passing silently.
-      return true;
+      // A route behind this guard must say what it requires.
+      //
+      // Returning true here was the previous behaviour, justified by a comment
+      // claiming a test asserted every mutating route declares a capability. No
+      // such test existed, and a probe confirmed the consequence: a `viewer`
+      // reached a publish route and got 200.
+      //
+      // Failing closed costs a developer one clear error the first time they add
+      // a route. Failing open costs a merchant their storefront, and does it
+      // silently.
+      throw new DomainException(
+        ErrorCode.FORBIDDEN,
+        'This action is not available.',
+      );
     }
 
     const ctx = getContext();

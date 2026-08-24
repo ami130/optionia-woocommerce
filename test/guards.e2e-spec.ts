@@ -65,6 +65,15 @@ class CapabilityProbeController {
   billing(): { ok: boolean } {
     return { ok: true };
   }
+
+  /**
+   * A route behind the guard that forgets to declare a capability — the
+   * realistic mistake, and the one that previously returned 200 to a viewer.
+   */
+  @Get('undeclared')
+  undeclared(): { ok: boolean } {
+    return { ok: true };
+  }
 }
 
 @Module({
@@ -224,6 +233,24 @@ describe('guards (e2e)', () => {
 
       expect(response.status).toBe(403);
       expect(response.body.error?.code).toBe('INSUFFICIENT_ROLE');
+    }, 40_000);
+
+    /**
+     * Fail closed.
+     *
+     * A probe found a `viewer` reaching a publish route and getting 200, because
+     * the route declared nothing and the guard let undeclared routes through.
+     * The comment beside that line claimed a test asserted every mutating route
+     * declares a capability; no such test existed.
+     *
+     * One clear error for a developer beats a silent hole for a merchant.
+     */
+    it('refuses a route that declares no capability, even for an owner', async () => {
+      const owner = await tokenAs('owner');
+      const viewer = await tokenAs('viewer');
+
+      expect((await call('undeclared', owner)).status).toBe(403);
+      expect((await call('undeclared', viewer)).status).toBe(403);
     }, 40_000);
 
     /**
