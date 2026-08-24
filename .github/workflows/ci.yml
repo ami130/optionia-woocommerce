@@ -97,6 +97,16 @@ jobs:
           JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
           CORS_ORIGINS: http://localhost:3000
 
+      # A dependency with a known advisory ships silently otherwise. Caught
+      # once by hand — nodemailer 7 had six advisories including CRLF header
+      # injection, which matters directly for a mailer that puts user-supplied
+      # names into headers. Nothing would have said so.
+      #
+      # --omit=dev because a devDependency advisory does not reach production
+      # and would block CI on something only a developer can reach.
+      - name: Dependency advisories
+        run: npm audit --omit=dev --audit-level=high
+
       # docs/DATABASE.md has drifted from the schema twice. Both times a person
       # found it by reading, which is the slowest detector available.
       - name: Documentation matches schema

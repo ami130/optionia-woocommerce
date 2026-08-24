@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { buildDataSourceOptions } from './config/data-source';
 import { loadConfig } from './config/env';
+import { MailModule } from './mail/mail.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { LoggingModule } from './common/logging/logging.module';
@@ -49,6 +50,7 @@ import { HealthModule } from './health/health.module';
       { name: 'sustained', ttl: 60_000, limit: 300 },
     ]),
 
+    MailModule,
     HealthModule,
   ],
 
