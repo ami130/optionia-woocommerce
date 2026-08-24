@@ -8,6 +8,9 @@ import { AppModule } from '../src/app.module';
 import { AuthModule } from '../src/auth/auth.module';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../src/auth/guards/tenant.guard';
+import { Capability } from '../src/auth/permissions/capabilities';
+import { CapabilityGuard } from '../src/auth/permissions/capability.guard';
+import { RequireCapability } from '../src/auth/permissions/require-capability.decorator';
 import { getContext } from '../src/common/context/request-context';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
 
@@ -38,7 +41,36 @@ class GuardProbeController {
   }
 }
 
-@Module({ imports: [AuthModule], controllers: [GuardProbeController] })
+/**
+ * Routes declaring the two capabilities the matrix separates most sharply.
+ * Editing is safe; publishing changes a live storefront and what customers pay.
+ */
+@Controller('capability-probe')
+@UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
+class CapabilityProbeController {
+  @Get('edit')
+  @RequireCapability(Capability.OPTION_SETS_EDIT)
+  edit(): { ok: boolean } {
+    return { ok: true };
+  }
+
+  @Get('publish')
+  @RequireCapability(Capability.OPTION_SETS_PUBLISH)
+  publish(): { ok: boolean } {
+    return { ok: true };
+  }
+
+  @Get('billing')
+  @RequireCapability(Capability.BILLING_MANAGE)
+  billing(): { ok: boolean } {
+    return { ok: true };
+  }
+}
+
+@Module({
+  imports: [AuthModule],
+  controllers: [GuardProbeController, CapabilityProbeController],
+})
 class GuardProbeModule {}
 
 describe('guards (e2e)', () => {
@@ -110,6 +142,107 @@ describe('guards (e2e)', () => {
    */
   it('boots a module that applies TenantGuard', () => {
     expect(app).toBeDefined();
+  });
+
+  describe('the permission matrix, enforced over HTTP (M6.5)', () => {
+    /**
+     * Roles are set on the membership row rather than minted into a token,
+     * because `TenantGuard` reads the stored role — which is the same path a
+     * real demotion takes.
+     */
+    async function tokenAs(role: string): Promise<string> {
+      // A distinct address per role *and* per suite section. The demotion test
+      // rewrites its user's role, and an earlier test asserting `owner` on a
+      // shared address failed because of it — a real conflict, not a code fault.
+      const email = `${NS}-cap-${role}@example.com`;
+      const token = await tokenFor(email);
+
+      await dataSource.query(
+        `UPDATE tenant_members tm JOIN users u ON u.id = tm.userId
+            SET tm.role = ? WHERE u.email = ?`,
+        [role, email],
+      );
+
+      return token;
+    }
+
+    const call = (path: string, token: string) =>
+      request(app.getHttpServer())
+        .get(`/v1/capability-probe/${path}`)
+        .set('Authorization', `Bearer ${token}`);
+
+    /**
+     * The single most important line in the matrix, asserted through the API
+     * rather than against the table — a client hiding the button is a courtesy,
+     * this is the rule.
+     */
+    it('lets an editor edit but not publish', async () => {
+      const token = await tokenAs('editor');
+
+      expect((await call('edit', token)).status).toBe(200);
+      expect((await call('publish', token)).status).toBe(403);
+    }, 40_000);
+
+    it('lets an owner do both', async () => {
+      const token = await tokenAs('owner');
+
+      expect((await call('edit', token)).status).toBe(200);
+      expect((await call('publish', token)).status).toBe(200);
+    }, 40_000);
+
+    it('refuses a viewer everything that changes state', async () => {
+      const token = await tokenAs('viewer');
+
+      expect((await call('edit', token)).status).toBe(403);
+      expect((await call('publish', token)).status).toBe(403);
+    }, 40_000);
+
+    /** A bookkeeper needs invoices, not the option builder. */
+    it('gives billing money but not configuration', async () => {
+      const token = await tokenAs('billing');
+
+      expect((await call('billing', token)).status).toBe(200);
+      expect((await call('edit', token)).status).toBe(403);
+    }, 40_000);
+
+    /** Ownership acts stay with the owner. */
+    it('refuses an admin the billing capability', async () => {
+      const token = await tokenAs('admin');
+
+      expect((await call('edit', token)).status).toBe(200);
+      expect((await call('billing', token)).status).toBe(403);
+    }, 40_000);
+
+    /**
+     * 403, not 404. The caller is a legitimate member and the resource plainly
+     * exists — hiding that would make "why can't I publish?" unanswerable.
+     * Cross-*tenant* access is the case that gets a 404; this is cross-*role*.
+     */
+    it('answers with INSUFFICIENT_ROLE rather than pretending the route is missing', async () => {
+      const token = await tokenAs('viewer');
+      const response = await call('publish', token);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error?.code).toBe('INSUFFICIENT_ROLE');
+    }, 40_000);
+
+    /**
+     * The window that matters when someone is removed for cause: the token still
+     * says `owner`, and the stored role no longer does.
+     */
+    it('applies a demotion on the next request, not when the token expires', async () => {
+      const token = await tokenAs('owner');
+      expect((await call('publish', token)).status).toBe(200);
+
+      await dataSource.query(
+        `UPDATE tenant_members tm JOIN users u ON u.id = tm.userId
+            SET tm.role = 'viewer' WHERE u.email = ?`,
+        [`${NS}-cap-owner@example.com`],
+      );
+
+      // Same token, same second.
+      expect((await call('publish', token)).status).toBe(403);
+    }, 40_000);
   });
 
   describe('public routes stay reachable', () => {
