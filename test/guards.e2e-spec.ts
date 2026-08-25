@@ -302,7 +302,23 @@ describe('guards (e2e)', () => {
 
     /** One user's logout must not end another user's session. */
     it('does not affect a different user', async () => {
-      const victim = await tokenFor(`${NS}-untouched@example.com`);
+      const victimEmail = `${NS}-untouched@example.com`;
+      const victim = await tokenFor(victimEmail);
+
+      /**
+       * The victim must have no invalidation of their own.
+       *
+       * The guard compares at one-second granularity and refuses on `>=`, which
+       * is deliberate — a token issued in the same second as a logout must die.
+       * The cost is that any stray invalidation in the second this token was
+       * minted fails the test for a reason unrelated to the property under
+       * test: whether *another* user's logout leaks across. Cleared explicitly
+       * so this asserts that and nothing else.
+       */
+      await dataSource.query(
+        `UPDATE users SET sessionsInvalidatedAt = NULL WHERE email = ?`,
+        [victimEmail],
+      );
 
       await dataSource.query(
         `UPDATE users SET sessionsInvalidatedAt = NOW(3) WHERE email = ?`,

@@ -176,6 +176,18 @@ describe('option authoring (e2e)', () => {
     return response.body.data.id as string;
   }
 
+  /**
+   * Create a fixture and insist it worked.
+   *
+   * `await post(...)` without checking the status lets a 409 — which a
+   * concurrent writer can legitimately produce — silently reduce a fixture. A
+   * duplicate test then copies one value instead of two and reports a product
+   * defect that is really a missing row.
+   */
+  async function mustCreate(path: string, body: object, what: string): Promise<string> {
+    return idOf(await post(tokenA, path, body), what);
+  }
+
   async function newGroup(label = 'Group'): Promise<string> {
     return idOf(await post(tokenA, `/option-sets/${setA}/groups`, { label }), 'group');
   }
@@ -221,8 +233,8 @@ describe('option authoring (e2e)', () => {
 
     it('lists a set’s groups in sort order', async () => {
       const set = await seedSetForA();
-      await post(tokenA, `/option-sets/${set}/groups`, { label: 'One' });
-      await post(tokenA, `/option-sets/${set}/groups`, { label: 'Two' });
+      await mustCreate(`/option-sets/${set}/groups`, { label: 'One' }, 'group');
+      await mustCreate(`/option-sets/${set}/groups`, { label: 'Two' }, 'group');
 
       const listed = await get(tokenA, `/option-sets/${set}/groups`);
       const orders = listed.body.data.map((g: { sortOrder: number }) => g.sortOrder);
@@ -489,8 +501,8 @@ describe('option authoring (e2e)', () => {
     it('deep-copies a group with its options and values', async () => {
       const group = await newGroup('Original');
       const option = await newOption(group, 'copied');
-      await post(tokenA, `/options/${option}/values`, { valueKey: 'a', label: 'A' });
-      await post(tokenA, `/options/${option}/values`, { valueKey: 'b', label: 'B' });
+      await mustCreate(`/options/${option}/values`, { valueKey: 'a', label: 'A' }, 'value');
+      await mustCreate(`/options/${option}/values`, { valueKey: 'b', label: 'B' }, 'value');
 
       const copy = await post(tokenA, `/groups/${group}/duplicate`);
 
@@ -521,7 +533,7 @@ describe('option authoring (e2e)', () => {
     it('copies an option’s values', async () => {
       const group = await newGroup();
       const option = await newOption(group, 'with_values');
-      await post(tokenA, `/options/${option}/values`, { valueKey: 'x', label: 'X' });
+      await mustCreate(`/options/${option}/values`, { valueKey: 'x', label: 'X' }, 'value');
 
       const copy = await post(tokenA, `/options/${option}/duplicate`);
       const values = await get(tokenA, `/options/${copy.body.data.id}/values`);
@@ -607,10 +619,37 @@ describe('option authoring (e2e)', () => {
       // when a concurrent writer deadlocks, and an `undefined` id would send the
       // probe to `/values/undefined` — a 400 that looks like an isolation
       // failure and is not one.
-      const group = idOf(
-        await post(tokenB, `/option-sets/${set}/groups`, { label: 'B group' }),
-        'foreign group',
-      );
+      const groupResponse = await post(tokenB, `/option-sets/${set}/groups`, { label: 'B group' });
+
+      /**
+       * Diagnostics kept deliberately.
+       *
+       * This create has been seen to answer 404 roughly once in eight full runs
+       * — the set exists, the token is tenant B's, and the API cannot see it.
+       * It has not reproduced under instrumentation, so rather than guess at a
+       * cause the failure now prints the state that would identify one: whose
+       * tenant owns the set, whether it is deleted, and which tenant the member
+       * belongs to. A rare failure that explains itself is worth more than a
+       * rare failure someone has to reproduce first.
+       */
+      if (groupResponse.status !== 201) {
+        const [row] = await dataSource.query(
+          `SELECT tenantId, deletedAt FROM option_sets WHERE id = ?`,
+          [set],
+        );
+        const [member] = await dataSource.query(
+          `SELECT tm.tenantId FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email = ?`,
+          [`${NS}-b@example.com`],
+        );
+
+        console.log(
+          `FOREIGN FIXTURE FAILED status=${groupResponse.status} set=${set} ` +
+            `setTenant=${row?.tenantId} setDeleted=${row?.deletedAt} ` +
+            `memberTenant=${member?.tenantId}`,
+        );
+      }
+
+      const group = idOf(groupResponse, 'foreign group');
       const option = idOf(
         await post(tokenB, `/groups/${group}/options`, {
           key: 'b_option',

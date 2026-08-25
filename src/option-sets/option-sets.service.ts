@@ -92,7 +92,11 @@ export class OptionSetsService {
       name: name.trim(),
       storeId,
       status: OptionSetStatus.DRAFT,
-      version: 1,
+      // Zero, not one: `version` counts **publishes**, and a draft that has
+      // never been published has none. Creating at 1 made the first publish
+      // produce version 2 and left a never-published set claiming a version no
+      // snapshot exists for.
+      version: 0,
       rowVersion: 1,
       publishedConfigVersion: 0,
     } as never);
@@ -241,7 +245,8 @@ export class OptionSetsService {
           storeId: source.storeId,
           name: name?.trim() || `${source.name} (copy)`,
           status: OptionSetStatus.DRAFT,
-          version: 1,
+          // A copy is unpublished however published its source was.
+          version: 0,
           rowVersion: 1,
           publishedConfigVersion: 0,
         }),

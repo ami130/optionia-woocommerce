@@ -516,10 +516,10 @@ in different orders are resolved by the database rolling one back. That surfaces
 as a conflict rather than a `500`, because it is transient and a retry will
 usually succeed.
 | `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[built]` |
-| `POST /option-sets/:id/publish` | `option_sets:publish` | `[7i]` |
-| `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7i]` |
-| `GET /option-sets/:id/versions` | `option_sets:view` | `[7i]` |
-| `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[7i]` |
+| `POST /option-sets/:id/publish` | `option_sets:publish` | `[built]` |
+| `GET /option-sets/:id/publish-check` | `option_sets:view` | `[built]` |
+| `GET /option-sets/:id/versions` · `GET /option-sets/:id/versions/:version` | `option_sets:view` | `[built]` |
+| `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[built]` |
 | `POST /option-sets/:id/reorder` | `option_sets:edit` | `[built]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
@@ -550,7 +550,7 @@ form of the same one.
 **Errors:** `CONFLICT` (409) when an order references it — the message names the
 count, because "you cannot delete this" without a reason is not actionable.
 
-### `POST /v1/option-sets/:id/publish` **[7i]**
+### `POST /v1/option-sets/:id/publish` **[built]**
 
 **Capability:** `option_sets:publish`. **Response:** `200 OK`
 
@@ -579,7 +579,7 @@ version.
 **Errors:** `VALIDATION_FAILED` (400) with per-item detail; `VERSION_MISMATCH`
 (409) if the draft changed since it was loaded; `INSUFFICIENT_ROLE` (403).
 
-### `POST /v1/option-sets/:id/rollback` **[7i]**
+### `POST /v1/option-sets/:id/rollback` **[built]**
 
 ```jsonc
 { "version": 5, "note": "reverting the holiday pricing" }
@@ -591,6 +591,26 @@ Rewriting would make the audit trail a lie, and the merchant who needs rollback 
 9pm is exactly the one who will later need to know what happened.
 
 **Errors:** `NOT_FOUND` (404) for an unknown version; `INSUFFICIENT_ROLE` (403).
+
+`GET /option-sets/:id/versions` lists history newest first **without** snapshots,
+which are large and rarely all wanted at once.
+`GET /option-sets/:id/versions/:version` returns one snapshot exactly as the
+storefront received it — the read M7.4's "diff any version against the current
+draft" needs, and the reason a merchant can see what they are rolling back to
+before they do it.
+
+**Rollback does not restore the live rows.** It changes what storefronts
+receive, not what the editor shows. Those are different things by design: a
+rollback that silently overwrote the working draft would destroy the edits a
+merchant was making when they hit the problem they are rolling back from.
+
+**Three of M7.4's five pre-publish checks run today.** *"Required options hidden
+by their own rule"* needs rule evaluation (M17.3), and *"pricing referencing a
+removed value"* has no subject — no pricing schema in the registry names a value
+id. Both arrive by appending to `PUBLISH_VALIDATORS`, which is what makes the
+extension point real rather than promised. Two further checks not in M7.4's list
+are included: a set with no enabled options blocks, and a set assigned to nothing
+warns.
 
 ---
 

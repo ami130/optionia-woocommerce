@@ -410,7 +410,9 @@ describe('option sets (e2e)', () => {
 
       expect(copy.body.data.status).toBe('draft');
       // And it starts its own history rather than inheriting the original's.
-      expect(copy.body.data.version).toBe(1);
+      // Zero because `version` counts publishes, and a copy has made none —
+      // the first publish of the copy produces version 1.
+      expect(copy.body.data.version).toBe(0);
       expect(copy.body.data.publishedAt).toBeNull();
     }, 30_000);
 

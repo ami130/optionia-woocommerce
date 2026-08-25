@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -28,6 +29,9 @@ import {
 import type { OptionSet } from './entities/option-set.entity';
 import type { PurgeResult } from './hard-delete.service';
 import { OptionSetsService } from './option-sets.service';
+import { PublishDto, RollbackDto } from './dto/publish.dto';
+import type { PublishFinding } from './publishing/publish-check';
+import { PublishService, type PublishResult, type VersionSummary } from './publishing/publish.service';
 import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/projections';
 
 /**
@@ -45,7 +49,10 @@ import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/pro
 @Controller('option-sets')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class OptionSetsController {
-  constructor(private readonly service: OptionSetsService) {}
+  constructor(
+    private readonly service: OptionSetsService,
+    private readonly publishing: PublishService,
+  ) {}
 
   @Get()
   @RequireCapability(Capability.OPTION_SETS_VIEW)
@@ -134,6 +141,64 @@ export class OptionSetsController {
   @RequireCapability(Capability.OPTION_SETS_VIEW)
   async findOnePublished(@Param('id', ParseUUIDPipe) id: string): Promise<PublishedOptionSet> {
     return this.service.findOnePublished(id);
+  }
+
+  /**
+   * What would block or warn, without publishing (M7.4).
+   *
+   * Read-only and `:view`, because seeing what is wrong is not a privileged act
+   * — an editor who cannot publish still needs to know what to fix.
+   */
+  @Get(':id/publish-check')
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  async publishCheck(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ findings: readonly PublishFinding[] }> {
+    return { findings: await this.publishing.check(id) };
+  }
+
+  @Post(':id/publish')
+  @RequireCapability(Capability.OPTION_SETS_PUBLISH)
+  async publish(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PublishDto,
+  ): Promise<PublishResult> {
+    return this.publishing.publish(id, dto.note);
+  }
+
+  /** Version history, newest first. Snapshots are omitted — they are large. */
+  @Get(':id/versions')
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  async versions(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ versions: readonly VersionSummary[] }> {
+    return { versions: await this.publishing.versions(id) };
+  }
+
+  /** One snapshot, exactly as the storefront received it. */
+  @Get(':id/versions/:version')
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  async version(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('version', ParseIntPipe) version: number,
+  ): Promise<Record<string, unknown>> {
+    return this.publishing.version(id, version);
+  }
+
+  /**
+   * Restore a prior snapshot as a new version.
+   *
+   * Its own capability, not `:publish`: an owner may want an editor able to
+   * publish forward without being able to revert a storefront to a state
+   * somebody else chose.
+   */
+  @Post(':id/rollback')
+  @RequireCapability(Capability.OPTION_SETS_ROLLBACK)
+  async rollback(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RollbackDto,
+  ): Promise<PublishResult> {
+    return this.publishing.rollback(id, dto.version, dto.note);
   }
 
   @Post(':id/duplicate')

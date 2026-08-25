@@ -1441,3 +1441,66 @@ not, and visibly wrong beats silently unpriced.
 But 7k freezes this document, and a plugin written against a shape without those
 keys would need a `schema_version` bump to gain them. They are emitted as empty
 arrays instead: a shape the plugin's first release already handles.
+
+---
+
+## ADR-033 — Publish writes history; rollback adds to it
+
+**Status:** accepted
+**Date:** Phase 7, M7.4
+
+### Context
+
+Publishing does five things at once: validate the set, increment `version`,
+stamp `published_at` / `published_by`, write an immutable snapshot, and bump the
+store's `config_version`. The plugin polls that last number to decide whether to
+re-fetch, so a failure between any two steps can leave a storefront asking for a
+document that was never written.
+
+### Decision
+
+**One transaction**, with the set's row locked. M7.4b requires that two
+simultaneous publishes do not interleave and that the second sees the first's
+version. The `uq_option_set_versions (option_set_id, version)` constraint is the
+backstop, not the mechanism — a design that relied on it would answer the second
+publisher with a `409` for a publish that should simply have waited.
+
+That distinction was invisible until it was measured: removing the lock left the
+suite green, because the test asserted only "no version was reused" — true of
+both. With the lock, three concurrent publishes return `[201, 201, 201]` and
+versions `1, 2, 3`; without it, two return `409`. The test now asserts the
+former, so the lock is load-bearing.
+
+**Serialization happens outside the transaction.** Reading the tree is the
+expensive part, and holding a row lock across it would make two merchants
+publishing different sets on one store wait for each other.
+
+**Rollback publishes a prior snapshot as a new version.** Rolling 8 back to 5
+produces 9 whose content matches 5. Rewriting would make the trail a lie, and the
+merchant who needs rollback at 9pm is exactly the one who will later need to know
+what happened.
+
+**Rollback does not restore the live rows.** It changes what storefronts receive,
+not what the editor shows. A rollback that silently overwrote the working draft
+would destroy the edits a merchant was making when they hit the problem they are
+rolling back from.
+
+### Consequences
+
+`version` counts **publishes**, so a new set starts at `0`. It was created at `1`,
+which made the first publish produce version 2 and left a never-published set
+claiming a version no snapshot existed for. The entity's own default was already
+`0` and its comment already said "incremented on publish"; the create disagreed
+with both.
+
+Pre-publish checks are a **registered list**, not a switch. Three of M7.4's five
+run today: *"required options hidden by their own rule"* needs rule evaluation
+(M17.3), and *"pricing referencing a removed value"* has no subject, because no
+pricing schema in the registry names a value id. Both arrive by appending to
+`PUBLISH_VALIDATORS` — proven by a test that appends a stand-in for M17.3's cycle
+detection and sees it block a publish, so the extension point is demonstrated
+rather than asserted.
+
+Blockers refuse; warnings publish and are returned in the response. A set with no
+product assignment warns rather than blocks, because build-publish-assign is a
+natural order of work and blocking would make it an error.
