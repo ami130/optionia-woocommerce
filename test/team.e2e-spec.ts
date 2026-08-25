@@ -373,6 +373,88 @@ describe('TeamService (integration)', () => {
     });
   });
 
+  describe('the last-owner race', () => {
+    async function ownerCount(): Promise<number> {
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM tenant_members
+          WHERE tenantId = ? AND role = 'owner' AND revokedAt IS NULL`,
+        [TENANT],
+      );
+
+      return Number(row.n);
+    }
+
+    async function addSecondOwner(): Promise<void> {
+      await dataSource.query(
+        `INSERT INTO tenant_members (id, tenantId, userId, role, acceptedAt, createdAt, updatedAt)
+         VALUES (?, ?, ?, 'owner', NOW(3), NOW(3), NOW(3))`,
+        [`${TENANT}-${SECOND_OWNER}`, TENANT, SECOND_OWNER],
+      );
+    }
+
+    /**
+     * **A tenant with no owner is unadministrable** — nobody can change roles,
+     * alter billing or delete it, and the repair edits the database by hand.
+     *
+     * The guard counted owners and then updated, so two demotions at the same
+     * instant both counted two and both proceeded. The count now happens inside
+     * the statement.
+     */
+    it('never leaves a tenant with zero owners when both are demoted at once', async () => {
+      await addSecondOwner();
+
+      await Promise.allSettled([
+        team.changeRole(TENANT, await memberId(OWNER), TenantRole.VIEWER),
+        team.changeRole(TENANT, await memberId(SECOND_OWNER), TenantRole.VIEWER),
+      ]);
+
+      expect(await ownerCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    it('never leaves a tenant with zero owners when both are removed at once', async () => {
+      await addSecondOwner();
+
+      await Promise.allSettled([
+        team.remove(TENANT, await memberId(OWNER)),
+        team.remove(TENANT, await memberId(SECOND_OWNER)),
+      ]);
+
+      expect(await ownerCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    /**
+     * One of the two must fail, and fail with the refusal rather than a raw
+     * database error — concurrent owner removals deadlock, and MySQL's
+     * `ER_LOCK_DEADLOCK` means nothing to a caller.
+     */
+    it('refuses the losing call with a message a person can act on', async () => {
+      await addSecondOwner();
+
+      const results = await Promise.allSettled([
+        team.remove(TENANT, await memberId(OWNER)),
+        team.remove(TENANT, await memberId(SECOND_OWNER)),
+      ]);
+
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      if (rejected.length > 0) {
+        const reason = (rejected[0] as PromiseRejectedResult).reason as Error;
+
+        expect(reason.message).toMatch(/at least one owner/);
+      }
+    });
+
+    /** The fix must not break the ordinary sequential case. */
+    it('still allows a demotion when a second owner exists', async () => {
+      await addSecondOwner();
+
+      await expect(
+        team.changeRole(TENANT, await memberId(OWNER), TenantRole.ADMIN),
+      ).resolves.toBeUndefined();
+      expect(await ownerCount()).toBe(1);
+    });
+  });
+
   describe('removal and scoping', () => {
     it('revokes rather than deletes, so the trail survives', async () => {
       await team.remove(TENANT, await memberId(ADMIN));

@@ -21,6 +21,10 @@ import { TenantMember } from './entities/tenant-member.entity';
 /** Invitations last a week. Long enough for a holiday, short enough to expire. */
 export const INVITATION_TTL_MINUTES = 7 * 24 * 60;
 
+/** One message for every way the last-owner guard refuses. */
+const LAST_OWNER_MESSAGE =
+  'This workspace must keep at least one owner. Make someone else an owner first.';
+
 @Injectable()
 export class TeamService {
   constructor(
@@ -174,10 +178,10 @@ export class TeamService {
     const member = await this.requireMember(tenantId, memberId);
 
     if (member.role === TenantRole.OWNER && role !== TenantRole.OWNER) {
-      await this.assertNotLastOwner(tenantId);
+      await this.demoteLastOwnerSafely(tenantId, member.id, role);
+    } else {
+      await this.members.update({ id: member.id }, { role });
     }
-
-    await this.members.update({ id: member.id }, { role });
 
     // Recorded after the change, so a failed update leaves no entry claiming it
     // happened. Before/after is the whole value: "who made this person an owner"
@@ -201,10 +205,10 @@ export class TeamService {
     const member = await this.requireMember(tenantId, memberId);
 
     if (member.role === TenantRole.OWNER) {
-      await this.assertNotLastOwner(tenantId);
+      await this.removeOwnerSafely(tenantId, member.id);
+    } else {
+      await this.members.update({ id: member.id }, { revokedAt: new Date() });
     }
-
-    await this.members.update({ id: member.id }, { revokedAt: new Date() });
 
     await this.audit.record({
       action: AuditAction.MEMBER_REMOVED,
@@ -246,15 +250,82 @@ export class TeamService {
    * billing, or delete it, and the only fix is a support request that edits the
    * database by hand.
    */
-  private async assertNotLastOwner(tenantId: string): Promise<void> {
-    const owners = await this.members.count({
-      where: { tenantId, role: TenantRole.OWNER, revokedAt: IsNull() },
-    });
+  /**
+   * Demote an owner, refusing if they are the last.
+   *
+   * **The count is inside the write.** Counting first and updating after is a
+   * race: two owners demoted at the same instant both count two, both proceed,
+   * and the tenant is left with none — unadministrable, repairable only by
+   * editing the database. Confirmed by probe before this was written.
+   *
+   * The subquery re-counts under the same row locks the UPDATE takes, so the
+   * second statement sees the first one's effect.
+   */
+  private async demoteLastOwnerSafely(
+    tenantId: string,
+    memberId: string,
+    role: TenantRole,
+  ): Promise<void> {
+    await this.runOwnerStatement(
+      `UPDATE tenant_members SET role = ?, updatedAt = NOW(3)
+        WHERE id = ? AND tenantId = ? AND role = 'owner' AND revokedAt IS NULL
+          AND (
+            SELECT owners FROM (
+              SELECT COUNT(*) AS owners FROM tenant_members
+               WHERE tenantId = ? AND role = 'owner' AND revokedAt IS NULL
+            ) AS counted
+          ) > 1`,
+      [role, memberId, tenantId, tenantId],
+    );
+  }
 
-    if (owners <= 1) {
-      throw DomainException.conflict(
-        'This workspace must keep at least one owner. Make someone else an owner first.',
-      );
+  /** Remove an owner, refusing if they are the last. Same reasoning as above. */
+  private async removeOwnerSafely(tenantId: string, memberId: string): Promise<void> {
+    await this.runOwnerStatement(
+      `UPDATE tenant_members SET revokedAt = NOW(3), updatedAt = NOW(3)
+        WHERE id = ? AND tenantId = ? AND role = 'owner' AND revokedAt IS NULL
+          AND (
+            SELECT owners FROM (
+              SELECT COUNT(*) AS owners FROM tenant_members
+               WHERE tenantId = ? AND role = 'owner' AND revokedAt IS NULL
+            ) AS counted
+          ) > 1`,
+      [memberId, tenantId, tenantId],
+    );
+  }
+
+  /**
+   * `affectedRows === 0` means the guard in the statement refused it.
+   *
+   * The member was verified to exist moments earlier, so the only condition that
+   * can have failed is the owner count — which is exactly the refusal to report.
+   */
+  private assertChanged(result: { affectedRows?: number }): void {
+    if ((result.affectedRows ?? 0) === 0) {
+      throw DomainException.conflict(LAST_OWNER_MESSAGE);
+    }
+  }
+
+  /**
+   * Run a guarded owner statement, turning a deadlock into the same refusal.
+   *
+   * Two owners removed simultaneously take row locks in opposite orders, and
+   * MySQL resolves that by aborting one — correctly, and with a raw
+   * `ER_LOCK_DEADLOCK` that means nothing to a caller.
+   *
+   * The aborted statement is the one that would have left no owner, so the
+   * honest translation is the refusal rather than a retry: retrying would only
+   * re-attempt an operation the guard exists to reject.
+   */
+  private async runOwnerStatement(sql: string, params: unknown[]): Promise<void> {
+    try {
+      this.assertChanged(await this.members.query(sql, params));
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ER_LOCK_DEADLOCK') {
+        throw DomainException.conflict(LAST_OWNER_MESSAGE);
+      }
+
+      throw error;
     }
   }
 

@@ -201,6 +201,72 @@ describe('SessionsService (integration)', () => {
     });
   });
 
+  describe('concurrent presentation (the race)', () => {
+    /**
+     * **The attack this table exists to catch, arriving the way it actually
+     * arrives.**
+     *
+     * Reuse detection worked perfectly when the two presentations were
+     * sequential — which was every test written for it. A thief uses a stolen
+     * token while the victim is still active, and the victim's client refreshes
+     * on a timer, so the two race by default rather than by effort.
+     *
+     * Before the fix both rotations succeeded, both parties got a working
+     * session, and nothing fired. The check now happens inside the write.
+     */
+    it('lets at most one of two simultaneous rotations succeed', async () => {
+      const stolen = await sessions.issue(USER_ID, '1.2.3.4', 'victim');
+
+      const outcomes = await Promise.all([
+        sessions.rotate(stolen, '1.2.3.4', 'victim'),
+        sessions.rotate(stolen, '9.9.9.9', 'attacker'),
+      ]);
+
+      expect(outcomes.filter((o) => o.failure === null).length).toBeLessThanOrEqual(1);
+      expect(outcomes.some((o) => o.failure === 'reused')).toBe(true);
+    });
+
+    /**
+     * Revoking the family is the point: the winner may be the thief, so nobody
+     * keeps a session. A live token here means the attacker is still signed in.
+     */
+    it('leaves no live token in the family', async () => {
+      const stolen = await sessions.issue(USER_ID, '1.2.3.4', 'victim');
+
+      await Promise.all([
+        sessions.rotate(stolen, '1.2.3.4', 'victim'),
+        sessions.rotate(stolen, '9.9.9.9', 'attacker'),
+      ]);
+
+      expect(await liveCount()).toBe(0);
+    });
+
+    /** The fix must not break the ordinary case it sits in front of. */
+    it('still rotates normally when presentations are sequential', async () => {
+      let token = await sessions.issue(USER_ID, '1.2.3.4', 'agent');
+
+      for (let i = 0; i < 4; i += 1) {
+        const outcome = await sessions.rotate(token, '1.2.3.4', 'agent');
+
+        expect(outcome.failure).toBeNull();
+        token = outcome.token as string;
+      }
+    });
+
+    /** One device racing itself must not end a session on another. */
+    it('does not touch another session for the same user', async () => {
+      const laptop = await sessions.issue(USER_ID, '5.6.7.8', 'laptop');
+      const phone = await sessions.issue(USER_ID, '1.2.3.4', 'phone');
+
+      await Promise.all([
+        sessions.rotate(phone, '1.2.3.4', 'phone'),
+        sessions.rotate(phone, '9.9.9.9', 'attacker'),
+      ]);
+
+      expect((await sessions.rotate(laptop, '5.6.7.8', 'laptop')).failure).toBeNull();
+    });
+  });
+
   describe('revocation', () => {
     it('ends a session on logout', async () => {
       const token = await sessions.issue(USER_ID, '1.2.3.4', 'agent');

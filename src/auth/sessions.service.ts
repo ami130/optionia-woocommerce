@@ -98,7 +98,9 @@ export class SessionsService {
    * what makes a second presentation detectable at all.
    */
   async rotate(plaintext: string, ip: string, userAgent: string): Promise<RefreshOutcome> {
-    const current = await this.tokens.findOne({ where: { tokenHash: hashToken(plaintext) } });
+    const tokenHash = hashToken(plaintext);
+
+    const current = await this.tokens.findOne({ where: { tokenHash } });
 
     if (current === null) {
       return { token: null, userId: null, failure: 'not_found' };
@@ -108,8 +110,33 @@ export class SessionsService {
       return { token: null, userId: null, failure: 'revoked' };
     }
 
-    // Presented after it was already exchanged. Someone has a copy.
-    if (current.rotatedAt !== null) {
+    if (hasExpired(current.expiresAt)) {
+      return { token: null, userId: null, failure: 'expired' };
+    }
+
+    /**
+     * Claim the token atomically.
+     *
+     * **The check is inside the write, and that is the whole point.** Reading
+     * `rotatedAt` and then writing it is a race: two requests presenting the same
+     * token both read null, both write a replacement, and both get a working
+     * session. Reuse detection never fires.
+     *
+     * That is not a theoretical window. A stolen token is used *while the victim
+     * is still active*, and the victim's client refreshes on a timer — so the
+     * attacker races the victim by default rather than by effort.
+     *
+     * `affected === 0` means someone else claimed it first: either a genuine
+     * concurrent refresh from the same client, or a second holder. Both are
+     * treated as reuse, because the two are indistinguishable from here and the
+     * safe reading is theft.
+     */
+    const claim = await this.tokens.update(
+      { tokenHash, rotatedAt: IsNull(), revokedAt: IsNull() },
+      { rotatedAt: new Date() },
+    );
+
+    if (claim.affected === 0) {
       await this.revokeFamily(current.familyId, RevokeReason.REUSE_DETECTED);
 
       this.logger.warn(
@@ -118,10 +145,6 @@ export class SessionsService {
       );
 
       return { token: null, userId: current.userId, failure: 'reused' };
-    }
-
-    if (hasExpired(current.expiresAt)) {
-      return { token: null, userId: null, failure: 'expired' };
     }
 
     const next = generateToken();
@@ -138,9 +161,28 @@ export class SessionsService {
       }),
     );
 
-    current.rotatedAt = new Date();
-    current.replacedById = replacement.id;
-    await this.tokens.save(current);
+    // Recorded after the replacement exists, so the link never points at a row
+    // that was not written.
+    await this.tokens.update({ id: current.id }, { replacedById: replacement.id });
+
+    /**
+     * Re-check the family after writing the replacement.
+     *
+     * A concurrent loser revokes the family, and its sweep can run *before* this
+     * replacement row exists — leaving the family revoked and one live token
+     * behind it. That token is the winner's, and the winner may be the thief.
+     *
+     * Verified by the race probe: the sweep ran and one live token remained.
+     */
+    const familyRevoked = await this.tokens.findOne({
+      where: { familyId: current.familyId, revokedReason: RevokeReason.REUSE_DETECTED },
+    });
+
+    if (familyRevoked) {
+      await this.revokeFamily(current.familyId, RevokeReason.REUSE_DETECTED);
+
+      return { token: null, userId: current.userId, failure: 'reused' };
+    }
 
     return { token: next.plaintext, userId: current.userId, failure: null };
   }
