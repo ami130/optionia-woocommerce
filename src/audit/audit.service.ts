@@ -25,6 +25,11 @@ export const AuditAction = {
   MEMBER_REMOVED: 'member.removed',
   MEMBER_INVITED: 'member.invited',
   MEMBER_JOINED: 'member.joined',
+
+  OPTION_SET_CREATED: 'option_set.created',
+  OPTION_SET_UPDATED: 'option_set.updated',
+  OPTION_SET_DELETED: 'option_set.deleted',
+  OPTION_SET_DUPLICATED: 'option_set.duplicated',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

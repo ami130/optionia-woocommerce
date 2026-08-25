@@ -7,6 +7,7 @@ import {
   FindOptionsWhere,
   ObjectLiteral,
   Repository,
+  SelectQueryBuilder,
   UpdateResult,
 } from 'typeorm';
 
@@ -185,6 +186,32 @@ export abstract class TenantScopedRepository<
     }
 
     return this.repository.save(entity);
+  }
+
+  /**
+   * A query builder already filtered by tenant and soft-delete state.
+   *
+   * `FindManyOptions` cannot express cursor pagination with a search, and the
+   * alternative — handing callers `unsafeUnscopedRepository` and trusting them to
+   * re-apply the predicate — is the failure this class exists to prevent. A
+   * subclass renaming that accessor to something reassuring would be the same
+   * hole with a better name.
+   *
+   * So the builder arrives pre-scoped. A caller adds ordering, limits and their
+   * own conditions on top, and cannot remove what is already there.
+   */
+  protected scopedQuery(alias: string): SelectQueryBuilder<T> {
+    const query = this.repository
+      .createQueryBuilder(alias)
+      .where(`${alias}.tenantId = :tenantId`, { tenantId: this.tenantId });
+
+    if (this.isSoftDeletable) {
+      query.andWhere(`${alias}.deletedAt = :liveSentinel`, {
+        liveSentinel: LIVE_SENTINEL_SQL,
+      });
+    }
+
+    return query;
   }
 
   /**

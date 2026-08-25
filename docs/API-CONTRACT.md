@@ -151,11 +151,15 @@ merchant is actively editing is a bug they will report as "my option disappeared
 // GET /v1/option-sets?limit=50&cursor=eyJpZCI6…
 { "data": [ … ],
   "meta": { "requestId": "…", "timestamp": "…",
-            "pagination": { "nextCursor": "eyJpZCI6…", "hasMore": true, "limit": 50 } } }
+            "pagination": { "cursor": "eyJpZCI6…", "hasMore": true, "limit": 50 } } }
 ```
 
-`limit` defaults to 50 and is capped at 100. The cursor is opaque and clients must
-not construct one; its encoding is an implementation detail that may change.
+`limit` defaults to 50 and is capped at 100. `cursor` is null on the last page.
+
+The cursor is **opaque** and clients must not construct one — its encoding is an
+implementation detail. The field is named `cursor` rather than `nextCursor`
+because `PaginationMeta` has used that name since Phase 5; this document said
+`nextCursor` until the first list endpoint was built against it.
 
 ### Route status markers
 
@@ -425,25 +429,25 @@ a handler remembers to add.
 
 | Route | Capability | State |
 |---|---|---|
-| `GET /option-sets` | `option_sets:view` | `[7f]` |
-| `POST /option-sets` | `option_sets:edit` | `[7f]` |
-| `GET /option-sets/:id` | `option_sets:view` | `[7f]` |
-| `PATCH /option-sets/:id` | `option_sets:edit` | `[7f]` |
-| `DELETE /option-sets/:id` | `option_sets:delete` | `[7f]` |
-| `DELETE /option-sets/:id?hard=true` | `option_sets:delete` | `[7h]` |
-| `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[7f]` |
-| `POST /option-sets/:id/publish` | `option_sets:publish` | `[7j]` |
-| `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7j]` |
-| `GET /option-sets/:id/versions` | `option_sets:view` | `[7j]` |
-| `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[7j]` |
-| `POST /option-sets/:id/reorder` | `option_sets:edit` | `[7g]` |
+| `GET /option-sets` | `option_sets:view` | `[built]` |
+| `POST /option-sets` | `option_sets:edit` | `[built]` |
+| `GET /option-sets/:id` | `option_sets:view` | `[built]` |
+| `PATCH /option-sets/:id` | `option_sets:edit` | `[built]` |
+| `DELETE /option-sets/:id` | `option_sets:delete` | `[built]` |
+| `DELETE /option-sets/:id?hard=true` | `option_sets:delete` | `[7g]` |
+| `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[built]` |
+| `POST /option-sets/:id/publish` | `option_sets:publish` | `[7i]` |
+| `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7i]` |
+| `GET /option-sets/:id/versions` | `option_sets:view` | `[7i]` |
+| `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[7i]` |
+| `POST /option-sets/:id/reorder` | `option_sets:edit` | `[7f]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
 line in the permission matrix. Editing is safe; publishing changes a live
 storefront and what customers are charged. An agency contractor should be able to
 build an option set without pushing it live.
 
-### `GET /v1/option-sets` **[7f]**
+### `GET /v1/option-sets` **[built]**
 
 Cursor-paginated. Filters: `status` (`draft` · `published` · `archived`),
 `storeId`, `q` (name search).
@@ -451,7 +455,7 @@ Cursor-paginated. Filters: `status` (`draft` · `published` · `archived`),
 **A filter cannot widen tenant scope.** The tenant predicate is merged *after* the
 caller's filters, so a supplied `tenantId` is overwritten rather than honoured.
 
-### `DELETE /v1/option-sets/:id` — soft and hard **[7f] [7h]**
+### `DELETE /v1/option-sets/:id` — soft and hard **[built] [7g]**
 
 Two distinct operations, and the sketch has a route for only one.
 
@@ -466,7 +470,7 @@ form of the same one.
 **Errors:** `CONFLICT` (409) when an order references it — the message names the
 count, because "you cannot delete this" without a reason is not actionable.
 
-### `POST /v1/option-sets/:id/publish` **[7j]**
+### `POST /v1/option-sets/:id/publish` **[7i]**
 
 **Capability:** `option_sets:publish`. **Response:** `200 OK`
 
@@ -495,7 +499,7 @@ version.
 **Errors:** `VALIDATION_FAILED` (400) with per-item detail; `VERSION_MISMATCH`
 (409) if the draft changed since it was loaded; `INSUFFICIENT_ROLE` (403).
 
-### `POST /v1/option-sets/:id/rollback` **[7j]**
+### `POST /v1/option-sets/:id/rollback` **[7i]**
 
 ```jsonc
 { "version": 5, "note": "reverting the holiday pricing" }
@@ -518,10 +522,10 @@ built before any of these endpoints.
 
 | Route | Capability | State |
 |---|---|---|
-| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[7g]` |
-| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[7g]` |
-| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[7g]` |
-| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[7g]` |
+| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[7f]` |
+| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[7f]` |
+| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[7f]` |
+| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[7f]` |
 
 > **Duplicate exists at every level**, not only for option sets. M7.2 says the
 > lifecycle operation set is "inherited by groups, options, and values alike", and
@@ -565,7 +569,7 @@ merchant** — never silently dropped, never left to fail at evaluation time. Th
 fourth rule *refuses* the delete, and is the one most likely to be omitted because
 it is the only one that fails rather than cascades.
 
-### `POST /v1/option-sets/:id/reorder` **[7g]**
+### `POST /v1/option-sets/:id/reorder` **[7f]**
 
 Bulk, gap-tolerant integers, so a single move is one write rather than renumbering
 every sibling.
