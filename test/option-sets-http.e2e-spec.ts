@@ -232,10 +232,37 @@ describe('option sets (e2e)', () => {
       );
     }, 20_000);
 
-    /** A malformed cursor shows page one rather than an error. */
-    it('tolerates a broken cursor', async () => {
-      expect((await asA('get', '?cursor=not-a-cursor')).status).toBe(200);
-    });
+    /**
+     * A malformed cursor is an error, not page one.
+     *
+     * Silently restarting would make a client's paging loop re-read page one
+     * forever without ever seeing a failure. Each case below decodes without
+     * throwing, so none of them is caught by a bare try/catch:
+     * `@@@` yields an empty string, valid base64 may simply lack the separator,
+     * and a well-formed pair can still carry a non-UUID or a partial date.
+     */
+    it.each([
+      ['not valid base64', '@@@'],
+      ['base64 without a separator', Buffer.from('nonsense').toString('base64url')],
+      ['a non-UUID id', Buffer.from('2020-01-01T00:00:00.000Z|nope').toString('base64url')],
+      ['a partial timestamp', Buffer.from('2020|01a03333-0000-7000-8000-000000000000').toString('base64url')],
+      ['extra separators', Buffer.from('2020-01-01T00:00:00.000Z|a|b').toString('base64url')],
+      ['an empty cursor', ''],
+    ])('rejects %s', async (_label, cursor) => {
+      const response = await asA('get', `?cursor=${encodeURIComponent(cursor)}`);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+      expect(response.body.error.details).toEqual([{ field: 'cursor', code: 'INVALID_CURSOR' }]);
+    }, 20_000);
+
+    it('accepts the cursor it just issued', async () => {
+      const first = await asA('get', '?limit=1');
+
+      expect((await asA('get', `?limit=1&cursor=${first.body.meta.pagination.cursor}`)).status).toBe(
+        200,
+      );
+    }, 20_000);
 
     it('refuses another tenant’s set exactly as a missing one', async () => {
       const foreign = await asA('get', `/${setB}`);
@@ -258,6 +285,57 @@ describe('option sets (e2e)', () => {
       const response = await asA('patch', `/${id}`).send({ name: 'After' });
 
       expect(response.body.data.name).toBe('After');
+    }, 20_000);
+
+    async function rowVersionOf(id: string): Promise<number> {
+      const [row] = await dataSource.query(`SELECT rowVersion FROM option_sets WHERE id = ?`, [id]);
+
+      return row.rowVersion as number;
+    }
+
+    /**
+     * `rowVersion` is the optimistic lock 7j turns into a 409. If a mutation
+     * does not advance it, a stale client looks current — the exact failure
+     * optimistic locking exists to prevent — so it is verified here, at the
+     * step that writes it, rather than assumed by the step that reads it.
+     */
+    it('advances rowVersion on every mutation', async () => {
+      const id = await make('Versioned');
+      const created = await rowVersionOf(id);
+
+      await asA('patch', `/${id}`).send({ name: 'Versioned II' });
+      const afterUpdate = await rowVersionOf(id);
+
+      await asA('delete', `/${id}`);
+      const afterDelete = await rowVersionOf(id);
+
+      expect(afterUpdate).toBeGreaterThan(created);
+      expect(afterDelete).toBeGreaterThan(afterUpdate);
+    }, 30_000);
+
+    it('does not advance rowVersion for a rename that changes nothing', async () => {
+      const id = await make('Same');
+      const before = await rowVersionOf(id);
+
+      await asA('patch', `/${id}`).send({ name: 'Same' });
+
+      expect(await rowVersionOf(id)).toBe(before);
+    }, 20_000);
+
+    /**
+     * `applyChange` restates the tenant predicate by hand in order to compute
+     * `rowVersion` in SQL, so it is the one write in this class not scoped by
+     * the shared helper. That makes it worth an isolation test of its own.
+     */
+    it('cannot advance another tenant’s rowVersion', async () => {
+      const before = await rowVersionOf(setB);
+
+      const response = await asA('patch', `/${setB}`).send({ name: 'Hijacked' });
+
+      expect(response.status).toBe(404);
+      expect(await rowVersionOf(setB)).toBe(before);
+      const [row] = await dataSource.query(`SELECT name FROM option_sets WHERE id = ?`, [setB]);
+      expect(row.name).not.toBe('Hijacked');
     }, 20_000);
 
     it('cannot rename another tenant’s set', async () => {
@@ -447,16 +525,84 @@ describe('option sets (e2e)', () => {
     }, 30_000);
   });
 
+  /**
+   * These read `audit_logs` directly and deliberately.
+   *
+   * `AuditService.record` swallows its own failures by design — the recorded
+   * action has already happened, so failing it afterwards is worse. The cost is
+   * that a spy on `record()` cannot tell a successful write from one that threw
+   * and was logged. Only the table can.
+   */
   describe('audit trail', () => {
-    it('records a create with what was created', async () => {
-      const created = await asA('post').send({ name: 'Audited', storeId: storeA });
-
-      const [row] = await dataSource.query(
-        `SELECT action, changes FROM audit_logs WHERE resourceId = ?`,
-        [created.body.data.id],
+    async function auditRowsFor(resourceId: string): Promise<
+      Array<{ action: string; changes: Record<string, { from: unknown; to: unknown }>; userId: string | null; ip: Buffer | null; userAgent: string | null }>
+    > {
+      return dataSource.query(
+        `SELECT action, changes, userId, ip, userAgent FROM audit_logs
+         WHERE resourceId = ? ORDER BY createdAt`,
+        [resourceId],
       );
+    }
+
+    it('records a create as a diff from nothing', async () => {
+      const created = await asA('post').send({ name: 'Audited', storeId: storeA });
+      const [row] = await auditRowsFor(created.body.data.id);
 
       expect(row.action).toBe('option_set.created');
+      expect(row.changes.name).toEqual({ from: null, to: 'Audited' });
+    }, 20_000);
+
+    it('records an update as before and after', async () => {
+      const created = await asA('post').send({ name: 'Before', storeId: storeA });
+      const id = created.body.data.id as string;
+      await asA('patch', `/${id}`).send({ name: 'After' });
+
+      const rows = await auditRowsFor(id);
+      const updated = rows.find((r) => r.action === 'option_set.updated');
+
+      expect(updated?.changes.name).toEqual({ from: 'Before', to: 'After' });
+    }, 20_000);
+
+    it('records a delete as a transition to deleted', async () => {
+      const created = await asA('post').send({ name: 'Doomed', storeId: storeA });
+      const id = created.body.data.id as string;
+      await asA('delete', `/${id}`);
+
+      const rows = await auditRowsFor(id);
+      const removed = rows.find((r) => r.action === 'option_set.deleted');
+
+      expect(removed?.changes.deleted).toEqual({ from: false, to: true });
+    }, 20_000);
+
+    /** M7.6 requires actor, diff and IP. All three, on every mutation. */
+    it('stamps actor, IP and user agent on every mutation', async () => {
+      const created = await asA('post')
+        .set('User-Agent', 'optionia-test/1.0')
+        .send({ name: 'Attributed', storeId: storeA });
+      const id = created.body.data.id as string;
+      await asA('patch', `/${id}`).send({ name: 'Attributed II' });
+      await asA('delete', `/${id}`);
+
+      const rows = await auditRowsFor(id);
+
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+      rows.forEach((row) => {
+        expect(row.userId).not.toBeNull();
+        expect(row.ip).not.toBeNull();
+        expect(row.ip).toHaveLength(16);
+      });
+      expect(rows[0].userAgent).toBe('optionia-test/1.0');
+    }, 30_000);
+
+    /** An unchanged rename is not a change, and must not fabricate a trail. */
+    it('records nothing for a rename to the same name', async () => {
+      const created = await asA('post').send({ name: 'Unchanged', storeId: storeA });
+      const id = created.body.data.id as string;
+      await asA('patch', `/${id}`).send({ name: 'Unchanged' });
+
+      const rows = await auditRowsFor(id);
+
+      expect(rows.filter((r) => r.action === 'option_set.updated')).toHaveLength(0);
     }, 20_000);
   });
 });

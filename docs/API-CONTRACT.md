@@ -161,6 +161,15 @@ implementation detail. The field is named `cursor` rather than `nextCursor`
 because `PaginationMeta` has used that name since Phase 5; this document said
 `nextCursor` until the first list endpoint was built against it.
 
+**A malformed cursor is rejected**, with `400 VALIDATION_FAILED` and the detail
+`{ "field": "cursor", "code": "INVALID_CURSOR" }`. It is not treated as an absent
+cursor. Returning page one for an unusable cursor gives a client a `200` it cannot
+distinguish from a genuine first page, so a cursor truncated in transit turns a
+paging loop into an infinite one that re-reads page one and never terminates.
+
+Clients should echo `meta.pagination.cursor` back verbatim and stop when it is
+`null`.
+
 ### Route status markers
 
 Every route table and heading carries its build state, and `bin/check-api-contract.sh`

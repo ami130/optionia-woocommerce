@@ -1027,3 +1027,96 @@ mistake otherwise surfaces at a customer's checkout.
 Adding a type in Phase 14 is an entry plus a test that its schemas reject what
 they should. The registry asserts its own size, so a second type appearing during
 Phase 7 fails a test rather than passing as scope creep.
+
+---
+
+## ADR-026 — A malformed cursor is an error, not the first page
+
+**Status:** accepted
+**Date:** Phase 7, M7.1
+
+### Context
+
+`decodeCursor` returned `null` for anything it could not parse, and `null` was
+also how "no cursor supplied" was represented. The two were indistinguishable, so
+`?cursor=@@@` returned `200` with page one.
+
+The original comment defended this: a cursor arrives in a URL a person may have
+edited, and answering "invalid cursor" to someone who pasted a link is unhelpful.
+
+That reasoning is sound for a link a human edits and wrong for this surface. The
+contract already states the cursor is opaque and clients must not construct one,
+so every caller is a machine that either echoes `meta.pagination.cursor` back or
+has a bug. For that caller, a silent reset is the worst possible answer: a cursor
+truncated in transit turns a paging loop into an infinite one that re-reads page
+one forever and never terminates — with a `200` at every step.
+
+### Decision
+
+A cursor that is present and unparseable is rejected with `400 VALIDATION_FAILED`
+and the detail `{ field: 'cursor', code: 'INVALID_CURSOR' }`. An *absent* cursor
+still means the first page.
+
+Validation is strict: the decoded value must be exactly `timestamp|uuid`, the
+timestamp must round-trip through `toISOString()`, and the id must match the UUID
+shape. `Buffer.from(x, 'base64url')` does not throw on invalid input — it silently
+drops the offending characters — so a `try/catch` alone would have caught none of
+the six cases now tested.
+
+### Consequences
+
+A client that mangles a cursor gets a loud, diagnosable failure rather than a
+silent loop. The behaviour is documented in `API-CONTRACT.md` under Pagination,
+and the test that previously asserted the old behaviour — "tolerates a broken
+cursor" — was inverted rather than deleted, because it encoded the defect.
+
+---
+
+## ADR-027 — Audit provenance comes from the request context, never the caller
+
+**Status:** accepted
+**Date:** Phase 7, M7.6
+
+### Context
+
+M7.6 requires every mutation recorded with **actor, diff, and IP**. Two of the
+three were being written: `AuditService` hardcoded `ip: null` and `userAgent:
+null`, and the request context carried neither — so this was not a missed wiring
+but a value that did not exist upstream.
+
+Separately, each mutation recorded a differently shaped `changes` payload: a
+create wrote `{name}`, an update wrote `{name: {from, to}}`, a delete wrote
+something else. A trail in three shapes cannot be rendered, searched or exported
+by one piece of code.
+
+### Decision
+
+The middleware captures `ip` and `userAgent` into the request context, and
+`AuditService` reads them from there — **not** from `AuditEntry`. An actor must
+not be able to declare their own origin, and a service reaching into an HTTP
+request would tie the audit layer to a transport, which is the same reason
+`tenantId` lives in the context.
+
+`ip` is packed to the 16 bytes `VARBINARY(16)` stores, in IPv4-mapped form, so
+`10.0.0.1` and `::ffff:10.0.0.1` — the same host on a dual-stack socket — compare
+equal instead of reading as two visitors. An unparseable address stores `null`: a
+gap is visibly missing, whereas a malformed value looks like evidence.
+
+One `diff(before, after)` helper produces `{field: {from, to}}` for every
+mutation, with a create diffing from `null` and a delete diffing to a removed
+state. Unchanged fields are omitted.
+
+### Consequences
+
+`⚠️` An IP is personal data under GDPR, so `audit_logs` is subject to the Phase 26b
+retention policy rather than kept indefinitely — already noted on the column.
+
+Because `AuditService` swallows its own write failures by design (the recorded
+action has already happened; failing it afterwards is worse), a spy on `record()`
+cannot distinguish a successful write from one that threw and was logged. The 7e
+audit tests therefore query `audit_logs` directly, and that is deliberate.
+
+`trust proxy` is **not** set, so `req.ip` is the socket address. That is correct
+and unspoofable today. The moment this runs behind a load balancer it must be
+configured, or every audit row will record the balancer's address — and a
+carelessly trusted `X-Forwarded-For` is worse than no IP at all.

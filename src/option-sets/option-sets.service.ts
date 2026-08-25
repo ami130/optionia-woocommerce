@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
+import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { getTenantId } from '../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
@@ -69,7 +70,7 @@ export class OptionSetsService {
       action: AuditAction.OPTION_SET_CREATED,
       resourceType: 'option_set',
       resourceId: created.id,
-      changes: { name: created.name, storeId },
+      changes: diff(null, { name: created.name, storeId, status: created.status }),
     });
 
     return created;
@@ -90,13 +91,22 @@ export class OptionSetsService {
       return before;
     }
 
-    await this.repository.update({ id } as never, { name: changes.name.trim() } as never);
+    const name = changes.name.trim();
+
+    // No-op guard: renaming a set to the name it already has should not burn a
+    // `rowVersion` — doing so would invalidate every other editor's loaded copy
+    // for a write that changed nothing.
+    if (name === before.name) {
+      return before;
+    }
+
+    await this.repository.applyChange(id, { name } as Partial<OptionSet>);
 
     await this.audit.record({
       action: AuditAction.OPTION_SET_UPDATED,
       resourceType: 'option_set',
       resourceId: id,
-      changes: { name: { from: before.name, to: changes.name.trim() } },
+      changes: diff({ name: before.name }, { name }),
     });
 
     return this.findOne(id);
@@ -112,13 +122,16 @@ export class OptionSetsService {
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
 
-    await this.repository.update({ id } as never, { deletedAt: new Date() } as never);
+    await this.repository.applyChange(id, { deletedAt: new Date() } as Partial<OptionSet>);
 
     await this.audit.record({
       action: AuditAction.OPTION_SET_DELETED,
       resourceType: 'option_set',
       resourceId: id,
-      changes: { name: before.name, status: before.status },
+      changes: diff(
+        { name: before.name, status: before.status, deleted: false },
+        { name: before.name, status: before.status, deleted: true },
+      ),
     });
   }
 
@@ -236,7 +249,10 @@ export class OptionSetsService {
       action: AuditAction.OPTION_SET_DUPLICATED,
       resourceType: 'option_set',
       resourceId: copy.id,
-      changes: { copiedFrom: source.id, name: copy.name },
+      changes: {
+        ...diff(null, { name: copy.name, storeId: copy.storeId, status: copy.status }),
+        copiedFrom: source.id,
+      },
     });
 
     return copy;

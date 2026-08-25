@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
+import { DomainException } from '../common/errors/domain.exception';
 import { TenantScopedRepository } from '../common/tenancy/tenant-scoped.repository';
 import type { OptionSetStatus } from '../common/database/enums';
 import { OptionSet } from './entities/option-set.entity';
@@ -33,6 +35,34 @@ export class OptionSetsRepository extends TenantScopedRepository<OptionSet> {
     repository: Repository<OptionSet>,
   ) {
     super(repository);
+  }
+
+  /**
+   * Apply a change and advance the row's version in the same statement.
+   *
+   * `rowVersion` is the optimistic lock 7j turns into a 409. It is incremented
+   * here, at the single point every mutation passes through, rather than in
+   * each caller — a mutation that forgets to bump it makes a *stale* client
+   * look current, which is the one failure optimistic locking exists to stop.
+   *
+   * `rowVersion + 1` is computed by the database, not read-then-written, so two
+   * concurrent updates cannot land on the same number.
+   */
+  async applyChange(id: string, changes: Partial<OptionSet>): Promise<number> {
+    const result = await this.unsafeUnscopedRepository
+      .createQueryBuilder()
+      .update(OptionSet)
+      .set({ ...changes, rowVersion: () => 'rowVersion + 1' } as never)
+      // The tenant predicate is restated here because this bypasses the
+      // scoped `update()` in order to compute `rowVersion` in SQL. It is the
+      // one place in this class where scoping is written by hand, so it is
+      // covered by an isolation test of its own.
+      .where('id = :id', { id })
+      .andWhere('tenantId = :tenantId', { tenantId: this.tenantId })
+      .andWhere('deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL })
+      .execute();
+
+    return result.affected ?? 0;
   }
 
   /**
@@ -104,22 +134,55 @@ function encodeCursor(createdAt: Date, id: string): string {
 }
 
 /**
- * Decode a cursor, or null if it is unusable.
+ * Decode a cursor. **Rejects a malformed one rather than ignoring it.**
  *
- * A malformed cursor returns the first page rather than an error. It arrives
- * from a URL a user may have edited or truncated, and answering "your cursor is
- * invalid" to someone who pasted a link is worse than showing them page one.
+ * Silently treating an unusable cursor as "no cursor" returns page one with a
+ * 200, which a client cannot distinguish from a genuine first page — so a
+ * cursor mangled in transit makes a paging loop restart forever, re-processing
+ * the same rows and never reaching the end. A truncated cursor is precisely the
+ * case that has to be loud.
+ *
+ * This is an API, not a link a person edits by hand: the contract already says
+ * the cursor is opaque and clients must not construct one, so the only callers
+ * are machines that either echo `meta.pagination.cursor` back verbatim or have
+ * a bug worth surfacing.
  */
 function decodeCursor(cursor?: string): { createdAt: Date; id: string } | null {
-  if (!cursor) {
+  if (cursor === undefined) {
+    return null;
+  }
+
+  const decoded = decodeCursorOrNull(cursor);
+
+  if (!decoded) {
+    throw DomainException.validation([
+      { field: 'cursor', code: 'INVALID_CURSOR' },
+    ]);
+  }
+
+  return decoded;
+}
+
+/** The parse itself, separated so the failure is one branch rather than three. */
+function decodeCursorOrNull(cursor: string): { createdAt: Date; id: string } | null {
+  if (cursor.length === 0 || cursor.length > MAX_CURSOR_LENGTH) {
     return null;
   }
 
   try {
-    const [timestamp, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    const [timestamp, id, ...extra] = Buffer.from(cursor, 'base64url')
+      .toString('utf8')
+      .split('|');
+
+    if (extra.length > 0 || !timestamp || !id || !UUID_PATTERN.test(id)) {
+      return null;
+    }
+
     const createdAt = new Date(timestamp);
 
-    if (!id || Number.isNaN(createdAt.getTime())) {
+    // `new Date('2020')` parses, so the round-trip confirms the value was a
+    // full ISO timestamp of the shape `encodeCursor` writes.
+    if (Number.isNaN(createdAt.getTime()) || createdAt.toISOString() !== timestamp) {
       return null;
     }
 
@@ -128,6 +191,11 @@ function decodeCursor(cursor?: string): { createdAt: Date; id: string } | null {
     return null;
   }
 }
+
+/** An encoded cursor is ~60 bytes; this bounds the work a junk value can cause. */
+const MAX_CURSOR_LENGTH = 256;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Escape a user's search term for `LIKE`.

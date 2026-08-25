@@ -56,6 +56,21 @@ export interface RequestContext {
    * wrong realm without re-parsing it.
    */
   realm?: 'platform' | 'tenant' | 'store';
+
+  /**
+   * The caller's IP, as seen at the socket.
+   *
+   * Captured in middleware rather than read from the request where it is
+   * needed, because M7.6 requires it on audit entries and a service reaching
+   * into an HTTP request would tie the audit layer to a transport — the same
+   * reason `tenantId` lives here.
+   *
+   * ⚠️ Personal data under GDPR wherever it is persisted (Phase 26b retention).
+   */
+  ip?: string;
+
+  /** The caller's user agent, truncated to what `audit_logs` stores. */
+  userAgent?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -120,4 +135,20 @@ export function getTenantId(): string | null {
 /** The authenticated user, or null outside an authenticated request. */
 export function getUserId(): string | null {
   return storage.getStore()?.userId ?? null;
+}
+
+/**
+ * The caller's IP, or null.
+ *
+ * Null outside a request and null when the address could not be determined —
+ * both are legitimate, so callers record the absence rather than inventing a
+ * value.
+ */
+export function getClientIp(): string | null {
+  return storage.getStore()?.ip ?? null;
+}
+
+/** The caller's user agent, or null. */
+export function getUserAgent(): string | null {
+  return storage.getStore()?.userAgent ?? null;
 }

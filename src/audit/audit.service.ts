@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { getContext } from '../common/context/request-context';
+import { packIpAddress } from '../common/net/ip-address';
 import { AuditLog } from './entities/audit-log.entity';
 
 /**
@@ -72,8 +73,10 @@ export class AuditService {
           resourceType: entry.resourceType,
           resourceId: entry.resourceId ?? null,
           changes: entry.changes ?? null,
-          ip: null,
-          userAgent: null,
+          // From the request context, not the entry: an audit row must record
+          // where the action actually came from, so a caller cannot supply it.
+          ip: packIpAddress(context?.ip),
+          userAgent: context?.userAgent ?? null,
         }),
       );
     } catch (error) {

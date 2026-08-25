@@ -28,6 +28,9 @@ export class RequestContextMiddleware implements NestMiddleware {
   private static readonly UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+  /** Matches `audit_logs.user_agent`, so a long header cannot fail a write. */
+  private static readonly USER_AGENT_MAX_LENGTH = 500;
+
   use(req: Request, res: Response, next: NextFunction): void {
     const requestId = RequestContextMiddleware.resolveRequestId(req);
 
@@ -35,7 +38,15 @@ export class RequestContextMiddleware implements NestMiddleware {
     // in a way that bypasses the response interceptor.
     res.setHeader(REQUEST_ID_HEADER, requestId);
 
-    runWithContext({ requestId, startedAt: Date.now() }, () => next());
+    runWithContext(
+      {
+        requestId,
+        startedAt: Date.now(),
+        ip: req.ip,
+        userAgent: RequestContextMiddleware.resolveUserAgent(req),
+      },
+      () => next(),
+    );
   }
 
   /**
@@ -44,6 +55,21 @@ export class RequestContextMiddleware implements NestMiddleware {
    * UUIDv7 rather than v4: it is time-ordered, so ids sort chronologically in a
    * log aggregator without a separate timestamp index.
    */
+  /**
+   * The caller's user agent, truncated to the column's width.
+   *
+   * A user agent is caller-controlled text going into a log, so it is bounded
+   * here rather than at the database, where an oversized value would either
+   * throw mid-audit or be silently cut depending on SQL mode.
+   */
+  private static resolveUserAgent(req: Request): string | undefined {
+    const supplied = req.headers['user-agent'];
+
+    return typeof supplied === 'string' && supplied.length > 0
+      ? supplied.slice(0, RequestContextMiddleware.USER_AGENT_MAX_LENGTH)
+      : undefined;
+  }
+
   private static resolveRequestId(req: Request): string {
     const supplied = req.headers[REQUEST_ID_HEADER];
     const candidate = Array.isArray(supplied) ? supplied[0] : supplied;

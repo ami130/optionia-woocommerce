@@ -62,9 +62,9 @@ import { HealthModule } from './health/health.module';
        * Deliberately loose: a global limit tight enough to matter for auth would
        * break legitimate dashboard traffic.
        */
-      { name: 'default', ttl: 60_000, limit: 300 },
-      { name: 'short', ttl: 1_000, limit: 20 },
-      { name: 'sustained', ttl: 60_000, limit: 300 },
+      { name: 'default', ttl: 60_000, limit: throttleLimit('THROTTLE_DEFAULT_LIMIT', 300) },
+      { name: 'short', ttl: 1_000, limit: throttleLimit('THROTTLE_SHORT_LIMIT', 20) },
+      { name: 'sustained', ttl: 60_000, limit: throttleLimit('THROTTLE_SUSTAINED_LIMIT', 300) },
     ]),
 
     AuthModule,
@@ -105,3 +105,26 @@ import { HealthModule } from './health/health.module';
   ],
 })
 export class AppModule {}
+
+/**
+ * A throttle limit, overridable by environment.
+ *
+ * Production needs these tunable without a deploy, and the e2e suite needs a
+ * ceiling above what a fast test run produces from a single IP — the `short`
+ * bucket is 20 requests per second, which a suite exceeds trivially while a
+ * real user never does.
+ *
+ * **Raising a limit in tests is not the same as disabling the guard.** The
+ * throttler still runs, still keys per IP, and its own tests still assert that
+ * it refuses — which is what the earlier inert-limit defect proved is worth
+ * protecting.
+ *
+ * An unparseable or non-positive value falls back to the default rather than
+ * becoming `NaN`, which `@nestjs/throttler` would treat as an always-exceeded
+ * limit and turn every request into a 429.
+ */
+function throttleLimit(variable: string, fallback: number): number {
+  const parsed = Number(process.env[variable]);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}

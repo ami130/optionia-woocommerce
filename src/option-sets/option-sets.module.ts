@@ -26,6 +26,13 @@ import { OptionTypeValidator } from './types/option-type.validator';
     AuditModule,
   ],
   controllers: [OptionSetsController],
+  // `OptionTypeValidator` is registered here but has no caller yet, and that is
+  // correct at 7e: option *sets* carry no type JSON — `validation`, `pricing`
+  // and `display` live on options, which 7f adds. It is provided now so 7f
+  // injects it rather than re-deciding where validation belongs.
+  //
+  // ⚠️ M7.3's acceptance — "malformed pricing config is rejected at the API
+  // boundary" — is therefore NOT yet demonstrated end-to-end. 7f owes that test.
   providers: [OptionSetsRepository, OptionSetsService, OptionTypeValidator],
   exports: [OptionSetsRepository, OptionSetsService, OptionTypeValidator],
 })
