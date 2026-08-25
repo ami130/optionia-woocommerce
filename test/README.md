@@ -55,3 +55,24 @@ Read both. Neither alone describes the codebase: the unit report covers the pure
 logic — money and bigint transformers, the permission matrix, config validation,
 crypto primitives — and this one covers everything that needs a database to be
 meaningful.
+
+## A passing test count is not a passing run
+
+`Tests: 265 passed` can appear beside `Test Suites: 1 failed`. A suite that fails
+to **typecheck** contributes zero tests rather than failing ones, so the count
+stays green while a whole file did not execute.
+
+This misled three separate mutation checks during Phase 7. Each reported a lower
+count than the known total — `0 total`, `35 of 54` — and each looked like a pass
+until the suite list was read.
+
+Two habits follow:
+
+- **Read `Test Suites`, not only `Tests`.** The suite line is where a compile
+  failure shows up.
+- **Treat a count below the known total as a skip, not a pass.** If the suite
+  usually runs 54 tests and reports 35, thirteen did not run and the reason is
+  almost always a type error introduced by the change under test.
+
+`npm run check` exits non-zero in this case, so CI is not fooled — but a human
+reading the summary line is.
