@@ -2468,6 +2468,42 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Phases 3–6 cross-phase audit
+
+Run after the third race was fixed. Nothing found in Phase 3 or Phase 5 has
+regressed; the open items are all Phase 6's and all are known.
+
+**No regressions.** The plugin's 45 tests and 4 gates still pass at `44aa707`,
+untouched since Phase 3. Every Phase 5 schema guarantee still holds after Phase 6
+added five tables: zero foreign keys with `NO ACTION`, zero nullable `deletedAt`,
+zero non-BIGINT money columns, zero `DECIMAL` anywhere, every table InnoDB, and
+`audit_logs.user_id` still `SET NULL` so GDPR erasure remains possible.
+
+**No contract drift between the repos.** The plugin's HTTP client has no endpoint
+calls yet — those arrive in [Phase 8](#phase-8--woocommerce-store-connection) —
+so there is nothing yet for the backend to have broken. Worth re-checking the
+moment Phase 8 wires the first call.
+
+**Open — e2e coverage is never measured.** `jest --coverage` reports **28.95%**,
+but it only instruments the unit run. Almost all of Phase 6's security code —
+`auth.service`, `team.service`, both guards, the scoped repository — shows 0%
+there while being covered by 193 e2e tests across 11 suites.
+
+The unit figure is therefore misleading in the dangerous direction: it understates
+coverage, so nobody trusts it, so nobody watches it. The true number for the auth
+and tenancy code is **unknown**, and that is the finding. Merging the two runs into
+one coverage report is small work and belongs with the threshold decision already
+deferred to [Phase 30](#phase-30--test-suite).
+
+**Open — `@nestjs/config` is still installed and unused.** Flagged during the
+Phase 6 analysis with the note that Phase 6 adds JWT secrets and mail settings and
+should therefore decide whether to adopt or remove it. Phase 6 has closed without
+deciding, which is how the pino dependency survived Phase 3.
+
+The decision is unchanged: `loadConfig()` throws on a missing variable with no
+fallback defaults, and `ConfigModule` does not. Either remove the package or write
+the ADR — leaving it is the one option that costs something later.
+
 #### Third-pass advanced testing — one low-severity defect, three confirmations
 
 Run after the two concurrency fixes landed. This pass targeted invitation
