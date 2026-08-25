@@ -28,6 +28,8 @@ export class OptionTypeValidator {
   assertValidOption(
     presentation: string,
     payload: {
+      valueKind?: unknown;
+      cardinality?: unknown;
       validation?: unknown;
       pricing?: unknown;
       display?: unknown;
@@ -52,7 +54,50 @@ export class OptionTypeValidator {
       ]);
     }
 
+    /**
+     * The three axes must agree with the type's declaration.
+     *
+     * The registry says `radio` is `choice`/`one`. Nothing in the schema stops a
+     * row being written as `radio`/`text`/`many`, and no renderer, validator or
+     * pricing path can do anything sensible with it — the axes are what carry the
+     * behaviour (M5.4b), so an incoherent triple is an option that exists and
+     * cannot work.
+     *
+     * Checked here rather than by a database constraint because the valid
+     * combinations come from the registry, and Phase 14 adds combinations by
+     * adding entries rather than by altering a table.
+     */
+    const axisDetails: ErrorDetail[] = [];
+
+    if (payload.valueKind !== undefined && payload.valueKind !== definition.valueKind) {
+      axisDetails.push({
+        field: 'valueKind',
+        code: 'INCOMPATIBLE_AXIS',
+        params: {
+          message:
+            `Option type "${presentation}" produces ${definition.valueKind} values, ` +
+            `not ${String(payload.valueKind)}.`,
+        },
+      });
+    }
+
+    if (
+      payload.cardinality !== undefined &&
+      !definition.cardinality.includes(payload.cardinality as never)
+    ) {
+      axisDetails.push({
+        field: 'cardinality',
+        code: 'INCOMPATIBLE_AXIS',
+        params: {
+          message:
+            `Option type "${presentation}" supports ${definition.cardinality.join(' or ')}, ` +
+            `not ${String(payload.cardinality)}.`,
+        },
+      });
+    }
+
     const details = [
+      ...axisDetails,
       ...check('validation', definition.validationSchema, payload.validation),
       ...check('pricing', definition.pricingSchema, payload.pricing),
       ...check('display', definition.displaySchema, payload.display),
@@ -82,12 +127,20 @@ export class OptionTypeValidator {
 /**
  * Run one schema and translate its failures.
  *
- * `null` and `undefined` are skipped rather than validated: all three columns are
- * nullable, and a merchant who has not configured display options has not made a
- * mistake. A schema that genuinely requires a value rejects `null` itself.
+ * **`null` means "not configured" and is skipped, not validated.** All three
+ * columns are nullable, MySQL returns `null` rather than `undefined`, and a
+ * merchant who has never opened the display panel has not made a mistake.
+ *
+ * The first version skipped only `undefined`, which is what a hand-written test
+ * object contains and what a database row never does — every one of the 45
+ * seeded options failed validation on `validation: null`, and no unit test
+ * noticed because none of them read a real row.
+ *
+ * A schema that genuinely requires a value expresses that by rejecting an empty
+ * object, not by relying on this.
  */
 function check(field: string, schema: z.ZodType, value: unknown): ErrorDetail[] {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return [];
   }
 

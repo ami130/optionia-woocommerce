@@ -1,6 +1,7 @@
 import { Presentation } from '../../common/database/enums';
 import { DomainException } from '../../common/errors/domain.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
+import type { ErrorDetail } from '../../common/http/api-response.types';
 import { OptionTypeValidator } from './option-type.validator';
 
 /**
@@ -16,7 +17,7 @@ describe('OptionTypeValidator', () => {
   const validator = new OptionTypeValidator();
 
   /** Pull the structured details out of a thrown DomainException. */
-  function detailsFrom(fn: () => void): Array<{ field: string; code: string }> {
+  function detailsFrom(fn: () => void): ErrorDetail[] {
     try {
       fn();
     } catch (error) {
@@ -24,7 +25,7 @@ describe('OptionTypeValidator', () => {
 
       expect(exception.code).toBe(ErrorCode.VALIDATION_FAILED);
 
-      return (exception.details ?? []) as Array<{ field: string; code: string }>;
+      return exception.details ?? [];
     }
 
     throw new Error('expected a validation error, and none was thrown');
@@ -56,6 +57,66 @@ describe('OptionTypeValidator', () => {
 
       expect(details[0].field).toBe('presentation');
       expect(details[0].code).toBe('UNSUPPORTED_OPTION_TYPE');
+    });
+  });
+
+  describe('the three axes must agree with the type', () => {
+    /**
+     * The registry says `radio` is `choice`/`one`. Nothing in the column
+     * definitions prevents `radio`/`text`/`many`, and no renderer, validator or
+     * pricing path can do anything with it — the axes carry the behaviour
+     * (M5.4b), so an incoherent triple is an option that exists and cannot work.
+     */
+    it('accepts the combination the registry declares', () => {
+      expect(() =>
+        validator.assertValidOption(Presentation.RADIO, {
+          valueKind: 'choice',
+          cardinality: 'one',
+        }),
+      ).not.toThrow();
+    });
+
+    it('rejects a value kind the type does not produce', () => {
+      const details = detailsFrom(() =>
+        validator.assertValidOption(Presentation.RADIO, { valueKind: 'text' }),
+      );
+
+      expect(details[0].field).toBe('valueKind');
+      expect(details[0].code).toBe('INCOMPATIBLE_AXIS');
+    });
+
+    it('rejects a cardinality the type does not support', () => {
+      const details = detailsFrom(() =>
+        validator.assertValidOption(Presentation.RADIO, { cardinality: 'many' }),
+      );
+
+      expect(details[0].field).toBe('cardinality');
+      expect(details[0].code).toBe('INCOMPATIBLE_AXIS');
+    });
+
+    /** The message says what the type does support, not merely that it failed. */
+    it('names what the type actually supports', () => {
+      const details = detailsFrom(() =>
+        validator.assertValidOption(Presentation.RADIO, { cardinality: 'many' }),
+      );
+
+      expect(String(details[0].params?.message)).toMatch(/supports one/);
+    });
+
+    /** Absent axes are not a mistake — a patch need not restate them. */
+    it('skips an axis that was not supplied', () => {
+      expect(() => validator.assertValidOption(Presentation.RADIO, {})).not.toThrow();
+    });
+
+    it('reports both axes together when both are wrong', () => {
+      const details = detailsFrom(() =>
+        validator.assertValidOption(Presentation.RADIO, {
+          valueKind: 'file',
+          cardinality: 'many',
+        }),
+      );
+
+      expect(details.map((d) => d.field).sort()).toEqual(['cardinality', 'valueKind']);
     });
   });
 
