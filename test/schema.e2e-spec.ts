@@ -368,21 +368,39 @@ describe('schema (integration)', () => {
     });
 
     /**
-     * Every row the seeds created must be enabled. A column added to a populated
-     * table is where "all my options vanished" comes from, and it is invisible
-     * until a merchant looks.
+     * The **column default** is what protects existing data, and it is the
+     * default this asserts rather than the current contents.
+     *
+     * An earlier version counted disabled rows in the live database and expected
+     * zero. That tested the migration's backfill through the seed data, so it
+     * broke the moment the fixture gained a deliberately disabled option — a
+     * test that fails when the data becomes more realistic is testing the wrong
+     * thing.
+     *
+     * A row inserted without naming the column is the case that matters: it is
+     * what an existing row becomes when the column is added.
      */
-    it('left every existing row enabled', async () => {
-      for (const table of ['option_groups', 'options', 'option_values']) {
-        const [row] = await dataSource.query(
-          `SELECT COUNT(*) AS total, SUM(isEnabled = 1) AS enabled FROM \`${table}\``,
-        );
+    it('gives a row that names no value the enabled state', async () => {
+      const [row] = await dataSource.query(
+        `SELECT COLUMN_DEFAULT AS d FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'options' AND COLUMN_NAME = 'isEnabled'`,
+        [schema],
+      );
 
-        expect({ table, disabled: Number(row.total) - Number(row.enabled) }).toEqual({
-          table,
-          disabled: 0,
-        });
-      }
+      expect(row.d).toBe('1');
+    });
+
+    /**
+     * And the state is reachable in both directions — a column that could only
+     * ever hold 1 would satisfy every other assertion here.
+     */
+    it('holds both states', async () => {
+      const [row] = await dataSource.query(
+        `SELECT SUM(isEnabled = 1) AS on_, SUM(isEnabled = 0) AS off FROM options`,
+      );
+
+      expect(Number(row.on_)).toBeGreaterThan(0);
+      expect(Number(row.off)).toBeGreaterThan(0);
     });
 
     /** Distinct columns, because they are distinct operations. */

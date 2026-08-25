@@ -154,6 +154,54 @@ describe('seeds (integration)', () => {
       expect(Number(row.largest)).toBeGreaterThanOrEqual(40);
     });
 
+    /**
+     * **The fixture must contain something disabled.**
+     *
+     * Every one of the 186 seeded rows was enabled, so a serializer that ignored
+     * `is_enabled` entirely would produce a config document identical to a
+     * correct one — the exclusion M7.2 requires would be tested only by code
+     * written to test it, never by the data developers work against.
+     *
+     * The same gap as the missing 40-option set in Phase 5: a state the schema
+     * supports and the fixture never reaches.
+     */
+    it('includes a disabled option and a disabled value', async () => {
+      const [options] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM options WHERE isEnabled = 0`,
+      );
+      const [values] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM option_values WHERE isEnabled = 0`,
+      );
+
+      expect(Number(options.n)).toBeGreaterThanOrEqual(1);
+      expect(Number(values.n)).toBeGreaterThanOrEqual(1);
+    });
+
+    /**
+     * The disabled value sits inside an *enabled* option, so the two levels can
+     * be exercised independently rather than only together.
+     */
+    it('puts the disabled value inside an enabled option', async () => {
+      const [row] = await dataSource.query(
+        `SELECT o.isEnabled AS parentEnabled FROM option_values v
+           JOIN options o ON o.id = v.optionId
+          WHERE v.isEnabled = 0 LIMIT 1`,
+      );
+
+      expect(Boolean(row.parentEnabled)).toBe(true);
+    });
+
+    /** Disabled rows keep their children, so re-enabling restores everything. */
+    it('keeps the disabled option’s values intact', async () => {
+      const [row] = await dataSource.query(
+        `SELECT COUNT(v.id) AS n FROM options o
+           JOIN option_values v ON v.optionId = o.id
+          WHERE o.isEnabled = 0`,
+      );
+
+      expect(Number(row.n)).toBeGreaterThanOrEqual(2);
+    });
+
     it('creates the catalogue the product picker needs', async () => {
       expect(await count('store_products')).toBe(30);
     });

@@ -346,6 +346,70 @@ async function seedOptionSets(
       ),
     );
 
+    /**
+     * The first set carries a disabled option and a disabled value.
+     *
+     * Nothing in the fixture exercised `is_enabled` — all 186 rows were enabled,
+     * so a serializer that ignored the flag entirely would produce a config
+     * document identical to a correct one. M7.2's escape hatch would have been
+     * tested only by code written to test it, never by the data everyone
+     * develops against.
+     *
+     * One set rather than all five: enough that the published projection has
+     * something to exclude, few enough that the demo still looks like a working
+     * store rather than a half-configured one.
+     */
+    if (index === 0) {
+      const seasonal = await options.save(
+        options.create({
+          optionGroupId: group.id,
+          key: 'gift_wrap',
+          valueKind: ValueKind.CHOICE,
+          cardinality: Cardinality.ONE,
+          presentation: Presentation.RADIO,
+          label: 'Gift wrapping (off-season)',
+          isRequired: false,
+          sortOrder: 1,
+          // Turned off for the holidays, retained in full — the case M7.2 names.
+          isEnabled: false,
+        }),
+      );
+
+      await values.save([
+        values.create({
+          optionId: seasonal.id,
+          valueKey: 'none',
+          label: 'No wrapping',
+          sortOrder: 0,
+          priceType: PriceType.FIXED,
+          priceAmountMinor: 0,
+          isDefault: true,
+        }),
+        values.create({
+          optionId: seasonal.id,
+          valueKey: 'premium',
+          label: 'Premium paper',
+          sortOrder: 1,
+          priceType: PriceType.FIXED,
+          priceAmountMinor: 500,
+        }),
+      ]);
+
+      // A disabled value inside an *enabled* option, so the two levels are
+      // exercised independently rather than only in combination.
+      await values.save(
+        values.create({
+          optionId: option.id,
+          valueKey: 'discontinued',
+          label: 'Discontinued finish',
+          sortOrder: spec.values.length,
+          priceType: PriceType.FIXED,
+          priceAmountMinor: 0,
+          isEnabled: false,
+        }),
+      );
+    }
+
     // The first set covers everything; the rest target a slice of the catalogue,
     // so assignment resolution has overlapping cases to exercise.
     if (index === 0) {
