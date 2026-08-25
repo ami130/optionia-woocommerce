@@ -33,6 +33,7 @@ export function buildDataSourceOptions(config: ReturnType<typeof loadConfig>): D
     password: config.database.password,
     database: config.database.name,
 
+
     // Discovered by glob rather than an explicit list, so adding an entity does
     // not require editing this file. `.js` covers the compiled build, `.ts` the
     // CLI running through ts-node.

@@ -13,7 +13,7 @@ import { v7 as uuidv7 } from 'uuid';
  *
  * See ADR-014 for the test and the two rejected alternatives.
  */
-export const LIVE_SENTINEL = new Date('1970-01-01T00:00:00.000Z');
+export const LIVE_SENTINEL = new Date(1970, 0, 1, 0, 0, 0, 0);
 
 /**
  * The sentinel as MySQL stores it, for use in a query parameter.
@@ -27,6 +27,29 @@ export const LIVE_SENTINEL = new Date('1970-01-01T00:00:00.000Z');
  * nothing looks like an empty result set, not like a broken filter.
  */
 export const LIVE_SENTINEL_SQL = '1970-01-01 00:00:00.000';
+
+/**
+ * Whether a value read from the database is the live sentinel.
+ *
+ * `LIVE_SENTINEL` is **local** midnight on 1970-01-01, not the UTC epoch, and
+ * that is deliberate: the column holds the literal `1970-01-01 00:00:00.000`
+ * with no zone of its own, and the driver converts on the way out. A UTC epoch
+ * constant disagrees with the stored literal everywhere except UTC.
+ *
+ * Matches on the wall-clock components the literal encodes, so it is correct
+ * whatever timezone the driver applied on the way out. An epoch comparison is
+ * not, and was the defect this replaces.
+ */
+export function isSentinelDate(value: Date): boolean {
+  return (
+    value.getFullYear() === 1970 &&
+    value.getMonth() === 0 &&
+    value.getDate() === 1 &&
+    value.getHours() === 0 &&
+    value.getMinutes() === 0 &&
+    value.getSeconds() === 0
+  );
+}
 
 /**
  * Identity and timestamps for every tenant-scoped entity.
@@ -99,9 +122,27 @@ export abstract class SoftDeletableEntity extends BaseEntity {
   })
   deletedAt: Date;
 
-  /** Whether this row is live. */
+  /**
+   * Whether this row is live.
+   *
+   * Compared by **wall-clock date**, not by instant.
+   *
+   * The sentinel is written as the literal `1970-01-01 00:00:00.000` — by the
+   * migration default, by the seeds, and by any fixture — which bypasses the
+   * driver's write-side conversion. Reading it back applies the read-side
+   * conversion regardless, so on a UTC+6 machine the column arrives as
+   * `1969-12-31T18:00:00Z` and an instant comparison says every live row is
+   * deleted.
+   *
+   * Verified: `isLive` returned false for a row holding the correct sentinel.
+   *
+   * Comparing the wall-clock date is what the literal actually means — the
+   * database column has no zone, and the value stored is the string, not an
+   * instant. `getTime()` here would be asking a question the storage cannot
+   * answer.
+   */
   get isLive(): boolean {
-    return this.deletedAt.getTime() === LIVE_SENTINEL.getTime();
+    return isSentinelDate(this.deletedAt);
   }
 
   /** Mark the row deleted. Idempotent — re-deleting keeps the original time. */
@@ -111,7 +152,18 @@ export abstract class SoftDeletableEntity extends BaseEntity {
     }
   }
 
-  /** Restore a deleted row. */
+  /**
+   * Restore a deleted row.
+   *
+   * Writes the sentinel as **local midnight on 1970-01-01**, because that is
+   * what the driver converts into the literal `1970-01-01 00:00:00.000` the
+   * migration default and the seeds write.
+   *
+   * Assigning `LIVE_SENTINEL` — the UTC epoch — writes a value offset by the
+   * local timezone instead, so a restored row matched neither the literal nor
+   * `isLive` and stayed invisible forever. Verified before this changed:
+   * restoring wrote `1970-01-01 06:00:00`.
+   */
   restore(): void {
     this.deletedAt = LIVE_SENTINEL;
   }

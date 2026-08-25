@@ -1,4 +1,4 @@
-import { BaseEntity, LIVE_SENTINEL, SoftDeletableEntity } from './base.entity';
+import { BaseEntity, isSentinelDate, LIVE_SENTINEL, SoftDeletableEntity } from './base.entity';
 
 class TestEntity extends BaseEntity {
   /** Expose the protected hook for testing. */
@@ -104,9 +104,26 @@ describe('SoftDeletableEntity', () => {
     expect(entity.deletedAt.getTime()).toBe(LIVE_SENTINEL.getTime());
   });
 
-  it('exposes the sentinel as a UTC epoch', () => {
-    // The value is written into a MySQL column default, so it must be the
-    // literal '1970-01-01 00:00:00.000' regardless of the server's timezone.
-    expect(LIVE_SENTINEL.toISOString()).toBe('1970-01-01T00:00:00.000Z');
+  /**
+   * The comment on the previous version of this test stated the requirement
+   * correctly — the column holds the literal `1970-01-01 00:00:00.000`
+   * regardless of timezone — and then asserted the UTC epoch, which satisfies it
+   * only on a UTC machine.
+   *
+   * On UTC+6 the constant and the stored literal were six hours apart, so
+   * `isLive` was false for every live row and a restored row matched nothing.
+   */
+  it('is midnight on 1970-01-01 in wall-clock terms', () => {
+    expect(LIVE_SENTINEL.getFullYear()).toBe(1970);
+    expect(LIVE_SENTINEL.getMonth()).toBe(0);
+    expect(LIVE_SENTINEL.getDate()).toBe(1);
+    expect(LIVE_SENTINEL.getHours()).toBe(0);
+    expect(LIVE_SENTINEL.getMinutes()).toBe(0);
+    expect(LIVE_SENTINEL.getSeconds()).toBe(0);
+  });
+
+  /** The constant and the check must agree, or a live row is not live. */
+  it('is recognised by isSentinelDate', () => {
+    expect(isSentinelDate(LIVE_SENTINEL)).toBe(true);
   });
 });

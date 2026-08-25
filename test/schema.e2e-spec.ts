@@ -3,6 +3,8 @@ import { DataSource } from 'typeorm';
 
 import { buildDataSourceOptions } from '../src/config/data-source';
 import { loadConfig } from '../src/config/env';
+import { isSentinelDate } from '../src/common/database/base.entity';
+import { OptionSet } from '../src/option-sets/entities/option-set.entity';
 
 /**
  * Schema guarantees, asserted against a real database.
@@ -255,6 +257,74 @@ describe('schema (integration)', () => {
 
       expect(rows.map((r) => r.cols)).toContain(columns);
     });
+  });
+
+  describe('the soft-delete sentinel survives a round trip', () => {
+    /**
+     * **The sentinel is written as a literal and read back through a converter.**
+     *
+     * The migration default, the seeds and every fixture write
+     * `1970-01-01 00:00:00.000` directly, bypassing the driver's write-side
+     * timezone conversion — but reading applies the read-side one regardless. On
+     * a UTC+6 machine the column arrived as `1969-12-31T18:00:00Z`, so an epoch
+     * comparison declared every live row deleted.
+     *
+     * Both halves were wrong and each hid the other: `isLive` was false for live
+     * rows, and `restore()` wrote `1970-01-01 06:00:00`, which matched neither
+     * the literal nor `isLive` and left the row invisible permanently.
+     */
+    /**
+     * Through the `isLive` getter, not the helper it calls.
+     *
+     * An earlier version of this test asserted on `isSentinelDate` directly and
+     * therefore passed when `isLive` was reverted to an epoch comparison — it
+     * tested the helper while the defect lived in the caller.
+     */
+    it('reports a live row as live', async () => {
+      const entity = await dataSource.getRepository(OptionSet).findOne({ where: {} });
+
+      expect(entity).toBeDefined();
+      expect(entity?.isLive).toBe(true);
+    });
+
+    it('recognises the sentinel however the driver returned it', async () => {
+      const [row] = await dataSource.query(
+        `SELECT deletedAt FROM option_sets WHERE deletedAt = '1970-01-01 00:00:00.000' LIMIT 1`,
+      );
+
+      expect(isSentinelDate(new Date(row.deletedAt))).toBe(true);
+    });
+
+    it('does not mistake a real deletion for the sentinel', () => {
+      expect(isSentinelDate(new Date())).toBe(false);
+      expect(isSentinelDate(new Date('1970-01-02T00:00:00Z'))).toBe(false);
+    });
+
+    /**
+     * A restored row must match what the migration writes, or it is live
+     * according to nobody: not the literal, and not `isLive`.
+     */
+    it('restores to a value the database recognises', async () => {
+      const [before] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM option_sets WHERE deletedAt = '1970-01-01 00:00:00.000'`,
+      );
+
+      // A restored row is written by the entity, not by a literal.
+      const repository = dataSource.getRepository(OptionSet);
+      const entity = await repository.findOne({ where: {} });
+
+      entity?.markDeleted();
+      await repository.save(entity as OptionSet);
+
+      entity?.restore();
+      await repository.save(entity as OptionSet);
+
+      const [after] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM option_sets WHERE deletedAt = '1970-01-01 00:00:00.000'`,
+      );
+
+      expect(Number(after.n)).toBe(Number(before.n));
+    }, 20_000);
   });
 
   describe('auth tokens (M6.1)', () => {
