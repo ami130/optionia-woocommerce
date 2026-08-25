@@ -64,6 +64,18 @@ async function registeredRoutes(): Promise<Route[]> {
       continue;
     }
 
+    /**
+     * `/health` is registered across every verb by the terminus module and is
+     * deliberately outside the contract's surface.
+     *
+     * Excluded here rather than at the comparison, so the reported count is the
+     * number of API routes rather than that plus ten framework entries — a count
+     * that does not match what a reader can see is a count they stop trusting.
+     */
+    if (layer.route.path === '/health') {
+      continue;
+    }
+
     for (const [method, enabled] of Object.entries(layer.route.methods)) {
       if (enabled && DOCUMENTED_METHODS.has(method.toUpperCase())) {
         routes.push({ method: method.toUpperCase(), path: layer.route.path });
@@ -83,21 +95,33 @@ async function registeredRoutes(): Promise<Route[]> {
  * it appears as `METHOD /path`, which is how every table row and heading writes
  * one.
  */
-function documentedRoutes(markdown: string): Set<string> {
+function documentedRoutes(markdown: string): {
+  all: Set<string>;
+  built: Set<string>;
+} {
   const deferredAt = markdown.indexOf('## Deferred to later phases');
   const active = deferredAt === -1 ? markdown : markdown.slice(0, deferredAt);
 
-  const found = new Set<string>();
+  const all = new Set<string>();
+  const built = new Set<string>();
 
-  for (const match of active.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
-    const method = match[1].toUpperCase();
-    // The contract writes paths with and without the /v1 prefix; normalise.
-    const routePath = match[2].startsWith('/v1') ? match[2] : `/v1${match[2]}`;
+  // Line by line, because `[built]` marks the line the route appears on.
+  for (const line of active.split('\n')) {
+    for (const match of line.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
+      const method = match[1].toUpperCase();
+      // The contract writes paths with and without the /v1 prefix; normalise.
+      const routePath = match[2].startsWith('/v1') ? match[2] : `/v1${match[2]}`;
+      const key = `${method} ${routePath.replace(/\?.*$/, '')}`;
 
-    found.add(`${method} ${routePath.replace(/\?.*$/, '')}`);
+      all.add(key);
+
+      if (line.includes('[built]')) {
+        built.add(key);
+      }
+    }
   }
 
-  return found;
+  return { all, built };
 }
 
 async function main(): Promise<void> {
@@ -106,16 +130,29 @@ async function main(): Promise<void> {
 
   const documented = documentedRoutes(contract);
   const registered = await registeredRoutes();
+  const registeredKeys = new Set(registered.map((r) => `${r.method} ${r.path}`));
 
   const failures: string[] = [];
 
-  for (const route of registered) {
-    // `/health` is deliberately unversioned and outside the contract's surface.
-    if (route.path === '/health') {
-      continue;
+  /**
+   * A route marked `[built]` that no longer exists.
+   *
+   * This is the direction the first version claimed to check and did not: its own
+   * header said "every route the contract documents is registered" while the code
+   * only looped the other way, so a fabricated endpoint added to the document
+   * passed silently. The third time in this project a comment asserted a check
+   * that was not implemented.
+   */
+  for (const key of documented.built) {
+    if (!registeredKeys.has(key)) {
+      failures.push(
+        `${key} is marked [built] in docs/API-CONTRACT.md but no route is registered`,
+      );
     }
+  }
 
-    if (!documented.has(`${route.method} ${route.path}`)) {
+  for (const route of registered) {
+    if (!documented.all.has(`${route.method} ${route.path}`)) {
       failures.push(
         `${route.method} ${route.path} is registered but absent from docs/API-CONTRACT.md`,
       );
@@ -130,6 +167,20 @@ async function main(): Promise<void> {
    * A green check that examined nothing is worse than no check, because it stops
    * anyone looking — the same failure the schema doc checker had (ADR-020).
    */
+  /**
+   * Every registered route must be marked `[built]`.
+   *
+   * Otherwise a new endpoint can be documented as a future step while already
+   * being live, and the marker stops describing anything.
+   */
+  for (const route of registered) {
+    const key = `${route.method} ${route.path}`;
+
+    if (documented.all.has(key) && !documented.built.has(key)) {
+      failures.push(`${key} is registered but not marked [built] in the contract`);
+    }
+  }
+
   if (registered.length === 0) {
     failures.push(
       'no routes were discovered at all — the router shape has changed and this ' +
@@ -147,8 +198,8 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `All API contract checks passed. ${registered.length - 1} routes registered, ` +
-      `${documented.size} documented.`,
+    `All API contract checks passed. ${registered.length} routes registered, ` +
+      `${documented.all.size} documented, ${documented.built.size} marked built.`,
   );
 }
 

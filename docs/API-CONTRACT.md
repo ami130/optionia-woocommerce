@@ -157,6 +157,23 @@ merchant is actively editing is a bug they will report as "my option disappeared
 `limit` defaults to 50 and is capped at 100. The cursor is opaque and clients must
 not construct one; its encoding is an implementation detail that may change.
 
+### Route status markers
+
+Every route table and heading carries its build state, and `bin/check-api-contract.sh`
+reads them:
+
+| Marker | Meaning |
+|---|---|
+| **`[built]`** | Registered by the application today. Must exist, or the check fails |
+| **`[7x]`** | Ships in this Phase 7 step. Must **not** exist yet |
+| **`[phase N]`** | A later phase owns it |
+
+Without a marker a route is neither verifiable nor refutable: the first version of
+this check verified only that registered routes were documented, so a fabricated
+endpoint added to this file passed silently. The markers make the reverse direction
+checkable — a `[built]` route that vanishes fails, and a route that appears before
+its step fails.
+
 ### Idempotency
 
 `POST` routes that create a resource accept an `Idempotency-Key` header. A repeat
@@ -179,7 +196,7 @@ credential.
 > endpoints that must be rate-limited — it was correctly built, and the sketch was
 > incomplete.
 
-### `POST /v1/auth/register`
+### `POST /v1/auth/register` **[built]**
 
 Creates a user, provisions their tenant, and sends a verification email — all in
 one transaction. A user without a tenant cannot act, and a tenant without an owner
@@ -210,7 +227,7 @@ who has an account. The wording is true either way.
 
 **Errors:** `VALIDATION_FAILED`, `RATE_LIMITED`.
 
-### `POST /v1/auth/verify-email`
+### `POST /v1/auth/verify-email` **[built]**
 
 **Rate limit:** 10 per hour. **Response:** `200 OK`
 
@@ -221,7 +238,7 @@ who has an account. The wording is true either way.
 **Errors:** `TOKEN_INVALID` (401) for expired, already-used, and never-existed
 alike — distinguishing them confirms a token was once valid.
 
-### `POST /v1/auth/resend-verification`
+### `POST /v1/auth/resend-verification` **[built]**
 
 **Rate limit:** 3 per hour, per address — this endpoint sends mail to an address
 the caller names, which is the email-bombing vector M6.1 warns about.
@@ -229,7 +246,7 @@ the caller names, which is the email-bombing vector M6.1 warns about.
 **Response:** `202 Accepted`, identically whether the address exists, is already
 verified, or is unknown.
 
-### `POST /v1/auth/login`
+### `POST /v1/auth/login` **[built]**
 
 **Rate limit:** 10 per 15 minutes, per account. Enough for someone who cannot
 remember which password they used; nowhere near enough to work through a list.
@@ -254,7 +271,7 @@ remember which password they used; nowhere near enough to work through a list.
   has already proven they hold the password.
 - `RATE_LIMITED` (429).
 
-### `POST /v1/auth/refresh`
+### `POST /v1/auth/refresh` **[built]**
 
 Exchanges a refresh token for a new one. **Rate limit:** 60 per hour.
 **Response:** `200 OK` → `{ "data": { "refreshToken": "…" } }`
@@ -269,7 +286,7 @@ signed in.
 Telling an attacker their replay was noticed tells them the token was real; the
 detection is for operations, which get a warning log.
 
-### `POST /v1/auth/logout`
+### `POST /v1/auth/logout` **[built]**
 
 **Rate limit:** 60 per hour. **Response:** `204 No Content`, whether or not the
 token was live — a different answer for an unknown token confirms which exist.
@@ -277,14 +294,14 @@ token was live — a different answer for an unknown token confirms which exist.
 Revokes the refresh family **and** stamps `sessions_invalidated_at`, so the access
 token stops working immediately rather than surviving until it expires (ADR-024).
 
-### `POST /v1/auth/request-password-reset`
+### `POST /v1/auth/request-password-reset` **[built]**
 
 **Rate limit:** 3 per hour, per address. **Response:** `202 Accepted`
 
 **No row is written and no mail is sent for an unknown address**, and the response
 is identical either way.
 
-### `POST /v1/auth/reset-password`
+### `POST /v1/auth/reset-password` **[built]**
 
 **Rate limit:** 10 per hour. **Response:** `200 OK` → `{ "data": { "reset": true } }`
 
