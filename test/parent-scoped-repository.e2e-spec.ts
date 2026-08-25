@@ -351,6 +351,65 @@ describe('ParentScopedRepository (integration)', () => {
     });
   });
 
+  describe('soft delete', () => {
+    /**
+     * M7.2: deleting an option set excludes its groups, options and values.
+     *
+     * The join originally matched on `id` alone, so a deleted set still exposed
+     * everything beneath it — a merchant deletes a set and its options remain
+     * listed, which reads as data they cannot remove.
+     */
+    it('hides children of a deleted parent', async () => {
+      expect(await asTenant(A, () => options.count())).toBe(1);
+
+      await dataSource.query(`UPDATE option_sets SET deletedAt = NOW(3) WHERE id = ?`, [
+        `${A}-set`,
+      ]);
+
+      expect(await asTenant(A, () => options.count())).toBe(0);
+      expect(await asTenant(A, () => values.count())).toBe(0);
+    });
+
+    it('hides a deleted row itself', async () => {
+      await dataSource.query(`UPDATE options SET deletedAt = NOW(3) WHERE id = ?`, [
+        `${A}-option`,
+      ]);
+
+      expect(await asTenant(A, () => options.findById(`${A}-option`))).toBeNull();
+      expect(await asTenant(A, () => options.count())).toBe(0);
+    });
+
+    /** A deleted parent cannot receive new children. */
+    it('refuses to create under a deleted parent', async () => {
+      await dataSource.query(`UPDATE option_groups SET deletedAt = NOW(3) WHERE id = ?`, [
+        `${A}-group`,
+      ]);
+
+      await expect(
+        asTenant(A, () =>
+          options.create(`${A}-group`, {
+            optionGroupId: `${A}-group`,
+            key: 'orphan',
+            valueKind: 'choice',
+            cardinality: 'one',
+            presentation: 'radio',
+            label: 'Orphan',
+          } as never),
+        ),
+      ).rejects.toThrow(/not found/);
+    });
+
+    /** Deleting one tenant's set must not touch another's. */
+    it('leaves the other tenant untouched', async () => {
+      await dataSource.query(`UPDATE option_sets SET deletedAt = NOW(3) WHERE id = ?`, [
+        `${A}-set`,
+      ]);
+
+      expect(await asTenant(B, () => options.count())).toBe(1);
+      expect(await asTenant(B, () => values.count())).toBe(1);
+    });
+  });
+
   describe('without a tenant context', () => {
     /**
      * The M6.4 acceptance criterion, extended to these entities: a method that

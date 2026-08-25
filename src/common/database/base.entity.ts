@@ -16,6 +16,19 @@ import { v7 as uuidv7 } from 'uuid';
 export const LIVE_SENTINEL = new Date('1970-01-01T00:00:00.000Z');
 
 /**
+ * The sentinel as MySQL stores it, for use in a query parameter.
+ *
+ * ⚠️ **Do not pass `LIVE_SENTINEL` itself into a `WHERE`.** The driver converts a
+ * JS `Date` into the connection's local time, so the comparison silently matches
+ * nothing — verified: filtering five live rows by the `Date` returned zero, and
+ * by this string returned five.
+ *
+ * The failure is silent in the worst direction. A scoping predicate that matches
+ * nothing looks like an empty result set, not like a broken filter.
+ */
+export const LIVE_SENTINEL_SQL = '1970-01-01 00:00:00.000';
+
+/**
  * Identity and timestamps for every tenant-scoped entity.
  *
  * The primary key is UUIDv7, generated in the application rather than by the

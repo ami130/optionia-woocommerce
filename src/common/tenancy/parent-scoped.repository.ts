@@ -11,6 +11,7 @@ import {
   UpdateResult,
 } from 'typeorm';
 
+import { LIVE_SENTINEL_SQL } from '../database/base.entity';
 import { requireTenantId } from '../context/request-context';
 
 /**
@@ -84,12 +85,31 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
     this.chain.forEach((link, index) => {
       const parent = `p${index}`;
 
-      query.innerJoin(link.table, parent, `${parent}.id = ${child}.${link.on}`);
+      /**
+       * Every link excludes soft-deleted parents.
+       *
+       * Joining on `id` alone leaves a deleted option set still exposing its
+       * groups, options and values — verified before this was added: deleting a
+       * set left its option still counted. M7.2 requires a deleted set to
+       * exclude its contents, and "the parent is gone but its children are
+       * listed" is a bug a merchant reports as data they cannot remove.
+       *
+       * A live row is `deleted_at = LIVE_SENTINEL`, never NULL (ADR-014), so
+       * this is an equality rather than a null check.
+       */
+      query.innerJoin(
+        link.table,
+        parent,
+        `${parent}.id = ${child}.${link.on} AND ${parent}.deletedAt = :liveSentinel`,
+      );
       child = parent;
     });
 
-    // `child` is now the alias of `option_sets`, whatever the depth.
-    return query.andWhere(`${child}.tenantId = :tenantId`, { tenantId: this.tenantId });
+    return query
+      .andWhere(`${child}.tenantId = :tenantId`, { tenantId: this.tenantId })
+      // The entity's own soft-delete state, not only its parents'.
+      .andWhere(`${this.alias}.deletedAt = :liveSentinel`)
+      .setParameter('liveSentinel', LIVE_SENTINEL_SQL);
   }
 
   async find(options: FindManyOptions<T> = {}): Promise<T[]> {
@@ -244,6 +264,8 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
     const owned = await query
       .where('p.id = :parentId', { parentId })
       .andWhere(`${child}.tenantId = :tenantId`, { tenantId: this.tenantId })
+      // A deleted parent cannot receive new children.
+      .andWhere('p.deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL })
       .getRawOne();
 
     if (!owned) {

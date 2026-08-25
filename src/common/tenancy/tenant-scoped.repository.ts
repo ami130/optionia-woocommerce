@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 
 import { requireTenantId } from '../context/request-context';
+import { LIVE_SENTINEL_SQL } from '../database/base.entity';
 
 /**
  * A repository that cannot return another tenant's rows.
@@ -64,13 +65,33 @@ export abstract class TenantScopedRepository<
   ): FindOptionsWhere<T> | FindOptionsWhere<T>[] {
     const tenantId = this.tenantId;
 
+    /**
+     * Soft-deleted rows are excluded on entities that support it.
+     *
+     * Without this a deleted option set still appeared in every list and
+     * `findById` still returned it — verified before the fix. `@DeleteDateColumn`
+     * is deliberately not used (ADR-014), so TypeORM does not filter these
+     * automatically and the predicate has to be explicit.
+     *
+     * The literal rather than the `Date`: passing `LIVE_SENTINEL` as a parameter
+     * makes the driver convert it to local time and match nothing at all.
+     */
+    const live = this.isSoftDeletable
+      ? { deletedAt: LIVE_SENTINEL_SQL as unknown }
+      : {};
+
     // An array is an OR. Each branch needs the predicate, or one unscoped branch
     // makes the whole query unscoped.
     if (Array.isArray(where)) {
-      return where.map((clause) => ({ ...clause, tenantId }) as FindOptionsWhere<T>);
+      return where.map((clause) => ({ ...clause, ...live, tenantId }) as FindOptionsWhere<T>);
     }
 
-    return { ...(where ?? {}), tenantId } as FindOptionsWhere<T>;
+    return { ...(where ?? {}), ...live, tenantId } as FindOptionsWhere<T>;
+  }
+
+  /** Whether this entity carries `deletedAt`, read once from its metadata. */
+  private get isSoftDeletable(): boolean {
+    return this.repository.metadata.columns.some((c) => c.propertyName === 'deletedAt');
   }
 
   async find(options: FindManyOptions<T> = {}): Promise<T[]> {
