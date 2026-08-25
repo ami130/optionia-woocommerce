@@ -3011,201 +3011,154 @@ implementation begins.
 
 ### Phase 7 execution plan
 
-Written after auditing what Phases 5 and 6 actually left behind. Three findings
-shape the order.
+Rewritten after auditing every milestone and every exit criterion against what
+Phases 5 and 6 actually left behind. The first draft was derived from the
+milestone headings and dropped two of them; this one is derived from the
+requirements, and states the forward dependencies rather than meeting them
+halfway through.
 
-**Finding 1 — the scoped repository covers one of seven entities.** Only
-`option_sets` carries a direct `tenant_id`. Groups, options, values, rules,
-versions and assignments all reach their tenant through a parent chain, and
+#### Five findings that shape the work
+
+**1. The scoped repository covers one of seven entities.** Only `option_sets`
+carries a direct `tenant_id`. Groups, options, values, rules, versions and
+assignments reach their tenant through a parent chain, and
 [`TenantScopedRepository`](#m64--tenant-scoped-repository-layer) requires the
 column.
 
-This is the single largest decision in the phase, and the schema is right rather
-than wrong: denormalising `tenant_id` onto six tables would create six places for
-it to disagree with the parent, and a row whose `tenant_id` contradicts its
-`option_set_id` is worse than no column at all.
+The schema is right rather than wrong: denormalising `tenant_id` onto six tables
+creates six places for it to disagree with the parent, and a row whose `tenant_id`
+contradicts its `option_set_id` is worse than no column. So the phase extends the
+scoping layer to entities that reach their tenant through a join — **not** by
+adding columns.
 
-So Phase 7 opens by extending the scoping layer to entities that reach their
-tenant through a join — **not** by adding columns. `AC5` is enforced at the data
-layer or it is not enforced, and [M6.6](#m66--tenant-isolation-test-suite) already
-attacks eight vectors that this must survive.
+**2. Enable/disable does not exist.** [M7.2](#m72--group-and-option-crud) defines
+it as distinct from soft delete — *"retained, excluded from published config"*,
+the escape hatch for turning something off without losing the work. Only
+`option_rules` has `is_enabled`. `deleted_at` cannot stand in: one hides
+permanently, the other is expected to be undone.
 
-**Finding 2 — enable/disable does not exist.** M7.2 defines it as a distinct
-operation from soft delete: *"retained, excluded from published config, the
-merchant's escape hatch for turn this off for the holidays without losing the
-work"*. Only `option_rules` has `is_enabled`; groups, options and values do not.
+**3. No Phase 7 milestone builds rules, but [M7.7](#m77--api-contract-written-before-implementation)
+lists four rule endpoints.** Rule CRUD and evaluation are
+[Phase 17](#phase-17--conditional-logic-engine); the `option_rules` table exists
+from Phase 5. Phase 7 must therefore honour M7.2's cascade — *"rules targeting a
+deleted group are disabled and flagged"* — against a table nothing else writes to
+yet, and must **not** ship the rule endpoints. Documenting them as Phase 17 in the
+contract is the correct outcome; building them here is scope creep the milestone
+does not ask for.
 
-`deleted_at` cannot stand in — the table lists them as separate rows because they
-mean different things. Soft delete hides permanently and is a cleanup action;
-disable is reversible and expected. A migration adds the column to three tables.
+**4. Publish references two later milestones.** [M7.4](#m74--publish-versioning-and-rollback)
+says publish validates "including M17.3 cycle detection and M14.4 regex
+complexity". Neither exists in Phase 7 — M17.3 is the rule engine, M14.4 is the
+type library. Publish is built with those checks as **named extension points**
+rather than silently omitted, so Phase 14 and Phase 17 add a validator to a list
+rather than reopening the publish transaction.
 
-**Finding 3 — everything else is already there.** `row_version` for M7.4b's
-optimistic locking, `version`/`published_at`/`published_by` for M7.4, and
-`option_set_versions.snapshot` for history. Phase 5 built the schema this phase
-needs, which is why the two gaps above are worth naming precisely rather than
-discovering in step six.
+**5. Everything else the phase needs is already there.** `row_version` for
+optimistic locking, `version` / `published_at` / `published_by` for publishing,
+`option_set_versions.snapshot` for history. Phase 5 built this schema, which is
+why the two gaps above are worth naming now rather than discovering in step six.
 
-#### 7a analysis — the route list is a sketch, not a contract
-
-Auditing M7.7's surface against what Phase 6 shipped and what Phase 7 requires
-found **five gaps in the list itself**. Writing the contract from it verbatim
-would document an API that does not match the one already running.
-
-**1. Two auth routes disagree with what exists.** The list says
-`POST /auth/forgot-password`; Phase 6 built `POST /auth/request-password-reset`.
-And `POST /auth/resend-verification` exists but is not listed — correctly built,
-because [M6.1](#m61--merchant-authentication) names "verification resend" among
-the endpoints that must be rate-limited.
-
-The implementation is right in both cases and the list is stale. The contract
-records the built names; renaming a shipped endpoint to match a sketch would be
-the tail wagging the dog.
-
-**2. Accepting an invitation has no route.** [M6.5b](#m65b--team-management-flows)
-builds accept, and the list only has `/tenants/me/members/*` — which cannot serve
-it. Someone accepting an invitation **is not yet a member of that tenant**, so a
-route scoped to "my tenant" is the wrong shape entirely. It needs a token-addressed
-route outside tenant scope, in the same family as email verification.
-
-**3. Revoking a pending invitation has no route**, and neither does listing
-pending invitations. Both are built in 6j and both are in M6.5b's text.
-
-**4. Hard delete has no route.** M7.2's operation table lists it as distinct from
-soft delete, permitted "only when no order ever referenced it". A distinct
-operation with distinct authorization needs its own endpoint rather than a query
-parameter that changes what `DELETE` means.
-
-**5. Duplicate exists only for option sets.** M7.2 says the lifecycle set is
-"inherited by groups, options, and values alike", and duplicate is in that set —
-deep-copying a group with its options and values is the operation a merchant
-actually wants when building variants.
-
-#### What 7a produces
-
-`docs/API-CONTRACT.md`, covering **every endpoint whose controller exists or is
-built in Phase 7** — the acceptance is "before its controller is written", not
-"all sixty-five now". Billing and analytics are documented in their own phases,
-when their shape is known rather than guessed.
-
-That means: the nine auth routes already shipped, the tenant and member routes,
-the option-set surface, and the store-facing routes Phase 8 consumes. Each with
-method, path, auth realm, required capability, request and response schema,
-error codes, rate limit, and pagination semantics.
-
-**Two things the contract must fix rather than inherit:**
-
-- **The store realm needs its own guard chain documented, not implied.** M7.7 says
-  a store token must never be accepted on `/option-sets` and a user JWT never on
-  `/store/config`. Phase 6 built the realm separation
-  ([ADR-024 and the `aud` claim](#m65--roles-and-permission-matrix)); the contract
-  states which realm each route accepts so a reviewer can check a new endpoint
-  against it.
-- **Every mutating route names its capability.** Phase 6's `CapabilityGuard` fails
-  closed on an undeclared route, so an undocumented capability is a route that
-  cannot be called at all. The contract is where that mapping is decided, and the
-  permission matrix already fixes the answers.
-
-#### Order of work, and why this order
+#### Order of work
 
 ```text
-7a  API contract              M7.7 — written first, because the milestone says so
-7b  Parent-scoped repository  the AC5 gap; everything below depends on it
-7c  Enable/disable migration  the schema gap, with is_enabled on three tables
+7a  API contract              M7.7 — the design, written before any controller
+7b  Parent-scoped repository  the AC5 gap; every endpoint below depends on it
+7c  Enable/disable migration  is_enabled on groups, options, values
 7d  Type registry + radio     M7.3 — Zod schemas, registry shaped for Phase 14
-7e  Option set CRUD           M7.1 — the first surface, on 7b
+7e  Option set CRUD           M7.1 — list, create, read, update, soft delete, duplicate
 7f  Group/option/value CRUD   M7.2 — the full lifecycle table, applied uniformly
-7g  Serializer, two projections M7.2b — before publish, because publish uses it
-7h  Publish + versioning      M7.4 — transaction, snapshot, config_version bump
-7i  Concurrency control       M7.4b — 409s and serialized publish
-7j  Config contract document  M7.5 — docs/CONFIG-CONTRACT.md, frozen for v1
-7k  Audit logging             M7.6 — actor, diff, IP on every mutation
-7l  OpenAPI generation        the exit criterion; decorators, served spec
-7m  Isolation + contract tests M6.6 extended to every new endpoint
+7g  Cascade + hard delete     M7.2 — the four cascade rules, stated not inherited
+7h  Serializer, two projections M7.2b — before publish, because publish uses it
+7i  Publish + versioning      M7.4 — transaction, snapshot, rollback, pre-publish checks
+7j  Concurrency control       M7.4b — 409 on stale writes, serialized publish
+7k  Config contract document  M7.5 — docs/CONFIG-CONTRACT.md, frozen for v1
+7l  Audit logging             M7.6 — actor, diff, IP on every mutation
+7m  OpenAPI generation        the exit criterion; decorators and a served spec
+7n  Isolation + contract tests M6.6 extended to every endpoint added here
 ```
 
-> **M7.6 was missing from the first draft of this plan**, and is restored as 7k.
-> The omission is worth recording rather than quietly patching: eleven steps were
-> derived from nine milestones and one of them dropped out unnoticed. It was found
-> by listing the milestones and diffing them against the steps — the same check
-> that found ADR-012 and ADR-018 incomplete, applied to a plan instead of a record.
->
-> It is late in the order deliberately. `AuditService` already exists from Phase 6
-> and the mutations it records are written in 7e–7i, so wiring it earlier would
-> mean revisiting each one. Late is not optional: M7.6 requires actor, diff and IP
-> on **every** option-set mutation, and a diff needs before-and-after, which the
-> services must capture as they write rather than reconstruct afterwards.
->
-> That constraint reaches back into 7e–7i, so it is stated here rather than
-> discovered at 7k: **every mutating service returns what changed**, not just
-> success.
+Fourteen steps for nine milestones. Four are not milestones at all — 7b and 7c
+close gaps this audit found, 7m is an exit criterion with no milestone, and 7g
+separates cascade from CRUD because M7.2's cascade table is the part most likely
+to be half-implemented.
 
-> **OpenAPI was also missing**, found by the same diff against the exit criteria
-> rather than the milestones. "OpenAPI/Swagger published" is one of the eight, and
-> `@nestjs/swagger` is not installed.
->
-> It is 7l rather than part of 7a for a reason worth stating. `docs/API-CONTRACT.md`
-> is written **before** the controllers and is the design; the generated spec is
-> derived **from** the controllers and is a description. They serve different
-> purposes and will disagree — and that disagreement is useful, because it means a
-> controller drifted from its contract.
->
-> A generated spec presented as the contract would hide exactly that. The two are
-> reconciled at 7m, which is where the contract stops being prose and becomes
-> something a check can compare against reality — the treatment `docs/DATABASE.md`
-> received in Phase 5.
+#### Why this order
 
-**Why the contract is genuinely first.** M7.7 says to design the surface before
-building it, and the reason is specific: the plugin is a client that cannot be
-redeployed across thousands of merchant sites. An API shaped by implementation
-accident becomes permanent in a way a dashboard's never does.
+**The contract is genuinely first.** M7.7 gives the reason: the plugin is a client
+that cannot be redeployed across thousands of merchant sites, so an API shaped by
+implementation accident becomes permanent in a way a dashboard's never does.
 
-**Why 7b precedes every endpoint.** The alternative is writing CRUD that scopes
-itself correctly by hand and retrofitting the guarantee afterwards — which is how
-a leak reaches production between two correct-looking commits. Phase 6 already
-proved a scoped repository can be made structurally impossible to bypass; this
-extends that property rather than re-earning it.
+**7b precedes every endpoint.** The alternative is CRUD that scopes itself by hand
+and a guarantee retrofitted afterwards — which is how a leak reaches production
+between two correct-looking commits. Phase 6 proved a scoped repository can be
+made structurally impossible to bypass; this extends that property rather than
+re-earning it.
 
-**Why the serializer precedes publish.** Publish writes an immutable snapshot, and
-a snapshot produced by different code from the live config document is two sources
-of truth with a version number pretending they agree.
+**7g is separate from 7f** because the cascade table has four rules with different
+shapes — one soft-deletes children, two disable *and flag* rules pointing at the
+deleted thing, and one **blocks** the delete outright. Folding that into CRUD
+means four behaviours land inside eight endpoints and none of them is tested as
+itself.
 
-#### Design decisions to settle inside the phase
+**The serializer precedes publish.** A snapshot produced by different code from
+the live config document is two sources of truth with a version number pretending
+they agree.
+
+**Audit is late but constrains what comes earlier.** `AuditService` exists from
+Phase 6, so wiring it before the mutations exist would mean revisiting each one.
+But M7.6 requires a *diff*, and a diff needs before-and-after captured as the
+write happens rather than reconstructed later — so **every mutating service in
+7e–7j returns what changed**, not just success. Stated here because discovering it
+at 7l means rewriting six services.
+
+**OpenAPI is separate from the contract, deliberately.** `docs/API-CONTRACT.md` is
+written before the controllers and is the **design**; the generated spec is derived
+from them and is a **description**. They will disagree, and that disagreement is
+the signal that a controller drifted — a generated spec presented as the contract
+would hide exactly that.
+
+#### Decisions to settle inside the phase
 
 - **How parent-scoped entities are scoped.** A join to `option_sets` on every
-  query, or a scoping predicate built from the parent id. The first is uniform and
-  costs a join; the second is faster and needs the parent verified once. Whichever
-  wins must be impossible to forget, which is the property that matters more than
-  the performance.
-- **Where `key` immutability is enforced.** After first publish a key is frozen
-  because `order_selections` stores it denormalised (ADR-016). The set knows it has
-  published; an option added afterwards has not been published yet. The rule is per
-  *option*, not per set, and that distinction belongs in a test.
-- **Snapshot shape.** The published projection of the serializer, or a fuller
-  record that rollback can restore from. Rollback republishes a prior snapshot as a
-  new version, so the snapshot must contain everything needed to rebuild the draft
-  — which is more than the config document exposes.
-- **Cursor pagination.** M7.7 fixes it as a convention for every list endpoint.
-  Deciding the cursor encoding once, here, is cheaper than four endpoints choosing
-  differently.
+  query, or a predicate built from a parent verified once. Whichever wins must be
+  impossible to forget, which matters more than which is faster.
+- **Where `key` immutability is enforced.** A key freezes after **its option** is
+  first published, not after the set is — an option added to a published set has
+  never been published itself. `order_selections` stores the key denormalised
+  (ADR-016), so the rule protects historic orders. That per-option distinction
+  belongs in a test.
+- **What a snapshot contains.** Rollback republishes a prior snapshot as a new
+  version, so it must hold enough to rebuild the *draft* — which is more than the
+  config document exposes to the plugin.
+- **Cursor encoding.** M7.7 fixes cursor pagination as a convention for every list
+  endpoint. Deciding the encoding once here is cheaper than four endpoints
+  choosing differently.
+- **Whether `option_set_versions` retention is enforced now.** M7.4 says retention
+  is per plan, per Phase 26b. Snapshots of a large set are not small, and a plan
+  limit nothing enforces is a storage bill nobody predicted.
 
 #### What could go wrong, and the guard against it
 
 - **A leak through a nested route.** `/groups/:id` names no tenant, so scoping
   depends entirely on 7b. Every nested endpoint gets a cross-tenant negative test
-  in the same commit that creates it, extending the M6.6 suite rather than adding
-  a second one.
-- **A snapshot that is not actually immutable.** Nothing in the schema stops an
+  in the commit that creates it, extending the M6.6 suite rather than starting a
+  second one.
+- **A snapshot that is not actually immutable.** Nothing in the schema prevents an
   `UPDATE` on `option_set_versions`. The guarantee is a convention until something
   enforces it, and a test that mutates a published snapshot and expects failure is
   the cheapest form of that.
-- **The config document drifting from its contract.** The document is consumed by
-  PHP that ships to merchant sites. It needs the same treatment
-  `docs/DATABASE.md` got in Phase 5 — a check that compares the document to what
-  the serializer actually produces, rather than prose that was true once.
-- **Publish partially applied.** M7.4b requires that a snapshot is never partially
-  written. Phase 6 found three read-then-write races by testing concurrently rather
-  than sequentially; publish is the same shape and gets the same treatment before
-  it is called done.
+- **The config document drifting from its contract.** It is consumed by PHP
+  shipping to merchant sites, so it needs the treatment `docs/DATABASE.md` got in
+  Phase 5: a check comparing the document to what the serializer actually
+  produces, rather than prose that was true once.
+- **Publish partially applied.** M7.4b requires a snapshot is never partially
+  written. Phase 6 found three read-then-write races by testing concurrently
+  rather than sequentially; publish is the same shape and gets the same treatment
+  before it is called done.
+- **Cascade half-implemented.** Four rules, and the one that *blocks* a delete is
+  the easiest to omit because it is the only one that fails. Each gets its own
+  test, and the flagged-rule cases get one that asserts the rule is disabled **and
+  surfaced**, since M7.2 requires it never be silently dropped.
 
 ### Phase 7 exit criteria
 
