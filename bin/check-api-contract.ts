@@ -98,15 +98,36 @@ async function registeredRoutes(): Promise<Route[]> {
 function documentedRoutes(markdown: string): {
   all: Set<string>;
   built: Set<string>;
+  marked: Set<string>;
 } {
   const deferredAt = markdown.indexOf('## Deferred to later phases');
   const active = deferredAt === -1 ? markdown : markdown.slice(0, deferredAt);
 
   const all = new Set<string>();
   const built = new Set<string>();
+  const marked = new Set<string>();
+  const unmarkedDeclarations = new Set<string>();
 
-  // Line by line, because `[built]` marks the line the route appears on.
-  for (const line of active.split('\n')) {
+  /**
+   * A marker belongs on a **declaration**, and only declarations are checked.
+   *
+   * A route is declared on a table row (`| … |`) or a heading (`### …`). It is
+   * also *mentioned* in the prose explaining it, and prose must not need a
+   * marker — `GET /option-sets/:id/publish-check` is declared in its table and
+   * referenced three sections later.
+   *
+   * The first rule here took the strongest mention, so a marked heading hid an
+   * unmarked table row: removing `[7f]` from the `GET /option-sets` row left the
+   * check passing. Restricting the requirement to declarations catches that
+   * without failing on every explanatory sentence.
+   */
+  for (const rawLine of active.split('\n')) {
+    const line = rawLine.trim();
+    const isDeclaration = line.startsWith('|') || line.startsWith('###');
+    const isBuilt = line.includes('[built]');
+    // `[built]`, `[7a]`…`[7n]`, or `[phase N]`.
+    const hasMarker = isBuilt || /\[7[a-n]\]|\[phase \d+\]/i.test(line);
+
     for (const match of line.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
       const method = match[1].toUpperCase();
       // The contract writes paths with and without the /v1 prefix; normalise.
@@ -115,13 +136,30 @@ function documentedRoutes(markdown: string): {
 
       all.add(key);
 
-      if (line.includes('[built]')) {
+      if (isBuilt) {
         built.add(key);
+      }
+
+      // Only a declaration can satisfy the requirement, and an *unmarked*
+      // declaration removes it — otherwise one marked mention covers for a row
+      // that lost its marker.
+      if (isDeclaration) {
+        if (hasMarker) {
+          marked.add(key);
+        } else {
+          unmarkedDeclarations.add(key);
+        }
       }
     }
   }
 
-  return { all, built };
+  // A route declared anywhere without a marker fails, even if another
+  // declaration carries one.
+  for (const key of unmarkedDeclarations) {
+    marked.delete(key);
+  }
+
+  return { all, built, marked };
 }
 
 async function main(): Promise<void> {
@@ -181,6 +219,23 @@ async function main(): Promise<void> {
     }
   }
 
+  /**
+   * Every documented route carries a build marker.
+   *
+   * The contract states this about itself, and it was false for 31 of 39 routes
+   * when the marker system was introduced — only the eight built ones were
+   * marked. An unmarked route is neither verifiable nor refutable: it cannot be
+   * checked against the application in either direction, which is the whole
+   * reason markers exist.
+   */
+  for (const key of documented.all) {
+    if (!documented.marked.has(key)) {
+      failures.push(
+        `${key} is documented without a build marker ([built], [7x] or [phase N])`,
+      );
+    }
+  }
+
   if (registered.length === 0) {
     failures.push(
       'no routes were discovered at all — the router shape has changed and this ' +
@@ -199,7 +254,7 @@ async function main(): Promise<void> {
 
   console.log(
     `All API contract checks passed. ${registered.length} routes registered, ` +
-      `${documented.all.size} documented, ${documented.built.size} marked built.`,
+      `${documented.all.size} documented, ${documented.built.size} built, ${documented.marked.size} marked.`,
   );
 }
 

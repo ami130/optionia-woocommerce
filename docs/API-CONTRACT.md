@@ -170,9 +170,19 @@ reads them:
 
 Without a marker a route is neither verifiable nor refutable: the first version of
 this check verified only that registered routes were documented, so a fabricated
-endpoint added to this file passed silently. The markers make the reverse direction
-checkable — a `[built]` route that vanishes fails, and a route that appears before
-its step fails.
+endpoint added to this file passed silently.
+
+The check enforces all three directions, and **a route with no marker is itself a
+failure** — when markers were introduced, this sentence was true of only eight of
+the thirty-nine routes, and the document asserted otherwise. It is now checked
+rather than claimed:
+
+| Failure | Meaning |
+|---|---|
+| marked `[built]`, not registered | The contract describes an endpoint that does not exist |
+| registered, not marked `[built]` | An endpoint shipped without its marker being updated |
+| documented, no marker at all | Neither direction can be checked for it |
+| no routes discovered | The router shape changed and the check is inspecting nothing |
 
 ### Idempotency
 
@@ -321,23 +331,28 @@ Every route is scoped to the tenant in the caller's token, verified against a li
 membership row on each request — so a removal or demotion takes effect on the next
 call rather than when the access token expires.
 
-| Route | Capability | Notes |
-|---|---|---|
-| `GET /tenants/me` | — | Any member may read their own workspace |
-| `PATCH /tenants/me` | `tenant:delete`-adjacent; **owner only** | Renaming is an ownership act |
-| `GET /tenants/me/members` | — | Any member may see who else is here |
-| `POST /tenants/me/members/invite` | `members:invite` | owner, admin |
-| `PATCH /tenants/me/members/:id` | `members:change_role` | **owner only** |
-| `DELETE /tenants/me/members/:id` | `members:invite` | owner, admin |
-| `GET /tenants/me/invitations` | `members:invite` | Pending invitations |
-| `DELETE /tenants/me/invitations/:id` | `members:invite` | Revoke a pending invitation |
+| Route | Capability | State | Notes |
+|---|---|---|---|
+| `GET /tenants/me` | — | `[7e]` | Any member may read their own workspace |
+| `PATCH /tenants/me` | **owner only** | `[7e]` | Renaming is an ownership act |
+| `GET /tenants/me/members` | — | `[7e]` | Any member may see who else is here |
+| `POST /tenants/me/members/invite` | `members:invite` | `[7e]` | owner, admin |
+| `PATCH /tenants/me/members/:id` | `members:change_role` | `[7e]` | **owner only** |
+| `DELETE /tenants/me/members/:id` | `members:invite` | `[7e]` | owner, admin |
+| `GET /tenants/me/invitations` | `members:invite` | `[7e]` | Pending invitations |
+| `DELETE /tenants/me/invitations/:id` | `members:invite` | `[7e]` | Revoke a pending invitation |
+
+> **The services behind these all exist** — `TeamService` was built in 6j with
+> invite, accept, change-role, remove, revoke and list. What is missing is the
+> HTTP surface, which is why they are `[7e]` rather than `[built]`: a documented
+> route whose service exists is still a route nobody can call.
 
 > **Three routes are absent from M7.7's sketch** and are added here: listing
 > pending invitations, revoking one, and accepting one (below). All three are built
 > in [M6.5b](../../developePlan.md) and all three are in its text. A pending-invite
 > list with resend and cancel is named explicitly.
 
-### `POST /v1/auth/accept-invitation`
+### `POST /v1/auth/accept-invitation` **[7e]**
 
 **This route is deliberately not under `/tenants/me`.** Someone accepting an
 invitation **is not yet a member of that tenant**, so a route scoped to "my tenant"
@@ -360,7 +375,7 @@ it — verified to hold under concurrency, not only sequentially.
 **Errors:** `TOKEN_INVALID` (401) for expired, revoked, already-used and unknown
 alike; `FORBIDDEN` (403) when the address does not match.
 
-### `POST /v1/tenants/me/members/invite`
+### `POST /v1/tenants/me/members/invite` **[7e]**
 
 **Capability:** `members:invite`. **Response:** `202 Accepted`
 
@@ -384,7 +399,7 @@ explicit grant list per role rather than a comparison:
 **Errors:** `INSUFFICIENT_ROLE` (403) for an escalation attempt or a role with no
 grant list; `CONFLICT` (409) if that person is already a member.
 
-### `PATCH /v1/tenants/me/members/:id` · `DELETE /v1/tenants/me/members/:id`
+### `PATCH /v1/tenants/me/members/:id` · `DELETE /v1/tenants/me/members/:id` **[7e]**
 
 **The last owner cannot be demoted or removed.** A tenant with no owner is
 unadministrable: nobody can change roles, alter billing, or delete it, and the only
@@ -408,26 +423,27 @@ answerable after the fact.
 **Realm:** tenant. Every route tenant-scoped at the data layer, not by a predicate
 a handler remembers to add.
 
-| Route | Capability |
-|---|---|
-| `GET /option-sets` | `option_sets:view` |
-| `POST /option-sets` | `option_sets:edit` |
-| `GET /option-sets/:id` | `option_sets:view` |
-| `PATCH /option-sets/:id` | `option_sets:edit` |
-| `DELETE /option-sets/:id` | `option_sets:delete` |
-| `DELETE /option-sets/:id?hard=true` → **see below** | `option_sets:delete` |
-| `POST /option-sets/:id/duplicate` | `option_sets:edit` |
-| `POST /option-sets/:id/publish` | `option_sets:publish` |
-| `GET /option-sets/:id/versions` | `option_sets:view` |
-| `POST /option-sets/:id/rollback` | `option_sets:rollback` |
-| `POST /option-sets/:id/reorder` | `option_sets:edit` |
+| Route | Capability | State |
+|---|---|---|
+| `GET /option-sets` | `option_sets:view` | `[7f]` |
+| `POST /option-sets` | `option_sets:edit` | `[7f]` |
+| `GET /option-sets/:id` | `option_sets:view` | `[7f]` |
+| `PATCH /option-sets/:id` | `option_sets:edit` | `[7f]` |
+| `DELETE /option-sets/:id` | `option_sets:delete` | `[7f]` |
+| `DELETE /option-sets/:id?hard=true` | `option_sets:delete` | `[7h]` |
+| `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[7f]` |
+| `POST /option-sets/:id/publish` | `option_sets:publish` | `[7j]` |
+| `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7j]` |
+| `GET /option-sets/:id/versions` | `option_sets:view` | `[7j]` |
+| `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[7j]` |
+| `POST /option-sets/:id/reorder` | `option_sets:edit` | `[7g]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
 line in the permission matrix. Editing is safe; publishing changes a live
 storefront and what customers are charged. An agency contractor should be able to
 build an option set without pushing it live.
 
-### `GET /v1/option-sets`
+### `GET /v1/option-sets` **[7f]**
 
 Cursor-paginated. Filters: `status` (`draft` · `published` · `archived`),
 `storeId`, `q` (name search).
@@ -435,7 +451,7 @@ Cursor-paginated. Filters: `status` (`draft` · `published` · `archived`),
 **A filter cannot widen tenant scope.** The tenant predicate is merged *after* the
 caller's filters, so a supplied `tenantId` is overwritten rather than honoured.
 
-### `DELETE /v1/option-sets/:id` — soft and hard
+### `DELETE /v1/option-sets/:id` — soft and hard **[7f] [7h]**
 
 Two distinct operations, and the sketch has a route for only one.
 
@@ -450,7 +466,7 @@ form of the same one.
 **Errors:** `CONFLICT` (409) when an order references it — the message names the
 count, because "you cannot delete this" without a reason is not actionable.
 
-### `POST /v1/option-sets/:id/publish`
+### `POST /v1/option-sets/:id/publish` **[7j]**
 
 **Capability:** `option_sets:publish`. **Response:** `200 OK`
 
@@ -479,7 +495,7 @@ version.
 **Errors:** `VALIDATION_FAILED` (400) with per-item detail; `VERSION_MISMATCH`
 (409) if the draft changed since it was loaded; `INSUFFICIENT_ROLE` (403).
 
-### `POST /v1/option-sets/:id/rollback`
+### `POST /v1/option-sets/:id/rollback` **[7j]**
 
 ```jsonc
 { "version": 5, "note": "reverting the holiday pricing" }
@@ -500,12 +516,12 @@ Rewriting would make the audit trail a lie, and the merchant who needs rollback 
 is entirely the data layer's job, which is why the parent-scoped repository is
 built before any of these endpoints.
 
-| Route | Capability |
-|---|---|
-| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` |
-| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` |
-| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` |
-| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` |
+| Route | Capability | State |
+|---|---|---|
+| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[7g]` |
+| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[7g]` |
+| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[7g]` |
+| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[7g]` |
 
 > **Duplicate exists at every level**, not only for option sets. M7.2 says the
 > lifecycle operation set is "inherited by groups, options, and values alike", and
@@ -549,7 +565,7 @@ merchant** — never silently dropped, never left to fail at evaluation time. Th
 fourth rule *refuses* the delete, and is the one most likely to be omitted because
 it is the only one that fails rather than cascades.
 
-### `POST /v1/option-sets/:id/reorder`
+### `POST /v1/option-sets/:id/reorder` **[7g]**
 
 Bulk, gap-tolerant integers, so a single move is one write rather than renumbering
 every sibling.
