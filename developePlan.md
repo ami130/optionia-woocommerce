@@ -2468,6 +2468,47 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### ⚠️ Two concurrency defects found by advanced testing
+
+Both are **read-then-write races** with no lock between the check and the write.
+Neither is visible in any sequential test, and 335 unit and 181 e2e tests pass
+with both present.
+
+**1. Refresh token double-spend — a security defect.** Two rotations of the *same*
+token, issued concurrently, **both succeed**. `rotate()` reads `rotatedAt`, finds
+null in both requests, and both write a replacement.
+
+The consequence is the precise attack `refresh_tokens` was built to detect:
+
+```text
+victim and attacker present the stolen token at the same instant
+  → outcomes: ok, ok
+  → both chains continue independently: victim=ok  attacker=ok
+  → reuse detection never fires; theft is undetected
+```
+
+Reuse detection works perfectly when the presentations are sequential, which is
+every test written for it. A thief racing the victim — which is what a thief
+does, because the victim's client refreshes on a timer — defeats it entirely.
+
+**Fix:** make the rotation atomic. `UPDATE refresh_tokens SET rotated_at = NOW()
+WHERE token_hash = ? AND rotated_at IS NULL` and treat `affected = 0` as reuse.
+The database already enforces the uniqueness this needs; the check simply has to
+happen inside the write rather than before it.
+
+**2. Last-owner protection can be raced to zero owners.** Two owners demoted
+simultaneously: both calls succeed, `owners_left = 0`, and the tenant is
+**orphaned** — nobody can change roles, alter billing, or delete it, and the only
+repair edits the database by hand.
+
+`assertNotLastOwner` counts owners and then updates, and both requests count 2.
+
+**Fix:** the same shape — a conditional `UPDATE` guarded by a subquery counting
+remaining owners, or `SELECT ... FOR UPDATE` inside the existing transaction.
+
+**Both are Phase 6 defects, not Phase 7 work.** They are the difference between a
+control that holds under sequential testing and one that holds under use.
+
 #### Carried forward from the Phase 6 deep audit
 
 The three fixed findings above are verified working. This pass attacked the auth
