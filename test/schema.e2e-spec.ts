@@ -327,6 +327,78 @@ describe('schema (integration)', () => {
     }, 20_000);
   });
 
+  describe('the enable/disable toggle (7c)', () => {
+    /**
+     * Four tables carry `is_enabled`, and the default is what protects existing
+     * data: adding a `NOT NULL` column to a populated table without one either
+     * fails or backfills with a zero — and a zero here means every option a
+     * merchant already had is silently switched off.
+     */
+    it('exists on every authorable entity', async () => {
+      const rows: Array<{ t: string }> = await dataSource.query(
+        `SELECT TABLE_NAME AS t FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND COLUMN_NAME = 'isEnabled'
+          ORDER BY TABLE_NAME`,
+        [schema],
+      );
+
+      expect(rows.map((r) => r.t)).toEqual([
+        'option_groups',
+        'option_rules',
+        'option_values',
+        'options',
+      ]);
+    });
+
+    it('defaults to enabled, so a migration cannot switch existing work off', async () => {
+      const rows: Array<{ t: string; d: string; n: string }> = await dataSource.query(
+        `SELECT TABLE_NAME AS t, COLUMN_DEFAULT AS d, IS_NULLABLE AS n
+           FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND COLUMN_NAME = 'isEnabled'`,
+        [schema],
+      );
+
+      rows.forEach((row) => {
+        expect({ table: row.t, default: row.d, nullable: row.n }).toEqual({
+          table: row.t,
+          default: '1',
+          nullable: 'NO',
+        });
+      });
+    });
+
+    /**
+     * Every row the seeds created must be enabled. A column added to a populated
+     * table is where "all my options vanished" comes from, and it is invisible
+     * until a merchant looks.
+     */
+    it('left every existing row enabled', async () => {
+      for (const table of ['option_groups', 'options', 'option_values']) {
+        const [row] = await dataSource.query(
+          `SELECT COUNT(*) AS total, SUM(isEnabled = 1) AS enabled FROM \`${table}\``,
+        );
+
+        expect({ table, disabled: Number(row.total) - Number(row.enabled) }).toEqual({
+          table,
+          disabled: 0,
+        });
+      }
+    });
+
+    /** Distinct columns, because they are distinct operations. */
+    it('is separate from soft delete on every table that has both', async () => {
+      const rows: Array<{ t: string; n: number }> = await dataSource.query(
+        `SELECT TABLE_NAME AS t, COUNT(*) AS n FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND COLUMN_NAME IN ('isEnabled', 'deletedAt')
+            AND TABLE_NAME IN ('option_groups', 'options', 'option_values')
+          GROUP BY TABLE_NAME`,
+        [schema],
+      );
+
+      rows.forEach((row) => expect({ t: row.t, n: Number(row.n) }).toEqual({ t: row.t, n: 2 }));
+    });
+  });
+
   describe('auth tokens (M6.1)', () => {
     /**
      * Reuse detection depends on a hash identifying exactly one issuance. Two

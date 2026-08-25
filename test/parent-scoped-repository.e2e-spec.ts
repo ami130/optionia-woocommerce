@@ -530,6 +530,112 @@ describe('ParentScopedRepository (integration)', () => {
     });
   });
 
+  describe('enable and disable (7c)', () => {
+    /**
+     * **Disable is not delete, and the repository must not conflate them.**
+     *
+     * M7.2 lists them as separate operations because they mean different things:
+     * deleting hides something permanently and is cleanup, disabling is
+     * reversible and expected to be undone. A disabled row stays fully readable
+     * and editable in the authoring API — it is only the *published config* that
+     * excludes it, which is 7h's job rather than the repository's.
+     *
+     * The risk this block covers is the repository quietly filtering disabled
+     * rows the way it filters deleted ones, which would make a merchant's
+     * turned-off option invisible in their own builder.
+     */
+    it('defaults to enabled', async () => {
+      const created = await asTenant(A, () =>
+        options.create(`${A}-group`, {
+          optionGroupId: `${A}-group`,
+          key: 'fresh',
+          valueKind: 'choice',
+          cardinality: 'one',
+          presentation: 'radio',
+          label: 'Fresh',
+        } as never),
+      );
+
+      expect(created.isEnabled).toBe(true);
+    });
+
+    /** A disabled row is still authorable — that is the whole point. */
+    it('still returns a disabled row', async () => {
+      await asTenant(A, () =>
+        options.update({ id: `${A}-option` } as never, { isEnabled: false } as never),
+      );
+
+      const row = await asTenant(A, () => options.findById(`${A}-option`));
+
+      expect(row).not.toBeNull();
+      expect(row?.isEnabled).toBe(false);
+      expect(await asTenant(A, () => options.count())).toBe(1);
+    });
+
+    /** Disabling is reversible; deleting is not the same act. */
+    it('re-enables without having lost anything', async () => {
+      await asTenant(A, () =>
+        options.update({ id: `${A}-option` } as never, { isEnabled: false } as never),
+      );
+      await asTenant(A, () =>
+        options.update({ id: `${A}-option` } as never, { isEnabled: true } as never),
+      );
+
+      const row = await asTenant(A, () => options.findById(`${A}-option`));
+
+      expect(row?.isEnabled).toBe(true);
+      expect(row?.label).toBe('shared-label');
+    });
+
+    /**
+     * Disabling a parent must not cascade. A merchant turning off a group for the
+     * holidays expects its options intact when they turn it back on — and a
+     * cascade would make re-enabling restore an empty shell.
+     */
+    it('does not cascade to children', async () => {
+      await asTenant(A, () =>
+        groups.update({ id: `${A}-group` } as never, { isEnabled: false } as never),
+      );
+
+      const child = await asTenant(A, () => options.findById(`${A}-option`));
+
+      expect(child?.isEnabled).toBe(true);
+    });
+
+    /** The two flags are independent, and a deleted row is still hidden. */
+    it('keeps disable and delete independent', async () => {
+      await asTenant(A, () =>
+        options.update({ id: `${A}-option` } as never, { isEnabled: false } as never),
+      );
+
+      // Disabled but live: visible.
+      expect(await asTenant(A, () => options.count())).toBe(1);
+
+      await dataSource.query(`UPDATE options SET deletedAt = NOW(3) WHERE id = ?`, [
+        `${A}-option`,
+      ]);
+
+      // Disabled and deleted: hidden, by the delete rather than the disable.
+      expect(await asTenant(A, () => options.count())).toBe(0);
+    });
+
+    it('filters by enabled state when asked', async () => {
+      await asTenant(A, () =>
+        options.update({ id: `${A}-option` } as never, { isEnabled: false } as never),
+      );
+
+      const enabled = await asTenant(A, () =>
+        options.find({ where: { isEnabled: true } as never }),
+      );
+      const disabled = await asTenant(A, () =>
+        options.find({ where: { isEnabled: false } as never }),
+      );
+
+      expect(enabled).toHaveLength(0);
+      expect(disabled.map((r) => r.id)).toEqual([`${A}-option`]);
+    });
+  });
+
   describe('without a tenant context', () => {
     /**
      * The M6.4 acceptance criterion, extended to these entities: a method that

@@ -70,4 +70,22 @@ export class OptionValue extends SoftDeletableEntity {
 
   @Column({ type: 'boolean', default: false })
   isDefault: boolean;
+
+  /**
+   * Whether this value appears in the published config.
+   *
+   * **A soft toggle, and deliberately not soft delete.** M7.2 lists them as
+   * separate operations because they mean different things: deleting hides
+   * something permanently and is a cleanup action, disabling is reversible and is
+   * expected to be undone. `deleted_at` cannot express "turn this off for the
+   * holidays without losing the work".
+   *
+   * Disabled rows are retained in full — their pricing and media survive, so re-enabling
+   * restores exactly what was there rather than an empty shell.
+   *
+   * Defaults to enabled: something a merchant just created is something they want
+   * live, and requiring an extra click to publish new work would be surprising.
+   */
+  @Column({ type: 'boolean', default: true })
+  isEnabled: boolean;
 }

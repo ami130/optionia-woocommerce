@@ -419,6 +419,31 @@ under GDPR — subject to the retention policy in Phase 26b.
 
 ---
 
+### The enable/disable toggle
+
+Added in Phase 7 to `option_groups`, `options` and `option_values`, alongside the
+`option_rules` column that already existed.
+
+`is_enabled` — M7.2 lists enable/disable and delete as **separate operations** because they mean
+different things. Deleting hides something permanently and is a cleanup action;
+disabling is reversible and expected to be undone — *"turn this off for the
+holidays"* without losing the work. `deleted_at` cannot express that, and reusing
+it would make the holidays indistinguishable from a mistake.
+
+`tinyint NOT NULL DEFAULT 1`, and the default is what protects existing data.
+Adding a `NOT NULL` column to a populated table either fails or backfills, and
+backfilling a zero here would silently switch off every option every merchant
+already had. Verified on 186 existing rows: all remained enabled.
+
+**Disabling does not cascade.** A disabled group keeps its options enabled, so
+re-enabling restores what was there rather than an empty shell. The published
+config excludes disabled rows (7h); the authoring API returns them, because a
+merchant must be able to see and re-enable what they turned off.
+
+No index was added. The existing `(parent, sort_order)` index already narrows to
+at most ten rows per parent in the largest seeded set, and filtering a boolean
+across ten rows costs nothing an index would recover.
+
 ## 9. Auth and mail (M6.0, M6.1)
 
 Added in Phase 6. The three token tables exist because **a stateless JWT cannot be
