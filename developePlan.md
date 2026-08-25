@@ -2468,6 +2468,47 @@ These are engineering calls, recorded as ADRs when made rather than left implici
   remove it, with the reasoning recorded — `loadConfig()` throws on a missing
   variable with no fallback defaults, and `ConfigModule` does not.
 
+#### Third-pass advanced testing — one low-severity defect, three confirmations
+
+Run after the two concurrency fixes landed. This pass targeted invitation
+acceptance, forwarded links, removal replay and mail failure.
+
+**1. Invitation single-use is not enforced under concurrency (low severity).**
+The same invitation accepted twice simultaneously succeeds twice: `accept()` reads
+`acceptedAt`, both requests find null, and both proceed. Same shape as the two
+races already fixed.
+
+**The consequence is benign, and that is the only reason it is low.** Both
+acceptances are the same user, the same invited role, and the second reuses the
+existing membership row rather than creating a second — verified: one row, correct
+role. Nothing escalates and nothing duplicates.
+
+Worth fixing for consistency rather than for risk, with the same conditional
+`UPDATE ... WHERE accepted_at IS NULL` pattern. It stays open deliberately rather
+than being fixed silently, because a race with no consequence today becomes one
+when the accept path grows a seat count or a billing side effect.
+
+**Three attacks that held.** Each was a candidate defect and each is correctly
+defended:
+
+- **A forwarded invitation racing the intended recipient** — two users accepting
+  the same link at once, one of them the wrong address, admits only the invited
+  address. Email binding holds under concurrency, not just sequentially.
+- **A removed member replaying their old invitation link** — refused. The
+  membership stays revoked, so removal cannot be undone by whoever was removed.
+- **Two invitations for one address accepted at once** — the superseded link is
+  refused, so a downgraded role cannot be resurrected by racing the newer one.
+
+**A correction to an earlier reading.** A probe showed `register()` throwing while
+the user row persisted — an account that exists behind an error the merchant
+sees, with a retry that says "already registered".
+
+That probe injected a mailer that throws, which is not how an outage arrives:
+`MailService` swallows transport failures and returns `{ sent: false }`, so a real
+SMTP outage leaves registration succeeding with an unsent email. The path only
+throws if `MailService` itself has a bug. Recorded because the distinction is the
+finding — the risk is a narrow one, not the broad one it first appeared to be.
+
 #### ⚠️ Two concurrency defects found by advanced testing
 
 Both are **read-then-write races** with no lock between the check and the write.
