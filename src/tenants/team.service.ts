@@ -137,7 +137,30 @@ export class TeamService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      await manager.update(TenantInvitation, { id: invitation.id }, { acceptedAt: new Date() });
+      /**
+       * Claim the invitation atomically.
+       *
+       * The unconditional update was a race: two acceptances of the same link
+       * both read `acceptedAt` as null and both proceeded. The consequence was
+       * benign — same user, same role, one membership row reused — which is
+       * exactly why it was worth fixing before the accept path grows a seat count
+       * or a billing side effect and the consequence stops being benign.
+       *
+       * `affected === 0` means someone claimed it first, and the caller gets the
+       * same answer as every other invalid invitation.
+       */
+      const claim = await manager.update(
+        TenantInvitation,
+        { id: invitation.id, acceptedAt: IsNull() },
+        { acceptedAt: new Date() },
+      );
+
+      if (claim.affected === 0) {
+        throw new DomainException(
+          ErrorCode.TOKEN_INVALID,
+          'That invitation is no longer valid. Ask for a new one.',
+        );
+      }
 
       const revoked = await manager.findOne(TenantMember, {
         where: { tenantId: invitation.tenantId, userId },

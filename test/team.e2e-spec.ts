@@ -373,6 +373,74 @@ describe('TeamService (integration)', () => {
     });
   });
 
+  describe('the invitation acceptance race', () => {
+    /**
+     * Single-use must hold when the same link is presented twice at once — a
+     * double-click, a retry, or a mail client prefetching the URL.
+     *
+     * The consequence before the fix was benign: same user, same role, one row
+     * reused. It was fixed anyway, because a race with no consequence today
+     * becomes one the moment this path grows a seat count or a billing effect.
+     */
+    it('accepts only once when presented twice simultaneously', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      const outcomes = await Promise.allSettled([
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+      ]);
+
+      expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+    });
+
+    it('still creates exactly one membership', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      await Promise.allSettled([
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+      ]);
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM tenant_members WHERE tenantId = ? AND userId = ?`,
+        [TENANT, NEWCOMER],
+      );
+
+      expect(Number(row.n)).toBe(1);
+    });
+
+    /** The loser must be indistinguishable from any other invalid invitation. */
+    it('gives the loser the same answer as an expired link', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      const outcomes = await Promise.allSettled([
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+        team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`),
+      ]);
+
+      const rejected = outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult;
+
+      expect((rejected.reason as Error).message).toMatch(/no longer valid/);
+    });
+
+    /** The fix must not break the ordinary single acceptance. */
+    it('still accepts a single presentation normally', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      const member = await team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`);
+
+      expect(member.role).toBe('editor');
+    });
+  });
+
   describe('the last-owner race', () => {
     async function ownerCount(): Promise<number> {
       const [row] = await dataSource.query(
