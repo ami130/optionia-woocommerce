@@ -2410,6 +2410,46 @@ point of the abstraction. A `LogMailer` that writes to the ops log stands in unt
 a provider exists, and the acceptance criterion "delivery confirmed to a real
 inbox" is what waits.
 
+#### Carried forward from the 7a–7b deep audit
+
+Three findings in `ParentScopedRepository`, all of the same shape: an option the
+type signature accepts and the implementation ignores. **None is a tenant leak** —
+the predicate holds in every case — and all three are correctness bugs that fail
+silently, which is why they are worth naming before endpoints are built on top.
+
+**1. An array `where` is dropped entirely.** `find({ where: [{ id: 'a' }, { id: 'b' }] })`
+returns **every row in the tenant**, verified: an OR of two non-existent ids
+returned all eight groups instead of none.
+
+The code comment justifies this correctly on safety grounds — an OR cannot widen
+past the tenant predicate, which is applied with `andWhere` — and then says
+nothing about the filter being discarded. Safe and wrong are not the same thing,
+and a list endpoint built on this would quietly ignore its own filters.
+
+**2. `relations` is silently ignored.** Asking for a group with its option set
+returns the group with the field simply absent. TypeORM's `FindManyOptions` accepts
+it, the builder never applies it, and the caller has no way to tell the difference
+between "no relation" and "relation not loaded".
+
+**3. A `FindOperator` becomes a string comparison.** `where: { id: In([...]) }`
+interpolates the operator object rather than expanding it, producing
+`id = '[object Object]'`. It currently returns zero rows, which is right by
+accident rather than by design — `Not()`, `LessThan()` and `IsNull()` would each
+be wrong in a different direction, and `IsNull()` in particular would silently
+match nothing on a column where that is a meaningful query.
+
+**Fix before 7e**, which is the first step to build list endpoints on this. The
+honest options are to support these properly or to reject them loudly; what
+cannot stand is a signature that promises `FindManyOptions` and delivers a subset,
+because the failure is invisible at the call site.
+
+**What the audit confirmed sound.** The timezone fix is genuinely
+timezone-independent: a row restored under `America/New_York` and one restored
+under `UTC` both store the identical literal, and the schema suite passes under
+both. Tenant isolation holds at one, two and three joins, soft-deleted parents
+hide their children, and the API contract check catches all four of its failure
+modes.
+
 #### Order of work, and why this order
 
 Each step is a commit, gated the way Phase 5 was: a file with branching logic gets
