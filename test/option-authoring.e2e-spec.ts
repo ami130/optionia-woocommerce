@@ -155,18 +155,40 @@ describe('option authoring (e2e)', () => {
     request(app.getHttpServer()).delete(`/v1${path}`).set('Authorization', `Bearer ${token}`);
 
   /** A fresh group in tenant A's set. */
+  /**
+   * Fixture builders that **fail loudly**.
+   *
+   * Reading `.body.data.id` without checking the status returns `undefined`
+   * when a create fails, and the test then runs against a parent that does not
+   * exist — where a duplicate key genuinely does not collide, because the two
+   * rows are attached to different (missing) parents. That turns a fixture
+   * problem into a false assertion about the product, which is how an
+   * intermittent "duplicate value key returned 201" reached this suite.
+   */
+  function idOf(response: request.Response, what: string): string {
+    if (response.status !== 201) {
+      throw new Error(
+        `Fixture failed to create a ${what}: ${response.status} ` +
+          `${JSON.stringify(response.body?.error ?? response.body)}`,
+      );
+    }
+
+    return response.body.data.id as string;
+  }
+
   async function newGroup(label = 'Group'): Promise<string> {
-    return (await post(tokenA, `/option-sets/${setA}/groups`, { label })).body.data.id as string;
+    return idOf(await post(tokenA, `/option-sets/${setA}/groups`, { label }), 'group');
   }
 
   async function newOption(groupId: string, key: string): Promise<string> {
-    return (
+    return idOf(
       await post(tokenA, `/groups/${groupId}/options`, {
         key,
         label: 'Print placement',
         presentation: 'radio',
-      })
-    ).body.data.id as string;
+      }),
+      'option',
+    );
   }
 
   describe('groups', () => {
@@ -397,7 +419,11 @@ describe('option authoring (e2e)', () => {
     it('refuses a duplicate value key on one option', async () => {
       const group = await newGroup();
       const option = await newOption(group, 'dupes');
-      await post(tokenA, `/options/${option}/values`, { valueKey: 'red', label: 'Red' });
+      // Asserted, not assumed: if the first create fails the second cannot
+      // collide with it, and the test would "pass" against a missing parent.
+      expect(
+        (await post(tokenA, `/options/${option}/values`, { valueKey: 'red', label: 'Red' })).status,
+      ).toBe(201);
 
       const second = await post(tokenA, `/options/${option}/values`, {
         valueKey: 'red',
@@ -632,6 +658,196 @@ describe('option authoring (e2e)', () => {
     }, 60_000);
   });
 
+  /**
+   * Behaviour under simultaneous writes to one parent.
+   *
+   * These are the cases a sequential suite cannot reach: every defect here
+   * passed every serial test before it was found by a concurrent probe.
+   */
+  describe('concurrency', () => {
+    /**
+     * A check-then-insert has a window; the constraint closes it. What must not
+     * happen is the loser getting a 500 for a collision that returns a clean
+     * error when it happens serially.
+     */
+    it('answers a raced duplicate key with a conflict, never a 500', async () => {
+      const group = await newGroup();
+
+      const responses = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          post(tokenA, `/groups/${group}/options`, {
+            key: 'racy',
+            label: 'Racy',
+            presentation: 'radio',
+          }),
+        ),
+      );
+
+      const statuses = responses.map((response) => response.status);
+
+      expect(statuses.filter((status) => status === 201)).toHaveLength(1);
+      expect(statuses).not.toContain(500);
+      // Whatever the losers got, it names the field rather than leaking SQL.
+      responses
+        .filter((response) => response.status !== 201)
+        .forEach((response) => {
+          expect(['VALIDATION_FAILED', 'CONFLICT']).toContain(response.body.error.code);
+          expect(JSON.stringify(response.body)).not.toContain('Duplicate entry');
+        });
+      expect((await get(tokenA, `/groups/${group}/options`)).body.data).toHaveLength(1);
+    }, 120_000);
+
+    it('answers a raced duplicate value key the same way', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'raced_values');
+
+      const responses = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          post(tokenA, `/options/${option}/values`, { valueKey: 'same', label: 'Same' }),
+        ),
+      );
+
+      expect(responses.map((r) => r.status).filter((s) => s === 201)).toHaveLength(1);
+      expect(responses.map((r) => r.status)).not.toContain(500);
+      expect((await get(tokenA, `/options/${option}/values`)).body.data).toHaveLength(1);
+    }, 120_000);
+
+    /**
+     * The defect this replaced left **zero** defaults, not two: each concurrent
+     * request cleared the flags of rows the others had just inserted. A radio
+     * with nothing pre-selected, where the merchant set a default.
+     */
+    it('leaves exactly one default when several are created at once', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'concurrent_defaults');
+
+      await Promise.all(
+        Array.from({ length: 4 }, (_, index) =>
+          post(tokenA, `/options/${option}/values`, {
+            valueKey: `d${index}`,
+            label: `D${index}`,
+            isDefault: true,
+          }),
+        ),
+      );
+
+      const values = await get(tokenA, `/options/${option}/values`);
+      const defaults = values.body.data.filter((v: { isDefault: boolean }) => v.isDefault);
+
+      expect(values.body.data).toHaveLength(4);
+      expect(defaults).toHaveLength(1);
+    }, 120_000);
+
+    it('leaves exactly one default when several are set at once by PATCH', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'concurrent_patch');
+      const ids: string[] = [];
+
+      for (let index = 0; index < 4; index += 1) {
+        ids.push(
+          (
+            await post(tokenA, `/options/${option}/values`, {
+              valueKey: `p${index}`,
+              label: `P${index}`,
+            })
+          ).body.data.id as string,
+        );
+      }
+
+      await Promise.all(ids.map((id) => patch(tokenA, `/values/${id}`, { isDefault: true })));
+
+      const values = await get(tokenA, `/options/${option}/values`);
+
+      expect(values.body.data.filter((v: { isDefault: boolean }) => v.isDefault)).toHaveLength(1);
+    }, 120_000);
+
+    /** The scoped-by-hand statement in `makeSoleDefault` needs its own probe. */
+    it('cannot clear another tenant’s defaults', async () => {
+      const foreignSet = await seedSet('b');
+      const foreignGroup = (
+        await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' })
+      ).body.data.id as string;
+      const foreignOption = (
+        await post(tokenB, `/groups/${foreignGroup}/options`, {
+          key: 'theirs',
+          label: 'Theirs',
+          presentation: 'radio',
+        })
+      ).body.data.id as string;
+      await post(tokenB, `/options/${foreignOption}/values`, {
+        valueKey: 'keep',
+        label: 'Keep',
+        isDefault: true,
+      });
+
+      // Tenant A tries to add a default to tenant B's option.
+      expect(
+        (
+          await post(tokenA, `/options/${foreignOption}/values`, {
+            valueKey: 'mine',
+            label: 'Mine',
+            isDefault: true,
+          })
+        ).status,
+      ).toBe(404);
+
+      const theirs = await get(tokenB, `/options/${foreignOption}/values`);
+
+      expect(theirs.body.data.filter((v: { isDefault: boolean }) => v.isDefault)).toHaveLength(1);
+    }, 120_000);
+  });
+
+  /**
+   * Structural ceilings, not plan quotas.
+   *
+   * `duplicate` copies a subtree inside one transaction and the child lists are
+   * unpaginated — both assume a parent holds a bounded number of children, and
+   * nothing enforced that assumption until these limits existed.
+   */
+  describe('limits', () => {
+    it('refuses a value beyond the ceiling', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'bounded');
+
+      // Fill the table directly: the point is the boundary, not 500 HTTP calls.
+      const [{ count }] = await dataSource.query(
+        `SELECT COUNT(*) AS count FROM option_values WHERE optionId = ?`,
+        [option],
+      );
+      const rows: string[] = [];
+
+      for (let index = Number(count); index < 500; index += 1) {
+        rows.push(
+          `('${randomUUID()}','${option}','k${index}','L${index}',${index},'fixed',0,0,NOW(3),NOW(3),'1970-01-01 00:00:00.000')`,
+        );
+      }
+
+      await dataSource.query(
+        `INSERT INTO option_values (id, optionId, valueKey, label, sortOrder, priceType,
+                                    priceAmountMinor, isDefault, createdAt, updatedAt, deletedAt)
+         VALUES ${rows.join(',')}`,
+      );
+
+      const response = await post(tokenA, `/options/${option}/values`, {
+        valueKey: 'one_too_many',
+        label: 'Too many',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.details[0].code).toBe('LIMIT_REACHED');
+    }, 120_000);
+
+    it('allows a create below the ceiling', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'unbounded_ok');
+
+      expect(
+        (await post(tokenA, `/options/${option}/values`, { valueKey: 'fine', label: 'Fine' }))
+          .status,
+      ).toBe(201);
+    }, 60_000);
+  });
+
   describe('parent version', () => {
     async function rowVersionOf(setId: string): Promise<number> {
       const [row] = await dataSource.query(`SELECT rowVersion FROM option_sets WHERE id = ?`, [
@@ -690,6 +906,110 @@ describe('option authoring (e2e)', () => {
   });
 
   describe('authorization', () => {
+    /**
+     * Capability enforcement on **these** routes.
+     *
+     * `guards.e2e-spec.ts` proves `CapabilityGuard` works, but it does so
+     * against a synthetic probe controller. Every route added in 7f declares a
+     * capability, and until this test nothing asserted that any of those
+     * declarations is enforced — which is exactly how the earlier fail-open
+     * guard reached production-shaped code with a comment claiming a test that
+     * did not exist.
+     */
+    describe('a viewer', () => {
+      let viewerToken = '';
+      let group = '';
+      let option = '';
+      let value = '';
+      let viewerSet = '';
+
+      beforeAll(async () => {
+        // A member of their own tenant, demoted to viewer — so the fixtures
+        // below are theirs to see and a 403 cannot be confused with a 404.
+        const email = `${NS}-viewer@example.com`;
+
+        await request(app.getHttpServer())
+          .post('/v1/auth/register')
+          .send({ email, password: PASSWORD, name: 'viewer', tenantName: `${NS}-viewer` });
+        await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [email]);
+        await dataSource.query(
+          `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
+             JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
+          [`${NS}-viewer`, email],
+        );
+
+        const owner = (
+          await request(app.getHttpServer())
+            .post('/v1/auth/login')
+            .send({ email, password: PASSWORD })
+        ).body.data.accessToken as string;
+
+        viewerSet = await seedSet('viewer');
+        group = (await post(owner, `/option-sets/${viewerSet}/groups`, { label: 'V' })).body.data
+          .id as string;
+        option = (
+          await post(owner, `/groups/${group}/options`, {
+            key: 'vk',
+            label: 'V',
+            presentation: 'radio',
+          })
+        ).body.data.id as string;
+        value = (await post(owner, `/options/${option}/values`, { valueKey: 'vv', label: 'V' })).body
+          .data.id as string;
+
+        await dataSource.query(
+          `UPDATE tenant_members tm JOIN users u ON u.id = tm.userId
+              SET tm.role = 'viewer' WHERE u.email = ?`,
+          [email],
+        );
+
+        viewerToken = (
+          await request(app.getHttpServer())
+            .post('/v1/auth/login')
+            .send({ email, password: PASSWORD })
+        ).body.data.accessToken as string;
+      }, 120_000);
+
+      it.each<[string, () => request.Test]>([
+        ['POST   /option-sets/:id/groups', () =>
+          post(viewerToken, `/option-sets/${viewerSet}/groups`, { label: 'X' })],
+        ['PATCH  /groups/:id', () => patch(viewerToken, `/groups/${group}`, { label: 'X' })],
+        ['DELETE /groups/:id', () => del(viewerToken, `/groups/${group}`)],
+        ['POST   /groups/:id/duplicate', () => post(viewerToken, `/groups/${group}/duplicate`)],
+        ['POST   /option-sets/:id/reorder', () =>
+          post(viewerToken, `/option-sets/${viewerSet}/reorder`, {
+            groups: [{ id: group, sortOrder: 10 }],
+          })],
+        ['POST   /groups/:id/options', () =>
+          post(viewerToken, `/groups/${group}/options`, {
+            key: 'x',
+            label: 'X',
+            presentation: 'radio',
+          })],
+        ['PATCH  /options/:id', () => patch(viewerToken, `/options/${option}`, { label: 'X' })],
+        ['DELETE /options/:id', () => del(viewerToken, `/options/${option}`)],
+        ['POST   /options/:id/duplicate', () => post(viewerToken, `/options/${option}/duplicate`)],
+        ['POST   /options/:id/values', () =>
+          post(viewerToken, `/options/${option}/values`, { valueKey: 'x', label: 'X' })],
+        ['PATCH  /values/:id', () => patch(viewerToken, `/values/${value}`, { label: 'X' })],
+        ['DELETE /values/:id', () => del(viewerToken, `/values/${value}`)],
+      ])('is refused %s', async (_label, call) => {
+        const response = await call();
+
+        // 403, not 404: the caller is a legitimate member and the resource
+        // plainly exists. Cross-*tenant* is the case that gets a 404.
+        expect(response.status).toBe(403);
+        expect(response.body.error.code).toBe('INSUFFICIENT_ROLE');
+      }, 60_000);
+
+      it('can still read every level', async () => {
+        expect((await get(viewerToken, `/option-sets/${viewerSet}/groups`)).status).toBe(200);
+        expect((await get(viewerToken, `/groups/${group}/options`)).status).toBe(200);
+        expect((await get(viewerToken, `/options/${option}/values`)).status).toBe(200);
+        expect((await get(viewerToken, `/values/${value}`)).status).toBe(200);
+      }, 60_000);
+    });
+
     it('refuses an unauthenticated request', async () => {
       const response = await request(app.getHttpServer()).get(`/v1/groups/${randomUUID()}`);
 

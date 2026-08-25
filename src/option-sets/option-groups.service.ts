@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, In } from 'typeorm';
 
+import { AUTHORING_LIMITS, assertWithinLimit } from './authoring-limits';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
@@ -61,6 +62,8 @@ export class OptionGroupsService {
    * predicate on the write itself.
    */
   async create(optionSetId: string, input: GroupChanges & { label: string }): Promise<OptionGroup> {
+    await this.assertRoomForGroup(optionSetId);
+
     const created = await this.groups.create(optionSetId, {
       optionSetId,
       label: input.label.trim(),
@@ -134,6 +137,10 @@ export class OptionGroupsService {
    */
   async duplicate(id: string, label?: string): Promise<OptionGroup> {
     const source = await this.findOne(id);
+
+    // A copy is a create: it must respect the same ceiling.
+    await this.assertRoomForGroup(source.optionSetId);
+
     const sortOrder = await this.groups.nextSortOrder(source.optionSetId);
 
     const copy = await this.dataSource.transaction(async (manager) => {
@@ -217,6 +224,15 @@ export class OptionGroupsService {
     return this.groups.listBySet(optionSetId);
   }
 
+  /** Refuse a create that would exceed the structural ceiling. */
+  private async assertRoomForGroup(optionSetId: string): Promise<void> {
+    assertWithinLimit(
+      await this.groups.count({ where: { optionSetId } } as never),
+      AUTHORING_LIMITS.groupsPerSet,
+      'groups',
+    );
+  }
+
   /** Confirm the set exists and belongs to this tenant, as a 404 either way. */
   private async assertSetExists(optionSetId: string): Promise<void> {
     if (!(await this.sets.findById(optionSetId))) {
@@ -253,6 +269,37 @@ export async function copyOptionsInto(
     order: { sortOrder: 'ASC' },
   });
 
+  if (options.length === 0) {
+    return;
+  }
+
+  /**
+   * Every value for every option, in one query.
+   *
+   * Querying per option made copying an N-option group cost N+1 round trips
+   * inside a transaction holding row locks. One `IN` and a group-by is the same
+   * result at constant cost.
+   */
+  const values = await manager.find(OptionValue, {
+    where: {
+      optionId: In(options.map((option) => option.id)),
+      deletedAt: LIVE_SENTINEL_SQL as never,
+    },
+    order: { sortOrder: 'ASC' },
+  });
+
+  const valuesByOption = new Map<string, OptionValue[]>();
+
+  values.forEach((value) => {
+    const bucket = valuesByOption.get(value.optionId);
+
+    if (bucket) {
+      bucket.push(value);
+    } else {
+      valuesByOption.set(value.optionId, [value]);
+    }
+  });
+
   for (const option of options) {
     const optionCopy = await manager.save(
       manager.create(Option, {
@@ -278,14 +325,11 @@ export async function copyOptionsInto(
       }),
     );
 
-    const values = await manager.find(OptionValue, {
-      where: { optionId: option.id, deletedAt: LIVE_SENTINEL_SQL as never },
-      order: { sortOrder: 'ASC' },
-    });
+    const optionValues = valuesByOption.get(option.id) ?? [];
 
-    if (values.length > 0) {
+    if (optionValues.length > 0) {
       await manager.save(
-        values.map((value) =>
+        optionValues.map((value) =>
           manager.create(OptionValue, {
             optionId: optionCopy.id,
             valueKey: value.valueKey,

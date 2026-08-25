@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
+import { AUTHORING_LIMITS, assertWithinLimit } from './authoring-limits';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { PriceType } from '../common/database/enums';
@@ -67,6 +68,11 @@ export class OptionValuesService {
 
   async create(optionId: string, input: CreateValueInput): Promise<OptionValue> {
     await this.assertOptionExists(optionId);
+    assertWithinLimit(
+      await this.values.count({ where: { optionId } } as never),
+      AUTHORING_LIMITS.valuesPerOption,
+      'values',
+    );
     const valueKey = input.valueKey.trim();
 
     if (input.priceConfig !== undefined && input.priceConfig !== null) {
@@ -164,18 +170,16 @@ export class OptionValuesService {
    * Exactly one default per option.
    *
    * Two defaults on one option is not a state the storefront can render — it
-   * would pre-select two mutually exclusive choices on a `radio`. Enforced here
-   * rather than by a constraint because "at most one true per group" is not
-   * expressible as a unique index over a boolean.
+   * would pre-select two mutually exclusive choices on a `radio`. Enforced in
+   * code rather than by a constraint because "at most one true per parent" is
+   * not expressible as a unique index over a boolean.
+   *
+   * The write is a single statement (`makeSoleDefault`) rather than a read
+   * followed by per-sibling updates: concurrent creates race that pattern into
+   * leaving **zero** defaults.
    */
   private async clearOtherDefaults(optionId: string, keepId: string): Promise<void> {
-    const siblings = await this.values.listByOption(optionId);
-
-    for (const sibling of siblings) {
-      if (sibling.id !== keepId && sibling.isDefault) {
-        await this.values.update({ id: sibling.id } as never, { isDefault: false } as never);
-      }
-    }
+    await this.values.makeSoleDefault(optionId, keepId);
   }
 
   private async assertValueKeyAvailable(optionId: string, valueKey: string): Promise<void> {

@@ -550,6 +550,18 @@ option's values are bounded by what a merchant can usefully build and are always
 fetched whole by the editor. A cursor here would add a round trip to every render
 for a page size no real set reaches.
 
+That bound is **enforced**, not assumed: 100 groups per set, 200 options per
+group, 500 values per option. Exceeding one is `400 VALIDATION_FAILED` with
+`LIMIT_REACHED`. These are structural ceilings that protect an unpaginated list
+and a subtree copied inside one transaction — not plan quotas, which are
+Phase 22 and answer `PLAN_LIMIT_EXCEEDED` instead.
+
+**Keys collide two ways.** A key already in use answers `400 VALIDATION_FAILED`
+with `DUPLICATE_KEY`. When two requests race — both pass the check, both insert —
+the database constraint decides, and the loser gets `409 CONFLICT` with the same
+`DUPLICATE_KEY` detail. A client may retry the 409; the 400 will not succeed on
+retry. Neither response echoes the colliding value.
+
 > **Duplicate exists at every level**, not only for option sets. M7.2 says the
 > lifecycle operation set is "inherited by groups, options, and values alike", and
 > deep-copying a group with its options and values is what a merchant building

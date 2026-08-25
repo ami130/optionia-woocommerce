@@ -1168,3 +1168,58 @@ success while inspecting nothing (ADR-020, ADR-021) — arriving in test fixture
 rather than in a script. The standing response holds: prove the check fails when
 the thing it checks is broken, and treat a passing suite as evidence only after
 that.
+
+---
+
+## ADR-029 — Invariants that span rows are written in one statement
+
+**Status:** accepted
+**Date:** Phase 7, M7.2
+
+### Context
+
+Three defects found by concurrent probes of 7f shared one shape: a rule read the
+current state, decided, and then wrote — and the window between the read and the
+write was where the rule failed.
+
+The worst was `isDefault`. At most one value per option may be the default, so a
+create with `isDefault` cleared its siblings. Four concurrent creates each read a
+sibling list that did not yet contain the others' rows, then cleared everything
+they *could* see. The result was an option with **zero** defaults — worse than
+the two the rule exists to prevent, and invisible to every sequential test:
+serially the same code gives exactly one, verified before and after.
+
+The second was `key` uniqueness. `keyExists()` then insert is the same shape; the
+database constraint closed the window correctly, but the loser's raw
+`QueryFailedError` reached the exception filter and became a **500** for the same
+collision that returns a clean 400 serially.
+
+### Decision
+
+**An invariant over more than one row is expressed as a single statement.**
+
+`makeSoleDefault` is one `UPDATE … SET isDefault = CASE WHEN id = :keep …
+WHERE optionId = :option`. Whichever transaction commits last has cleared every
+row the others inserted, so the invariant holds no matter how the writes
+interleave.
+
+For uniqueness, the constraint stays the guarantee and the pre-check stays as the
+common-case error. `asUniqueViolation` recognises `ER_DUP_ENTRY` and maps it to
+`409 CONFLICT` with a `DUPLICATE_KEY` detail — a distinct code from the serial
+`400`, because a race loser may retry and a genuine collision may not.
+
+Only the *index name* is read from the driver error, to name the field. The
+message itself is still discarded: it quotes the colliding value, which may be
+user data, and ADR-009's rule that a database error never leaks detail holds.
+
+### Consequences
+
+Structural ceilings were added at the same time (100 groups per set, 200 options
+per group, 500 values per option). They are not plan quotas — they bound an
+unpaginated list endpoint and a subtree copied inside one transaction, both of
+which had assumed a limit that nothing enforced.
+
+Reverting either fix now fails two tests each; the ceilings fail one. The
+sequential suite passed throughout all three defects, which is the point:
+**a serial test cannot observe a read-then-write race, so any rule spanning rows
+needs a concurrent probe before it is believed.**

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
+import { AUTHORING_LIMITS, assertWithinLimit } from './authoring-limits';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
@@ -81,6 +82,7 @@ export class OptionsService {
    */
   async create(optionGroupId: string, input: CreateOptionInput): Promise<Option> {
     const group = await this.assertGroupExists(optionGroupId);
+    await this.assertRoomForOption(optionGroupId);
     const key = input.key.trim();
 
     this.validator.assertValidOption(input.presentation, {
@@ -188,6 +190,10 @@ export class OptionsService {
    */
   async duplicate(id: string, key?: string): Promise<Option> {
     const source = await this.findOne(id);
+
+    // A copy is a create: it must respect the same ceiling.
+    await this.assertRoomForOption(source.optionGroupId);
+
     const newKey = key?.trim() || (await this.availableCopyKey(source.optionGroupId, source.key));
 
     await this.assertKeyAvailable(source.optionGroupId, newKey);
@@ -275,6 +281,15 @@ export class OptionsService {
 
     throw DomainException.conflict(
       'Could not generate a free key for the copy. Supply one explicitly.',
+    );
+  }
+
+  /** Refuse a create that would exceed the structural ceiling. */
+  private async assertRoomForOption(optionGroupId: string): Promise<void> {
+    assertWithinLimit(
+      await this.options.count({ where: { optionGroupId } } as never),
+      AUTHORING_LIMITS.optionsPerGroup,
+      'options',
     );
   }
 

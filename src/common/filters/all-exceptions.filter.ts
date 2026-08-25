@@ -11,6 +11,7 @@ import { QueryFailedError } from 'typeorm';
 
 import { getRequestId } from '../context/request-context';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes';
+import { asUniqueViolation } from '../errors/unique-violation';
 import type { ApiError, ApiErrorResponse, ErrorDetail } from '../http/api-response.types';
 
 /** What `main.ts`'s exceptionFactory emits for each failed constraint. */
@@ -68,9 +69,37 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return this.fromHttpException(exception);
     }
 
-    // A database error means a bug or an outage, never something the client can
-    // fix. The driver message is logged and discarded from the response — it
-    // routinely contains SQL and column names.
+    /**
+     * A unique-constraint violation is the caller's problem, not ours.
+     *
+     * Every check-then-insert has a race: two requests both pass the
+     * "is this key free?" query and both insert. The constraint closes it, and
+     * without this the loser gets a **500 for the same collision that returns
+     * 400 when it happens serially** — the caller cannot tell a bug from a
+     * retryable conflict.
+     *
+     * Only the index *name* is used, to name the field. The driver message is
+     * still discarded: it quotes the colliding value, which is user data.
+     */
+    const duplicate = asUniqueViolation(exception);
+
+    if (duplicate) {
+      return {
+        status: HttpStatus.CONFLICT,
+        error: {
+          code: ErrorCode.CONFLICT,
+          message: 'That value is already in use.',
+          details: [duplicate.detail],
+        },
+        // Not our bug, so no stack trace — but logged at warn with the index, so
+        // a constraint colliding constantly is still visible.
+        logAsError: false,
+      };
+    }
+
+    // Any other database error means a bug or an outage, never something the
+    // client can fix. The driver message is logged and discarded from the
+    // response — it routinely contains SQL and column names.
     if (exception instanceof QueryFailedError) {
       return {
         status: HttpStatus.INTERNAL_SERVER_ERROR,
