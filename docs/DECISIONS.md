@@ -962,3 +962,68 @@ indexed columns, and the alternative was a third read on every request rather th
 a second on some.
 
 Proven by mutation: neutralising the check fails the logout test.
+
+---
+
+## ADR-025 — Option types are registry entries, and money never reaches a float
+
+**Status:** accepted
+**Date:** Phase 7, M7.3
+
+### Context
+
+M7.3 asks for one option type — `radio` — and for a registry built so
+[Phase 14](../../developePlan.md) is *registration, not refactoring*. Twelve types
+are planned. If adding one means editing a validator, a serializer and a
+controller, the twelfth costs the same as the second and the estimate for Phase 14
+is wrong by an order of magnitude.
+
+### Decision
+
+An option type is one entry in `type-registry.ts` declaring what varies: its
+presentation, its value kind and cardinality, whether it takes values, and three
+Zod schemas. Nothing else in the system enumerates types.
+
+**Entries key on `presentation`, not on a flat type name**, because the three-axis
+model (M5.4b) already separates behaviour from rendering. `radio` and `dropdown`
+are the same `choice`/`one` pair drawn differently; `checkbox` is that pair at a
+different cardinality. The shared schemas are written once and registered
+repeatedly, which is what makes Phase 14 additive.
+
+**A choice type refuses type-level pricing.** A radio prices per value, so an
+amount on the option would be charged *in addition* to the selected value's price
+— silently doubling every priced option. The schema is `z.null()`: refusing is
+clearer than accepting a field nothing reads.
+
+### Money
+
+Amounts are integers in minor units, and the schema **rejects a decimal rather
+than truncating it**. `10.5` looks like £10.50 and means ten and a half pence, and
+truncating charges the wrong amount for as long as the option exists. An error a
+merchant can read is better than a silent 999 where they meant 999.5.
+
+Percentages are basis points for the same reason: `0.1 + 0.2 !== 0.3` in binary
+floating point, and a percentage that drifts produces different totals on two
+machines.
+
+Amounts are bounded at £10,000,000 rather than `MAX_SAFE_INTEGER`. A larger value
+is a typo — minor units entered twice — and catching it at entry beats an order
+total that overflows a payment provider's limit.
+
+### Tier validation is about relationships
+
+A tiered price is validated as a set, because the failures that matter are
+between brackets rather than inside one: a gap leaves quantities unpriced, an
+overlap makes the charge depend on evaluation order, and an open-ended tier that
+is not last swallows every bracket after it. None is visible from a single tier,
+and each is a wrong charge rather than a malformed document.
+
+### Consequences
+
+Every error names its field — `pricing.tiers.1.minQuantity` rather than "pricing
+is invalid" — because MySQL accepts `{"amountMinor":"ten"}` as valid JSON and the
+mistake otherwise surfaces at a customer's checkout.
+
+Adding a type in Phase 14 is an entry plus a test that its schemas reject what
+they should. The registry asserts its own size, so a second type appearing during
+Phase 7 fails a test rather than passing as scope creep.
