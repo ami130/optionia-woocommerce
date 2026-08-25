@@ -444,6 +444,28 @@ a handler remembers to add.
 | `PATCH /option-sets/:id` | `option_sets:edit` | `[built]` |
 | `DELETE /option-sets/:id` | `option_sets:delete` | `[built]` |
 | `DELETE /option-sets/:id/permanent` | `option_sets:delete` | `[built]` |
+| `GET /option-sets/:id/detail` · `GET /option-sets/:id/preview` | `option_sets:view` | `[built]` |
+
+> **Two projections, one serializer** ([M7.2b](../../developePlan.md)).
+> `/detail` returns the **authoring** shape — the whole tree in `camelCase`, with
+> drafts, ids and audit fields, which is what the editor renders.
+> `/preview` returns the **published** shape — the config document a storefront
+> would receive if the set were published now, in `snake_case`.
+>
+> Both come from the same serializer, so a preview cannot show something a
+> storefront would not. The published shape is defined by
+> [M7.5](../../developePlan.md) and frozen in `docs/CONFIG-CONTRACT.md` at 7k.
+>
+> `GET /option-sets/:id` still returns the set alone: a list row does not need
+> its tree, and loading one for every row would make the list cost grow with the
+> work a merchant has done.
+
+The **published** projection deliberately omits `tenantId`, `rowVersion`,
+`createdAt`/`updatedAt` and `isEnabled`, and drops disabled groups, options and
+values entirely rather than flagging them. The config document sits on merchant
+servers, so a field appears only if the plugin genuinely needs it — and a
+disabled thing that ships with a flag makes every consumer responsible for
+remembering to check it.
 
 > **This was designed as `DELETE /option-sets/:id?hard=true` and built as a
 > distinct path.** A query parameter that turns a reversible action into an

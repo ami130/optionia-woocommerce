@@ -1353,3 +1353,65 @@ check to a plain `Error` failed nothing, because the service checks the parent
 first and answers 404 — the repository's throw is reached only in the race no
 deterministic test can stage. It is now asserted by calling the repository
 directly, which is the only honest way to cover a path HTTP cannot reach.
+
+---
+
+## ADR-032 — The published projection is a type, not a convention
+
+**Status:** accepted
+**Date:** Phase 7, M7.2b
+
+### Context
+
+M7.2b asks for one serializer and two projections, with an acceptance that is
+really a process requirement: *"adding a field to the model requires an explicit
+decision about whether it appears in the published projection."*
+
+A convention cannot deliver that. Documenting "remember to check the config
+document" means the check happens when someone remembers, and the failure mode is
+silent — a new column flows into a document that sits on merchant servers, and
+nobody notices because nothing breaks.
+
+Before this step, controllers returned entities directly. `tenantId` and the
+soft-delete sentinel were already reaching API clients: not a cross-tenant leak,
+since a caller only ever sees their own rows, but data the API had never decided
+to publish.
+
+### Decision
+
+Each projection is an explicit `interface`, and the serializer maps **every field
+by name**. Nothing spreads an entity.
+
+The consequence is the acceptance: adding a column to an entity does not appear
+in either projection until someone writes it there, and writing it into the
+published shape without adding it to `PublishedOption` (or its siblings) **fails
+to compile**. Verified by mutation — adding `tenantId` to the authoring
+projection is a type error, not a failing test.
+
+Two shapes, two conventions: authoring is `camelCase` for a TypeScript
+dashboard, published is `snake_case` for a PHP plugin whose reader already
+ships. The published shape drops `tenantId`, `rowVersion`, audit timestamps,
+parent ids and `isEnabled`.
+
+**Disabled things are dropped, not flagged.** A flag makes every consumer —
+renderer, evaluator, TS and PHP — responsible for remembering to check it. One
+of them will forget, and the failure is an option appearing on a storefront the
+merchant switched off.
+
+**One price shape.** The table stores both a `price_type`/`price_amount_minor`
+pair and a nullable `price_config` JSON; the document carries only
+`price_config`, because two ways to express a price is two ways for the TS and
+PHP evaluators to disagree — the thing M11.4's shared fixtures exist to prevent.
+
+### Consequences
+
+`OptionSetTreeLoader` reads a set in four queries rather than four levels of
+N+1: a set with 10 groups of 10 options of 5 values is 111 round trips per
+render otherwise, on every editor load and every publish.
+
+The tie-break on `id` makes ordering deterministic when two rows share a
+`sort_order`. **Its test cannot currently fail** — removing the clause changes
+the SQL but not the result, because InnoDB returns these rows in primary-key
+order anyway. That is a coincidence of the current query plan, not a contract, so
+the clause stays and both the loader and the test say plainly that the assertion
+is presently unfalsifiable.

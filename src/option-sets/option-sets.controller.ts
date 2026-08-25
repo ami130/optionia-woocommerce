@@ -28,6 +28,7 @@ import {
 import type { OptionSet } from './entities/option-set.entity';
 import type { PurgeResult } from './hard-delete.service';
 import { OptionSetsService } from './option-sets.service';
+import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/projections';
 
 /**
  * Option set CRUD (M7.1).
@@ -108,6 +109,31 @@ export class OptionSetsController {
   @RequireCapability(Capability.OPTION_SETS_DELETE)
   async purge(@Param('id', ParseUUIDPipe) id: string): Promise<PurgeResult> {
     return this.service.purge(id);
+  }
+
+  /**
+   * The whole set, in the dashboard's shape (M7.2b).
+   *
+   * Separate from `GET /option-sets/:id`, which returns the set alone: a list
+   * row does not need the tree, and loading it for one would make the list
+   * quadratically more expensive as merchants build.
+   */
+  @Get(':id/detail')
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  async findOneDetailed(@Param('id', ParseUUIDPipe) id: string): Promise<AuthoringOptionSet> {
+    return this.service.findOneDetailed(id);
+  }
+
+  /**
+   * What a storefront would receive if this set were published now.
+   *
+   * Built by the same serializer as the config document, so a preview cannot
+   * show something a storefront would not.
+   */
+  @Get(':id/preview')
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  async findOnePublished(@Param('id', ParseUUIDPipe) id: string): Promise<PublishedOptionSet> {
+    return this.service.findOnePublished(id);
   }
 
   @Post(':id/duplicate')

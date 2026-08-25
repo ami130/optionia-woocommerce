@@ -14,6 +14,9 @@ import { Option } from './entities/option.entity';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { HardDeleteService, type PurgeResult } from './hard-delete.service';
 import { OptionSetsRepository, type ListFilters, type ListPage } from './option-sets.repository';
+import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/projections';
+import { OptionSetTreeLoader } from './serialization/option-set-tree.loader';
+import { OptionSetSerializer } from './serialization/option-set.serializer';
 
 /** The default page size when a caller does not ask for one. */
 export const DEFAULT_PAGE_SIZE = 50;
@@ -33,7 +36,31 @@ export class OptionSetsService {
     private readonly audit: AuditService,
     private readonly cascade: CascadeService,
     private readonly hardDelete: HardDeleteService,
+    private readonly trees: OptionSetTreeLoader,
+    private readonly serializer: OptionSetSerializer,
   ) {}
+
+  /**
+   * A set with everything under it, in the dashboard's shape (M7.2b).
+   *
+   * The editor needs the whole tree in one request — fetching groups, then
+   * options per group, then values per option is a render that gets slower the
+   * more work a merchant has done.
+   */
+  async findOneDetailed(id: string): Promise<AuthoringOptionSet> {
+    return this.serializer.toAuthoring(await this.trees.load(id));
+  }
+
+  /**
+   * The published projection of a set, for preview and for publish ([7i]).
+   *
+   * Produced by the **same serializer** that builds the config document, so a
+   * preview cannot disagree with what a storefront will render — which is the
+   * whole reason M7.2b asks for one serializer rather than one per consumer.
+   */
+  async findOnePublished(id: string): Promise<PublishedOptionSet> {
+    return this.serializer.toPublished(await this.trees.load(id));
+  }
 
   async list(filters: Partial<ListFilters>): Promise<ListPage> {
     return this.repository.list({
