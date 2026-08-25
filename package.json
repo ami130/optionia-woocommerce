@@ -32,11 +32,11 @@
     "check:scripts": "bash bin/check-scripts.sh",
     "db:seed": "ts-node -r tsconfig-paths/register src/seeds/run-seeds.ts",
     "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts",
-    "check:docs": "bash bin/check-docs.sh"
+    "check:docs": "bash bin/check-docs.sh",
+    "test:e2e:cov": "jest --config test/jest-e2e.json --coverage"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
-    "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^11.0.1",

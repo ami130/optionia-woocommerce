@@ -797,3 +797,105 @@ belongs with the test strategy in Phase 30, where the exemption list — entitie
 migrations, module wiring — can be argued rather than assumed. The risk of
 waiting is real and is recorded here rather than left implicit: until that floor
 exists, coverage can fall and nothing will say so.
+
+---
+
+## ADR-022 — Configuration is a plain function, not `ConfigModule`
+
+**Status:** accepted
+**Date:** Phase 6, close
+
+### Context
+
+`@nestjs/config` was installed early and never used. It survived two audits with
+the note "decide in Phase 6, when JWT secrets and mail settings arrive" — and
+Phase 6 arrived, added both, and closed without deciding.
+
+That is exactly how the pino dependency survived Phase 3: a package nobody uses,
+sitting in `package.json` reading as though it were part of the design.
+
+### Decision
+
+Configuration stays as `loadConfig()` in `src/config/env.ts`, and the package is
+removed.
+
+The difference that decides it is not style. `loadConfig()` **throws on a missing
+variable and has no fallback defaults**; `ConfigModule` returns `undefined` and
+leaves the default to each call site. That is the failure this project has already
+been bitten by — `check-secrets.sh` has a dedicated rule against
+`process.env.X || 'literal'` — and adopting a module whose ergonomics encourage it
+would undo a guard we wrote deliberately.
+
+Two further properties matter and are cheap to keep:
+
+- **Boot fails, not the first request.** Every variable is read and validated once
+  at startup, so a misconfiguration is a container that will not start rather than
+  a 500 an hour later on an uncommon path.
+- **The whole contract is one interface.** `AppConfig` is readable in one screen,
+  and adding a variable without declaring it does not typecheck.
+
+### Consequences
+
+Nest's dependency injection does not supply configuration; modules call
+`loadConfig()` directly. That is a real cost in one place — a test wanting a
+different value sets `process.env` rather than overriding a provider — and
+`env.spec.ts` already does exactly that, clearing the environment first so a stray
+shell variable cannot make a failing case pass.
+
+If configuration ever needs to differ per request or per tenant, this decision
+should be revisited rather than worked around: `loadConfig()` is deliberately a
+snapshot of the process environment and nothing more.
+
+**Do not re-add the package without amending this record.** Its absence is the
+decision.
+
+---
+
+## ADR-023 — Coverage is two numbers, and only one was ever measured
+
+**Status:** accepted
+**Date:** Phase 6, close
+**Amends:** [ADR-021](#adr-021--coverage-is-measured-or-it-is-not-a-guarantee)
+
+### Context
+
+ADR-021 established that coverage must be measured rather than assumed, and
+recorded 15.7% as the honest figure. It was honest about what it measured and
+wrong about what that meant.
+
+`jest --coverage` instruments the unit run. By the end of Phase 6, almost every
+security control in the codebase — both guards, the tenant-scoped repository,
+`auth.service`, `team.service`, `sessions.service` — had **no unit test by
+design**. They are exercised against a real database, because the defects that
+matter in them are invisible to a mock: a `= NULL` comparison that matches
+nothing, a transaction deadlocking against its own connection, three
+read-then-write races.
+
+So the report showed them at 0% and the total at 28.95%, while 193 e2e tests
+covered them.
+
+**The failure mode is the interesting part.** A number that understates coverage
+is not a harmless inaccuracy: it is untrusted, so it is unwatched, and an
+unwatched metric is the same as an unmeasured one. ADR-021 was written to prevent
+exactly that and then produced it.
+
+### Decision
+
+Coverage is reported for both runs, and neither is treated as the figure.
+
+`npm run test:cov` covers the pure logic — transformers, the permission matrix,
+config validation, crypto primitives. `npm run test:e2e:cov` covers everything
+requiring a database, and reports **88.19%** statements, with `jwt-auth.guard`
+and `audit.service` at 100%, `sessions.service` at 98%, and nothing in the auth
+or tenancy layer below 92%.
+
+### Consequences
+
+The threshold question deferred to Phase 30 now has real numbers to set a floor
+against, and it must set two — one per run — rather than one number that means
+different things depending on which suite happens to grow.
+
+The e2e config needed `rootDir` moved to the project root for its patterns to
+resolve. The first attempt reported 0% with no files listed, which looked like
+nothing being covered and was in fact nothing being *instrumented* — the same
+shape as the doc checker that verified zero rules while reporting success.

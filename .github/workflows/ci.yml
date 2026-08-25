@@ -145,8 +145,11 @@ jobs:
       # Schema constraints live in MySQL and no unit test can observe them.
       # A delete rule regressing to RESTRICT would make GDPR user erasure
       # impossible, and migration:run would still pass.
+      # Coverage, not just pass/fail. The unit report shows the security code at
+      # 0% because it has no unit tests by design (ADR-023), so this is the only
+      # place the real figure is visible.
       - name: Schema and seed guarantees
-        run: npm run test:e2e
+        run: npm run test:e2e:cov
         env:
           NODE_ENV: test
           PORT: 4000

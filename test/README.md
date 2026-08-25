@@ -25,3 +25,33 @@ Suites namespace their fixtures (`httpauth-`, `authsvc-`) and delete only their
 own rows. Keep that even with serial execution: a suite that deletes by a broad
 pattern is one that breaks the next suite to adopt a similar name, and the
 failure surfaces far from the cause.
+
+## Coverage is measured here, not by `test:cov`
+
+`npm run test:cov` instruments the **unit** run only. Almost every guard, service
+and repository in the auth and tenancy layers has no unit test by design — they
+are exercised against a real database — so that report showed them at **0%** and
+the overall figure at **28.95%**.
+
+That number was misleading in the dangerous direction. It understated coverage, so
+nobody trusted it, so nobody watched it, and the real figure for the security code
+was simply unknown.
+
+`npm run test:e2e:cov` reports what these suites actually cover:
+
+```text
+All files                     88.19% statements
+  jwt-auth.guard.ts          100%
+  audit.service.ts           100%
+  sessions.service.ts         98%
+  tenant.guard.ts             95%
+  capability.guard.ts         95%
+  team.service.ts             94%
+  auth.service.ts             93%
+  tenant-scoped.repository.ts 93%
+```
+
+Read both. Neither alone describes the codebase: the unit report covers the pure
+logic — money and bigint transformers, the permission matrix, config validation,
+crypto primitives — and this one covers everything that needs a database to be
+meaningful.

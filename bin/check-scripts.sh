@@ -58,6 +58,36 @@ else
 fi
 
 echo
+
+# --- Dependencies that nothing imports -------------------------------------
+# A package installed and never used reads as part of the design. pino survived
+# Phase 3 that way, and @nestjs/config survived two audits with a note saying
+# "decide next phase" until the phase closed without deciding (ADR-022).
+#
+# The four allowed below are genuinely indirect and were each verified:
+#   mysql2                   TypeORM loads the driver by name at runtime
+#   @nestjs/platform-express Nest's HTTP adapter, implicit in NestFactory.create
+#   @types/bcrypt            types only, never imported
+#   class-transformer        required by class-validator's ValidationPipe
+INDIRECT="mysql2 @nestjs/platform-express @types/bcrypt class-transformer"
+
+UNUSED=""
+for dep in $(node -e "console.log(Object.keys(require('./package.json').dependencies).join(' '))"); do
+  case " $INDIRECT " in *" $dep "*) continue ;; esac
+
+  if ! grep -rq "$dep" src --include='*.ts' 2>/dev/null; then
+    UNUSED="$UNUSED $dep"
+  fi
+done
+
+if [ -n "$UNUSED" ]; then
+  fail "dependencies nothing imports (remove them, or add to INDIRECT with a reason):"
+  for dep in $UNUSED; do echo "        $dep"; done
+else
+  pass "every dependency is imported or explicitly indirect"
+fi
+
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d script check(s) failed.\033[0m\n' "$FAILURES"
   exit 1

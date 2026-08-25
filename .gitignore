@@ -1,29 +1,26 @@
-# Dependencies
-/node_modules/
 
-# Build output
-/dist/
-/build/
-*.tsbuildinfo
-
-# Environment — NEVER commit a real credential.
+!.env.example
 # .env.example is tracked and must contain placeholders only.
+# Build output
+# Dependencies
+# Environment — NEVER commit a real credential.
+# Logs
+# OS / editors
+# Test / coverage
+*.log
+*.swp
+*.tsbuildinfo
+.DS_Store
 .env
 .env.*
-!.env.example
-
-# Test / coverage
-/coverage/
-/.nyc_output/
-
-# Logs
-*.log
-npm-debug.log*
-logs/
-
-# OS / editors
-.DS_Store
-Thumbs.db
 /.idea/
+/.nyc_output/
 /.vscode/
-*.swp
+/build/
+/coverage/
+/dist/
+/node_modules/
+Thumbs.db
+coverage-e2e/
+logs/
+npm-debug.log*
