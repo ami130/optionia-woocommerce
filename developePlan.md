@@ -2410,6 +2410,42 @@ point of the abstraction. A `LogMailer` that writes to the ops log stands in unt
 a provider exists, and the acceptance criterion "delivery confirmed to a real
 inbox" is what waits.
 
+#### Carried forward from the 7c audit
+
+Three findings. **None is a defect in what 7c built** — the column, its default,
+the backfill and the reversibility all behave correctly, and a `tinyint` reads
+back as a real `boolean` rather than a `1`.
+
+**1. No seeded row is ever disabled.** All 186 rows across groups, options and
+values are enabled, so the fixture never exercises the state the column exists
+for. That is the same shape as the missing 40-option set in Phase 5: a feature
+supported by the schema and absent from the data every developer works against.
+
+It matters at [7h](#m725--serialization-contract), where the published projection
+must exclude disabled rows — a serializer tested only against fully-enabled
+fixtures proves nothing about the exclusion it is written to perform. Fix with the
+seeds, before 7h rather than during it.
+
+**2. A rollback silently re-enables everything.** Reverting the migration drops
+the column, so options a merchant deliberately turned off come back live on the
+next publish.
+
+**This is a development concern, not a production one** — the plan already states
+migrations are forward-only in production ([M7.4](#m74--publish-versioning-and-rollback)),
+and dropping a column cannot preserve its data by any means. Recorded because
+"rolled back the migration and the merchant's disabled options went live" is
+worth knowing before it happens on a staging environment during a demo.
+
+**3. `presentational_items` has no `is_enabled`, and that is correct here.** A
+heading or divider sits inside an option group and is soft-deletable, so a
+merchant can currently disable an option but not the heading above it.
+
+M7.2's operation set names "groups, options, and values" and never mentions
+presentational items — they are built in
+[Phase 14](#phase-14--option-type-library) along with the rest of the type
+library. Phase 7 built exactly its scope. The question belongs with that phase,
+and is recorded here so it is inherited rather than rediscovered.
+
 #### Carried forward from the 7a–7b deep audit
 
 Three findings in `ParentScopedRepository`, all of the same shape: an option the
