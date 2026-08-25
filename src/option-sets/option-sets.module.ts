@@ -7,7 +7,16 @@ import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
+import { OptionGroupsController } from './option-groups.controller';
+import { OptionGroupsRepository } from './option-groups.repository';
+import { OptionGroupsService } from './option-groups.service';
 import { OptionSetsController } from './option-sets.controller';
+import { OptionValuesController } from './option-values.controller';
+import { OptionValuesRepository } from './option-values.repository';
+import { OptionValuesService } from './option-values.service';
+import { OptionsController } from './options.controller';
+import { OptionsRepository } from './options.repository';
+import { OptionsService } from './options.service';
 import { OptionSetsRepository } from './option-sets.repository';
 import { OptionSetsService } from './option-sets.service';
 import { OptionTypeValidator } from './types/option-type.validator';
@@ -25,15 +34,38 @@ import { OptionTypeValidator } from './types/option-type.validator';
     AuthModule,
     AuditModule,
   ],
-  controllers: [OptionSetsController],
-  // `OptionTypeValidator` is registered here but has no caller yet, and that is
-  // correct at 7e: option *sets* carry no type JSON — `validation`, `pricing`
-  // and `display` live on options, which 7f adds. It is provided now so 7f
-  // injects it rather than re-deciding where validation belongs.
-  //
-  // ⚠️ M7.3's acceptance — "malformed pricing config is rejected at the API
-  // boundary" — is therefore NOT yet demonstrated end-to-end. 7f owes that test.
-  providers: [OptionSetsRepository, OptionSetsService, OptionTypeValidator],
-  exports: [OptionSetsRepository, OptionSetsService, OptionTypeValidator],
+  controllers: [
+    OptionSetsController,
+    OptionGroupsController,
+    OptionsController,
+    OptionValuesController,
+  ],
+  // `OptionTypeValidator` is injected by `OptionsService` (option type JSON) and
+  // `OptionValuesService` (value `priceConfig`), which is where M7.3's
+  // acceptance — "malformed pricing config is rejected at the API boundary" —
+  // is met. Option *sets* carry no type JSON, which is why nothing called it
+  // until 7f.
+  providers: [
+    OptionSetsRepository,
+    OptionSetsService,
+    OptionGroupsRepository,
+    OptionGroupsService,
+    OptionsRepository,
+    OptionsService,
+    OptionValuesRepository,
+    OptionValuesService,
+    OptionTypeValidator,
+  ],
+  exports: [
+    OptionSetsRepository,
+    OptionSetsService,
+    OptionGroupsRepository,
+    OptionGroupsService,
+    OptionsRepository,
+    OptionsService,
+    OptionValuesRepository,
+    OptionValuesService,
+    OptionTypeValidator,
+  ],
 })
 export class OptionSetsModule {}

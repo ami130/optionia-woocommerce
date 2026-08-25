@@ -31,6 +31,21 @@ export const AuditAction = {
   OPTION_SET_UPDATED: 'option_set.updated',
   OPTION_SET_DELETED: 'option_set.deleted',
   OPTION_SET_DUPLICATED: 'option_set.duplicated',
+  OPTION_SET_REORDERED: 'option_set.reordered',
+
+  OPTION_GROUP_CREATED: 'option_group.created',
+  OPTION_GROUP_UPDATED: 'option_group.updated',
+  OPTION_GROUP_DELETED: 'option_group.deleted',
+  OPTION_GROUP_DUPLICATED: 'option_group.duplicated',
+
+  OPTION_CREATED: 'option.created',
+  OPTION_UPDATED: 'option.updated',
+  OPTION_DELETED: 'option.deleted',
+  OPTION_DUPLICATED: 'option.duplicated',
+
+  OPTION_VALUE_CREATED: 'option_value.created',
+  OPTION_VALUE_UPDATED: 'option_value.updated',
+  OPTION_VALUE_DELETED: 'option_value.deleted',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

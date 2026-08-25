@@ -449,7 +449,7 @@ a handler remembers to add.
 | `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7i]` |
 | `GET /option-sets/:id/versions` | `option_sets:view` | `[7i]` |
 | `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[7i]` |
-| `POST /option-sets/:id/reorder` | `option_sets:edit` | `[7f]` |
+| `POST /option-sets/:id/reorder` | `option_sets:edit` | `[built]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
 line in the permission matrix. Editing is safe; publishing changes a live
@@ -531,10 +531,24 @@ built before any of these endpoints.
 
 | Route | Capability | State |
 |---|---|---|
-| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[7f]` |
-| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[7f]` |
-| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[7f]` |
-| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[7f]` |
+| `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[built]` |
+| `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[built]` |
+| `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[built]` |
+| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[built]` |
+| `GET /option-sets/:id/groups` · `GET /groups/:id/options` · `GET /options/:id/values` | `option_sets:view` | `[built]` |
+| `GET /groups/:id` · `GET /options/:id` · `GET /values/:id` | `option_sets:view` | `[built]` |
+
+> **Reads were missing from this table** until the routes were built and
+> `check-api-contract.sh` refused them. The sketch listed only mutations, but a
+> dashboard cannot render an editor without fetching what it is editing, and a
+> child cannot be loaded through its set alone once it is addressable by id.
+> They are listed as their own rows because they carry `:view`, not `:edit` —
+> the capability split is the point.
+
+**No pagination on these lists.** A set's groups, a group's options and an
+option's values are bounded by what a merchant can usefully build and are always
+fetched whole by the editor. A cursor here would add a round trip to every render
+for a page size no real set reaches.
 
 > **Duplicate exists at every level**, not only for option sets. M7.2 says the
 > lifecycle operation set is "inherited by groups, options, and values alike", and
@@ -578,7 +592,7 @@ merchant** — never silently dropped, never left to fail at evaluation time. Th
 fourth rule *refuses* the delete, and is the one most likely to be omitted because
 it is the only one that fails rather than cascades.
 
-### `POST /v1/option-sets/:id/reorder` **[7f]**
+### `POST /v1/option-sets/:id/reorder` **[built]**
 
 Bulk, gap-tolerant integers, so a single move is one write rather than renumbering
 every sibling.

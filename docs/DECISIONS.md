@@ -1120,3 +1120,51 @@ audit tests therefore query `audit_logs` directly, and that is deliberate.
 and unspoofable today. The moment this runs behind a load balancer it must be
 configured, or every audit row will record the balancer's address — and a
 carelessly trusted `X-Forwarded-For` is worse than no IP at all.
+
+---
+
+## ADR-028 — Isolation probes build their own fixtures
+
+**Status:** accepted
+**Date:** Phase 7, M7.2
+
+### Context
+
+The 7f suite has fifteen tenant-isolation probes, one per group/option/value
+route, each asserting that tenant A gets a 404 for tenant B's row. All fifteen
+passed.
+
+They were then mutation-tested by removing the tenant predicate from
+`ParentScopedRepository.scoped()` — the single line that makes cross-tenant reads
+impossible. **Only four probes failed.** Eleven kept passing against a query with
+no tenant filter at all, which the generated SQL confirmed.
+
+The cause was shared fixtures. All fifteen probes used one group, option and
+value created in `beforeAll`. With scoping broken the third probe —
+`DELETE /groups/:id` — *succeeded* and soft-deleted the shared group. Every later
+probe then met a genuinely deleted parent and got its 404 from the soft-delete
+filter rather than from tenant scoping.
+
+The suite was green, thorough-looking, and blind to the exact defect it existed
+to catch.
+
+### Decision
+
+Every isolation probe creates its own tenant-B fixtures. The cost is one extra
+set per probe and a slower suite; the benefit is that a probe's result depends on
+the guarantee it names and on nothing another probe did first.
+
+More generally: **a test whose subject can be mutated by an earlier test in the
+same suite is not testing that subject.** This applies wherever a fixture is
+shared across cases that mutate it, not only to isolation.
+
+### Consequences
+
+Re-running the same mutation now fails **sixteen** tests rather than four. The
+guarantee is measured rather than assumed.
+
+This is the same failure this project has hit repeatedly — a check that reports
+success while inspecting nothing (ADR-020, ADR-021) — arriving in test fixtures
+rather than in a script. The standing response holds: prove the check fails when
+the thing it checks is broken, and treat a passing suite as evidence only after
+that.

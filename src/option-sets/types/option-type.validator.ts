@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception';
 import type { ErrorDetail } from '../../common/http/api-response.types';
 import { pricingConfigSchema } from './pricing.schema';
-import { findType, registeredTypes } from './type-registry';
+import { findType, registeredTypes, type OptionTypeDefinition } from './type-registry';
 
 /**
  * Validates an option's type-specific JSON at the API boundary.
@@ -114,6 +114,26 @@ export class OptionTypeValidator {
    * Separate from the option's type because a value's price does not depend on
    * how the option renders — a radio and a dropdown price identically.
    */
+  /**
+   * The registry entry for a type, after `assertValidOption` has accepted it.
+   *
+   * Callers need the declared axes to fill in what a request omitted — `radio`
+   * *is* `choice`/`one`, and a caller that does not say so must still store a
+   * row the evaluator can interpret. Throwing on an unknown type keeps that
+   * defaulting from silently inventing one.
+   */
+  describe(presentation: string): OptionTypeDefinition {
+    const definition = findType(presentation);
+
+    if (!definition) {
+      throw DomainException.validation([
+        { field: 'presentation', code: 'UNSUPPORTED_OPTION_TYPE' },
+      ]);
+    }
+
+    return definition;
+  }
+
   assertValidValuePricing(priceConfig: unknown, valueIndex?: number): void {
     const prefix = valueIndex === undefined ? 'priceConfig' : `values.${valueIndex}.priceConfig`;
     const details = check(prefix, pricingConfigSchema, priceConfig);
