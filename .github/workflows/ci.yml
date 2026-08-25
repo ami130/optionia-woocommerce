@@ -123,6 +123,22 @@ jobs:
           JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
           CORS_ORIGINS: http://localhost:3000
 
+      # The contract is consumed by a plugin that cannot be redeployed across
+      # merchant sites, so drift is more expensive here than elsewhere.
+      - name: API contract matches the routes
+        run: bash bin/check-api-contract.sh
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
       # Seeds must be idempotent and must refuse production. Both were
       # previously verified by hand, once — so a regression would have passed CI
       # and been found by a developer discovering six plans.
