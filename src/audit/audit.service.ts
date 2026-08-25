@@ -32,6 +32,7 @@ export const AuditAction = {
   OPTION_SET_DELETED: 'option_set.deleted',
   OPTION_SET_DUPLICATED: 'option_set.duplicated',
   OPTION_SET_REORDERED: 'option_set.reordered',
+  OPTION_SET_PURGED: 'option_set.purged',
 
   OPTION_GROUP_CREATED: 'option_group.created',
   OPTION_GROUP_UPDATED: 'option_group.updated',

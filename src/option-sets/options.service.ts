@@ -10,6 +10,7 @@ import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
 import { buildPatch, pick } from './option-groups.service';
+import { CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
 import { OptionSetsRepository } from './option-sets.repository';
 import { OptionsRepository } from './options.repository';
@@ -54,6 +55,7 @@ export class OptionsService {
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly validator: OptionTypeValidator,
+    private readonly cascade: CascadeService,
   ) {}
 
   async findOne(id: string): Promise<Option> {
@@ -171,14 +173,20 @@ export class OptionsService {
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
 
-    await this.options.update({ id } as never, { deletedAt: new Date() } as never);
+    const deletedAt = new Date();
+    const cascaded = await this.cascade.onOptionDeleted(id, deletedAt);
+
+    await this.options.update({ id } as never, { deletedAt } as never);
     await this.touchSetForOption(before);
 
     await this.audit.record({
       action: AuditAction.OPTION_DELETED,
       resourceType: 'option',
       resourceId: id,
-      changes: diff({ key: before.key, deleted: false }, { key: before.key, deleted: true }),
+      changes: {
+        ...diff({ key: before.key, deleted: false }, { key: before.key, deleted: true }),
+        cascaded,
+      },
     });
   }
 

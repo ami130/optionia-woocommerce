@@ -26,6 +26,7 @@ import {
   UpdateOptionSetDto,
 } from './dto/option-set.dto';
 import type { OptionSet } from './entities/option-set.entity';
+import type { PurgeResult } from './hard-delete.service';
 import { OptionSetsService } from './option-sets.service';
 
 /**
@@ -90,6 +91,23 @@ export class OptionSetsController {
   @RequireCapability(Capability.OPTION_SETS_DELETE)
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.service.remove(id);
+  }
+
+  /**
+   * Permanent deletion (M7.2, "Delete (hard)").
+   *
+   * A distinct path rather than a flag on `DELETE`, because the two operations
+   * have different preconditions and different consequences — and a query
+   * parameter that silently turns a reversible action into an irreversible one
+   * is the kind of API that produces a support ticket nobody can undo.
+   *
+   * Returns what was removed rather than 204: a merchant confirming an
+   * irreversible act deserves to see its scope.
+   */
+  @Delete(':id/permanent')
+  @RequireCapability(Capability.OPTION_SETS_DELETE)
+  async purge(@Param('id', ParseUUIDPipe) id: string): Promise<PurgeResult> {
+    return this.service.purge(id);
   }
 
   @Post(':id/duplicate')

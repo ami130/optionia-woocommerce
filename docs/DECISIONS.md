@@ -1223,3 +1223,58 @@ Reverting either fix now fails two tests each; the ceilings fail one. The
 sequential suite passed throughout all three defects, which is the point:
 **a serial test cannot observe a read-then-write race, so any rule spanning rows
 needs a concurrent probe before it is believed.**
+
+---
+
+## ADR-030 — Hard delete is a separate path, guarded by order history
+
+**Status:** accepted
+**Date:** Phase 7, M7.2
+
+### Context
+
+M7.2 permits hard delete "only when no order ever referenced it". The contract
+sketched it as `DELETE /option-sets/:id?hard=true`.
+
+Two problems with that shape. A query parameter turns a reversible action into an
+irreversible one, so a single typo erases a merchant's work — and in an access
+log, the safe and the catastrophic request are the same line, which is the one
+place anyone looks afterwards.
+
+The precondition is also harder than it appears. `order_selections` stores
+`option_key` denormalized with **no foreign key** (ADR-016), precisely so an
+order survives its option being deleted: an order is a historical fact. The
+consequence is that nothing in the schema stops a permanent delete from leaving
+an order line naming an option that no longer exists — "Finish: Luxury" with
+nothing behind it, which is the Phase 4 failure seen from the other end.
+
+### Decision
+
+`DELETE /option-sets/:id/permanent`, a distinct path. Same capability, because
+the authority is the same; different path, because the consequence is.
+
+The check matches `option_key` **within the store**, and includes options that
+are already soft-deleted — otherwise a two-step delete would erase what a
+one-step delete refuses. It is deliberately conservative: a key repeated across
+two of a merchant's sets blocks both. Refusing a delete that might have been safe
+is recoverable; permitting one that destroys the meaning of an order is not.
+
+Purge reads through `findByIdIncludingDeleted`, because delete-then-erase is the
+normal path and a purge that only reached live sets would make discarded ones
+unreachable forever.
+
+### Consequences
+
+Cascade rules are enforced in `CascadeService` rather than inside the three CRUD
+services, so each of the four shapes — cascade down, cascade *and* flag sideways,
+refuse outright — is tested as itself. Each is mutation-proven: disabling any one
+fails between one and four tests.
+
+**A mutation escaped and taught something.** Flipping `withDeleted` on the purge
+query changed nothing, and the reason was not a missing test: `deletedAt` is a
+plain sentinel column, not TypeORM's `@DeleteDateColumn`, so `withDeleted` is a
+**no-op in this codebase** — a flag that reads as a safeguard and does nothing.
+`parent-scoped.repository.ts` already said so. It was removed and replaced with a
+comment stating why no predicate is needed, and the real guarantee — that the
+purge query filters on no `deletedAt` at all — is now proven by mutating in a
+live-only filter, which fails four tests.

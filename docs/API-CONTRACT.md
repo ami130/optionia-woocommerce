@@ -443,7 +443,30 @@ a handler remembers to add.
 | `GET /option-sets/:id` | `option_sets:view` | `[built]` |
 | `PATCH /option-sets/:id` | `option_sets:edit` | `[built]` |
 | `DELETE /option-sets/:id` | `option_sets:delete` | `[built]` |
-| `DELETE /option-sets/:id?hard=true` | `option_sets:delete` | `[7g]` |
+| `DELETE /option-sets/:id/permanent` | `option_sets:delete` | `[built]` |
+
+> **This was designed as `DELETE /option-sets/:id?hard=true` and built as a
+> distinct path.** A query parameter that turns a reversible action into an
+> irreversible one is a single typo away from erasing a merchant's work, and it
+> makes the two operations indistinguishable in an access log — the one place
+> anyone looks after an accident. The capability is the same because the
+> authority is the same; the path differs because the consequence does.
+
+`DELETE /option-sets/:id` is always permitted and reverses; it soft-deletes the
+set and cascades to its groups, options, values, rules and assignments.
+
+`DELETE /option-sets/:id/permanent` erases the set and everything under it, and
+is **refused with `409 CONFLICT` when any order ever referenced one of its option
+keys.** `order_selections` stores `option_key` denormalized with no foreign key
+([ADR-016](DECISIONS.md#adr-016--option_key-outlives-its-option-by-design)) so an
+order survives its option being deleted — which means nothing in the schema
+prevents a permanent delete from leaving an order line naming an option that no
+longer exists. This check is that protection. It matches on key within the store
+and includes already-deleted options, so a two-step delete cannot erase what a
+one-step delete refuses.
+
+It returns `200` with the counts removed rather than `204`: a merchant
+confirming an irreversible act deserves to see its scope.
 | `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[built]` |
 | `POST /option-sets/:id/publish` | `option_sets:publish` | `[7i]` |
 | `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7i]` |

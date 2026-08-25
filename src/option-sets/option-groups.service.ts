@@ -10,6 +10,7 @@ import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
+import { CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
 import { OptionSetsRepository } from './option-sets.repository';
 
@@ -36,6 +37,7 @@ export class OptionGroupsService {
     private readonly sets: OptionSetsRepository,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly cascade: CascadeService,
   ) {}
 
   async findOne(id: string): Promise<OptionGroup> {
@@ -117,14 +119,20 @@ export class OptionGroupsService {
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
 
-    await this.groups.update({ id } as never, { deletedAt: new Date() } as never);
+    const deletedAt = new Date();
+    const cascaded = await this.cascade.onGroupDeleted(id, deletedAt);
+
+    await this.groups.update({ id } as never, { deletedAt } as never);
     await this.touchSet(before.optionSetId);
 
     await this.audit.record({
       action: AuditAction.OPTION_GROUP_DELETED,
       resourceType: 'option_group',
       resourceId: id,
-      changes: diff({ label: before.label, deleted: false }, { label: before.label, deleted: true }),
+      changes: {
+        ...diff({ label: before.label, deleted: false }, { label: before.label, deleted: true }),
+        cascaded,
+      },
     });
   }
 

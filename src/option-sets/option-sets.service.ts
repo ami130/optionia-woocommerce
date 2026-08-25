@@ -11,6 +11,8 @@ import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
+import { CascadeService } from './cascade.service';
+import { HardDeleteService, type PurgeResult } from './hard-delete.service';
 import { OptionSetsRepository, type ListFilters, type ListPage } from './option-sets.repository';
 
 /** The default page size when a caller does not ask for one. */
@@ -29,6 +31,8 @@ export class OptionSetsService {
     private readonly repository: OptionSetsRepository,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly cascade: CascadeService,
+    private readonly hardDelete: HardDeleteService,
   ) {}
 
   async list(filters: Partial<ListFilters>): Promise<ListPage> {
@@ -122,17 +126,56 @@ export class OptionSetsService {
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
 
-    await this.repository.applyChange(id, { deletedAt: new Date() } as Partial<OptionSet>);
+    // One instant for the whole cascade, so every row this action removed can be
+    // identified together afterwards.
+    const deletedAt = new Date();
+    const cascaded = await this.cascade.onOptionSetDeleted(id, deletedAt);
+
+    await this.repository.applyChange(id, { deletedAt } as Partial<OptionSet>);
 
     await this.audit.record({
       action: AuditAction.OPTION_SET_DELETED,
       resourceType: 'option_set',
       resourceId: id,
-      changes: diff(
-        { name: before.name, status: before.status, deleted: false },
-        { name: before.name, status: before.status, deleted: true },
-      ),
+      changes: {
+        ...diff(
+          { name: before.name, status: before.status, deleted: false },
+          { name: before.name, status: before.status, deleted: true },
+        ),
+        // What went with it. A merchant asking "where did my options go?" is
+        // answered from the trail rather than by inference.
+        cascaded,
+      },
     });
+  }
+
+  /**
+   * Permanently erase a set (M7.2, "Delete (hard)").
+   *
+   * Separate from `remove` because the precondition is different in kind: a soft
+   * delete is always allowed, and this is refused whenever an order ever named
+   * one of the set's option keys. See `HardDeleteService` for why that check
+   * cannot be a foreign key.
+   */
+  async purge(id: string): Promise<PurgeResult> {
+    // Deliberately includes soft-deleted sets: delete-then-erase is the normal
+    // path, and `findOne` would make an already-deleted set unreachable.
+    const before = await this.repository.findByIdIncludingDeleted(id);
+
+    if (!before) {
+      throw DomainException.notFound('Option set');
+    }
+    const purged = await this.hardDelete.purge(before);
+
+    await this.audit.record({
+      action: AuditAction.OPTION_SET_PURGED,
+      resourceType: 'option_set',
+      // The row is gone, so the id is recorded as a value rather than a link.
+      resourceId: id,
+      changes: { ...diff({ name: before.name, storeId: before.storeId }, null), purged },
+    });
+
+    return purged;
   }
 
   /**

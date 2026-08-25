@@ -1,7 +1,12 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 
 import { SoftDeletableEntity } from '../../common/database/base.entity';
-import { RuleAction, RuleMatchType, RuleTargetType } from '../../common/database/enums';
+import {
+  RuleAction,
+  type RuleDisabledReason,
+  RuleMatchType,
+  RuleTargetType,
+} from '../../common/database/enums';
 import { OptionSet } from './option-set.entity';
 
 /**
@@ -58,4 +63,18 @@ export class OptionRule extends SoftDeletableEntity {
    */
   @Column({ type: 'boolean', default: true })
   isEnabled: boolean;
+
+  /**
+   * Why the system disabled this rule, or `null` when the merchant did.
+   *
+   * `isEnabled` alone cannot tell those apart, and the difference is the whole
+   * promise: a merchant who turned a rule off knows where it is, while one whose
+   * rule was disabled because its target was deleted needs to be told which
+   * target and why. Without this column "surfaced to the merchant" is a comment
+   * rather than something the dashboard can render.
+   *
+   * Set when a cascade disables the rule; cleared when a merchant re-enables it.
+   */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  disabledReason: RuleDisabledReason | null;
 }

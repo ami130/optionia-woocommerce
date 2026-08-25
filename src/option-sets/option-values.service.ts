@@ -7,6 +7,7 @@ import { PriceType } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
 import { buildPatch, pick } from './option-groups.service';
+import { CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
 import { OptionSetsRepository } from './option-sets.repository';
 import { OptionValuesRepository } from './option-values.repository';
@@ -48,6 +49,7 @@ export class OptionValuesService {
     private readonly sets: OptionSetsRepository,
     private readonly audit: AuditService,
     private readonly validator: OptionTypeValidator,
+    private readonly cascade: CascadeService,
   ) {}
 
   async findOne(id: string): Promise<OptionValue> {
@@ -144,13 +146,16 @@ export class OptionValuesService {
   /**
    * Soft delete a value.
    *
-   * M7.2's cascade table blocks deleting a value that an enabled rule targets.
-   * The rules engine is Phase 17 and `option_rules` has no rows yet, so there is
-   * nothing to check against — 7g adds that precondition with the rest of the
-   * cascade, where it can be tested rather than asserted.
+   * **Blocked when an enabled rule targets it** — the one rule in M7.2's cascade
+   * table that refuses rather than cascades. Silently disabling the rule instead
+   * would change what a storefront shows without telling anyone: a rule saying
+   * "hide shipping when Gift Wrap is chosen" simply stops hiding it, and the
+   * merchant learns that from a customer.
    */
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
+
+    await this.cascade.assertValueIsNotRuleTarget(id);
 
     await this.values.update({ id } as never, { deletedAt: new Date() } as never);
     await this.touchSetForValue(before.optionId);

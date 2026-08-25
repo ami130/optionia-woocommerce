@@ -265,10 +265,21 @@ cardinality, not two types. Same renderer, same validator, same pricing path.
 `id`, `option_set_id` FK, `target_type` (`option` · `group` · `value`),
 `target_id`, `action` (`show` · `hide` · `require` · `unrequire` · `set_price` ·
 `set_default`), `conditions` JSON, `match_type` (`all` · `any`), `sort_order`,
-`is_enabled`, `deleted_at`.
+`is_enabled`, `disabled_reason`, `deleted_at`.
 
 `is_enabled` exists because a rule whose target is deleted is **disabled and
 flagged**, never silently dropped and never left to fail at evaluation.
+
+`disabled_reason` is what makes "flagged" real. `is_enabled` alone cannot
+distinguish a rule the merchant switched off from one the system disabled when
+its target was deleted, and the difference is the whole promise: the first they
+know about, the second they must be told about. `target_deleted` is the only
+value today; `NULL` means the merchant did it. Set by the cascade (7g), cleared
+when a rule is re-enabled.
+
+`target_id` is deliberately **not** a foreign key — the target is polymorphic
+across three tables, and a rule must outlive its target long enough to be
+flagged rather than cascading away silently.
 
 ### `presentational_items`
 

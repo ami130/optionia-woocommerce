@@ -38,6 +38,25 @@ export class OptionSetsRepository extends TenantScopedRepository<OptionSet> {
   }
 
   /**
+   * One set, **including a soft-deleted one**, still tenant-scoped.
+   *
+   * Every other read hides deleted rows, which is right: a deleted set is gone
+   * as far as authoring is concerned. Permanent deletion is the exception — the
+   * natural path is delete, reconsider, then erase, and a purge that could only
+   * reach live sets would make the discarded ones unreachable forever.
+   *
+   * Tenant scoping is unchanged, so this widens what a caller can see of their
+   * own data and nothing else.
+   */
+  async findByIdIncludingDeleted(id: string): Promise<OptionSet | null> {
+    return this.unsafeUnscopedRepository
+      .createQueryBuilder('s')
+      .where('s.id = :id', { id })
+      .andWhere('s.tenantId = :tenantId', { tenantId: this.tenantId })
+      .getOne();
+  }
+
+  /**
    * Apply a change and advance the row's version in the same statement.
    *
    * `rowVersion` is the optimistic lock 7j turns into a 409. It is incremented

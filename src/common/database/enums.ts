@@ -169,6 +169,20 @@ export const RuleTargetType = {
 } as const;
 export type RuleTargetType = (typeof RuleTargetType)[keyof typeof RuleTargetType];
 
+/**
+ * Why the system disabled a rule.
+ *
+ * `null` means the merchant disabled it themselves. Stored rather than derived
+ * because the target is already gone by the time anyone asks, so the reason
+ * cannot be reconstructed from the rule alone.
+ */
+export const RuleDisabledReason = {
+  /** The group, option or value the rule targets was deleted. */
+  TARGET_DELETED: 'target_deleted',
+} as const;
+export type RuleDisabledReason =
+  (typeof RuleDisabledReason)[keyof typeof RuleDisabledReason];
+
 export const RuleAction = {
   SHOW: 'show',
   HIDE: 'hide',

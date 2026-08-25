@@ -7,6 +7,8 @@ import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
+import { CascadeService } from './cascade.service';
+import { HardDeleteService } from './hard-delete.service';
 import { OptionGroupsController } from './option-groups.controller';
 import { OptionGroupsRepository } from './option-groups.repository';
 import { OptionGroupsService } from './option-groups.service';
@@ -55,6 +57,8 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionValuesRepository,
     OptionValuesService,
     OptionTypeValidator,
+    CascadeService,
+    HardDeleteService,
   ],
   exports: [
     OptionSetsRepository,
@@ -66,6 +70,8 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionValuesRepository,
     OptionValuesService,
     OptionTypeValidator,
+    CascadeService,
+    HardDeleteService,
   ],
 })
 export class OptionSetsModule {}
