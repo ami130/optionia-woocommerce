@@ -3045,6 +3045,66 @@ optimistic locking, `version`/`published_at`/`published_by` for M7.4, and
 needs, which is why the two gaps above are worth naming precisely rather than
 discovering in step six.
 
+#### 7a analysis — the route list is a sketch, not a contract
+
+Auditing M7.7's surface against what Phase 6 shipped and what Phase 7 requires
+found **five gaps in the list itself**. Writing the contract from it verbatim
+would document an API that does not match the one already running.
+
+**1. Two auth routes disagree with what exists.** The list says
+`POST /auth/forgot-password`; Phase 6 built `POST /auth/request-password-reset`.
+And `POST /auth/resend-verification` exists but is not listed — correctly built,
+because [M6.1](#m61--merchant-authentication) names "verification resend" among
+the endpoints that must be rate-limited.
+
+The implementation is right in both cases and the list is stale. The contract
+records the built names; renaming a shipped endpoint to match a sketch would be
+the tail wagging the dog.
+
+**2. Accepting an invitation has no route.** [M6.5b](#m65b--team-management-flows)
+builds accept, and the list only has `/tenants/me/members/*` — which cannot serve
+it. Someone accepting an invitation **is not yet a member of that tenant**, so a
+route scoped to "my tenant" is the wrong shape entirely. It needs a token-addressed
+route outside tenant scope, in the same family as email verification.
+
+**3. Revoking a pending invitation has no route**, and neither does listing
+pending invitations. Both are built in 6j and both are in M6.5b's text.
+
+**4. Hard delete has no route.** M7.2's operation table lists it as distinct from
+soft delete, permitted "only when no order ever referenced it". A distinct
+operation with distinct authorization needs its own endpoint rather than a query
+parameter that changes what `DELETE` means.
+
+**5. Duplicate exists only for option sets.** M7.2 says the lifecycle set is
+"inherited by groups, options, and values alike", and duplicate is in that set —
+deep-copying a group with its options and values is the operation a merchant
+actually wants when building variants.
+
+#### What 7a produces
+
+`docs/API-CONTRACT.md`, covering **every endpoint whose controller exists or is
+built in Phase 7** — the acceptance is "before its controller is written", not
+"all sixty-five now". Billing and analytics are documented in their own phases,
+when their shape is known rather than guessed.
+
+That means: the nine auth routes already shipped, the tenant and member routes,
+the option-set surface, and the store-facing routes Phase 8 consumes. Each with
+method, path, auth realm, required capability, request and response schema,
+error codes, rate limit, and pagination semantics.
+
+**Two things the contract must fix rather than inherit:**
+
+- **The store realm needs its own guard chain documented, not implied.** M7.7 says
+  a store token must never be accepted on `/option-sets` and a user JWT never on
+  `/store/config`. Phase 6 built the realm separation
+  ([ADR-024 and the `aud` claim](#m65--roles-and-permission-matrix)); the contract
+  states which realm each route accepts so a reviewer can check a new endpoint
+  against it.
+- **Every mutating route names its capability.** Phase 6's `CapabilityGuard` fails
+  closed on an undeclared route, so an undocumented capability is a route that
+  cannot be called at all. The contract is where that mapping is decided, and the
+  permission matrix already fixes the answers.
+
 #### Order of work, and why this order
 
 ```text
@@ -3058,8 +3118,41 @@ discovering in step six.
 7h  Publish + versioning      M7.4 — transaction, snapshot, config_version bump
 7i  Concurrency control       M7.4b — 409s and serialized publish
 7j  Config contract document  M7.5 — docs/CONFIG-CONTRACT.md, frozen for v1
-7k  Isolation + contract tests M6.6 extended to every new endpoint
+7k  Audit logging             M7.6 — actor, diff, IP on every mutation
+7l  OpenAPI generation        the exit criterion; decorators, served spec
+7m  Isolation + contract tests M6.6 extended to every new endpoint
 ```
+
+> **M7.6 was missing from the first draft of this plan**, and is restored as 7k.
+> The omission is worth recording rather than quietly patching: eleven steps were
+> derived from nine milestones and one of them dropped out unnoticed. It was found
+> by listing the milestones and diffing them against the steps — the same check
+> that found ADR-012 and ADR-018 incomplete, applied to a plan instead of a record.
+>
+> It is late in the order deliberately. `AuditService` already exists from Phase 6
+> and the mutations it records are written in 7e–7i, so wiring it earlier would
+> mean revisiting each one. Late is not optional: M7.6 requires actor, diff and IP
+> on **every** option-set mutation, and a diff needs before-and-after, which the
+> services must capture as they write rather than reconstruct afterwards.
+>
+> That constraint reaches back into 7e–7i, so it is stated here rather than
+> discovered at 7k: **every mutating service returns what changed**, not just
+> success.
+
+> **OpenAPI was also missing**, found by the same diff against the exit criteria
+> rather than the milestones. "OpenAPI/Swagger published" is one of the eight, and
+> `@nestjs/swagger` is not installed.
+>
+> It is 7l rather than part of 7a for a reason worth stating. `docs/API-CONTRACT.md`
+> is written **before** the controllers and is the design; the generated spec is
+> derived **from** the controllers and is a description. They serve different
+> purposes and will disagree — and that disagreement is useful, because it means a
+> controller drifted from its contract.
+>
+> A generated spec presented as the contract would hide exactly that. The two are
+> reconciled at 7m, which is where the contract stops being prose and becomes
+> something a check can compare against reality — the treatment `docs/DATABASE.md`
+> received in Phase 5.
 
 **Why the contract is genuinely first.** M7.7 says to design the surface before
 building it, and the reason is specific: the plugin is a client that cannot be
