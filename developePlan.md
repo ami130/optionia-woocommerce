@@ -3009,6 +3009,111 @@ implementation begins.
 **Acceptance:** every endpoint documented with auth, authz, schemas, errors, and limits
 **before** its controller is written.
 
+### Phase 7 execution plan
+
+Written after auditing what Phases 5 and 6 actually left behind. Three findings
+shape the order.
+
+**Finding 1 — the scoped repository covers one of seven entities.** Only
+`option_sets` carries a direct `tenant_id`. Groups, options, values, rules,
+versions and assignments all reach their tenant through a parent chain, and
+[`TenantScopedRepository`](#m64--tenant-scoped-repository-layer) requires the
+column.
+
+This is the single largest decision in the phase, and the schema is right rather
+than wrong: denormalising `tenant_id` onto six tables would create six places for
+it to disagree with the parent, and a row whose `tenant_id` contradicts its
+`option_set_id` is worse than no column at all.
+
+So Phase 7 opens by extending the scoping layer to entities that reach their
+tenant through a join — **not** by adding columns. `AC5` is enforced at the data
+layer or it is not enforced, and [M6.6](#m66--tenant-isolation-test-suite) already
+attacks eight vectors that this must survive.
+
+**Finding 2 — enable/disable does not exist.** M7.2 defines it as a distinct
+operation from soft delete: *"retained, excluded from published config, the
+merchant's escape hatch for turn this off for the holidays without losing the
+work"*. Only `option_rules` has `is_enabled`; groups, options and values do not.
+
+`deleted_at` cannot stand in — the table lists them as separate rows because they
+mean different things. Soft delete hides permanently and is a cleanup action;
+disable is reversible and expected. A migration adds the column to three tables.
+
+**Finding 3 — everything else is already there.** `row_version` for M7.4b's
+optimistic locking, `version`/`published_at`/`published_by` for M7.4, and
+`option_set_versions.snapshot` for history. Phase 5 built the schema this phase
+needs, which is why the two gaps above are worth naming precisely rather than
+discovering in step six.
+
+#### Order of work, and why this order
+
+```text
+7a  API contract              M7.7 — written first, because the milestone says so
+7b  Parent-scoped repository  the AC5 gap; everything below depends on it
+7c  Enable/disable migration  the schema gap, with is_enabled on three tables
+7d  Type registry + radio     M7.3 — Zod schemas, registry shaped for Phase 14
+7e  Option set CRUD           M7.1 — the first surface, on 7b
+7f  Group/option/value CRUD   M7.2 — the full lifecycle table, applied uniformly
+7g  Serializer, two projections M7.2b — before publish, because publish uses it
+7h  Publish + versioning      M7.4 — transaction, snapshot, config_version bump
+7i  Concurrency control       M7.4b — 409s and serialized publish
+7j  Config contract document  M7.5 — docs/CONFIG-CONTRACT.md, frozen for v1
+7k  Isolation + contract tests M6.6 extended to every new endpoint
+```
+
+**Why the contract is genuinely first.** M7.7 says to design the surface before
+building it, and the reason is specific: the plugin is a client that cannot be
+redeployed across thousands of merchant sites. An API shaped by implementation
+accident becomes permanent in a way a dashboard's never does.
+
+**Why 7b precedes every endpoint.** The alternative is writing CRUD that scopes
+itself correctly by hand and retrofitting the guarantee afterwards — which is how
+a leak reaches production between two correct-looking commits. Phase 6 already
+proved a scoped repository can be made structurally impossible to bypass; this
+extends that property rather than re-earning it.
+
+**Why the serializer precedes publish.** Publish writes an immutable snapshot, and
+a snapshot produced by different code from the live config document is two sources
+of truth with a version number pretending they agree.
+
+#### Design decisions to settle inside the phase
+
+- **How parent-scoped entities are scoped.** A join to `option_sets` on every
+  query, or a scoping predicate built from the parent id. The first is uniform and
+  costs a join; the second is faster and needs the parent verified once. Whichever
+  wins must be impossible to forget, which is the property that matters more than
+  the performance.
+- **Where `key` immutability is enforced.** After first publish a key is frozen
+  because `order_selections` stores it denormalised (ADR-016). The set knows it has
+  published; an option added afterwards has not been published yet. The rule is per
+  *option*, not per set, and that distinction belongs in a test.
+- **Snapshot shape.** The published projection of the serializer, or a fuller
+  record that rollback can restore from. Rollback republishes a prior snapshot as a
+  new version, so the snapshot must contain everything needed to rebuild the draft
+  — which is more than the config document exposes.
+- **Cursor pagination.** M7.7 fixes it as a convention for every list endpoint.
+  Deciding the cursor encoding once, here, is cheaper than four endpoints choosing
+  differently.
+
+#### What could go wrong, and the guard against it
+
+- **A leak through a nested route.** `/groups/:id` names no tenant, so scoping
+  depends entirely on 7b. Every nested endpoint gets a cross-tenant negative test
+  in the same commit that creates it, extending the M6.6 suite rather than adding
+  a second one.
+- **A snapshot that is not actually immutable.** Nothing in the schema stops an
+  `UPDATE` on `option_set_versions`. The guarantee is a convention until something
+  enforces it, and a test that mutates a published snapshot and expects failure is
+  the cheapest form of that.
+- **The config document drifting from its contract.** The document is consumed by
+  PHP that ships to merchant sites. It needs the same treatment
+  `docs/DATABASE.md` got in Phase 5 — a check that compares the document to what
+  the serializer actually produces, rather than prose that was true once.
+- **Publish partially applied.** M7.4b requires that a snapshot is never partially
+  written. Phase 6 found three read-then-write races by testing concurrently rather
+  than sequentially; publish is the same shape and gets the same treatment before
+  it is called done.
+
 ### Phase 7 exit criteria
 
 ```text
