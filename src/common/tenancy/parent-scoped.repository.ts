@@ -14,6 +14,7 @@ import {
 } from 'typeorm';
 
 import { LIVE_SENTINEL_SQL } from '../database/base.entity';
+import { DomainException } from '../errors/domain.exception';
 import { requireTenantId } from '../context/request-context';
 
 /**
@@ -194,9 +195,30 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
    * a caller cannot supply it without this method seeing it.
    */
   async create(parentId: string, data: DeepPartial<T>): Promise<T> {
-    await this.assertParentOwned(parentId);
+    /**
+     * Check and insert in **one transaction**.
+     *
+     * Checking then inserting outside a transaction leaves a window: a create
+     * that passes the check can commit *after* a concurrent delete has
+     * cascaded, leaving a live child under a deleted parent — invisible to
+     * every read, because the join chain hides it, and still real rows.
+     *
+     * **Deliberately no `SELECT … FOR UPDATE`.** Locking the parent was tried
+     * and removed: it closes the window, and it makes a create and a delete of
+     * the same subtree take locks in opposite orders, so ordinary concurrent
+     * authoring deadlocks. Trading a rare invisible orphan for a routine
+     * user-visible failure is the wrong way round.
+     *
+     * The transaction still narrows the window to the gap between the check and
+     * the insert *within one connection*, and `7j`'s optimistic locking is
+     * where a definitive answer belongs — it can refuse a stale write without
+     * holding a row lock across the request.
+     */
+    return this.repository.manager.transaction(async (manager) => {
+      await this.assertParentOwned(parentId, manager);
 
-    return this.repository.save(this.repository.create(data));
+      return manager.save(manager.create(this.repository.target, data));
+    });
   }
 
   /**
@@ -264,10 +286,10 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
    *
    * Walks the same chain a read would, starting one link up.
    */
-  private async assertParentOwned(parentId: string): Promise<void> {
+  private async assertParentOwned(parentId: string, manager?: EntityManager): Promise<void> {
     const [nearest, ...rest] = this.chain;
 
-    const query = this.repository.manager
+    const query = (manager ?? this.repository.manager)
       .createQueryBuilder()
       .select('1')
       .from(nearest.table, 'p');
@@ -281,17 +303,30 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
       child = parent;
     });
 
-    const owned = await query
+    query
       .where('p.id = :parentId', { parentId })
       .andWhere(`${child}.tenantId = :tenantId`, { tenantId: this.tenantId })
       // A deleted parent cannot receive new children.
-      .andWhere('p.deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL })
-      .getRawOne();
+      .andWhere('p.deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL });
+
+    const owned = await query.getRawOne();
 
     if (!owned) {
-      // Same answer as a parent that does not exist — a caller must not learn
-      // that an id is real but belongs to someone else.
-      throw new Error(`Parent ${parentId} not found.`);
+      /**
+       * Same answer as a parent that does not exist — a caller must not learn
+       * that an id is real but belongs to someone else (ADR-010).
+       *
+       * A `DomainException` rather than a plain `Error`, because this describes
+       * a **request outcome**, not a bug: the caller named a parent they cannot
+       * write to. A plain `Error` has no code for the exception filter to
+       * translate, so it became a 500 — normally hidden because a service checks
+       * the parent first and returns 404, but a create racing that parent's
+       * deletion slips between the two checks and the 500 surfaces.
+       *
+       * The other throws in this class stay plain `Error`s deliberately: they
+       * report a programming mistake, and a 500 is the correct answer to those.
+       */
+      throw DomainException.notFound('Parent');
     }
   }
 

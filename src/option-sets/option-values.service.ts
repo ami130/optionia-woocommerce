@@ -155,7 +155,26 @@ export class OptionValuesService {
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
 
-    await this.cascade.assertValueIsNotRuleTarget(id);
+    try {
+      await this.cascade.assertValueIsNotRuleTarget(id);
+    } catch (error) {
+      /**
+       * Record the refusal, then re-raise.
+       *
+       * M7.6 asks for a trail of mutations, and this is not one — nothing
+       * changed. It is recorded anyway because "the merchant tried to delete a
+       * value a live rule depends on" is exactly the event support is asked
+       * about, and an empty trail makes that question unanswerable.
+       */
+      await this.audit.record({
+        action: AuditAction.OPTION_VALUE_DELETE_REFUSED,
+        resourceType: 'option_value',
+        resourceId: id,
+        changes: { valueKey: { from: before.valueKey, to: before.valueKey } },
+      });
+
+      throw error;
+    }
 
     await this.values.update({ id } as never, { deletedAt: new Date() } as never);
     await this.touchSetForValue(before.optionId);

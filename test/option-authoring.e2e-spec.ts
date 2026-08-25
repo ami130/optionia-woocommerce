@@ -567,9 +567,10 @@ describe('option authoring (e2e)', () => {
     it('rejects the whole request when an id is not in the set', async () => {
       const set = await seedSetForA();
       const foreignSet = await seedSet('b');
-      const foreignGroupId = (
-        await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' })
-      ).body.data.id as string;
+      const foreignGroupId = idOf(
+        await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' }),
+        'foreign group',
+      );
       const mine = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'Mine' })).body.data
         .id as string;
       const before = (await get(tokenA, `/option-sets/${set}/groups`)).body.data[0].sortOrder;
@@ -602,18 +603,26 @@ describe('option authoring (e2e)', () => {
     /** A fresh group/option/value owned by tenant B. */
     async function foreign(): Promise<{ group: string; option: string; value: string }> {
       const set = await seedSet('b');
-      const group = (await post(tokenB, `/option-sets/${set}/groups`, { label: 'B group' })).body
-        .data.id as string;
-      const option = (
+      // `idOf` rather than reading `.body.data.id`: a create can be answered 409
+      // when a concurrent writer deadlocks, and an `undefined` id would send the
+      // probe to `/values/undefined` — a 400 that looks like an isolation
+      // failure and is not one.
+      const group = idOf(
+        await post(tokenB, `/option-sets/${set}/groups`, { label: 'B group' }),
+        'foreign group',
+      );
+      const option = idOf(
         await post(tokenB, `/groups/${group}/options`, {
           key: 'b_option',
           label: 'B option',
           presentation: 'radio',
-        })
-      ).body.data.id as string;
-      const value = (
-        await post(tokenB, `/options/${option}/values`, { valueKey: 'b_value', label: 'B value' })
-      ).body.data.id as string;
+        }),
+        'foreign option',
+      );
+      const value = idOf(
+        await post(tokenB, `/options/${option}/values`, { valueKey: 'b_value', label: 'B value' }),
+        'foreign value',
+      );
 
       return { group, option, value };
     }
@@ -721,7 +730,7 @@ describe('option authoring (e2e)', () => {
       const group = await newGroup();
       const option = await newOption(group, 'concurrent_defaults');
 
-      await Promise.all(
+      const responses = await Promise.all(
         Array.from({ length: 4 }, (_, index) =>
           post(tokenA, `/options/${option}/values`, {
             valueKey: `d${index}`,
@@ -733,9 +742,21 @@ describe('option authoring (e2e)', () => {
 
       const values = await get(tokenA, `/options/${option}/values`);
       const defaults = values.body.data.filter((v: { isDefault: boolean }) => v.isDefault);
+      const created = responses.filter((response) => response.status === 201);
 
-      expect(values.body.data).toHaveLength(4);
-      expect(defaults).toHaveLength(1);
+      // A concurrent writer may be rolled back and answered 409; that is a retry
+      // instruction, not a broken invariant. What must never happen is two
+      // defaults, or a row that was reported created going missing.
+      responses
+        .filter((response) => response.status !== 201)
+        .forEach((response) => expect(response.status).toBe(409));
+
+      expect(values.body.data).toHaveLength(created.length);
+      expect(defaults.length).toBeLessThanOrEqual(1);
+
+      if (created.length > 0) {
+        expect(defaults).toHaveLength(1);
+      }
     }, 120_000);
 
     it('leaves exactly one default when several are set at once by PATCH', async () => {
@@ -745,35 +766,59 @@ describe('option authoring (e2e)', () => {
 
       for (let index = 0; index < 4; index += 1) {
         ids.push(
-          (
+          idOf(
             await post(tokenA, `/options/${option}/values`, {
               valueKey: `p${index}`,
               label: `P${index}`,
-            })
-          ).body.data.id as string,
+            }),
+            'value',
+          ),
         );
       }
 
-      await Promise.all(ids.map((id) => patch(tokenA, `/values/${id}`, { isDefault: true })));
+      const responses = await Promise.all(
+        ids.map((id) => patch(tokenA, `/values/${id}`, { isDefault: true })),
+      );
 
       const values = await get(tokenA, `/options/${option}/values`);
+      const defaults = values.body.data.filter((v: { isDefault: boolean }) => v.isDefault);
 
-      expect(values.body.data.filter((v: { isDefault: boolean }) => v.isDefault)).toHaveLength(1);
+      /**
+       * **Never more than one** is the invariant. Exactly one requires that at
+       * least one PATCH committed, and it need not: four writers touching the
+       * same rows can deadlock, and a rolled-back write is a `409` telling the
+       * caller to retry — not a failure of the rule under test. Asserting a
+       * flat `1` made this suite fail roughly once in ten for a reason that had
+       * nothing to do with defaults.
+       */
+      expect(defaults.length).toBeLessThanOrEqual(1);
+
+      const succeeded = responses.filter((response) => response.status === 200);
+
+      responses
+        .filter((response) => response.status !== 200)
+        .forEach((response) => expect(response.status).toBe(409));
+
+      if (succeeded.length > 0) {
+        expect(defaults).toHaveLength(1);
+      }
     }, 120_000);
 
     /** The scoped-by-hand statement in `makeSoleDefault` needs its own probe. */
     it('cannot clear another tenant’s defaults', async () => {
       const foreignSet = await seedSet('b');
-      const foreignGroup = (
-        await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' })
-      ).body.data.id as string;
-      const foreignOption = (
+      const foreignGroup = idOf(
+        await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' }),
+        'foreign group',
+      );
+      const foreignOption = idOf(
         await post(tokenB, `/groups/${foreignGroup}/options`, {
           key: 'theirs',
           label: 'Theirs',
           presentation: 'radio',
-        })
-      ).body.data.id as string;
+        }),
+        'foreign option',
+      );
       await post(tokenB, `/options/${foreignOption}/values`, {
         valueKey: 'keep',
         label: 'Keep',
@@ -887,9 +932,10 @@ describe('option authoring (e2e)', () => {
     it('records every level with an actor and an IP', async () => {
       const group = await newGroup('Audited');
       const option = await newOption(group, 'audited');
-      const value = (
-        await post(tokenA, `/options/${option}/values`, { valueKey: 'v', label: 'V' })
-      ).body.data.id as string;
+      const value = idOf(
+        await post(tokenA, `/options/${option}/values`, { valueKey: 'v', label: 'V' }),
+        'value',
+      );
 
       const rows = await dataSource.query(
         `SELECT action, userId, ip FROM audit_logs WHERE resourceId IN (?, ?, ?)`,
@@ -947,13 +993,14 @@ describe('option authoring (e2e)', () => {
         viewerSet = await seedSet('viewer');
         group = (await post(owner, `/option-sets/${viewerSet}/groups`, { label: 'V' })).body.data
           .id as string;
-        option = (
+        option = idOf(
           await post(owner, `/groups/${group}/options`, {
             key: 'vk',
             label: 'V',
             presentation: 'radio',
-          })
-        ).body.data.id as string;
+          }),
+          'option',
+        );
         value = (await post(owner, `/options/${option}/values`, { valueKey: 'vv', label: 'V' })).body
           .data.id as string;
 

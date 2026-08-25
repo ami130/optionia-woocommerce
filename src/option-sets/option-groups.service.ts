@@ -10,7 +10,7 @@ import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
-import { CascadeService } from './cascade.service';
+import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
 import { OptionSetsRepository } from './option-sets.repository';
 
@@ -118,11 +118,21 @@ export class OptionGroupsService {
    */
   async remove(id: string): Promise<void> {
     const before = await this.findOne(id);
-
     const deletedAt = new Date();
-    const cascaded = await this.cascade.onGroupDeleted(id, deletedAt);
 
-    await this.groups.update({ id } as never, { deletedAt } as never);
+    let cascaded;
+
+    try {
+      // Marks the group itself too, in the same transaction.
+      cascaded = await this.cascade.onGroupDeleted(id, deletedAt);
+    } catch (error) {
+      if (error instanceof AlreadyDeletedError) {
+        return;
+      }
+
+      throw error;
+    }
+
     await this.touchSet(before.optionSetId);
 
     await this.audit.record({

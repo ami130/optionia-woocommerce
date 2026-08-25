@@ -265,11 +265,19 @@ describe('option sets (e2e)', () => {
     }, 20_000);
 
     it('refuses another tenant’s set exactly as a missing one', async () => {
+      // A fresh id rather than a fixed one: a hardcoded UUID can be created by
+      // another suite, and then "missing" is not missing. That happened — the
+      // comparison passed `undefined` against `NOT_FOUND` because `?.` quietly
+      // absorbed a 200, so the test failed for a reason unrelated to scoping.
       const foreign = await asA('get', `/${setB}`);
-      const missing = await asA('get', '/01a03333-0000-7000-8000-000000000000');
+      const missing = await asA('get', `/${randomUUID()}`);
 
-      expect(foreign.status).toBe(missing.status);
-      expect(foreign.body.error?.code).toBe(missing.body.error?.code);
+      // Asserted absolutely, not just against each other: two identical wrong
+      // answers would satisfy an equality check.
+      expect(foreign.status).toBe(404);
+      expect(missing.status).toBe(404);
+      expect(foreign.body.error.code).toBe('NOT_FOUND');
+      expect(missing.body.error.code).toBe('NOT_FOUND');
     }, 20_000);
   });
 

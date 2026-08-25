@@ -1,6 +1,6 @@
 import { QueryFailedError } from 'typeorm';
 
-import { asUniqueViolation } from './unique-violation';
+import { asUniqueViolation, isTransientLockConflict } from './unique-violation';
 
 /** A `QueryFailedError` shaped like the mysql2 driver's. */
 function duplicateError(message: string, code = 'ER_DUP_ENTRY'): QueryFailedError {
@@ -72,5 +72,37 @@ describe('asUniqueViolation', () => {
     Object.assign(error, { errno: 1062, sqlMessage: "Duplicate entry 'x' for key 'a.uq_options_group_key'" });
 
     expect(asUniqueViolation(error)?.detail.field).toBe('key');
+  });
+});
+
+describe('isTransientLockConflict', () => {
+  /** Not a bug and not the caller's mistake — two correct transactions collided. */
+  it('recognises a deadlock', () => {
+    expect(isTransientLockConflict(duplicateError('Deadlock found', 'ER_LOCK_DEADLOCK'))).toBe(true);
+  });
+
+  it('recognises a lock-wait timeout', () => {
+    expect(
+      isTransientLockConflict(duplicateError('Lock wait timeout', 'ER_LOCK_WAIT_TIMEOUT')),
+    ).toBe(true);
+  });
+
+  it('reads the code from driverError when the top level lacks one', () => {
+    const error = new QueryFailedError('UPDATE …', [], new Error('Deadlock found'));
+    Object.assign(error, { driverError: { code: 'ER_LOCK_DEADLOCK' } });
+
+    expect(isTransientLockConflict(error)).toBe(true);
+  });
+
+  /** A duplicate key is the caller's problem and gets a different answer. */
+  it('does not treat a duplicate key as transient', () => {
+    expect(
+      isTransientLockConflict(duplicateError("Duplicate entry 'x' for key 'a.b'")),
+    ).toBe(false);
+  });
+
+  it('ignores anything that is not a QueryFailedError', () => {
+    expect(isTransientLockConflict(new Error('nope'))).toBe(false);
+    expect(isTransientLockConflict(null)).toBe(false);
   });
 });

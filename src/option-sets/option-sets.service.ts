@@ -11,7 +11,7 @@ import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
-import { CascadeService } from './cascade.service';
+import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { HardDeleteService, type PurgeResult } from './hard-delete.service';
 import { OptionSetsRepository, type ListFilters, type ListPage } from './option-sets.repository';
 
@@ -129,9 +129,24 @@ export class OptionSetsService {
     // One instant for the whole cascade, so every row this action removed can be
     // identified together afterwards.
     const deletedAt = new Date();
-    const cascaded = await this.cascade.onOptionSetDeleted(id, deletedAt);
 
-    await this.repository.applyChange(id, { deletedAt } as Partial<OptionSet>);
+    let cascaded;
+
+    try {
+      // The cascade marks the set itself too, in the same transaction — so
+      // there is no second write that could leave the children deleted and the
+      // parent live.
+      cascaded = await this.cascade.onOptionSetDeleted(id, deletedAt);
+    } catch (error) {
+      if (error instanceof AlreadyDeletedError) {
+        // Another request deleted it first. The caller's intent is satisfied,
+        // so this is still a success — it simply does not record a second
+        // audit entry for one deletion.
+        return;
+      }
+
+      throw error;
+    }
 
     await this.audit.record({
       action: AuditAction.OPTION_SET_DELETED,

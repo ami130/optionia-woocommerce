@@ -1278,3 +1278,78 @@ plain sentinel column, not TypeORM's `@DeleteDateColumn`, so `withDeleted` is a
 comment stating why no predicate is needed, and the real guarantee — that the
 purge query filters on no `deletedAt` at all — is now proven by mutating in a
 live-only filter, which fails four tests.
+
+---
+
+## ADR-031 — A delete and its cascade are one transaction
+
+**Status:** accepted
+**Date:** Phase 7, M7.2
+
+### Context
+
+7g's first implementation ran the cascade in its own transaction and then
+deleted the parent in a separate statement. A failure between the two would
+leave every child soft-deleted and the parent live — a set whose contents
+vanished with no error anywhere, which is exactly the partial cascade M7.2
+forbids. The cascade's own comment said so about its children while leaving its
+own boundary split.
+
+Two related defects came from the same seam:
+
+- Three concurrent deletes of one set all succeeded and wrote **three**
+  `option_set.deleted` audit entries for one deletion.
+- A create racing its parent's deletion left a **live child under a deleted
+  parent** in five attempts out of six — invisible to every read, because the
+  join chain hides it, and still real rows.
+
+### Decision
+
+Each cascade method marks the parent **inside its own transaction**, so one
+commit covers parent and children. `rowVersion` advances there too, for the same
+reason it advances on any other mutation.
+
+The parent's transition is claimed conditionally
+(`UPDATE … WHERE deletedAt = LIVE_SENTINEL`). Exactly one of several concurrent
+deletes updates a row; the losers raise `AlreadyDeletedError`, which the service
+translates to a plain success **without** an audit entry. Every caller's intent
+was satisfied, so every caller sees success — but the trail records one deletion,
+because that is what happened.
+
+`create` verifies the parent and inserts inside one transaction.
+
+**Locking the parent was built and then removed.** `SELECT … FOR UPDATE` closes
+the orphan window completely, and it makes a create and a delete of the same
+subtree take locks in opposite orders — the delete locks children then the
+parent, the create locks the parent then inserts a child. Ordinary concurrent
+authoring deadlocked, and sequential creates began returning intermittent 404s.
+
+Trading a rare orphan that **no read can reach** for routine user-visible
+failures is the wrong way round, so the lock is gone and the residual race is
+stated rather than hidden: a child created during its parent's deletion can
+survive as an unreachable row. The tests assert that consequence — it never
+appears in a list or a fetch, and a purge still erases it — instead of asserting
+an absence that is not true.
+
+`7j`'s optimistic locking is where the definitive answer belongs: it can refuse
+a stale write without holding a row lock across a request.
+
+### Consequences
+
+`isTransientLockConflict` maps `ER_LOCK_DEADLOCK` and `ER_LOCK_WAIT_TIMEOUT` to
+`409 CONFLICT` with a retry-shaped message, following the precedent set for the
+last-owner check. It was added for the deadlocks the lock caused and kept after
+its removal: any two transactions touching the same rows can still collide, and
+a rolled-back transaction is transient rather than an outage.
+
+`presentational_items` were missing from the cascade entirely — they carry no
+value, no pricing and no reader yet, and 7h's serializer would have been the
+first thing to surface headings belonging to a group nobody can see. They are now
+cascaded and purged explicitly rather than left to `ON DELETE CASCADE`, so the
+count returned to a merchant is complete.
+
+**One mutation escaped and was worth chasing.** Reverting the repository's parent
+check to a plain `Error` failed nothing, because the service checks the parent
+first and answers 404 — the repository's throw is reached only in the race no
+deterministic test can stage. It is now asserted by calling the repository
+directly, which is the only honest way to cover a path HTTP cannot reach.

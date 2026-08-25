@@ -6,7 +6,9 @@ import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
 import { AppModule } from '../src/app.module';
+import { runWithContext } from '../src/common/context/request-context';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { OptionsRepository } from '../src/option-sets/options.repository';
 
 /**
  * Cascade rules and hard delete (M7.2, step 7g).
@@ -135,6 +137,10 @@ describe('cascade and hard delete (e2e)', () => {
   const del = (path: string) =>
     request(app.getHttpServer()).delete(`/v1${path}`).set('Authorization', `Bearer ${token}`);
 
+  async function tenantIdOfA(): Promise<string> {
+    return tenantId;
+  }
+
   function idOf(response: request.Response, what: string): string {
     if (response.status !== 201) {
       throw new Error(
@@ -167,6 +173,20 @@ describe('cascade and hard delete (e2e)', () => {
     const second = idOf(await post(`/options/${option}/values`, { valueKey: 'b', label: 'B' }), 'value');
 
     return { set, group, option, values: [first, second] };
+  }
+
+  /** A heading in a group. The presentational-items API is Phase 14. */
+  async function seedItem(optionGroupId: string): Promise<string> {
+    const id = randomUUID();
+
+    await dataSource.query(
+      `INSERT INTO presentational_items (id, optionGroupId, kind, content, sortOrder, display,
+                                         createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, 'heading', 'Hello', 0, NULL, NOW(3), NOW(3), '1970-01-01 00:00:00.000')`,
+      [id, optionGroupId],
+    );
+
+    return id;
   }
 
   /** A rule targeting something, written directly — the rules API is Phase 17. */
@@ -331,6 +351,21 @@ describe('cascade and hard delete (e2e)', () => {
       expect(response.status).toBe(409);
       expect(response.body.error.code).toBe('CONFLICT');
       expect(await isLive('option_values', values[0])).toBe(true);
+    }, 60_000);
+
+    it('records the refusal, so support can answer why', async () => {
+      const { set, values } = await tree();
+      await seedRule(set, 'value', values[0]);
+
+      await del(`/values/${values[0]}`);
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM audit_logs
+          WHERE resourceId = ? AND action = 'option_value.delete_refused'`,
+        [values[0]],
+      );
+
+      expect(Number(row.n)).toBe(1);
     }, 60_000);
 
     it('is allowed when the rule targeting it is disabled', async () => {
@@ -498,6 +533,239 @@ describe('cascade and hard delete (e2e)', () => {
 
     it('refuses another tenant’s set as a 404', async () => {
       expect((await del(`/option-sets/${randomUUID()}/permanent`)).status).toBe(404);
+    }, 60_000);
+  });
+
+  /**
+   * Presentational items hang off a group exactly as options do, and were missed
+   * at first because they carry no value, no pricing and no reader yet — 7h's
+   * serializer is the first. A heading belonging to a group nobody can see is
+   * the failure this prevents.
+   */
+  describe('presentational items', () => {
+    it('are soft-deleted with their group', async () => {
+      const { group } = await tree();
+      const item = await seedItem(group);
+
+      await del(`/groups/${group}`);
+
+      expect(await isLive('presentational_items', item)).toBe(false);
+    }, 60_000);
+
+    it('are soft-deleted with their set', async () => {
+      const { set, group } = await tree();
+      const item = await seedItem(group);
+
+      await del(`/option-sets/${set}`);
+
+      expect(await isLive('presentational_items', item)).toBe(false);
+    }, 60_000);
+
+    it('are counted in the cascade audit entry', async () => {
+      const { set, group } = await tree();
+      await seedItem(group);
+      await seedItem(group);
+
+      await del(`/option-sets/${set}`);
+
+      const [row] = await dataSource.query(
+        `SELECT changes FROM audit_logs WHERE resourceId = ? AND action = 'option_set.deleted'`,
+        [set],
+      );
+
+      expect(row.changes.cascaded.items).toBe(2);
+    }, 60_000);
+
+    it('are erased by a purge, and counted', async () => {
+      const { set, group } = await tree();
+      const item = await seedItem(group);
+
+      const response = await del(`/option-sets/${set}/permanent`);
+
+      expect(response.body.data.items).toBe(1);
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM presentational_items WHERE id = ?`,
+        [item],
+      );
+      expect(Number(row.n)).toBe(0);
+    }, 60_000);
+  });
+
+  /**
+   * The delete of the parent and the cascade over its children are one
+   * transaction. Split across two, a failure between them leaves the children
+   * deleted and the parent live — a set whose contents vanished, with no error.
+   */
+  describe('atomicity and concurrency', () => {
+    it('advances the set’s rowVersion when it is deleted', async () => {
+      const { set } = await tree();
+      const [before] = await dataSource.query(
+        `SELECT rowVersion FROM option_sets WHERE id = ?`,
+        [set],
+      );
+
+      await del(`/option-sets/${set}`);
+
+      const [after] = await dataSource.query(
+        `SELECT rowVersion FROM option_sets WHERE id = ?`,
+        [set],
+      );
+
+      expect(Number(after.rowVersion)).toBeGreaterThan(Number(before.rowVersion));
+    }, 60_000);
+
+    /**
+     * Three simultaneous deletes previously wrote three `option_set.deleted`
+     * audit rows for one deletion — harmless to the data, and a trail support
+     * reads and misbelieves.
+     */
+    it('records one audit entry however many deletes race', async () => {
+      const { set } = await tree();
+
+      const responses = await Promise.all([
+        del(`/option-sets/${set}`),
+        del(`/option-sets/${set}`),
+        del(`/option-sets/${set}`),
+      ]);
+
+      // Every caller's intent was satisfied, so every caller sees success.
+      responses.forEach((response) => expect([204, 404]).toContain(response.status));
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM audit_logs
+          WHERE resourceId = ? AND action = 'option_set.deleted'`,
+        [set],
+      );
+
+      expect(Number(row.n)).toBe(1);
+    }, 60_000);
+
+    it('records one audit entry for racing group deletes', async () => {
+      const { group } = await tree();
+
+      await Promise.all([del(`/groups/${group}`), del(`/groups/${group}`)]);
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM audit_logs
+          WHERE resourceId = ? AND action = 'option_group.deleted'`,
+        [group],
+      );
+
+      expect(Number(row.n)).toBe(1);
+    }, 60_000);
+
+    /**
+     * A create racing its parent's deletion can leave a **live child under a
+     * deleted parent**, and this asserts the consequence rather than the
+     * absence.
+     *
+     * Closing the window needs `SELECT … FOR UPDATE` on the parent. That was
+     * built, and removed: it makes a create and a delete of the same subtree
+     * take locks in opposite orders, so ordinary concurrent authoring
+     * deadlocks. A rare orphan that **no read can reach** is a better outcome
+     * than routine user-visible failures, and 7j's optimistic locking is where
+     * a definitive answer belongs — it can refuse a stale write without holding
+     * a row lock across a request.
+     *
+     * So what is guaranteed, and tested here, is that the orphan is
+     * unreachable: it never appears in a list, a fetch, or a purge's blast
+     * radius.
+     */
+    it('keeps a child created during its parent’s deletion unreachable', async () => {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const { set, group } = await tree();
+
+        const [, created] = await Promise.all([
+          del(`/option-sets/${set}`),
+          post(`/groups/${group}/options`, {
+            key: `race${attempt}`,
+            label: 'Raced',
+            presentation: 'radio',
+          }),
+        ]);
+
+        expect([201, 404, 409]).toContain(created.status);
+
+        // Whatever happened, the set is gone and nothing under it is reachable.
+        expect((await get(`/option-sets/${set}`)).status).toBe(404);
+        expect((await get(`/groups/${group}`)).status).toBe(404);
+        expect((await get(`/groups/${group}/options`)).status).toBe(404);
+
+        if (created.status === 201) {
+          expect((await get(`/options/${created.body.data.id}`)).status).toBe(404);
+        }
+      }
+    }, 180_000);
+
+    /** And a purge still erases it, orphan included. */
+    it('erases an orphaned child when the set is purged', async () => {
+      const { set, group } = await tree();
+
+      const [, created] = await Promise.all([
+        del(`/option-sets/${set}`),
+        post(`/groups/${group}/options`, {
+          key: 'orphan_purge',
+          label: 'Orphan',
+          presentation: 'radio',
+        }),
+      ]);
+
+      expect((await del(`/option-sets/${set}/permanent`)).status).toBe(200);
+
+      if (created.status === 201) {
+        const [row] = await dataSource.query(`SELECT COUNT(*) AS n FROM options WHERE id = ?`, [
+          created.body.data.id,
+        ]);
+
+        expect(Number(row.n)).toBe(0);
+      }
+    }, 120_000);
+
+    it('answers a create under a deleted parent with 404, never 500', async () => {
+      const { group } = await tree();
+      await del(`/groups/${group}`);
+
+      const response = await post(`/groups/${group}/options`, {
+        key: 'orphan',
+        label: 'Orphan',
+        presentation: 'radio',
+      });
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe('NOT_FOUND');
+    }, 60_000);
+
+    /**
+     * Reaches `ParentScopedRepository.assertParentOwned` directly.
+     *
+     * The service checks the parent first and returns a clean 404, so through
+     * HTTP that check is what answers — and the repository's own throw is only
+     * reached when the parent disappears *between* the two, which no
+     * deterministic test can stage. Calling it directly is the only way to
+     * assert it is a `DomainException` rather than a plain `Error`, which had no
+     * code for the filter to translate and so became a 500.
+     */
+    it('throws a translatable error from the repository’s own parent check', async () => {
+      const { group, set } = await tree();
+
+      await del(`/option-sets/${set}`);
+
+      const repository = app.get(OptionsRepository);
+
+      await expect(
+        runWithContext(
+          { requestId: 'test', startedAt: Date.now(), tenantId: await tenantIdOfA() },
+          () =>
+            repository.create(group, {
+              optionGroupId: group,
+              key: 'direct',
+              label: 'Direct',
+              valueKind: 'choice',
+              cardinality: 'one',
+              presentation: 'radio',
+            } as never),
+        ),
+      ).rejects.toMatchObject({ getStatus: expect.any(Function) });
     }, 60_000);
   });
 

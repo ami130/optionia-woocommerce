@@ -466,7 +466,18 @@ and includes already-deleted options, so a two-step delete cannot erase what a
 one-step delete refuses.
 
 It returns `200` with the counts removed rather than `204`: a merchant
-confirming an irreversible act deserves to see its scope.
+confirming an irreversible act deserves to see its scope. The counts include
+`items` — presentational headings and paragraphs belonging to the deleted groups.
+
+**A delete and its cascade are one transaction.** The parent row and every child
+it owns are marked in a single commit, so a failure cannot leave the children
+deleted and the parent live. Concurrent deletes of the same resource all return
+success and record **one** audit entry between them.
+
+**`409 CONFLICT` can mean "try again".** Two transactions touching the same rows
+in different orders are resolved by the database rolling one back. That surfaces
+as a conflict rather than a `500`, because it is transient and a retry will
+usually succeed.
 | `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[built]` |
 | `POST /option-sets/:id/publish` | `option_sets:publish` | `[7i]` |
 | `GET /option-sets/:id/publish-check` | `option_sets:view` | `[7i]` |

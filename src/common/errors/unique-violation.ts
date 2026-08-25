@@ -6,6 +6,10 @@ import type { ErrorDetail } from '../http/api-response.types';
 const ER_DUP_ENTRY = 'ER_DUP_ENTRY';
 const ER_DUP_ENTRY_ERRNO = 1062;
 
+/** Deadlock and lock-wait timeout: transient, and the caller may retry. */
+const ER_LOCK_DEADLOCK = 'ER_LOCK_DEADLOCK';
+const ER_LOCK_WAIT_TIMEOUT = 'ER_LOCK_WAIT_TIMEOUT';
+
 /**
  * Which field a unique index belongs to, by index name.
  *
@@ -90,4 +94,31 @@ function indexNameOf(error: QueryFailedError): string | null {
   const match = /for key '(?:[^'.]+\.)?([^']+)'/.exec(message);
 
   return match ? match[1] : null;
+}
+
+/**
+ * Whether a database error is a transient lock conflict.
+ *
+ * A deadlock is **not a bug and not the caller's mistake** — it is two correct
+ * transactions touching the same rows in different orders, which MySQL resolves
+ * by rolling one back. Reported as a 500 it looks like an outage and a client
+ * gives up; reported as a conflict it says exactly what happened and that
+ * retrying will probably work.
+ *
+ * Seen here when a create locks a parent while a concurrent delete is locking
+ * that parent's children — the very ordering that prevents a live child under a
+ * deleted parent.
+ */
+export function isTransientLockConflict(error: unknown): boolean {
+  if (!(error instanceof QueryFailedError)) {
+    return false;
+  }
+
+  const driver = error as QueryFailedError & {
+    code?: string;
+    driverError?: { code?: string };
+  };
+  const code = driver.code ?? driver.driverError?.code;
+
+  return code === ER_LOCK_DEADLOCK || code === ER_LOCK_WAIT_TIMEOUT;
 }

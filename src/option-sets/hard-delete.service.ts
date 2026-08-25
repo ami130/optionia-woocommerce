@@ -8,6 +8,7 @@ import { OptionSetAssignment } from './entities/option-set-assignment.entity';
 import { OptionSetVersion } from './entities/option-set-version.entity';
 import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
+import { PresentationalItem } from './entities/presentational-item.entity';
 import { Option } from './entities/option.entity';
 
 /** What a hard delete removed. */
@@ -15,6 +16,7 @@ export interface PurgeResult {
   readonly groups: number;
   readonly options: number;
   readonly values: number;
+  readonly items: number;
   readonly rules: number;
   readonly assignments: number;
   readonly versions: number;
@@ -71,6 +73,18 @@ export class HardDeleteService {
       // reverse order fails on the constraint rather than cascading.
       const values = await hardDelete(manager, OptionValue, valueIds);
       const options = await hardDelete(manager, Option, optionIds);
+      // Deleted explicitly rather than left to `ON DELETE CASCADE`. The
+      // constraint would remove them, but then the count returned to a merchant
+      // confirming an irreversible act would silently omit them — and a cascade
+      // rule that works only because of a constraint nobody stated is the kind
+      // this step exists to make explicit.
+      const items = groupIds.length
+        ? await hardDelete(
+            manager,
+            PresentationalItem,
+            await allIds(manager, PresentationalItem, { optionGroupId: In(groupIds) }),
+          )
+        : 0;
       const groups = await hardDelete(manager, OptionGroup, groupIds);
       const rules = await hardDelete(
         manager,
@@ -90,7 +104,7 @@ export class HardDeleteService {
 
       await manager.delete(OptionSet, { id: set.id });
 
-      return { groups, options, values, rules, assignments, versions };
+      return { groups, options, values, items, rules, assignments, versions };
     });
   }
 

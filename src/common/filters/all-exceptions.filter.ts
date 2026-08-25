@@ -11,7 +11,7 @@ import { QueryFailedError } from 'typeorm';
 
 import { getRequestId } from '../context/request-context';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes';
-import { asUniqueViolation } from '../errors/unique-violation';
+import { asUniqueViolation, isTransientLockConflict } from '../errors/unique-violation';
 import type { ApiError, ApiErrorResponse, ErrorDetail } from '../http/api-response.types';
 
 /** What `main.ts`'s exceptionFactory emits for each failed constraint. */
@@ -93,6 +93,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
         },
         // Not our bug, so no stack trace — but logged at warn with the index, so
         // a constraint colliding constantly is still visible.
+        logAsError: false,
+      };
+    }
+
+    /**
+     * A lock conflict is transient, not a fault.
+     *
+     * Two correct transactions touched the same rows in different orders and
+     * MySQL rolled one back. A 500 tells the caller the server is broken; a 409
+     * tells them what happened and that a retry will likely succeed.
+     */
+    if (isTransientLockConflict(exception)) {
+      return {
+        status: HttpStatus.CONFLICT,
+        error: {
+          code: ErrorCode.CONFLICT,
+          message: 'That resource was being changed by someone else. Please try again.',
+        },
         logAsError: false,
       };
     }

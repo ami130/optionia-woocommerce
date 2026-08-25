@@ -6,8 +6,10 @@ import { RuleDisabledReason, RuleTargetType } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionRule } from './entities/option-rule.entity';
+import { OptionSet } from './entities/option-set.entity';
 import { OptionSetAssignment } from './entities/option-set-assignment.entity';
 import { OptionValue } from './entities/option-value.entity';
+import { PresentationalItem } from './entities/presentational-item.entity';
 import { Option } from './entities/option.entity';
 
 /** What a cascade touched, for the audit entry and the response. */
@@ -15,11 +17,20 @@ export interface CascadeResult {
   readonly groups: number;
   readonly options: number;
   readonly values: number;
+  /** Headings, paragraphs and dividers belonging to the deleted groups. */
+  readonly items: number;
   readonly rules: number;
   readonly assignments: number;
 }
 
-const NOTHING: CascadeResult = { groups: 0, options: 0, values: 0, rules: 0, assignments: 0 };
+const NOTHING: CascadeResult = {
+  groups: 0,
+  options: 0,
+  values: 0,
+  items: 0,
+  rules: 0,
+  assignments: 0,
+};
 
 /**
  * The cascade rules of M7.2, stated explicitly rather than inherited from the ORM.
@@ -56,6 +67,34 @@ export class CascadeService {
    */
   async onOptionSetDeleted(optionSetId: string, deletedAt: Date): Promise<CascadeResult> {
     return this.dataSource.transaction(async (manager) => {
+      /**
+       * The parent goes first and **inside this transaction**.
+       *
+       * Deleting it in a separate statement afterwards means a failure between
+       * the two leaves the children deleted and the set live — a set whose
+       * contents vanished with no error anywhere, which is the partial cascade
+       * this rule forbids.
+       *
+       * `rowVersion` advances here for the same reason it advances on any other
+       * mutation ([7j]): a client holding the old version must not look current.
+       */
+      const claimed = await manager
+        .createQueryBuilder()
+        .update(OptionSet)
+        .set({ deletedAt, rowVersion: () => 'rowVersion + 1' } as never)
+        .where('id = :id', { id: optionSetId })
+        // Only the request that actually transitions the row proceeds. Three
+        // concurrent deletes all succeeded and wrote three `option_set.deleted`
+        // audit rows for one deletion — harmless to the data, because the
+        // cascade is idempotent, and a trail that says a set was deleted three
+        // times is one support reads and misbelieves.
+        .andWhere('deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL })
+        .execute();
+
+      if ((claimed.affected ?? 0) === 0) {
+        throw new AlreadyDeletedError();
+      }
+
       const groupIds = await liveIds(manager, OptionGroup, { optionSetId });
       const optionIds = groupIds.length
         ? await liveIds(manager, Option, { optionGroupId: In(groupIds) })
@@ -67,6 +106,18 @@ export class CascadeService {
       return {
         values: await softDelete(manager, OptionValue, valueIds, deletedAt),
         options: await softDelete(manager, Option, optionIds, deletedAt),
+        // Presentational items hang off a group exactly as options do. They
+        // were missed at first because they carry no value, no pricing and no
+        // reader yet — which is precisely why leaving them live would surface
+        // later as headings belonging to a group nobody can see.
+        items: groupIds.length
+          ? await softDelete(
+              manager,
+              PresentationalItem,
+              await liveIds(manager, PresentationalItem, { optionGroupId: In(groupIds) }),
+              deletedAt,
+            )
+          : 0,
         groups: await softDelete(manager, OptionGroup, groupIds, deletedAt),
         // Rules and assignments belong to the set directly. They are deleted
         // rather than disabled: their owner is gone, so there is nothing left
@@ -90,6 +141,10 @@ export class CascadeService {
   /** A group's options and their values, plus any rule that targeted them. */
   async onGroupDeleted(groupId: string, deletedAt: Date): Promise<CascadeResult> {
     return this.dataSource.transaction(async (manager) => {
+      if (!(await claimDeletion(manager, OptionGroup, groupId, deletedAt))) {
+        throw new AlreadyDeletedError();
+      }
+
       const optionIds = await liveIds(manager, Option, { optionGroupId: groupId });
       const valueIds = optionIds.length
         ? await liveIds(manager, OptionValue, { optionId: In(optionIds) })
@@ -97,6 +152,12 @@ export class CascadeService {
 
       const values = await softDelete(manager, OptionValue, valueIds, deletedAt);
       const options = await softDelete(manager, Option, optionIds, deletedAt);
+      const items = await softDelete(
+        manager,
+        PresentationalItem,
+        await liveIds(manager, PresentationalItem, { optionGroupId: groupId }),
+        deletedAt,
+      );
 
       // Every target that just disappeared, at all three levels.
       const rules = await disableRulesTargeting(manager, [
@@ -105,13 +166,17 @@ export class CascadeService {
         { type: RuleTargetType.VALUE, ids: valueIds },
       ]);
 
-      return { ...NOTHING, values, options, rules };
+      return { ...NOTHING, values, options, items, rules };
     });
   }
 
   /** An option's values, plus any rule that targeted the option or those values. */
   async onOptionDeleted(optionId: string, deletedAt: Date): Promise<CascadeResult> {
     return this.dataSource.transaction(async (manager) => {
+      if (!(await claimDeletion(manager, Option, optionId, deletedAt))) {
+        throw new AlreadyDeletedError();
+      }
+
       const valueIds = await liveIds(manager, OptionValue, { optionId });
       const values = await softDelete(manager, OptionValue, valueIds, deletedAt);
 
@@ -153,6 +218,43 @@ export class CascadeService {
       );
     }
   }
+}
+
+/**
+ * Raised when another request deleted the row first.
+ *
+ * Not a `DomainException`: the caller's delete *did* happen, so the answer is
+ * still success. This exists so only one of several concurrent deletes writes an
+ * audit entry.
+ */
+export class AlreadyDeletedError extends Error {
+  constructor() {
+    super('Already deleted by another request.');
+    this.name = 'AlreadyDeletedError';
+  }
+}
+
+/**
+ * Mark one row deleted, and report whether *this* call is the one that did it.
+ *
+ * The `deletedAt = LIVE_SENTINEL` predicate makes the transition atomic: of
+ * several concurrent deletes exactly one updates a row, and the rest see zero
+ * affected. Without it every one of them believes it performed the deletion and
+ * records an audit entry saying so.
+ */
+async function claimDeletion<T>(
+  manager: EntityManager,
+  entity: new () => T,
+  id: string,
+  deletedAt: Date,
+): Promise<boolean> {
+  const result = await manager.update(
+    entity,
+    { id, deletedAt: LIVE_SENTINEL_SQL } as never,
+    { deletedAt } as never,
+  );
+
+  return (result.affected ?? 0) > 0;
 }
 
 /** Live ids matching a condition. */

@@ -47,6 +47,7 @@ export const AuditAction = {
   OPTION_VALUE_CREATED: 'option_value.created',
   OPTION_VALUE_UPDATED: 'option_value.updated',
   OPTION_VALUE_DELETED: 'option_value.deleted',
+  OPTION_VALUE_DELETE_REFUSED: 'option_value.delete_refused',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
