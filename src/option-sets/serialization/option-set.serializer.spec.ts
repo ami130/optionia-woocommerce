@@ -172,6 +172,21 @@ describe('OptionSetSerializer', () => {
     it('keeps publishedAt null on an unpublished set', () => {
       expect(serializer.toAuthoring(tree()).publishedAt).toBeNull();
     });
+
+    /**
+     * The editor shows "published by X at Y" and had only the timestamp.
+     * Deliberately absent from the published projection: the plugin has no use
+     * for a user id, and naming a merchant's staff in a document that sits on
+     * their storefront is needless exposure.
+     */
+    it('carries who published, and keeps it out of the document', () => {
+      const published = tree({
+        set: set({ publishedBy: 'user-42', publishedAt: AT, status: 'published' }),
+      });
+
+      expect(serializer.toAuthoring(published).publishedBy).toBe('user-42');
+      expect(JSON.stringify(serializer.toPublished(published))).not.toContain('user-42');
+    });
   });
 
   describe('published projection', () => {
@@ -262,6 +277,8 @@ describe('OptionSetSerializer', () => {
         amount_minor: 1000,
       });
 
+      // The stored JSON is camelCase — its schema is TypeScript. The document is
+      // snake_case, whichever path produced the value.
       const fromJson = serializer.toPublished(
         tree({
           groups: [
@@ -271,7 +288,7 @@ describe('OptionSetSerializer', () => {
               options: [
                 {
                   option: option(),
-                  values: [value({ priceConfig: { type: 'percentage', basis_points: 250 } })],
+                  values: [value({ priceConfig: { type: 'percentage', basisPoints: 250 } })],
                 },
               ],
             },
@@ -283,6 +300,47 @@ describe('OptionSetSerializer', () => {
         type: 'percentage',
         basis_points: 250,
       });
+    });
+
+    /**
+     * The defect this replaced: a value priced through `price_config` emitted
+     * `amountMinor` while one priced through the columns emitted `amount_minor`,
+     * so the same document carried two spellings of one field and a PHP
+     * evaluator reading `amount_minor` got null for half its values.
+     */
+    it('uses one spelling for every price, whichever path produced it', () => {
+      const both = serializer.toPublished(
+        tree({
+          groups: [
+            {
+              group: group(),
+              items: [],
+              options: [
+                {
+                  option: option(),
+                  values: [
+                    value({ id: 'from-columns', valueKey: 'columns' }),
+                    value({
+                      id: 'from-json',
+                      valueKey: 'json',
+                      priceConfig: { type: 'fixed', amountMinor: 250 },
+                    }),
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      const configs = both.groups[0].options[0].values.map((v) => v.price_config);
+
+      configs.forEach((config) => {
+        expect(config).toHaveProperty('amount_minor');
+        expect(config).not.toHaveProperty('amountMinor');
+      });
+      expect(configs[0].amount_minor).toBe(1000);
+      expect(configs[1].amount_minor).toBe(250);
     });
 
     /** Money is an integer in minor units on the wire (ADR-013). */

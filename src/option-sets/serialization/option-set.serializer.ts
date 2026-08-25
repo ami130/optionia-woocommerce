@@ -5,6 +5,7 @@ import { OptionSet } from '../entities/option-set.entity';
 import { OptionValue } from '../entities/option-value.entity';
 import { Option } from '../entities/option.entity';
 import { PresentationalItem } from '../entities/presentational-item.entity';
+import { toPublishedPriceConfig } from './price-config';
 import type {
   AuthoringGroup,
   AuthoringOption,
@@ -82,6 +83,7 @@ export class OptionSetSerializer {
       version: set.version,
       rowVersion: set.rowVersion,
       publishedAt: iso(set.publishedAt),
+      publishedBy: set.publishedBy,
       publishedConfigVersion: set.publishedConfigVersion,
       createdAt: iso(set.createdAt) as string,
       updatedAt: iso(set.updatedAt) as string,
@@ -180,9 +182,19 @@ export class OptionSetSerializer {
     return {
       id: tree.set.id,
       version: tree.set.version,
+      /**
+       * Empty until Phase 13 (assignments) and Phase 17 (rules) build them.
+       *
+       * Present rather than omitted: 7k freezes this document for v1, and a
+       * plugin written against a shape lacking these keys would need a
+       * `schema_version` bump to gain them. An empty array is a shape a reader
+       * handles from its first release.
+       */
+      assignments: [],
       groups: tree.groups
         .filter((node) => node.group.isEnabled)
         .map((node) => this.groupToPublished(node)),
+      rules: [],
     };
   }
 
@@ -229,12 +241,19 @@ export class OptionSetSerializer {
   }
 
   /**
-   * A value's price, always as a `price_config` object.
+   * A value's price, always as a `price_config` object in the document's
+   * own convention.
    *
    * The table carries both a `price_type` + `price_amount_minor` pair and a
    * nullable `price_config` JSON. The document carries **one** shape, because
    * two ways to express a price is two ways for the TS and PHP evaluators to
    * disagree — and M11.4 shares fixtures between them precisely to stop that.
+   *
+   * The stored JSON is `camelCase` (its Zod schema is TypeScript); the document
+   * is `snake_case` (its reader is PHP). `toPublishedPriceConfig` converts
+   * per type rather than passing the object through, which previously put
+   * `amountMinor` and `amount_minor` in the same document depending on which
+   * path produced the value.
    *
    * Money stays an integer in minor units on the wire (ADR-013).
    */
@@ -243,10 +262,10 @@ export class OptionSetSerializer {
       value_key: value.valueKey,
       label: value.label,
       sort_order: value.sortOrder,
-      price_config: value.priceConfig ?? {
-        type: value.priceType,
-        amount_minor: value.priceAmountMinor,
-      },
+      price_config: toPublishedPriceConfig(value.priceConfig, {
+        priceType: value.priceType,
+        priceAmountMinor: value.priceAmountMinor,
+      }),
       ...optional('image_url', value.imageUrl),
       ...optional('color_hex', value.colorHex),
       ...optional('sku_suffix', value.skuSuffix),

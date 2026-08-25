@@ -40,7 +40,7 @@ export class OptionSetTreeLoader {
 
     const groups = await this.dataSource.getRepository(OptionGroup).find({
       where: { optionSetId: set.id, deletedAt: LIVE_SENTINEL_SQL as never },
-      order: { sortOrder: 'ASC', id: 'ASC' },
+      order: CHILD_ORDER,
     });
 
     const groupIds = groups.map((group) => group.id);
@@ -48,14 +48,14 @@ export class OptionSetTreeLoader {
     const options = groupIds.length
       ? await this.dataSource.getRepository(Option).find({
           where: { optionGroupId: In(groupIds), deletedAt: LIVE_SENTINEL_SQL as never },
-          order: { sortOrder: 'ASC', id: 'ASC' },
+          order: CHILD_ORDER,
         })
       : [];
 
     const items = groupIds.length
       ? await this.dataSource.getRepository(PresentationalItem).find({
           where: { optionGroupId: In(groupIds), deletedAt: LIVE_SENTINEL_SQL as never },
-          order: { sortOrder: 'ASC', id: 'ASC' },
+          order: CHILD_ORDER,
         })
       : [];
 
@@ -64,7 +64,7 @@ export class OptionSetTreeLoader {
     const values = optionIds.length
       ? await this.dataSource.getRepository(OptionValue).find({
           where: { optionId: In(optionIds), deletedAt: LIVE_SENTINEL_SQL as never },
-          order: { sortOrder: 'ASC', id: 'ASC' },
+          order: CHILD_ORDER,
         })
       : [];
 
@@ -85,6 +85,18 @@ export class OptionSetTreeLoader {
     };
   }
 }
+
+/**
+ * The order every child query uses.
+ *
+ * Exported so a test can assert the tie-break exists. **Ordering is a property
+ * of the SQL, not of the rows a particular dataset returns** — removing the
+ * `id` clause changes the query and, on today's data, not the result, because
+ * InnoDB happens to return these rows in primary-key order. That coincidence
+ * depends on the plan the optimizer picks, so asserting the returned order
+ * cannot fail while asserting the clause can.
+ */
+export const CHILD_ORDER = { sortOrder: 'ASC', id: 'ASC' } as const;
 
 /**
  * Bucket rows by a parent id, preserving the order they arrived in.

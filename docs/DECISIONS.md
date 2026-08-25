@@ -1410,8 +1410,34 @@ N+1: a set with 10 groups of 10 options of 5 values is 111 round trips per
 render otherwise, on every editor load and every publish.
 
 The tie-break on `id` makes ordering deterministic when two rows share a
-`sort_order`. **Its test cannot currently fail** — removing the clause changes
-the SQL but not the result, because InnoDB returns these rows in primary-key
-order anyway. That is a coincidence of the current query plan, not a contract, so
-the clause stays and both the loader and the test say plainly that the assertion
-is presently unfalsifiable.
+`sort_order`. Asserting it on *returned rows* cannot fail — removing the clause
+changes the SQL but not the result, because InnoDB returns these rows in
+primary-key order anyway, which is a query plan rather than a contract. So the
+clause is a single exported constant (`CHILD_ORDER`) used by all four child
+queries, and the test asserts **the clause**, which can fail. A second test
+asserts no query orders by anything else, because a tie-break on three levels
+and not the fourth is drift nobody notices until a diff is wrong.
+
+### Correction — one price shape meant one *spelling*
+
+The first implementation passed a stored `price_config` through unchanged and
+built `{ type, amount_minor }` from the columns when it was null. Both are
+"one shape" in structure and **two spellings in practice**: the stored JSON is
+`camelCase`, because its Zod schema is TypeScript, so the same document carried
+`amountMinor` for a value priced one way and `amount_minor` for one priced the
+other. A PHP evaluator reading `price_config['amount_minor']` would get `null`
+for half its values — precisely the disagreement the decision existed to prevent.
+
+`toPublishedPriceConfig` converts per pricing type. Explicitly, not with a
+camelCase-to-snake_case walker: a walker would rename keys inside merchant JSON
+and would convert whatever a future pricing type adds without anyone deciding.
+An unrecognised type passes through untouched, because the validator refuses
+unknown types at the boundary — a stored one means the registry grew and this did
+not, and visibly wrong beats silently unpriced.
+
+### Correction — the envelope is complete from v1
+
+`assignments` and `rules` were absent because Phase 13 and Phase 17 build them.
+But 7k freezes this document, and a plugin written against a shape without those
+keys would need a `schema_version` bump to gain them. They are emitted as empty
+arrays instead: a shape the plugin's first release already handles.

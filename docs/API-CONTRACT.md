@@ -461,11 +461,26 @@ a handler remembers to add.
 > work a merchant has done.
 
 The **published** projection deliberately omits `tenantId`, `rowVersion`,
-`createdAt`/`updatedAt` and `isEnabled`, and drops disabled groups, options and
-values entirely rather than flagging them. The config document sits on merchant
-servers, so a field appears only if the plugin genuinely needs it — and a
-disabled thing that ships with a flag makes every consumer responsible for
-remembering to check it.
+`publishedBy`, `createdAt`/`updatedAt` and `isEnabled`, and drops disabled
+groups, options and values entirely rather than flagging them. The config
+document sits on merchant servers, so a field appears only if the plugin
+genuinely needs it — and a disabled thing that ships with a flag makes every
+consumer responsible for remembering to check it.
+
+**The envelope is complete from v1.** `assignments` and `rules` are always
+present and always empty until Phase 13 and Phase 17 build them. A plugin
+written against a shape that lacks a key would need a `schema_version` bump to
+gain it later; an empty array is a shape its first release can already handle.
+
+**`price_config` is `snake_case`, always.** The stored JSON is `camelCase`
+because its schema is TypeScript (M7.3); the document is converted per pricing
+type — `amount_minor`, `basis_points`, `free_characters`, and tiers as
+`min_quantity` / `max_quantity` / `amount_minor`. Passing the stored object
+through unchanged put **two spellings of the same field in one document**,
+depending on whether a value was priced through `price_config` or through the
+`price_type` / `price_amount_minor` columns. An open-ended tier keeps
+`max_quantity: null` explicitly, because an evaluator must tell it apart from
+absent.
 
 > **This was designed as `DELETE /option-sets/:id?hard=true` and built as a
 > distinct path.** A query parameter that turns a reversible action into an

@@ -317,6 +317,66 @@ describe('serialization (e2e)', () => {
       expect(authoring.groups.some((g: { id: string }) => g.id === group)).toBe(false);
     }, 90_000);
 
+    /**
+     * Empty until Phase 13 and Phase 17, and present from the first release so a
+     * plugin never has to learn a key that appears later.
+     */
+    it('carries the full document envelope, including what is not built yet', async () => {
+      const document = (await get(`/option-sets/${setId}/preview`)).body.data;
+
+      expect(Object.keys(document).sort()).toEqual(['assignments', 'groups', 'id', 'rules', 'version']);
+      expect(document.assignments).toEqual([]);
+      expect(document.rules).toEqual([]);
+    }, 60_000);
+
+    /**
+     * The stored JSON is camelCase because its schema is TypeScript; the
+     * document is snake_case because its reader is PHP. A value priced through
+     * `price_config` and one priced through the columns must not spell the same
+     * field two ways in one document.
+     */
+    it('uses one spelling for every price, whichever path produced it', async () => {
+      const group = idOf(await post(`/option-sets/${setId}/groups`, { label: 'Pricing' }), 'group');
+      const option = idOf(
+        await post(`/groups/${group}/options`, {
+          key: 'priced',
+          label: 'Priced',
+          presentation: 'radio',
+        }),
+        'option',
+      );
+
+      idOf(
+        await post(`/options/${option}/values`, {
+          valueKey: 'from_columns',
+          label: 'Columns',
+          priceAmountMinor: 500,
+        }),
+        'value',
+      );
+      idOf(
+        await post(`/options/${option}/values`, {
+          valueKey: 'from_json',
+          label: 'Json',
+          priceConfig: { type: 'fixed', amountMinor: 250 },
+        }),
+        'value',
+      );
+
+      const published = (await get(`/option-sets/${setId}/preview`)).body.data;
+      const values = published.groups.find((g: { id: string }) => g.id === group).options[0]
+        .values as Array<{ value_key: string; price_config: Record<string, unknown> }>;
+
+      expect(values).toHaveLength(2);
+      values.forEach((value) => {
+        expect(value.price_config).toHaveProperty('amount_minor');
+        expect(value.price_config).not.toHaveProperty('amountMinor');
+      });
+
+      // And no camelCase anywhere in the document.
+      expect(JSON.stringify(published)).not.toMatch(/"[a-z]+[A-Z][a-zA-Z]*":/);
+    }, 90_000);
+
     it('refuses another tenant’s set as a 404', async () => {
       expect((await get(`/option-sets/${setId}/preview`, tokenB)).status).toBe(404);
     }, 60_000);

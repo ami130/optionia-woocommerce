@@ -107,6 +107,14 @@ export interface AuthoringOptionSet {
   /** The optimistic lock a client echoes back on a write ([7j]). */
   readonly rowVersion: number;
   readonly publishedAt: string | null;
+  /**
+   * Who published, as a user id.
+   *
+   * The editor shows "published by X at Y" and had only the timestamp. It stays
+   * out of the **published** projection — the plugin has no use for a user id,
+   * and a storefront document naming a merchant's staff is needless exposure.
+   */
+  readonly publishedBy: string | null;
   readonly publishedConfigVersion: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -166,8 +174,41 @@ export interface PublishedGroup {
   readonly items: readonly PublishedItem[];
 }
 
+/**
+ * Where a set applies, in the document's shape (M7.5).
+ *
+ * Assignment CRUD is Phase 13, so this is always empty today. It is **present
+ * and empty rather than absent**, because 7k freezes this document for v1 and a
+ * plugin written against a shape without the key would need a `schema_version`
+ * bump to gain it. An empty array is a shape a reader can handle from the first
+ * release; a missing key is one it has to learn.
+ */
+export interface PublishedAssignment {
+  readonly target_type: string;
+  readonly target_ref: string;
+  readonly priority: number;
+}
+
+/**
+ * Conditional rules, in the document's shape (M7.5).
+ *
+ * The evaluation engine is Phase 17 and rule CRUD with it, so this is always
+ * empty today — and present for the same reason as `assignments`.
+ */
+export interface PublishedRule {
+  readonly id: string;
+  readonly target_type: string;
+  readonly target_id: string;
+  readonly action: string;
+  readonly match_type: string;
+  readonly conditions: Record<string, unknown>;
+  readonly sort_order: number;
+}
+
 export interface PublishedOptionSet {
   readonly id: string;
   readonly version: number;
+  readonly assignments: readonly PublishedAssignment[];
   readonly groups: readonly PublishedGroup[];
+  readonly rules: readonly PublishedRule[];
 }
