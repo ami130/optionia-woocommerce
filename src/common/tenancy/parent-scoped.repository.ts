@@ -1,9 +1,11 @@
 import {
+  Brackets,
   DeepPartial,
   DeleteResult,
   EntityManager,
   FindManyOptions,
   FindOneOptions,
+  FindOperator,
   FindOptionsWhere,
   ObjectLiteral,
   Repository,
@@ -113,10 +115,24 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
   }
 
   async find(options: FindManyOptions<T> = {}): Promise<T[]> {
+    assertSupportedOptions(options);
+
     const query = this.scoped();
 
     applyWhere(query, this.alias, options.where);
     applyOrder(query, this.alias, options.order);
+
+    if (options.select) {
+      // Accepted in SUPPORTED_OPTIONS, so it has to actually do something — the
+      // whole point of this pass is that no option is accepted and discarded.
+      const fields = Array.isArray(options.select)
+        ? options.select
+        : Object.keys(options.select).filter(
+            (f) => (options.select as Record<string, unknown>)[f],
+          );
+
+      query.select(fields.map((f) => `${this.alias}.${String(f)}`));
+    }
 
     if (options.take !== undefined) {
       query.take(options.take);
@@ -130,6 +146,8 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
   }
 
   async findOne(options: FindOneOptions<T>): Promise<T | null> {
+    assertSupportedOptions(options);
+
     const query = this.scoped();
 
     applyWhere(query, this.alias, options.where);
@@ -149,6 +167,8 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
   }
 
   async count(options: FindManyOptions<T> = {}): Promise<number> {
+    assertSupportedOptions(options);
+
     const query = this.scoped();
 
     applyWhere(query, this.alias, options.where);
@@ -290,21 +310,103 @@ export abstract class ParentScopedRepository<T extends ObjectLiteral & { id: str
   }
 }
 
-/** Apply a caller's `where` to a builder, qualified by alias. */
+/**
+ * Options this repository implements.
+ *
+ * Anything else is **rejected**, not ignored. The signature is `FindManyOptions`
+ * because that is what callers expect to write, and a signature that accepts an
+ * option while discarding it fails invisibly at the call site — which is exactly
+ * how `relations` came to be silently dropped and an array `where` came to return
+ * every row in the tenant.
+ *
+ * Adding support for one of these is a small change here. Discovering that it
+ * never worked is a debugging session in a controller that looks correct.
+ */
+const SUPPORTED_OPTIONS = new Set(['where', 'order', 'skip', 'take', 'select']);
+
+/**
+ * Refuse an option this repository does not implement.
+ *
+ * `withDeleted` is deliberately unsupported rather than unimplemented: soft
+ * deletion is filtered in the join chain, and honouring `withDeleted` would mean
+ * a second predicate path that has to be kept correct alongside the first.
+ * Reading deleted rows is a deliberate act that belongs in
+ * `unsafeUnscopedRepository`, where it is visible in review.
+ */
+function assertSupportedOptions(options: object): void {
+  const unsupported = Object.keys(options).filter(
+    (key) => !SUPPORTED_OPTIONS.has(key) && (options as Record<string, unknown>)[key] !== undefined,
+  );
+
+  if (unsupported.length > 0) {
+    throw new Error(
+      `ParentScopedRepository does not support: ${unsupported.join(', ')}. ` +
+        `Supported: ${[...SUPPORTED_OPTIONS].join(', ')}. ` +
+        `Use the query builder via unsafeUnscopedRepository if this is genuinely ` +
+        `needed, and apply the tenant predicate yourself.`,
+    );
+  }
+}
+
+/**
+ * Apply a caller's `where`, qualified by alias.
+ *
+ * Handles the three shapes TypeORM allows and refuses nothing silently:
+ *
+ * - an object, applied as an AND of its fields
+ * - an **array**, applied as an OR of those objects — previously discarded
+ *   entirely, which returned every row in the tenant rather than the filtered set
+ * - a `FindOperator` value, expanded by TypeORM rather than interpolated —
+ *   `In([...])` previously became `= '[object Object]'`, which returned nothing
+ *   by accident while `Not()` and `IsNull()` would each have been wrong
+ *   differently
+ *
+ * The tenant predicate is applied with `andWhere` around whatever this produces,
+ * so an OR cannot widen past it.
+ */
 function applyWhere<T extends ObjectLiteral>(
   query: SelectQueryBuilder<T>,
   alias: string,
   where?: FindOptionsWhere<T> | FindOptionsWhere<T>[],
 ): void {
-  if (!where || Array.isArray(where)) {
-    // Arrays are an OR of conditions; the tenant predicate is already applied to
-    // the whole query with andWhere, so an OR cannot widen past it.
+  if (!where) {
     return;
   }
 
-  Object.entries(where).forEach(([field, value]) => {
-    query.andWhere(`${alias}.${field} = :w_${field}`, { [`w_${field}`]: value });
-  });
+  const clauses = Array.isArray(where) ? where : [where];
+
+  if (clauses.length === 0) {
+    return;
+  }
+
+  // Each clause becomes one bracketed AND group; the groups are ORed together.
+  query.andWhere(
+    new Brackets((outer) => {
+      clauses.forEach((clause, clauseIndex) => {
+        const condition = new Brackets((inner) => {
+          Object.entries(clause).forEach(([field, value], fieldIndex) => {
+            const key = `w${clauseIndex}_${fieldIndex}`;
+
+            if (value instanceof FindOperator) {
+              // Let TypeORM render IN, LIKE, IsNull and the rest, rather than
+              // stringifying the operator object into an equality.
+              inner.andWhere({ [field]: value } as never);
+
+              return;
+            }
+
+            inner.andWhere(`${alias}.${field} = :${key}`, { [key]: value });
+          });
+        });
+
+        if (clauseIndex === 0) {
+          outer.where(condition);
+        } else {
+          outer.orWhere(condition);
+        }
+      });
+    }),
+  );
 }
 
 /** Apply a caller's `order`, qualified by alias. */

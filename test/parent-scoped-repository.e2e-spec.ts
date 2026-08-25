@@ -1,5 +1,5 @@
 import { config as loadDotenv } from 'dotenv';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { runWithContext, type RequestContext } from '../src/common/context/request-context';
 import { ParentScopedRepository } from '../src/common/tenancy/parent-scoped.repository';
@@ -407,6 +407,126 @@ describe('ParentScopedRepository (integration)', () => {
 
       expect(await asTenant(B, () => options.count())).toBe(1);
       expect(await asTenant(B, () => values.count())).toBe(1);
+    });
+  });
+
+  describe('every option is honoured or refused', () => {
+    /**
+     * **The surface is enumerated here rather than sampled.**
+     *
+     * Three bugs of one shape were found by probing options one at a time:
+     * an array `where` returned every row in the tenant, `relations` was silently
+     * dropped, and a `FindOperator` became `= '[object Object]'`. Each was
+     * accepted by the type signature and discarded by the implementation, so the
+     * failure was invisible at the call site.
+     *
+     * This block covers all thirteen `FindManyOptions` keys — the five supported
+     * and the eight refused — so a future option cannot join them quietly.
+     */
+    describe('supported', () => {
+      it('where — object, as an AND of its fields', async () => {
+        const rows = await asTenant(A, () =>
+          options.find({ where: { key: 'size', label: 'shared-label' } as never }),
+        );
+
+        expect(rows.map((r) => r.id)).toEqual([`${A}-option`]);
+      });
+
+      /**
+       * An array is an OR. It previously returned every row in the tenant,
+       * because the clause was discarded entirely.
+       */
+      it('where — array, as an OR that still filters', async () => {
+        const none = await asTenant(A, () =>
+          options.find({ where: [{ id: 'nope-1' }, { id: 'nope-2' }] as never }),
+        );
+
+        expect(none).toHaveLength(0);
+
+        const one = await asTenant(A, () =>
+          options.find({ where: [{ id: `${A}-option` }, { id: 'nope' }] as never }),
+        );
+
+        expect(one.map((r) => r.id)).toEqual([`${A}-option`]);
+      });
+
+      /** An OR must not reach past the tenant predicate. */
+      it('where — array cannot reach another tenant', async () => {
+        const rows = await asTenant(A, () =>
+          options.find({ where: [{ id: `${A}-option` }, { id: `${B}-option` }] as never }),
+        );
+
+        expect(rows.map((r) => r.id)).toEqual([`${A}-option`]);
+      });
+
+      /**
+       * `In([...])` previously produced `= '[object Object]'`, which returned
+       * nothing — right by accident. `Not()` and `IsNull()` would each have been
+       * wrong in a different direction.
+       */
+      it('where — a FindOperator is expanded, not stringified', async () => {
+        const matched = await asTenant(A, () =>
+          options.find({ where: { id: In([`${A}-option`, 'nope']) } as never }),
+        );
+
+        expect(matched.map((r) => r.id)).toEqual([`${A}-option`]);
+
+        const negated = await asTenant(A, () =>
+          options.find({ where: { key: Not('size') } as never }),
+        );
+
+        expect(negated).toHaveLength(0);
+      });
+
+      it('order sorts within the tenant', async () => {
+        const rows = await asTenant(A, () => options.find({ order: { key: 'DESC' } }));
+
+        expect(rows).toHaveLength(1);
+      });
+
+      it('select returns the named columns', async () => {
+        const rows = await asTenant(A, () =>
+          options.find({ select: { id: true, key: true } as never }),
+        );
+
+        expect(rows[0].id).toBe(`${A}-option`);
+        expect(rows[0].key).toBe('size');
+      });
+
+      it('skip and take paginate within the tenant', async () => {
+        const page = await asTenant(A, () => options.find({ take: 1, skip: 0 }));
+
+        expect(page).toHaveLength(1);
+      });
+    });
+
+    describe('refused', () => {
+      /**
+       * Refused loudly rather than ignored. `relations` returning an entity with
+       * the field simply absent gives a caller no way to tell "not loaded" from
+       * "no rows".
+       */
+      it.each([
+        ['relations', { relations: { optionSet: true } }],
+        ['withDeleted', { withDeleted: true }],
+        ['cache', { cache: true }],
+        ['lock', { lock: { mode: 'pessimistic_read' } }],
+        ['loadEagerRelations', { loadEagerRelations: true }],
+        ['loadRelationIds', { loadRelationIds: true }],
+        ['comment', { comment: 'x' }],
+        ['transaction', { transaction: true }],
+      ])('%s throws rather than being dropped', async (name, option) => {
+        await expect(asTenant(A, () => options.find(option as never))).rejects.toThrow(
+          new RegExp(`does not support: ${name}`),
+        );
+      });
+
+      /** The message says what to do instead. */
+      it('names the supported options in the error', async () => {
+        await expect(
+          asTenant(A, () => options.find({ relations: {} as never })),
+        ).rejects.toThrow(/Supported: where, order, skip, take, select/);
+      });
     });
   });
 

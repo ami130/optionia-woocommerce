@@ -1,5 +1,5 @@
 import { config as loadDotenv } from 'dotenv';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import { buildDataSourceOptions } from '../src/config/data-source';
 import { loadConfig } from '../src/config/env';
@@ -233,6 +233,47 @@ describe('TenantScopedRepository (integration)', () => {
       await expect(asTenant(TENANT_A, () => sets.save(foreign as never))).rejects.toThrow(
         /Refusing to save/,
       );
+    });
+  });
+
+  describe('option handling, checked against the parent-scoped bugs', () => {
+    /**
+     * `ParentScopedRepository` builds its own query and dropped three options
+     * silently: an array `where`, a `FindOperator`, and `relations`. This class
+     * delegates to TypeORM's `find()`, so it should handle all three — asserted
+     * rather than assumed, because "the library does it" is exactly the reasoning
+     * that left the other one broken.
+     */
+    it('honours an array where as an OR that still filters', async () => {
+      const none = await asTenant(TENANT_A, () =>
+        sets.find({ where: [{ id: 'nope-1' }, { id: 'nope-2' }] as never }),
+      );
+
+      expect(none).toHaveLength(0);
+    });
+
+    it('cannot reach another tenant through an OR', async () => {
+      const rows = await asTenant(TENANT_A, () =>
+        sets.find({ where: [{ id: `${TENANT_A}-p1` }, { id: `${TENANT_B}-p1` }] as never }),
+      );
+
+      expect(rows.map((r) => r.id)).toEqual([`${TENANT_A}-p1`]);
+    });
+
+    it('expands a FindOperator rather than stringifying it', async () => {
+      const rows = await asTenant(TENANT_A, () =>
+        sets.find({ where: { id: In([`${TENANT_A}-p1`, 'nope']) } as never }),
+      );
+
+      expect(rows.map((r) => r.id)).toEqual([`${TENANT_A}-p1`]);
+    });
+
+    it('honours a relation request', async () => {
+      const rows = await asTenant(TENANT_A, () =>
+        sets.find({ relations: { store: true } as never }),
+      );
+
+      expect(rows[0]).toHaveProperty('store');
     });
   });
 
