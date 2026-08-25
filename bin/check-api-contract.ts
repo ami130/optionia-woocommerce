@@ -21,6 +21,8 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 
 import { AppModule } from '../src/app.module';
+import { Capability } from '../src/auth/permissions/capabilities';
+import { ErrorCode } from '../src/common/errors/error-codes';
 
 /** The verbs this API uses. Anything else is framework plumbing. */
 const DOCUMENTED_METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
@@ -162,6 +164,33 @@ function documentedRoutes(markdown: string): {
   return { all, built, marked };
 }
 
+/**
+ * Capability names the contract mentions, from table cells.
+ *
+ * The contract names a required capability per route, and `CapabilityGuard` fails
+ * closed — so a misspelled name is not a documentation typo, it is a route nobody
+ * can call. The failure surfaces as a merchant reporting a 403 on a button that
+ * should work.
+ *
+ * Read from backticked cells rather than prose, because prose discusses
+ * capabilities in the abstract ("editor cannot publish") without naming one.
+ */
+function referencedCapabilities(markdown: string): Set<string> {
+  const found = new Set<string>();
+
+  for (const line of markdown.split('\n')) {
+    if (!line.trim().startsWith('|')) {
+      continue;
+    }
+
+    for (const match of line.matchAll(/`([a-z_]+:[a-z_]+)`/g)) {
+      found.add(match[1]);
+    }
+  }
+
+  return found;
+}
+
 async function main(): Promise<void> {
   const contractPath = path.join(__dirname, '..', 'docs', 'API-CONTRACT.md');
   const contract = fs.readFileSync(contractPath, 'utf8');
@@ -233,6 +262,48 @@ async function main(): Promise<void> {
       failures.push(
         `${key} is documented without a build marker ([built], [7x] or [phase N])`,
       );
+    }
+  }
+
+  /**
+   * Every capability the contract names must exist in the permission matrix.
+   *
+   * A name that does not appear there cannot be granted to any role, so the route
+   * is refused for everyone including an owner.
+   */
+  const known = new Set<string>(Object.values(Capability));
+
+  for (const capability of referencedCapabilities(contract)) {
+    if (!known.has(capability)) {
+      failures.push(
+        `capability \`${capability}\` is named in the contract but does not exist ` +
+          `in the permission matrix — CapabilityGuard fails closed, so that route ` +
+          `would be uncallable`,
+      );
+    }
+  }
+
+  /**
+   * Every error code the API can return is mentioned somewhere in the contract.
+   *
+   * Deliberately "somewhere" rather than "in the table": a code explained in the
+   * prose of the endpoint that returns it is documented, and requiring the table
+   * specifically would fail on a correct document. What must not happen is a code
+   * the API sends that appears nowhere — a plugin author meeting an error they
+   * were never told about, in a client that cannot be redeployed.
+   */
+  const realCodes = new Set<string>(Object.values(ErrorCode));
+  const namedCodes = new Set<string>();
+
+  for (const match of contract.matchAll(/`([A-Z][A-Z_]{3,})`/g)) {
+    if (realCodes.has(match[1])) {
+      namedCodes.add(match[1]);
+    }
+  }
+
+  for (const code of realCodes) {
+    if (!namedCodes.has(code)) {
+      failures.push(`error code ${code} exists but is not documented in the contract`);
     }
   }
 
