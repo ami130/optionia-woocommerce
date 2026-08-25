@@ -431,6 +431,28 @@ precedent. A database read must never yield a working credential. Not bcrypt:
 these values are high-entropy and random, so there is nothing to brute-force, and
 a work factor would be paid on every refresh for no benefit.
 
+### users.sessions_invalidated_at
+
+Every access token issued before this instant is rejected.
+
+Access tokens are stateless and cannot be revoked individually — that is the trade
+they exist to make. Without this, logging out killed the refresh family and left
+the access token working for the rest of its lifetime, **measured at 15 minutes**.
+
+A deny-list would close the same gap at the cost of a database read on every
+authenticated request. This costs nothing extra: `TenantGuard` already reads the
+membership row per request, so the comparison rides on a query that happens
+anyway.
+
+Set on logout and on a successful password reset. Removal and demotion were
+already immediate, because `TenantGuard` reads the stored role rather than the
+token's copy.
+
+`iat` is in seconds and this column has millisecond precision, so the comparison
+rounds down and a token minted in the same second as the invalidation is
+rejected. Erring toward rejection is right: the cost is one unnecessary re-login,
+against a session that should already have ended.
+
 ### refresh_tokens
 
 One issued refresh token. Rotation mints a new row and stamps `rotated_at` on the

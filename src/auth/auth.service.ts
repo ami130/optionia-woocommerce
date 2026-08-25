@@ -199,6 +199,11 @@ export class AuthService {
     // suspected compromise leaves the attacker signed in.
     await this.sessions.revokeAllForUser(token.userId, RevokeReason.PASSWORD_CHANGED);
 
+    // Refresh tokens are gone, but an access token minted moments ago still
+    // works for its full lifetime. A reset prompted by a suspected compromise
+    // has to close that too.
+    await this.invalidateAccessTokens(token.userId);
+
     const user = await this.users.findOne({ where: { id: token.userId } });
 
     if (user) {
@@ -215,6 +220,18 @@ export class AuthService {
     }
 
     return true;
+  }
+
+  /**
+   * Invalidate every access token this user currently holds.
+   *
+   * Access tokens are stateless, so there is nothing to delete — instead a
+   * timestamp is written and `TenantGuard` rejects anything issued before it,
+   * using the membership read it already performs. That is why this costs
+   * nothing per request while a deny-list would cost a lookup on every one.
+   */
+  async invalidateAccessTokens(userId: string): Promise<void> {
+    await this.users.update({ id: userId }, { sessionsInvalidatedAt: new Date() });
   }
 
   /**

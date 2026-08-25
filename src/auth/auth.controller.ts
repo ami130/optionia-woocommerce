@@ -209,7 +209,14 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
   async logout(@Body() dto: RefreshDto): Promise<void> {
-    await this.sessions.revoke(dto.refreshToken ?? '');
+    const userId = await this.sessions.revoke(dto.refreshToken ?? '');
+
+    if (userId) {
+      // Closes the window this endpoint otherwise leaves open: the refresh
+      // family dies immediately, and without this the access token keeps working
+      // for the rest of its lifetime.
+      await this.auth.invalidateAccessTokens(userId);
+    }
   }
 
   /**

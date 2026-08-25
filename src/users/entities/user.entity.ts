@@ -51,4 +51,24 @@ export class User extends BaseEntity {
 
   @Column({ type: 'datetime', precision: 3, nullable: true })
   lastLoginAt: Date | null;
+
+  /**
+   * Every access token issued before this instant is rejected.
+   *
+   * Access tokens are stateless and cannot be revoked individually — that is the
+   * trade they exist to make. Without this, logging out left the token working
+   * for the remainder of its lifetime: measured at **15 minutes**, and "I logged
+   * out and it still worked" is a support ticket nobody can answer.
+   *
+   * A deny-list would close it too, at the cost of a database read on every
+   * authenticated request. This costs nothing extra: `TenantGuard` already reads
+   * the membership row per request, so the comparison rides on a query that
+   * happens anyway.
+   *
+   * Removal and demotion are already immediate — `TenantGuard` reads the stored
+   * role, so a token claiming `owner` resolves to whatever the row says. This
+   * closes the two cases that were left: logout and password reset.
+   */
+  @Column({ type: 'datetime', precision: 3, nullable: true })
+  sessionsInvalidatedAt: Date | null;
 }

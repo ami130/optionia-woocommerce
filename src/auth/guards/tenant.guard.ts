@@ -6,6 +6,7 @@ import { getContext } from '../../common/context/request-context';
 import { DomainException } from '../../common/errors/domain.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { TenantMember } from '../../tenants/entities/tenant-member.entity';
+import { User } from '../../users/entities/user.entity';
 
 /**
  * Confirms the caller is still a member of the tenant their token names.
@@ -24,6 +25,8 @@ export class TenantGuard implements CanActivate {
   constructor(
     @InjectRepository(TenantMember)
     private readonly members: Repository<TenantMember>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
   ) {}
 
   async canActivate(_context: ExecutionContext): Promise<boolean> {
@@ -44,6 +47,32 @@ export class TenantGuard implements CanActivate {
       // 401, not 403. A 403 would confirm the tenant exists and that this user
       // is simply not in it — from outside a tenant, it does not exist (ADR-010).
       throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    /**
+     * Reject a token issued before this user's sessions were invalidated.
+     *
+     * Logout and password reset set that timestamp. Without this an access token
+     * kept working for the rest of its lifetime after logout — measured at 15
+     * minutes — because a stateless token cannot be revoked individually.
+     *
+     * `iat` is in seconds and the column has millisecond precision, so the
+     * comparison rounds the timestamp down: a token minted in the same second as
+     * the invalidation is rejected rather than kept. Erring toward rejection is
+     * correct here — the cost is one unnecessary re-login, against a session that
+     * should have ended.
+     */
+    if (ctx.tokenIssuedAt !== undefined) {
+      const user = await this.users.findOne({
+        where: { id: ctx.userId },
+        select: { id: true, sessionsInvalidatedAt: true },
+      });
+
+      const invalidatedAt = user?.sessionsInvalidatedAt;
+
+      if (invalidatedAt && Math.floor(invalidatedAt.getTime() / 1000) >= ctx.tokenIssuedAt) {
+        throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+      }
     }
 
     // The stored role wins over the token's copy. A demotion has to take effect

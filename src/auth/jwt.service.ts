@@ -34,6 +34,8 @@ export interface AccessTokenClaims {
    */
   readonly tid?: string;
   readonly role?: string;
+  /** Issued-at, in seconds. Set by the library on every token. */
+  readonly iat?: number;
 }
 
 @Injectable()

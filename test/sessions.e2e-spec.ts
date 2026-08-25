@@ -271,7 +271,9 @@ describe('SessionsService (integration)', () => {
     it('ends a session on logout', async () => {
       const token = await sessions.issue(USER_ID, '1.2.3.4', 'agent');
 
-      expect(await sessions.revoke(token)).toBe(true);
+      // Returns the owner's id so the caller can invalidate their access
+      // tokens too — logout otherwise leaves those working until they expire.
+      expect(await sessions.revoke(token)).toBe(USER_ID);
       expect((await sessions.rotate(token, '1.2.3.4', 'agent')).failure).toBe('revoked');
     });
 

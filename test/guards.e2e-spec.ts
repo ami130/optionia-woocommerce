@@ -272,6 +272,67 @@ describe('guards (e2e)', () => {
     }, 40_000);
   });
 
+  describe('access tokens stop working when sessions are invalidated', () => {
+    /**
+     * **The window this closes was measured at 15 minutes.**
+     *
+     * Access tokens are stateless and cannot be revoked individually, so logout
+     * killed the refresh family and left the access token working for the rest
+     * of its lifetime. "I logged out and it still worked" is a support ticket
+     * nobody can answer.
+     *
+     * A deny-list would close it at the cost of a lookup on every authenticated
+     * request. This rides on the membership read `TenantGuard` already performs.
+     */
+    it('rejects an access token after logout', async () => {
+      const email = `${NS}-logout@example.com`;
+      const token = await tokenFor(email);
+
+      expect((await probe(token)).status).toBe(200);
+
+      const [row] = await dataSource.query(`SELECT id FROM users WHERE email = ?`, [email]);
+      await dataSource.query(
+        `UPDATE users SET sessionsInvalidatedAt = NOW(3) WHERE id = ?`,
+        [row.id],
+      );
+
+      // Same token, same second.
+      expect((await probe(token)).status).toBe(401);
+    }, 40_000);
+
+    /** One user's logout must not end another user's session. */
+    it('does not affect a different user', async () => {
+      const victim = await tokenFor(`${NS}-untouched@example.com`);
+
+      await dataSource.query(
+        `UPDATE users SET sessionsInvalidatedAt = NOW(3) WHERE email = ?`,
+        [`${NS}-logout@example.com`],
+      );
+
+      expect((await probe(victim)).status).toBe(200);
+    }, 40_000);
+
+    /** A token minted after the invalidation is legitimate again. */
+    it('accepts a token issued after the invalidation', async () => {
+      const email = `${NS}-relogin@example.com`;
+      await tokenFor(email);
+
+      await dataSource.query(
+        `UPDATE users SET sessionsInvalidatedAt = NOW(3) WHERE email = ?`,
+        [email],
+      );
+
+      // A second later, so `iat` is strictly greater than the timestamp.
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+      const login = await request(app.getHttpServer())
+        .post('/v1/auth/login')
+        .send({ email, password: PASSWORD });
+
+      expect((await probe(login.body.data.accessToken)).status).toBe(200);
+    }, 40_000);
+  });
+
   describe('public routes stay reachable', () => {
     /**
      * Authentication is global, so every unauthenticated route depends on a

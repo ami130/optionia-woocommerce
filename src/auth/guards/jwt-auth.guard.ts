@@ -52,6 +52,7 @@ export class JwtAuthGuard implements CanActivate {
       ctx.realm = 'tenant';
       ctx.tenantId = claims.tid;
       ctx.tenantRole = claims.role;
+      ctx.tokenIssuedAt = claims.iat;
     }
 
     return true;

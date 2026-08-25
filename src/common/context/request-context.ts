@@ -41,6 +41,14 @@ export interface RequestContext {
   tenantRole?: string;
 
   /**
+   * When the access token was issued, in seconds.
+   *
+   * Compared against the user's `sessionsInvalidatedAt` so a token issued before
+   * a logout is rejected before its natural expiry.
+   */
+  tokenIssuedAt?: number;
+
+  /**
    * Which identity realm authenticated this request.
    *
    * Three realms exist and must never blur: platform staff, tenant members, and

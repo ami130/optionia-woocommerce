@@ -193,16 +193,19 @@ export class SessionsService {
    * Revokes the family rather than the row, so a token already rotated out
    * cannot be used to continue after a logout.
    */
-  async revoke(plaintext: string): Promise<boolean> {
+  async revoke(plaintext: string): Promise<string | null> {
     const row = await this.tokens.findOne({ where: { tokenHash: hashToken(plaintext) } });
 
     if (row === null) {
-      return false;
+      return null;
     }
 
     await this.revokeFamily(row.familyId, RevokeReason.LOGOUT);
 
-    return true;
+    // The caller invalidates this user's access tokens. Returning the id rather
+    // than doing it here keeps this service about refresh tokens, which is the
+    // only thing it stores.
+    return row.userId;
   }
 
   /**

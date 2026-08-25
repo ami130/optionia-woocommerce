@@ -899,3 +899,66 @@ The e2e config needed `rootDir` moved to the project root for its patterns to
 resolve. The first attempt reported 0% with no files listed, which looked like
 nothing being covered and was in fact nothing being *instrumented* — the same
 shape as the doc checker that verified zero rules while reporting success.
+
+---
+
+## ADR-024 — Logout invalidates access tokens by timestamp, not a deny-list
+
+**Status:** accepted
+**Date:** Phase 6, close
+
+### Context
+
+Access tokens are stateless and short-lived, which is the whole point: no storage,
+no lookup, no shared state on the hottest path in the system. The cost is that an
+individual token cannot be revoked.
+
+A probe measured what that left open. After logout the access token still
+authenticated — **200 before, 200 after** — for the remainder of its lifetime. At
+a 15-minute TTL that is fifteen minutes during which "I logged out" is not true,
+and it is a support conversation nobody can win.
+
+Two cases were already closed and it is worth being precise about which: removal
+and demotion take effect immediately, because `TenantGuard` reads the membership
+row on every request and the stored role overrides the token's copy. The gap was
+logout and password reset only.
+
+### Options
+
+**A deny-list of revoked tokens.** Correct, and it costs a database read on every
+authenticated request forever — reintroducing exactly the state the stateless
+token exists to avoid, to fix a problem that occurs at logout.
+
+**A shorter access TTL.** Cheap, and it only shrinks the window rather than
+closing it. Five minutes is still five minutes, and it multiplies refresh traffic
+by three.
+
+**A per-user invalidation timestamp.** Closes it completely at **no extra
+per-request cost**, because `TenantGuard` already performs a read that this rides
+on.
+
+### Decision
+
+`users.sessions_invalidated_at`. `TenantGuard` rejects any token whose `iat`
+precedes it, using the membership query it already runs. Logout and password reset
+set it.
+
+`iat` is in seconds and the column is millisecond-precision, so the comparison
+rounds down: a token minted in the same second as the invalidation is rejected.
+The asymmetry is deliberate — one unnecessary re-login against a session that
+should have ended already.
+
+### Consequences
+
+Revocation is per user, not per session. Logging out of one device ends every
+access token that user holds, while their other refresh families survive and mint
+new ones on the next refresh. For a merchant dashboard that is closer to what
+"log me out" means than the alternative; if per-device revocation is ever needed,
+the timestamp moves onto the session family and this record should be amended
+rather than worked around.
+
+`TenantGuard` now reads two rows instead of one. Both are primary-key lookups on
+indexed columns, and the alternative was a third read on every request rather than
+a second on some.
+
+Proven by mutation: neutralising the check fails the logout test.
