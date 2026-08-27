@@ -726,6 +726,39 @@ a real choice — reload, or view what changed — rather than an error toast.
 Autosave carries the same check and **degrades gracefully**: an autosave conflict
 warns rather than discarding.
 
+The 409 carries the current version in `details`, so a client knows what to
+reload without a second request:
+
+```jsonc
+{ "error": { "code": "VERSION_MISMATCH",
+             "message": "This option set was changed by someone else.",
+             "details": [{ "field": "rowVersion", "code": "STALE",
+                           "params": { "current": 9 } }] } }
+```
+
+**`rowVersion` is optional, deliberately.** Omitting it means "I have not loaded
+a version", which scripts, migrations and background jobs legitimately have not.
+Requiring it would break every non-dashboard caller to guard against a failure —
+two editors overwriting each other — that only editors have.
+
+**Where it is carried.** `PATCH /option-sets/:id` and `POST
+/option-sets/:id/publish` take it in the body; `DELETE /option-sets/:id` takes it
+as a query parameter, because `DELETE` bodies are dropped by some proxies and
+refused by some clients.
+
+**A child edit makes a parent version stale.** Adding a group, option or value
+advances its set's `rowVersion`, so a set-level save loaded before that edit is
+refused. Without it, two people editing different parts of one set would never
+see each other.
+
+**The check is a predicate on the write, not a comparison before it.** Reading
+the version, comparing, then writing leaves a window in which another editor
+commits between the two. The `WHERE rowVersion = ?` means the database decides:
+of two concurrent saves exactly one matches a row. A pre-flight comparison also
+runs, for the cases a predicate cannot reach — a save that turns out to change
+nothing must still be refused if it is stale, or the *next* save is the silent
+overwrite.
+
 ---
 
 ## Deferred to later phases

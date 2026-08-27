@@ -22,6 +22,7 @@ import { RequireCapability } from '../auth/permissions/require-capability.decora
 import { PaginatedResult } from '../common/http/api-response.types';
 import {
   CreateOptionSetDto,
+  DeleteOptionSetDto,
   DuplicateOptionSetDto,
   ListOptionSetsDto,
   UpdateOptionSetDto,
@@ -85,7 +86,7 @@ export class OptionSetsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateOptionSetDto,
   ): Promise<OptionSet> {
-    return this.service.update(id, { name: dto.name });
+    return this.service.update(id, { name: dto.name }, dto.rowVersion);
   }
 
   /**
@@ -97,8 +98,11 @@ export class OptionSetsController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequireCapability(Capability.OPTION_SETS_DELETE)
-  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
-    await this.service.remove(id);
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: DeleteOptionSetDto,
+  ): Promise<void> {
+    await this.service.remove(id, query.rowVersion);
   }
 
   /**
@@ -163,7 +167,7 @@ export class OptionSetsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PublishDto,
   ): Promise<PublishResult> {
-    return this.publishing.publish(id, dto.note);
+    return this.publishing.publish(id, dto.note, dto.rowVersion);
   }
 
   /** Version history, newest first. Snapshots are omitted — they are large. */

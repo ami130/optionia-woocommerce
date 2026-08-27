@@ -1504,3 +1504,60 @@ rather than asserted.
 Blockers refuse; warnings publish and are returned in the response. A set with no
 product assignment warns rather than blocks, because build-publish-assign is a
 natural order of work and blocking would make it an error.
+
+---
+
+## ADR-033 — The optimistic lock is a predicate, and a pre-flight check
+
+**Status:** accepted
+**Date:** Phase 7, M7.4b
+
+### Context
+
+`rowVersion` has advanced on every mutation since 7e, and the DTO has accepted a
+client's `rowVersion` since then too — and **ignored it**. The column existed,
+the error code existed, the plumbing existed; nothing compared them.
+
+M7.4b's acceptance is behavioural: two concurrent editors both save, the second
+gets a 409 with a usable choice, and no write is silently lost.
+
+### Decision
+
+The check is a **predicate on the write** — `UPDATE … WHERE rowVersion = ?` — so
+the database decides. Read-compare-write leaves a window in which another editor
+commits between the read and the comparison, and the comparison then passes on a
+value that is already stale.
+
+A **pre-flight comparison also runs**, for two cases a predicate cannot reach:
+
+- A save that turns out to change nothing never reaches a write. A stale client
+  saving an unchanged name must still be refused — otherwise it believes it is
+  current, and its *next* save, on a value that does differ, is the silent
+  overwrite this exists to prevent.
+- Publish serializes a whole tree before writing. Reporting the conflict first
+  means the answer is prompt and specific rather than arriving after the
+  expensive work.
+
+The 409 carries the current version in `details`. A conflict that only says
+"you are stale" leaves a dashboard with an error toast; with the server's version
+it can fetch what changed and offer a real choice.
+
+`rowVersion` stays **optional**. Omitting it means "I have not loaded a version",
+which scripts and background jobs legitimately have not. Requiring it would break
+every non-dashboard caller to guard against a failure only editors have.
+
+### Consequences
+
+Delete carries its version as a **query parameter**: `DELETE` bodies are legal
+but dropped by some proxies and refused by some clients. A stale delete matters
+more than a stale rename, not less — it discards a colleague's work along with
+the set, and the cascade takes every group, option and value with it.
+
+**Two mutations escaped the first test pass, and both were real gaps.** Removing
+the write predicate failed nothing, because a single concurrent pair can be
+serialized by chance — the test now runs eight attempts and asserts the version
+advanced *exactly once*. Moving the pre-flight check after the no-op guard also
+failed nothing, because the test's "unchanged" save differed from the current
+name and so reached the write path anyway; it now changes the set's version via a
+child edit while leaving the name alone, which is the only shape that exercises
+that branch.

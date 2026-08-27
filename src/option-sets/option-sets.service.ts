@@ -12,6 +12,7 @@ import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
+import { assertVersionMatches } from './optimistic-lock';
 import { HardDeleteService, type PurgeResult } from './hard-delete.service';
 import { OptionSetsRepository, type ListFilters, type ListPage } from './option-sets.repository';
 import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/projections';
@@ -119,8 +120,23 @@ export class OptionSetsService {
    * ([7i]), and a `PATCH` that could set it would let a merchant mark a set
    * published with none of that having happened.
    */
-  async update(id: string, changes: { name?: string }): Promise<OptionSet> {
+  async update(
+    id: string,
+    changes: { name?: string },
+    expectedRowVersion?: number,
+  ): Promise<OptionSet> {
     const before = await this.findOne(id);
+
+    /**
+     * The conflict is answered **before** the no-op guards below (M7.4b).
+     *
+     * A client that loaded version 4, had its set changed by a colleague, and
+     * then saved an unchanged name must still be told. Returning early because
+     * nothing differs would hide a real conflict behind a coincidence — and the
+     * next save, on a value that *does* differ, would be the silent overwrite
+     * this exists to prevent.
+     */
+    assertVersionMatches(before.rowVersion, expectedRowVersion);
 
     if (changes.name === undefined) {
       return before;
@@ -135,7 +151,25 @@ export class OptionSetsService {
       return before;
     }
 
-    await this.repository.applyChange(id, { name } as Partial<OptionSet>);
+    const affected = await this.repository.applyChange(
+      id,
+      { name } as Partial<OptionSet>,
+      expectedRowVersion,
+    );
+
+    /**
+     * Lost the race.
+     *
+     * The row was live when it was read a moment ago, so `affected = 0` here
+     * means another editor committed in between and the version predicate no
+     * longer matches. Re-read to report the version they should reload.
+     */
+    if (affected === 0) {
+      throw DomainException.versionMismatch(
+        'This option set was changed by someone else.',
+        (await this.findOne(id)).rowVersion,
+      );
+    }
 
     await this.audit.record({
       action: AuditAction.OPTION_SET_UPDATED,
@@ -154,8 +188,18 @@ export class OptionSetsService {
    * unaffected, because `order_selections` stores keys denormalised (ADR-016).
    * Hard delete is a separate operation with its own precondition ([7g]).
    */
-  async remove(id: string): Promise<void> {
+  async remove(id: string, expectedRowVersion?: number): Promise<void> {
     const before = await this.findOne(id);
+
+    /**
+     * A stale delete matters **more** than a stale rename, not less.
+     *
+     * Deleting a set someone else has been editing discards their work along
+     * with it, and the cascade takes every group, option and value with it. A
+     * merchant who loaded the set before those edits existed did not decide to
+     * delete them.
+     */
+    assertVersionMatches(before.rowVersion, expectedRowVersion);
 
     // One instant for the whole cascade, so every row this action removed can be
     // identified together afterwards.

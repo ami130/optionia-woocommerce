@@ -67,8 +67,12 @@ export class OptionSetsRepository extends TenantScopedRepository<OptionSet> {
    * `rowVersion + 1` is computed by the database, not read-then-written, so two
    * concurrent updates cannot land on the same number.
    */
-  async applyChange(id: string, changes: Partial<OptionSet>): Promise<number> {
-    const result = await this.unsafeUnscopedRepository
+  async applyChange(
+    id: string,
+    changes: Partial<OptionSet>,
+    expectedRowVersion?: number,
+  ): Promise<number> {
+    const query = this.unsafeUnscopedRepository
       .createQueryBuilder()
       .update(OptionSet)
       .set({ ...changes, rowVersion: () => 'rowVersion + 1' } as never)
@@ -78,8 +82,22 @@ export class OptionSetsRepository extends TenantScopedRepository<OptionSet> {
       // covered by an isolation test of its own.
       .where('id = :id', { id })
       .andWhere('tenantId = :tenantId', { tenantId: this.tenantId })
-      .andWhere('deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL })
-      .execute();
+      .andWhere('deletedAt = :liveSentinel', { liveSentinel: LIVE_SENTINEL_SQL });
+
+    /**
+     * The optimistic lock, as a **predicate on the write** (M7.4b).
+     *
+     * Reading the version, comparing it, then writing leaves a window in which
+     * another editor commits between the two — and the check would pass on a
+     * value that is already stale by the time the update runs. Making it part
+     * of the `WHERE` means the database decides: exactly one of two concurrent
+     * saves matches a row, and the other sees `affected = 0`.
+     */
+    if (expectedRowVersion !== undefined) {
+      query.andWhere('rowVersion = :expectedRowVersion', { expectedRowVersion });
+    }
+
+    const result = await query.execute();
 
     return result.affected ?? 0;
   }

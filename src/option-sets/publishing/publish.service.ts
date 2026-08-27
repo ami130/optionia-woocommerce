@@ -7,6 +7,7 @@ import { getUserId } from '../../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../../common/database/base.entity';
 import { OptionSetStatus } from '../../common/database/enums';
 import { DomainException } from '../../common/errors/domain.exception';
+import { assertVersionMatches } from '../optimistic-lock';
 import { OptionRule } from '../entities/option-rule.entity';
 import { OptionSetAssignment } from '../entities/option-set-assignment.entity';
 import { OptionSetVersion } from '../entities/option-set-version.entity';
@@ -78,8 +79,28 @@ export class PublishService {
     return runPublishChecks(await this.context(optionSetId));
   }
 
-  async publish(optionSetId: string, note?: string): Promise<PublishResult> {
+  async publish(
+    optionSetId: string,
+    note?: string,
+    expectedRowVersion?: number,
+  ): Promise<PublishResult> {
     const context = await this.context(optionSetId);
+
+    /**
+     * Publishing a draft that changed since it was loaded (M7.4b).
+     *
+     * The stakes are higher than a rename: publish takes whatever the set
+     * currently contains and puts it in front of customers. A merchant who
+     * reviewed a draft, and whose colleague then changed it, would publish work
+     * they never saw.
+     *
+     * Checked here rather than inside the transaction so the answer names what
+     * is wrong before the expensive serialization runs. The lock taken in the
+     * transaction is what stops two publishes interleaving; this is what stops
+     * one publishing a draft its author had not read.
+     */
+    assertVersionMatches(context.tree.set.rowVersion, expectedRowVersion);
+
     const findings = runPublishChecks(context);
 
     if (hasBlockers(findings)) {

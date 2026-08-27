@@ -114,3 +114,17 @@ export class DuplicateOptionSetDto {
   @MaxLength(255)
   name?: string;
 }
+
+/**
+ * A delete carries its version as a **query parameter**.
+ *
+ * `DELETE` bodies are legal but poorly supported — proxies drop them and some
+ * HTTP clients refuse to send one — so the optimistic lock rides in the query
+ * string where every client can put it.
+ */
+export class DeleteOptionSetDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  rowVersion?: number;
+}

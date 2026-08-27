@@ -55,9 +55,22 @@ export class DomainException extends HttpException {
    *
    * Distinct from a plain conflict because the client can act on it — reload,
    * show the difference, and let the user decide. See M7.4b.
+   *
+   * **Carries the current version**, because a 409 that only says "you are
+   * stale" leaves the dashboard with nothing to offer but an error toast. With
+   * the server's version the client can fetch what changed and present a real
+   * choice — reload and lose local edits, or review the difference — which is
+   * the whole point of designing out silent overwrite rather than merely
+   * detecting it.
    */
-  static versionMismatch(message: string): DomainException {
-    return new DomainException(ErrorCode.VERSION_MISMATCH, message);
+  static versionMismatch(message: string, current?: number): DomainException {
+    return new DomainException(
+      ErrorCode.VERSION_MISMATCH,
+      message,
+      current === undefined
+        ? undefined
+        : [{ field: 'rowVersion', code: 'STALE', params: { current } }],
+    );
   }
 
   /** Authenticated, but lacking the required role or capability. */

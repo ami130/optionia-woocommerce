@@ -4,6 +4,18 @@ import { IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class PublishDto {
   /**
+   * The version the client loaded (M7.4b).
+   *
+   * Optional, like every other `rowVersion`: a script publishing on a schedule
+   * has no loaded version. A dashboard always sends one, because publishing a
+   * draft a colleague changed puts unreviewed work in front of customers.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  rowVersion?: number;
+
+  /**
    * Why this version was published.
    *
    * Optional, because requiring a note on every publish trains merchants to type
