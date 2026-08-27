@@ -1974,6 +1974,31 @@ on work rather than on a deliberate mutation.
 
 **The intermittent failure is reduced, not eliminated.** Two more contributors
 were found and fixed — a second tenant provisioned mid-test rather than in
-`beforeAll`, the same shape as the config-document fix. Five of six runs are now
-clean and the suite is 5× faster, which makes the remaining case rarer and
-cheaper to reproduce. It is still not diagnosed, and is recorded as such.
+`beforeAll`, the same shape as the config-document fix. The suite is 5× faster,
+which makes the remaining case rarer and cheaper to reproduce. It is still not
+diagnosed, and is recorded as such — though **nine consecutive clean runs** have
+now been observed, against roughly one failure in four before the harness.
+
+### Addendum — the refactor made a coverage hole visible
+
+A final audit asked a question the passing suite could not answer: *how many
+tests does removing each resolver break?*
+
+`ParentSetService.touchForOption` broke **none of 581**. It serves option update,
+delete, duplicate and reorder — four paths that must advance the parent set's
+`rowVersion`, or an editor holding a version from before a colleague's rename
+looks current and their next save overwrites it silently, which is the failure
+M7.4b exists to design out. The existing assertions used option *create*, which
+knows its group id and takes a different branch.
+
+`touchForValue` had the same shape one level down: five paths, one covered.
+
+**This predates the refactor.** The four original `touchSetForOption` call sites
+were equally unproven; extracting the concept gave it a name a mutation could
+target, and that is what surfaced it. Consolidation did not create the risk — it
+made the risk measurable.
+
+Removing each resolver now fails 12, 5 and 5 tests respectively.
+
+The lesson is the one this codebase keeps relearning in new places: **a green
+suite is evidence only after you have asked what it would take to make it red.**

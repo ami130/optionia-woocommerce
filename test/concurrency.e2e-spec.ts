@@ -376,5 +376,152 @@ describe('optimistic locking (e2e)', () => {
 
       expect((await patch(`/option-sets/${id}`, { name: 'Renamed', rowVersion })).status).toBe(409);
     }, 60_000);
+
+    /**
+     * Every option-level mutation, not only a create.
+     *
+     * A create knows its group id and advances the set directly; **update,
+     * delete, duplicate and reorder resolve the set from the group** through
+     * `ParentSetService.touchForOption`. Disabling that method entirely used to
+     * pass all 581 tests — the existing child-edit assertions took the other
+     * branch, so four paths that must advance `rowVersion` were unproven.
+     *
+     * The consequence of a miss is not cosmetic: an editor holding a version
+     * from before a colleague renamed an option would look current, and their
+     * next save would overwrite that rename with no conflict — the silent
+     * overwrite M7.4b exists to design out, one level down where nobody looked.
+     */
+    describe('an option-level edit advances its set', () => {
+      /** A set with a group, an option and a value, plus the loaded version. */
+      async function tree(): Promise<{
+        set: string;
+        group: string;
+        option: string;
+        value: string;
+        rowVersion: number;
+      }> {
+        const set = idOf(await post('/option-sets', { name: 'Tree', storeId }), 'set');
+        const group = idOf(await post(`/option-sets/${set}/groups`, { label: 'G' }), 'group');
+        const option = idOf(
+          await post(`/groups/${group}/options`, {
+            key: `k${randomUUID().slice(0, 8)}`,
+            label: 'O',
+            presentation: 'radio',
+          }),
+          'option',
+        );
+        const value = idOf(
+          await post(`/options/${option}/values`, { valueKey: 'v', label: 'V' }),
+          'value',
+        );
+
+        return {
+          set,
+          group,
+          option,
+          value,
+          rowVersion: (await get(`/option-sets/${set}`)).body.data.rowVersion as number,
+        };
+      }
+
+      it('after an option is renamed', async () => {
+        const { set, option, rowVersion } = await tree();
+
+        expect((await patch(`/options/${option}`, { label: 'Renamed' })).status).toBe(200);
+
+        expect((await get(`/option-sets/${set}`)).body.data.rowVersion).toBeGreaterThan(
+          rowVersion,
+        );
+      }, 60_000);
+
+      it('after an option is deleted', async () => {
+        const { set, option, rowVersion } = await tree();
+
+        expect((await del(`/options/${option}`)).status).toBe(204);
+
+        expect((await get(`/option-sets/${set}`)).body.data.rowVersion).toBeGreaterThan(
+          rowVersion,
+        );
+      }, 60_000);
+
+      it('after an option is duplicated', async () => {
+        const { set, option, rowVersion } = await tree();
+
+        expect((await post(`/options/${option}/duplicate`)).status).toBe(201);
+
+        expect((await get(`/option-sets/${set}`)).body.data.rowVersion).toBeGreaterThan(
+          rowVersion,
+        );
+      }, 60_000);
+
+      it('after a group’s options are reordered', async () => {
+        const { set, group, option, rowVersion } = await tree();
+
+        expect(
+          (await post(`/groups/${group}/reorder`, { options: [{ id: option, sortOrder: 20 }] }))
+            .status,
+        ).toBe(201);
+
+        expect((await get(`/option-sets/${set}`)).body.data.rowVersion).toBeGreaterThan(
+          rowVersion,
+        );
+      }, 60_000);
+
+      /**
+       * The same four paths one level down.
+       *
+       * `touchForValue` serves create, update, delete, duplicate and reorder,
+       * and only create was covered — the identical shape as `touchForOption`,
+       * found by asking how many tests each resolver's removal breaks rather
+       * than assuming a passing suite meant coverage.
+       */
+      it.each([
+        [
+          'a value is relabelled',
+          async (ids: { option: string; value: string }) =>
+            patch(`/values/${ids.value}`, { label: 'Renamed' }),
+          200,
+        ],
+        [
+          'a value is deleted',
+          async (ids: { option: string; value: string }) => del(`/values/${ids.value}`),
+          204,
+        ],
+        [
+          'a value is duplicated',
+          async (ids: { option: string; value: string }) =>
+            post(`/values/${ids.value}/duplicate`),
+          201,
+        ],
+        [
+          'an option’s values are reordered',
+          async (ids: { option: string; value: string }) =>
+            post(`/options/${ids.option}/reorder`, { values: [{ id: ids.value, sortOrder: 20 }] }),
+          201,
+        ],
+      ])('after %s', async (_label, act, expected) => {
+        const { set, option, value, rowVersion } = await tree();
+
+        expect((await act({ option, value })).status).toBe(expected);
+
+        expect((await get(`/option-sets/${set}`)).body.data.rowVersion).toBeGreaterThan(
+          rowVersion,
+        );
+      }, 90_000);
+
+      /**
+       * And the consequence the version exists for: a set-level save loaded
+       * before an option-level edit must be refused.
+       */
+      it('so a set-level save loaded beforehand is refused', async () => {
+        const { set, option, rowVersion } = await tree();
+
+        await patch(`/options/${option}`, { label: 'Changed by a colleague' });
+
+        expect((await patch(`/option-sets/${set}`, { name: 'Mine', rowVersion })).status).toBe(
+          409,
+        );
+      }, 60_000);
+    });
   });
 });
