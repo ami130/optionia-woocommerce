@@ -174,6 +174,38 @@ describe('store ownership (e2e)', () => {
       expect(response.status).toBe(404);
     });
 
+    /**
+     * Defence in depth for the `[8f]` scenario.
+     *
+     * The state guard already refuses to move a `DISCONNECTED` store back to
+     * `CONNECTED`, so an unspent code cannot resurrect it. Spending the code as
+     * well means no artefact survives that *looks* redeemable — the merchant's
+     * disconnect is a clear statement that the handshake is over.
+     */
+    it('spends any pending connection code', async () => {
+      const store = await connectedStore();
+
+      await dataSource.query(
+        `INSERT INTO store_connection_codes
+           (id, createdAt, updatedAt, siteUrl, callback, stateHash, challenge,
+            requestExpiresAt, storeId, codeHash, codeExpiresAt, approvedAt)
+         VALUES (UUID(), NOW(3), NOW(3), 'https://own8g-pending.example.com',
+                 'https://own8g-pending.example.com/cb', REPEAT('a', 64), REPEAT('b', 43),
+                 NOW(3) + INTERVAL 30 MINUTE, ?, REPEAT('c', 64),
+                 NOW(3) + INTERVAL 5 MINUTE, NOW(3))`,
+        [store.id],
+      );
+
+      await post(`/stores/${store.id}/disconnect`, owner);
+
+      const [row] = await dataSource.query(
+        `SELECT redeemedAt FROM store_connection_codes WHERE storeId = ?`,
+        [store.id],
+      );
+
+      expect(row.redeemedAt).not.toBeNull();
+    });
+
     it('records the disconnection', async () => {
       const store = await connectedStore();
 
@@ -240,6 +272,48 @@ describe('store ownership (e2e)', () => {
       const [row] = await dataSource.query(`SELECT status FROM stores WHERE id = ?`, [store.id]);
 
       expect(row.status).toBe(StoreStatus.CONNECTED);
+    });
+
+    /**
+     * An erroring store still holds a live credential, and a merchant who
+     * suspects that error *is* a compromised token is who rotation exists for.
+     *
+     * An earlier guard of `!== CONNECTED` refused them, making the security
+     * feature unavailable in the state that most suggests it is needed.
+     */
+    it('rotates a store in ERROR, which still holds a live credential', async () => {
+      const store = await connectedStore();
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.ERROR,
+        store.id,
+      ]);
+
+      const response = await post(`/stores/${store.id}/rotate-credential`, owner);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.token).toMatch(/^osk_live_/);
+      expect(await liveCredentials(store.id)).toBe(1);
+
+      // And the old one is dead, exactly as for a connected store.
+      const [old] = await dataSource.query(
+        `SELECT revokedAt FROM store_credentials WHERE tokenHash = ?`,
+        [createHash('sha256').update(store.token).digest('hex')],
+      );
+
+      expect(old.revokedAt).not.toBeNull();
+    });
+
+    /** A store still handshaking has no credential yet. */
+    it('answers 409 for a store that is still CONNECTING', async () => {
+      const store = await connectedStore();
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.CONNECTING,
+        store.id,
+      ]);
+
+      expect((await post(`/stores/${store.id}/rotate-credential`, owner)).status).toBe(409);
     });
 
     /** A disconnected store has no credential worth replacing. */

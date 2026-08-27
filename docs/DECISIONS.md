@@ -2129,6 +2129,41 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+#### An audit of `[8g]` — rotation was refused where it was most needed
+
+**A store in `ERROR` could not rotate its credential.** The guard read
+`status !== CONNECTED`, a literal reading of the contract's
+`CONFLICT (store is not connected)`. But an erroring store reached that state
+*from* `CONNECTED` on a sync or auth failure, and nothing revokes on the way in —
+M8.1b has it keep serving cache and recover, so **its credential is still live**.
+
+A merchant whose store is erroring, who suspects that error *is* a compromised
+token, is precisely who this endpoint exists for. The guard made the security
+feature unavailable in the state that most suggests it is needed. `ERROR` now
+rotates; `DISCONNECTED`, `REVOKED` and `CONNECTING` still cannot, because they
+hold no live credential to replace. The contract says that rather than naming one
+state.
+
+**`disconnect` discarded its transition result** — the same defect fixed in the
+reuse path two commits earlier, reproduced in code written after that fix. Only
+reachable if the store row is deleted mid-transaction, and nothing is corrupted
+when it happens (the store is gone; no credential outlives it), but the handler
+would have answered `{ status: 'disconnected' }` about a row that no longer
+exists.
+
+**Disconnect now spends any pending connection code.** `[8f]`'s guard already
+refuses to move a `DISCONNECTED` store to `CONNECTED`, so this changes no
+outcome — it is defence in depth. A code that looks redeemable for its remaining
+five minutes is an artefact someone will eventually reason about incorrectly, and
+a merchant's disconnect is a clear statement that the handshake is over.
+
+**Two things were tested rather than assumed, and both were fine.** Three
+concurrent rotations leave exactly **one** live credential — InnoDB row locking
+serialises them, so the race suspected during the audit does not exist. And the
+full M8.1b scenario, driven end to end, refuses the retry: initiate → authorize →
+merchant disconnects → plugin retries its valid code → `401`, store
+`disconnected`, zero live credentials, code spent.
+
 ### Addendum — `[8g]`, and a test that proved a constant
 
 **`STORE_REVOKED` was mapped to the wrong step, and the mechanism caught it.**

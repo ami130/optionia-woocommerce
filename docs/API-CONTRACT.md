@@ -1175,7 +1175,23 @@ The plugin's next request answers `401` and it surfaces a reconnect notice —
 [M8.6](../../developePlan.md)'s path, and the storefront keeps serving cache
 throughout.
 
-**Errors:** `NOT_FOUND`, `INSUFFICIENT_ROLE`, `CONFLICT` (store is not connected).
+**Which states may rotate.** `CONNECTED` and `ERROR`.
+
+`ERROR` is included deliberately, and the distinction matters: an erroring store
+**still holds a live credential** — it reached `ERROR` from `CONNECTED` on a sync
+or auth failure and nothing revokes on the way in, which is why
+[M8.1b](../../developePlan.md) has it keep serving cache and recover to
+`CONNECTED`. A merchant whose store is erroring, who suspects that error *is* a
+compromised token, is exactly the person this endpoint exists for. Refusing them
+would make the security feature unavailable in the one state that most suggests
+it is needed.
+
+`DISCONNECTED`, `REVOKED` and `CONNECTING` are refused because they hold no live
+credential to replace: the first two had theirs revoked, and the third has not
+been issued one yet. For those the answer is to connect, not to rotate.
+
+**Errors:** `NOT_FOUND`, `INSUFFICIENT_ROLE`, `CONFLICT` (the store holds no live
+credential to rotate).
 
 ---
 

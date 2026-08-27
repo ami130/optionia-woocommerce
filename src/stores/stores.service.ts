@@ -73,7 +73,37 @@ export class StoresService {
         [storeId],
       );
 
-      await this.state.transition(storeId, StoreStatus.DISCONNECTED, { manager });
+      /**
+       * Every state may reach `DISCONNECTED`, so this cannot refuse on state —
+       * but it reports no rows if the store was deleted between the lookup above
+       * and this write.
+       *
+       * Checked rather than discarded. Unchecked, the handler would answer
+       * `{ status: 'disconnected' }` for a store that no longer exists: nothing
+       * is corrupted, because the store is gone and no credential outlives it,
+       * but the response would be a statement about a row that isn't there.
+       */
+      const moved = await this.state.transition(storeId, StoreStatus.DISCONNECTED, { manager });
+
+      if (!moved) {
+        throw new DomainException(ErrorCode.NOT_FOUND, 'Store not found.');
+      }
+
+      /**
+       * Finding 3: spend any pending connection code for this store.
+       *
+       * `[8f]`'s state guard already refuses to move a `DISCONNECTED` store to
+       * `CONNECTED`, so an unspent code cannot resurrect it. This is defence in
+       * depth rather than a fix: a code that looks redeemable for its remaining
+       * five minutes is an artefact someone will eventually reason about
+       * incorrectly, and the merchant's disconnect is a clear statement that the
+       * handshake it belongs to is over.
+       */
+      await manager.query(
+        `UPDATE store_connection_codes SET redeemedAt = NOW(3), updatedAt = NOW(3)
+          WHERE storeId = ? AND redeemedAt IS NULL`,
+        [storeId],
+      );
 
       return Number(result.affectedRows ?? 0);
     });
@@ -114,16 +144,27 @@ export class StoresService {
     }
 
     /**
-     * Only a connected store has a credential worth replacing.
+     * Only a store holding a live credential has one worth replacing.
      *
-     * `CONFLICT` rather than `NOT_FOUND`: the store exists and the caller may
-     * see it, so hiding it would be misleading — this is a state problem, and
-     * the merchant can fix it by connecting.
+     * **`ERROR` counts.** An erroring store reached that state from `CONNECTED`
+     * on a sync or auth failure, and nothing revokes on the way in — its
+     * credential is still live, which is why M8.1b has it keep serving cache and
+     * recover. A merchant whose store is erroring and who suspects that error
+     * *is* a compromised token is exactly who this endpoint exists for; an
+     * earlier guard of `!== CONNECTED` refused them, making the security feature
+     * unavailable in the state that most suggests it is needed.
+     *
+     * `DISCONNECTED` and `REVOKED` had theirs revoked; `CONNECTING` has not been
+     * issued one. For those the answer is to connect, not to rotate.
+     *
+     * `CONFLICT` rather than `NOT_FOUND`: the store exists and the caller may see
+     * it, so hiding it would mislead — this is a state problem the merchant can
+     * fix.
      */
-    if (store.status !== StoreStatus.CONNECTED) {
+    if (store.status !== StoreStatus.CONNECTED && store.status !== StoreStatus.ERROR) {
       throw new DomainException(
         ErrorCode.CONFLICT,
-        'This store is not connected, so it has no credential to rotate.',
+        'This store holds no live credential to rotate.',
       );
     }
 
