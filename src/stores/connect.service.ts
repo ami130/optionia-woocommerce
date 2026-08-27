@@ -307,11 +307,11 @@ export class ConnectService {
        * same `TOKEN_INVALID` as every other, so the caller learns nothing about
        * why.
        */
-      const moved = await this.state.transition(row.storeId, StoreStatus.CONNECTED, {
+      const connected = await this.state.transition(row.storeId, StoreStatus.CONNECTED, {
         manager,
       });
 
-      if (!moved.moved) {
+      if (!connected) {
         throw ConnectService.invalidRequest();
       }
     });
@@ -371,10 +371,26 @@ export class ConnectService {
     );
 
     if (existing[0]) {
-      // Every state may begin a handshake, so this cannot legitimately refuse —
-      // it goes through the machine anyway so one place decides state, and so
-      // `check-store-state` has nothing to flag.
-      await this.state.transition(existing[0].id, StoreStatus.CONNECTING, { manager });
+      /**
+       * Every state may begin a handshake, so the machine cannot refuse this on
+       * state — but it *can* report no rows when the store was deleted between
+       * the lookup above and this write.
+       *
+       * The result is checked rather than discarded. Left unchecked, that race
+       * carried on to `UPDATE store_connection_codes SET storeId = …` and failed
+       * on the foreign key — a 500 from a constraint, where the condition was
+       * knowable one statement earlier. The data was never at risk; the error
+       * was just far from its cause.
+       */
+      const reconnecting = await this.state.transition(
+        existing[0].id,
+        StoreStatus.CONNECTING,
+        { manager },
+      );
+
+      if (!reconnecting) {
+        throw ConnectService.invalidRequest();
+      }
 
       return { storeId: existing[0].id, reconnected: true };
     }

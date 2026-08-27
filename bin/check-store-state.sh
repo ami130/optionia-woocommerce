@@ -51,34 +51,40 @@ ALLOWED='src/stores/store-state\.ts|src/stores/store-state\.service\.ts|src/comm
 # reason `check-secrets` strips them.
 strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 
-# A status value is *read* legitimately when comparing or reporting. It is
-# *written* when it reaches a persistence call. Rather than guess which is which
-# from one line, every mention outside the machine must be justified — and the
-# only justification the codebase needs today is passing one to
-# `StoreStateService.transition`, or naming one in an audit entry's `changes`.
-# `.spec.ts` files exercise the machine rather than bypass it — and the machine's
-# own tests must name every state to assert the table at all.
-CANDIDATES=$(grep -rn "StoreStatus\." src 2>/dev/null \
-             | grep -vE "$ALLOWED" \
-             | grep -vE '\.spec\.ts:' \
-             | strip_comments || true)
-
-# Allowed uses, each narrow and each visible in one grep:
+# Which files name a `StoreStatus` value, and are they entitled to?
 #
-#   `transition(..., StoreStatus.X`   the machine performing the write
+# Analysed per **file**, not per line. A line-based allowance has the same
+# fragility the detection had: a legitimate
+# `transition(\n  id,\n  StoreStatus.CONNECTING,\n)` split across lines stops
+# matching, and the gate fails on correct code. Flattening the file first means
+# formatting cannot change the verdict either way.
+#
+# A file is entitled when every status value it names is accounted for by one of:
+#   `transition(… StoreStatus.X …)`   the machine performing the write
 #   `changes: { … status: … }`        an audit entry *recording* a write
-#   `INSERT INTO stores`              an initial state, not a transition —
-#                                     there is no prior state to guard
-#
-# ⚠️ The audit allowance requires the `changes:` context, not a bare
-# `status: StoreStatus.X`. Allowing the bare key let
-# `manager.update(Store, id, { status: StoreStatus.CONNECTED })` through — an
-# audit entry and a TypeORM write are the same six characters, and only the
-# surrounding key tells them apart.
-OFFENDERS=$(echo "$CANDIDATES" \
-            | grep -vE "transition\(|changes: \{[^}]*status: StoreStatus\.|StoreStatus\.[A-Z_]+ \}, siteUrl" \
-            | grep -vE "INSERT INTO stores|StoreStatus\.CONNECTING\],?$" \
-            | grep -v '^$' || true)
+#   `INSERT INTO stores`              an initial state, not a transition
+OFFENDERS=""
+
+for f in $(grep -rl "StoreStatus\." src --include='*.ts' 2>/dev/null \
+           | grep -vE "$ALLOWED" | grep -vE '\.spec\.ts$'); do
+  FLAT=$(tr '\n' ' ' < "$f")
+
+  # Count the status values this file names...
+  NAMED=$(echo "$FLAT" | grep -oE "StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+
+  # ...and those each allowance accounts for.
+  VIA_TRANSITION=$(echo "$FLAT" | grep -oE "transition\([^)]*StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+  VIA_AUDIT=$(echo "$FLAT" | grep -oE "changes: \{[^}]*StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+  VIA_INSERT=$(echo "$FLAT" | grep -oE "INSERT INTO stores[^\`]*\`[^;]*StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+
+  ACCOUNTED=$((VIA_TRANSITION + VIA_AUDIT + VIA_INSERT))
+
+  if [ "$NAMED" -gt "$ACCOUNTED" ]; then
+    OFFENDERS="${OFFENDERS}${f} (names $NAMED, accounted $ACCOUNTED)\n"
+  fi
+done
+
+OFFENDERS=$(printf '%b' "$OFFENDERS" | grep -v '^$' || true)
 
 if [ -n "$OFFENDERS" ]; then
   fail "connection state named outside StoreStateService (route it through transition()):"

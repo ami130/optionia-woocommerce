@@ -144,6 +144,46 @@ jobs:
           JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
           CORS_ORIGINS: http://localhost:3000
 
+      # AC5's enforcement. Asserts that **every tenant-scoped route has a
+      # negative test** — the check that stops a new route shipping with no
+      # cross-tenant coverage at all.
+      #
+      # It existed for three phases and was never wired here, so the one gate
+      # standing behind tenant isolation ran only when someone invoked it by
+      # hand. A gate that does not run is worse than no gate: it reads as
+      # coverage in the list and verifies nothing in the pipeline.
+      - name: Every tenant-scoped route has a negative test
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+        run: bash bin/check-isolation.sh
+
+      # The spec a client developer reads. Asserts every [built] route appears
+      # in it, all three realms are declared, and every guarded operation
+      # references one — a scheme defined and applied to nothing would have a
+      # generated client treat the API as public.
+      - name: Generated spec describes every route and realm
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+        run: bash bin/check-openapi.sh
+
       # Seeds must be idempotent and must refuse production. Both were
       # previously verified by hand, once — so a regression would have passed CI
       # and been found by a developer discovering six plans.

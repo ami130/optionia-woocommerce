@@ -2184,6 +2184,64 @@ until the action is genuinely exercised. Mutation-proven.
 documented in `DATABASE.md`, and nothing had ever set it — so "connected since
 when?", the first question a support ticket asks, had no answer for any store.
 
+#### Two gates existed and never ran
+
+An audit found `check-isolation` and `check-openapi` **absent from `ci.yml`**
+entirely, and `npm run check` invoking two of seven gates.
+
+`check-isolation` is AC5's enforcement: it asserts that *every tenant-scoped route
+has a negative test*, which is what stops a new route shipping with no
+cross-tenant coverage. It had existed for three phases and ran only when someone
+invoked it by hand.
+
+This is the project's recurring failure one level up. Each gate carries a coverage
+floor so it cannot pass while inspecting nothing — and two of them were not in the
+pipeline at all, reading as coverage in the list while verifying nothing on any
+push. Adding `check-store-state` to CI without checking whether its neighbours
+were there is how it stayed hidden.
+
+All seven now run in CI and in `npm run check`.
+
+#### `DISCONNECTED` was the only state that could not be re-entered
+
+`CONNECTING`, `ERROR` and `REVOKED` were self-reachable; `DISCONNECTED` was not,
+with nothing recording why. `[8g]` would have met it immediately — a merchant
+double-clicking Disconnect gets `moved: false` on the second call, and the
+contract's response (`{"status": "disconnected", …}`) promises idempotency by
+returning the resulting state rather than a changed flag.
+
+Now self-reachable, with the rule asserted: every state may be re-entered
+**except `CONNECTED`**. That exception is the whole reason the table exists — it
+is what refuses a replayed connection code — so it is tested rather than left
+looking like the same oversight.
+
+#### `TransitionResult` is a boolean
+
+It carried a `from` field costing a `SELECT` on every refusal that **no caller
+read**. The same defect as the `tenantId` and `reason` parameters removed with it.
+A caller that ever needs the current state can read it once and say so, rather
+than every caller paying for it always.
+
+The reuse path also **discarded** its transition result. It cannot refuse on state
+— every state may begin a handshake — but it can report no rows if the store was
+deleted between the lookup and the write. Unchecked, that race continued to
+`UPDATE store_connection_codes SET storeId` and failed on the foreign key: a 500
+from a constraint, one statement away from where the condition was knowable. Data
+was never at risk; the error was just far from its cause.
+
+#### The gate's *allowance* had the fragility its detection used to have
+
+Rewriting the reuse call across four lines broke it: the `transition(` allowance
+matched per line, so a legitimate multi-line call stopped being recognised and the
+gate failed on correct code.
+
+It now analyses per **file**, flattening newlines first and counting how many
+`StoreStatus` values a file names against how many its allowances account for.
+Formatting can no longer change the verdict in either direction. Four evasions —
+multi-line SQL, `manager.update`, `manager.save`, and entity mutation — are all
+caught, a legitimate multi-line call passes, and the floor still fails if the enum
+is renamed.
+
 #### The gate I shipped caught one spelling, not the rule
 
 An audit of `[8f]` found `check-store-state` catching **none of three** realistic

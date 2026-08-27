@@ -4,13 +4,19 @@ import { DataSource, EntityManager } from 'typeorm';
 import { StoreStatus } from '../common/database/enums';
 import { allowedPredecessors } from './store-state';
 
-/** What a caller must know after attempting a transition. */
-export interface TransitionResult {
-  /** False when the store was not in a state this transition permits. */
-  readonly moved: boolean;
-  /** The state the store was in, for an audit entry or an error message. */
-  readonly from: StoreStatus | null;
-}
+/**
+ * Whether the store moved.
+ *
+ * A bare boolean, deliberately. An earlier version also returned the state the
+ * store was found in — which cost a `SELECT` on every refusal and **no caller
+ * ever read**. The same defect as the `tenantId` and `reason` parameters removed
+ * alongside it: a field that looks maintained, is not read, and charges a round
+ * trip on the failure path.
+ *
+ * If a caller ever needs the current state to explain a refusal, it can read it
+ * once and say so, rather than every caller paying for it always.
+ */
+export type TransitionResult = boolean;
 
 /**
  * Performs connection-state transitions, and refuses the ones M8.1b forbids.
@@ -62,7 +68,7 @@ export class StoreStateService {
     const from = allowedPredecessors(to);
 
     if (from.length === 0) {
-      return { moved: false, from: null };
+      return false;
     }
 
     const placeholders = from.map(() => '?').join(', ');
@@ -83,16 +89,8 @@ export class StoreStateService {
       [to, storeId, ...from],
     );
 
-    if (result.affectedRows !== 1) {
-      // Either the store is gone or it was not in a permitted state. Both are
-      // "did not move", and the caller decides what that means.
-      const [row] = await runner.query(`SELECT status FROM stores WHERE id = ? LIMIT 1`, [
-        storeId,
-      ]);
-
-      return { moved: false, from: (row?.status as StoreStatus) ?? null };
-    }
-
-    return { moved: true, from: null };
+    // Either the store is gone or it was not in a permitted state. Both are
+    // "did not move", and the caller decides what that means.
+    return result.affectedRows === 1;
   }
 }

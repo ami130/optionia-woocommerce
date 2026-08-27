@@ -63,6 +63,29 @@ describe('store state machine', () => {
   });
 
   /**
+   * Repeating a transition is a no-op, not a failure — with one exception.
+   *
+   * A merchant double-clicking Disconnect must not see an error for asking
+   * twice for a state the store is already in, and the contract's response
+   * agrees: it returns the resulting status rather than a changed flag.
+   *
+   * `CONNECTED` is excluded from its own predecessors deliberately. That is what
+   * refuses a replayed connection code, and it is the reason this table exists —
+   * so the asymmetry is asserted rather than left to look like an oversight.
+   */
+  describe('idempotency', () => {
+    it('lets every state be re-entered, except CONNECTED', () => {
+      ALL_STORE_STATUSES.filter((state) => state !== StoreStatus.CONNECTED).forEach((state) => {
+        expect(canTransition(state, state)).toBe(true);
+      });
+    });
+
+    it('refuses CONNECTED → CONNECTED, so a spent code cannot re-connect', () => {
+      expect(canTransition(StoreStatus.CONNECTED, StoreStatus.CONNECTED)).toBe(false);
+    });
+  });
+
+  /**
    * Every state must be reachable, or it is decoration.
    *
    * A state nothing can enter looks like a modelled possibility and is dead

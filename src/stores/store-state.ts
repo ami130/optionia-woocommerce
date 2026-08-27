@@ -65,12 +65,25 @@ const ALLOWED_FROM: Readonly<Record<StoreStatus, readonly StoreStatus[]>> = {
   /** A sync or auth failure, from a store that was working. */
   [StoreStatus.ERROR]: [StoreStatus.CONNECTED, StoreStatus.ERROR],
 
-  /** The merchant's own act, or a handshake that timed out. */
+  /**
+   * The merchant's own act, or a handshake that timed out.
+   *
+   * Self-reachable, like `ERROR` and `REVOKED`. Disconnecting an
+   * already-disconnected store is a no-op, not a failure — a merchant
+   * double-clicking the button must not see an error for asking twice for a
+   * state the store is already in. The contract's response says so: it returns
+   * the resulting status rather than a changed/unchanged flag.
+   *
+   * `CONNECTED` is the deliberate exception. Excluding it from its own
+   * predecessors is what refuses a replayed connection code, and that is the
+   * whole reason this table exists.
+   */
   [StoreStatus.DISCONNECTED]: [
     StoreStatus.CONNECTING,
     StoreStatus.CONNECTED,
     StoreStatus.ERROR,
     StoreStatus.REVOKED,
+    StoreStatus.DISCONNECTED,
   ],
 
   /** The cloud revoking: a site-URL change, or an operator acting. */
