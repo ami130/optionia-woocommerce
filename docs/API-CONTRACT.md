@@ -1140,6 +1140,19 @@ trigger instead of six.
 nullable so a store-authenticated write records an absent actor rather than an
 invented one.
 
+**`store_credentials.scopes` is not read, and that is correct.** Every store
+credential carries the same fixed scope — *read config, write events, heartbeat*
+([M6.5](../../developePlan.md)) — so there is nothing per-credential to check and
+the guard does not look. The column exists for a per-credential permission model
+that was considered and not adopted: a plugin install needs all three or it
+cannot function, and a credential that can heartbeat but not read config
+describes a broken install rather than a useful restriction.
+
+Stated here because a column named `scopes` that no code reads reads two ways to
+a later author — *enforcement is missing* or *enforcement is elsewhere* — and both
+are wrong. Reintroducing per-credential scopes would be a contract change, not an
+implementation detail.
+
 **`last_used_at` is throttled to one write per 5 minutes.** The column answers
 "when did this store last talk to us", a question asked in days; writing it on
 every request would turn a read path into a write path, and the heartbeat alone
@@ -1161,6 +1174,12 @@ A daily authenticated ping. The support and analytics backbone
 before a merchant reports them.
 
 **Rate limit:** 60 per hour, per store — a daily job with retries, not a stream.
+Keyed on the **hash of the presented credential**, because the throttler is
+ordered ahead of authentication (so an unauthenticated flood costs no database
+lookup) and `store_id` is not yet in context when the key is computed. A
+credential belongs to one store, so the two are equivalent here. Without this the
+key falls back to the address, and an agency running many shops on one server
+gives all of them a single shared budget.
 **Response:** `200 OK`
 
 ```jsonc

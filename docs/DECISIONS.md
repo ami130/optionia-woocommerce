@@ -2101,6 +2101,57 @@ consumers — support, stale-install detection — ask in days, and the heartbea
 alone is 60 requests an hour per store. The write is also swallowed on failure: a
 telemetry column must not turn an authenticated request into a 500.
 
+### Addendum — an audit of `[8c]`, and four things it found
+
+**The OpenAPI spec still said `aud: store`.** The one artefact facing a client
+developer — generated, served at `/docs` — carried the exact belief the step
+existed to delete. It survived because the sweep searched for the symbol
+`TokenAudience.STORE` and the spec spells the concept, not the symbol. Whoever
+wrote it had already omitted `bearerFormat: 'JWT'` for that scheme alone, so the
+machine-readable half was right and only the prose was wrong; the prose is what a
+human reads. Corrected to say opaque token, no claims, no `aud`.
+
+**`store_credentials.scopes` is never read, and that is correct.** M6.5 gives
+every store credential the same fixed scope — read config, write events,
+heartbeat — so there is nothing per-credential to check. But a column named
+`scopes` that no code reads says two contradictory things to a later author
+(*enforcement is missing* / *enforcement is elsewhere*), and both are wrong. Now
+stated in the contract, along with why a per-credential model was not adopted: a
+plugin install needs all three permissions or it cannot function.
+
+**The fail-closed claim was reasoning, not a test.** `[8c]` argued that a route
+carrying `@StoreRoute()` without `StoreTokenGuard` is *unusable rather than
+unprotected*, because the scoped repository calls `requireTenantId()` and it
+throws. The test only asserted the context was **empty** — which shows nothing was
+established, not that the absence is safe. The other half is now a test: the
+unguarded probe has a route that attempts a scoped read, and it must 500.
+Mutation-proven by making `requireTenantId()` return `''` instead of throwing.
+
+**"60 per hour, per store" was specified and not implemented.**
+`AuthThrottlerGuard` keys on IP, falling back to IP alone when a request carries
+no email — and a store request never does. Every store behind one address shared
+a bucket, so an agency's busy shop throttled its quiet ones, while one store
+moving between addresses never met its limit at all.
+
+The fix has an ordering constraint worth recording: the throttler is deliberately
+registered **ahead** of authentication, so an unauthenticated flood is rejected
+before it costs a signature check or a database lookup — which means `store_id`
+is not in context when the key is computed. Keying on the **hash of the presented
+credential** needs no lookup and is equivalent, since a credential belongs to one
+store. Rotation starts a fresh budget, which is correct: rotation is
+capability-gated, not attacker-triggerable.
+
+The realm is decided by the **route prefix**, not by the token's shape — a store
+credential and a tenant JWT are both opaque strings in one header, and inferring
+from shape would key a merchant into the store bucket. `/stores/:id/credential`
+is a *tenant* route, so the match is on the path segment: a prefix match captures
+it wrongly, and that mutation is caught.
+
+`getTracker` had **no test at all** before this. A rate-limit key is not
+observable from a passing request, so nothing else would ever have caught the
+gap — which is why a specified-but-unimplemented limit survived into the
+contract.
+
 **Eleven mutations, one of which survived.** Removing the revocation check, the
 expiry check, the stand-aside, the context write and the throttle each broke
 tests. Changing the guard's `INNER JOIN` to a `LEFT JOIN` broke **nothing** — the

@@ -8,7 +8,7 @@ import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { StoreRoute } from '../src/auth/guards/store-route.decorator';
 import { StoreTokenGuard } from '../src/auth/guards/store-token.guard';
 import { TenantGuard } from '../src/auth/guards/tenant.guard';
-import { getContext } from '../src/common/context/request-context';
+import { getContext, requireTenantId } from '../src/common/context/request-context';
 import { generateToken, hashToken } from '../src/common/crypto/tokens';
 
 import { bootstrapTestApp, createHarness, type Harness } from './harness';
@@ -74,6 +74,21 @@ class UnguardedStoreProbeController {
     const ctx = getContext();
 
     return { realm: ctx?.realm, tenantId: ctx?.tenantId, storeId: ctx?.storeId };
+  }
+
+  /**
+   * What a real handler on such a route would do: ask for the tenant.
+   *
+   * The empty context above is only half the argument — it shows nothing was
+   * established, not that the absence is *safe*. This is the other half, and it
+   * is the half that matters: the scoped repository layer calls
+   * `requireTenantId()` on every query, and it throws rather than returning
+   * unscoped rows. Asserted rather than reasoned about, because "it would throw"
+   * is exactly the kind of claim this codebase has been wrong about before.
+   */
+  @Get('scoped-read')
+  scopedRead(): { tenantId: string } {
+    return { tenantId: requireTenantId() };
   }
 }
 
@@ -334,6 +349,23 @@ describe('store realm (e2e)', () => {
       expect(response.body.data.realm).toBeUndefined();
       expect(response.body.data.tenantId).toBeUndefined();
       expect(response.body.data.storeId).toBeUndefined();
+    });
+
+    /**
+     * The fail-closed half, and the reason `@StoreRoute()` is safe where
+     * `@Public()` would not be.
+     *
+     * A route that reaches a handler with no tenant cannot quietly read another
+     * tenant's rows — the first scoped query throws. A `500` here is the correct
+     * outcome: the route is misconfigured, and failing loudly is what stops the
+     * misconfiguration from becoming a data leak.
+     */
+    it('cannot perform a tenant-scoped read', async () => {
+      const response = await request(app.getHttpServer()).get(
+        '/v1/unguarded-store-probe/scoped-read',
+      );
+
+      expect(response.status).toBe(500);
     });
 
     /**

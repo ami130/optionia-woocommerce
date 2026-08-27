@@ -58,11 +58,23 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
       },
       'platform',
     )
+    /**
+     * Deliberately **no `bearerFormat`**, because this one is not a JWT.
+     *
+     * A store presents an opaque credential whose SHA-256 lives in
+     * `store_credentials`, checked against the database on every request — M8.6
+     * requires revocation to be immediate and a JWT cannot be un-issued.
+     * Declaring a format here would tell a generated client to expect a
+     * decodable token and invite it to read claims that do not exist.
+     */
     .addBearerAuth(
       {
         type: 'http',
         scheme: 'bearer',
-        description: 'A store credential, issued to a plugin install. `aud: store`.',
+        description:
+          'A store credential, issued to a plugin install. An **opaque token**, ' +
+          'not a JWT — it carries no claims and has no `aud`. Revoking it in ' +
+          '`store_credentials` takes effect on the next request.',
       },
       'store',
     )
