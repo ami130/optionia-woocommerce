@@ -2129,6 +2129,43 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+#### An audit written inside a transaction survives its rollback
+
+`authorize` recorded its audit entry **inside** `dataSource.transaction`, while
+every state change there used the transactional `manager`. `AuditService` writes
+through its own repository — a different connection — so the entry was never part
+of the transaction at all.
+
+Demonstrated rather than argued: an audit written inside a deliberately
+rolled-back transaction left the row behind, `PHANTOM_DELTA 1`. A phantom entry is
+worse than a missing one, because it sends whoever reads the trail looking for a
+store that does not exist.
+
+Every other service in this codebase records **after** its transaction commits,
+including `duplicate`, which has one. The trade is the opposite failure — a commit
+whose audit write then fails — and `record` swallows that deliberately, leaving an
+incomplete trail rather than undoing an action that already happened. Moving the
+call out restores the convention; the mutation putting it back is now caught.
+
+#### `tokensMatch` had no caller, and one site needed it
+
+`src/common/crypto/tokens.ts` has provided a timing-safe comparison since Phase 6
+with **zero production callers**, which reads as a security helper protecting
+nothing.
+
+The reason turned out to be structural rather than neglect: every secret in this
+system — refresh tokens, password resets, email verification, store credentials —
+is found by an **indexed lookup on its hash**, so the database does the matching
+and no comparison happens in our code at all. `[8d]`'s `state` check is the first
+and only in-process hash comparison in the codebase.
+
+It now uses `tokensMatch`. The channel is weak on a digest — an attacker cannot
+walk it byte-by-byte without already holding the preimage — but the correct
+comparison costs nothing, and leaving the single comparison site on `!==` is what
+makes a helper look decorative. The alternative considered and rejected was
+deleting `tokensMatch`: `[8e]` compares a PKCE verifier against a stored
+challenge, which is the second such site.
+
 #### Three gates excluded public routes by path
 
 `check-openapi`, `check-isolation` and the OpenAPI e2e suite each skipped

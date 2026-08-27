@@ -4,7 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { StorePlatform, StoreStatus } from '../common/database/enums';
-import { generateToken, hashToken } from '../common/crypto/tokens';
+import { generateToken, hashToken, tokensMatch } from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { AuthorizeDto, InitiateDto } from './dto/connect.dto';
@@ -118,19 +118,32 @@ export class ConnectService {
      * Distinguishing them would let a caller enumerate request ids and learn
      * which exist, which is exactly what the rate limit and this uniform error
      * exist to prevent together.
+     *
+     * `state` is compared with `tokensMatch` rather than `!==`.
+     *
+     * This is the **only** in-process hash comparison in the codebase: every
+     * other secret — refresh tokens, password resets, store credentials — is
+     * found by an indexed lookup on its hash, where the database does the
+     * matching and no timing channel exists in our code. That is why
+     * `tokensMatch` was written for Phase 6 and had no caller until now.
+     *
+     * The channel is weak on a digest, since an attacker cannot walk it
+     * byte-by-byte without already holding the preimage. It is used anyway
+     * because the correct comparison costs nothing here and leaving the one
+     * comparison site on `!==` is what makes a helper look decorative.
      */
     if (
       !request ||
       request.approvedAt !== null ||
       new Date(request.requestExpiresAt).getTime() <= Date.now() ||
-      hashToken(dto.state) !== request.stateHash
+      !tokensMatch(hashToken(dto.state), request.stateHash)
     ) {
       throw ConnectService.invalidRequest();
     }
 
     const code = generateToken();
 
-    return this.dataSource.transaction(async (manager) => {
+    const { storeId, reconnected } = await this.dataSource.transaction(async (manager) => {
       /**
        * Claim the request with a conditional write, not a read then a write.
        *
@@ -165,22 +178,38 @@ export class ConnectService {
         dto.request,
       ]);
 
-      await this.audit.record({
-        action: reconnected
-          ? AuditAction.STORE_RECONNECT_AUTHORIZED
-          : AuditAction.STORE_CONNECT_AUTHORIZED,
-        resourceType: 'store',
-        resourceId: storeId,
-        changes: { siteUrl: request.siteUrl, status: StoreStatus.CONNECTING },
-      });
-
-      const redirect = new URL(request.callback);
-
-      redirect.searchParams.set('code', code.plaintext);
-      redirect.searchParams.set('state', dto.state);
-
-      return { redirect_url: redirect.toString() };
+      return { storeId, reconnected };
     });
+
+    /**
+     * Audited **after** the transaction commits, never inside it.
+     *
+     * `AuditService` writes through its own repository — a different connection
+     * — so an entry recorded inside the callback survives a rollback and reports
+     * a connection that never happened. A phantom entry is worse than a missing
+     * one: it sends whoever reads the trail looking for a store that does not
+     * exist. Every other service in this codebase records after its transaction
+     * for the same reason.
+     *
+     * The trade is the opposite failure — a commit whose audit write then fails —
+     * and `record` swallows that deliberately, leaving an incomplete trail rather
+     * than undoing an action that already happened.
+     */
+    await this.audit.record({
+      action: reconnected
+        ? AuditAction.STORE_RECONNECT_AUTHORIZED
+        : AuditAction.STORE_CONNECT_AUTHORIZED,
+      resourceType: 'store',
+      resourceId: storeId,
+      changes: { siteUrl: request.siteUrl, status: StoreStatus.CONNECTING },
+    });
+
+    const redirect = new URL(request.callback);
+
+    redirect.searchParams.set('code', code.plaintext);
+    redirect.searchParams.set('state', dto.state);
+
+    return { redirect_url: redirect.toString() };
   }
 
   /**

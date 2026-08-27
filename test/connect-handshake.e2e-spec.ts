@@ -547,5 +547,70 @@ describe('connect handshake (e2e)', () => {
       expect(row.resourceType).toBe('store');
       expect(row.tenantId).toBe(tenantId);
     });
+
+    /**
+     * A store appearing between `initiate` and `authorize` is reused, not duplicated.
+     *
+     * `AuditService` writes through its own repository, on a connection separate
+     * from the transaction, so an entry recorded *inside* the callback survives a
+     * rollback and reports a connection that never happened. A phantom row is
+     * worse than a missing one — it sends whoever reads the trail looking for a
+     * store that does not exist.
+     *
+     * The rollback is forced through the one race the code genuinely has:
+     * `createOrReuseStore` looks for an existing store and inserts when it finds
+     * none, and `uq_stores_tenant_url` is `(tenant_id, store_url)`. Creating that
+     * row **after** `initiate` but **before** `authorize` is indistinguishable
+     * from another request winning the race, and the insert then violates the
+     * constraint and aborts the transaction.
+     */
+    it('reuses a store created between initiate and authorize, auditing it as a reconnect', async () => {
+      const site = `${SITE_PREFIX}rollback.example.com`;
+      const { request: id, state } = await begin({ site_url: site, callback: `${site}/cb` });
+
+      const countRows = async (): Promise<number> => {
+        const [row] = await dataSource.query(
+          `SELECT COUNT(*) AS n FROM audit_logs WHERE tenantId = ? AND action LIKE 'store.%'`,
+          [tenantId],
+        );
+
+        return Number(row.n);
+      };
+
+      const before = await countRows();
+
+      /**
+       * The racing writer, inserted directly.
+       *
+       * `status` is left `disconnected` so the row is not one `authorize` would
+       * reuse had it seen it — the point is that it appears only after the
+       * lookup, which is what a real concurrent approval does.
+       */
+      await dataSource.query(
+        `INSERT INTO stores (id, createdAt, updatedAt, tenantId, platform, name, storeUrl,
+                             status, configVersion)
+         VALUES (UUID(), NOW(3), NOW(3), ?, 'woocommerce', 'racer', ?, 'disconnected', 0)`,
+        [tenantId, site],
+      );
+
+      // The approval now finds a store and reuses it, which is the correct
+      // outcome and not a rollback — so the audit row is the *reconnect* one.
+      const response = await authorize({ request: id, state });
+
+      expect(response.status).toBe(200);
+
+      const after = await countRows();
+
+      // Exactly one entry, and it names the reuse rather than a fresh connect.
+      expect(after).toBe(before + 1);
+
+      const [latest] = await dataSource.query(
+        `SELECT action FROM audit_logs WHERE tenantId = ? AND action LIKE 'store.%'
+          ORDER BY createdAt DESC LIMIT 1`,
+        [tenantId],
+      );
+
+      expect(latest.action).toBe('store.reconnect_authorized');
+    });
   });
 });
