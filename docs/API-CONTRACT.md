@@ -1097,15 +1097,15 @@ unaudited because at that point no tenant exists to name.
 
 | Route | Capability | State |
 |---|---|---|
-| `POST /stores/:id/disconnect` | `stores:connect` | `[8g]` |
-| `POST /stores/:id/rotate-credential` | `stores:rotate_credential` | `[8g]` |
+| `POST /stores/:id/disconnect` | `stores:connect` | `[built]` |
+| `POST /stores/:id/rotate-credential` | `stores:rotate_credential` | `[built]` |
 
 > The store **list** and **detail** reads belong to Phase 13
 > ([M13.3](../../developePlan.md)), and product listing to Phase 19. They are in
 > the deferred table, not here, because a contract row is a commitment to a shape
 > and Phase 8 does not know theirs.
 
-### `POST /v1/stores/:id/disconnect` **[8g]**
+### `POST /v1/stores/:id/disconnect` **[built]**
 
 The merchant disconnects a store from the dashboard. Revokes every live credential
 and moves the store to `DISCONNECTED`.
@@ -1132,7 +1132,7 @@ ability to publish, not their shop.
 
 ---
 
-### `POST /v1/stores/:id/rotate-credential` **[8g]**
+### `POST /v1/stores/:id/rotate-credential` **[built]**
 
 Issues a new credential and revokes the old one. For a merchant who believes their
 token leaked, and for scheduled rotation.
@@ -1146,12 +1146,26 @@ rotation invalidates a live credential.
 { "reason": "suspected disclosure" }
 
 // Response
-{ "data": { "token": "osk_live_…", "prefix": "osk_live", "rotated_at": "…" } }
+{ "data": { "token": "osk_live_…", "prefix": "7Kd2mQ8x", "rotated_at": "…" } }
 ```
 
 | Field | Rules |
 |---|---|
-| `reason` | optional, ≤ 255 chars. Recorded in the audit trail, shown to the merchant in the store's history |
+| `reason` | optional, ≤ 255 chars. Recorded in the audit trail |
+
+**`prefix` is the eight characters *after* `osk_live_`, not the marker itself.**
+An earlier example here showed `"osk_live"`, which was written before `[8e]`
+settled the question and is the opposite of what the column means: every
+credential begins with the same nine characters, so storing those would make
+`store_credentials.token_prefix` a constant that identifies nothing. The marker
+exists to make a leaked token recognisable; the prefix exists to tell two tokens
+apart.
+
+**Where the reason is read** is deferred to [Phase 26](../../developePlan.md), with
+the rest of the audit trail. An earlier draft promised it "shown to the merchant in
+the store's history" — no such route exists in Phase 8 or is planned in any of its
+remaining steps, so that was a promise with no owner. The reason *is* captured, on
+the audit entry, and the surface that displays it arrives with the audit reader.
 
 **The old credential is revoked immediately, not at a grace period.** A rotation a
 merchant asked for because they think the token leaked must take effect at once;

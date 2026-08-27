@@ -91,6 +91,15 @@ export const AuditAction = {
   STORE_DISCONNECTED: 'store.disconnected',
   STORE_REVOKED: 'store.revoked',
   STORE_ERRORED: 'store.errored',
+
+  /**
+   * A credential replaced without the store changing state.
+   *
+   * Rotation is **not** a transition — the store stays `CONNECTED` throughout —
+   * so it cannot borrow one of the state actions above. It is the one store
+   * event that records a change to a credential rather than to a connection.
+   */
+  STORE_CREDENTIAL_ROTATED: 'store.credential_rotated',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

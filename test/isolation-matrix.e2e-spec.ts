@@ -114,6 +114,14 @@ describe('tenant isolation matrix (e2e)', () => {
     ['GET /v1/option-sets/:id/detail', () => get(tokenB, `/option-sets/${owned.set}/detail`)],
     ['GET /v1/option-sets/:id/preview', () => get(tokenB, `/option-sets/${owned.set}/preview`)],
 
+    /**
+     * Stores (M8.6). Both are destructive ownership acts, so a 403 here would
+     * confirm another tenant's store exists before refusing to touch it.
+     */
+    ['POST /v1/stores/:id/disconnect', () => post(tokenB, `/stores/${storeA}/disconnect`)],
+    ['POST /v1/stores/:id/rotate-credential', () =>
+      post(tokenB, `/stores/${storeA}/rotate-credential`)],
+
     // Publishing
     ['GET /v1/option-sets/:id/publish-check', () =>
       get(tokenB, `/option-sets/${owned.set}/publish-check`)],

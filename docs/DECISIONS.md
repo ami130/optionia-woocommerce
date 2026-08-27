@@ -2129,6 +2129,49 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+### Addendum — `[8g]`, and a test that proved a constant
+
+**`STORE_REVOKED` was mapped to the wrong step, and the mechanism caught it.**
+`[8f]` listed it as awaiting `[8g]` on the assumption that disconnecting revokes.
+It does not: `disconnect` moves a store to `DISCONNECTED`, and `rotate` does not
+transition at all. The state diagram labels that edge "cloud revokes" and M8.1b
+names its trigger — a `site_url` change requiring re-authorisation, which is
+`[8i]`. Re-pointed.
+
+Worth recording that the self-expiry built into that exemption is what would have
+caught it: once `[8g]` shipped, the marker leaves the contract and the check fails
+on an action nothing produces. The list could not have quietly gone stale.
+
+**Rotation needed its own audit action.** It is the one store event that changes a
+credential without changing state — the store stays `CONNECTED` throughout — so it
+could borrow neither `STORE_DISCONNECTED` nor `STORE_REVOKED`.
+`store.credential_rotated` is that action.
+
+**Two stale contract statements.** The rotate example showed
+`"prefix": "osk_live"`, written before `[8e]` settled that `token_prefix` holds
+the eight characters *after* the marker — `osk_live` is identical in every
+credential and identifies nothing, which is the opposite of the column's purpose.
+And `reason` was promised "shown to the merchant in the store's history", a route
+that exists in no step of Phase 8. The reason is captured on the audit entry; the
+surface that displays it is deferred to Phase 26 with the rest of the audit
+reader, rather than left as a promise with no owner.
+
+**Five mutations, one survived — a test that proved a constant.** Removing
+revocation from `disconnect`, removing it from `rotate` (the leaked-token case),
+returning `403` instead of `404` cross-tenant, and rotating a disconnected store
+each broke tests. Transitioning to `CONNECTING` instead of `DISCONNECTED` broke
+**nothing**: the suite asserted `response.body.data.status`, which is a constant
+the handler returns, so it read `disconnected` whatever the database held. The
+tests now read `stores.status` back, and the mutation is caught.
+
+**The state gate needed read allowances, and they had to be narrow.**
+`stores.service.ts` legitimately *reads* status — comparing to decide whether a
+rotation is possible, and reporting one back to the caller — which the gate
+flagged. Allowing a bare `status: StoreStatus.X` would have been the easy fix and
+would have reopened the exact hole closed a commit earlier, since that also
+matches a TypeORM update payload. Comparisons and returns are allowed by their own
+patterns instead, and all four evasions remain caught.
+
 ### Addendum — `[8f]`, the state machine, and a store that could rise from the dead
 
 `[8f]` has no route and no contract entry. It is **M8.1b**, the one part of Phase 8

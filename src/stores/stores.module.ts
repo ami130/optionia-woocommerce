@@ -10,6 +10,9 @@ import { ConnectController } from './connect.controller';
 import { ConnectService } from './connect.service';
 import { StoreConnectionCode } from './entities/store-connection-code.entity';
 import { StoreStateService } from './store-state.service';
+import { StoresController } from './stores.controller';
+import { StoresRepository } from './stores.repository';
+import { StoresService } from './stores.service';
 import { StoreCredential } from './entities/store-credential.entity';
 import { Store } from './entities/store.entity';
 
@@ -31,9 +34,11 @@ import { Store } from './entities/store.entity';
     AuthModule,
     AuditModule,
   ],
-  controllers: [ConnectController],
+  controllers: [ConnectController, StoresController],
   providers: [
     StoreStateService,
+    StoresRepository,
+    StoresService,
     {
       provide: ConnectService,
       inject: [DataSource, AuditService, StoreStateService],
@@ -48,6 +53,6 @@ import { Store } from './entities/store.entity';
         new ConnectService(dataSource, audit, state, loadConfig().appUrl),
     },
   ],
-  exports: [ConnectService, StoreStateService],
+  exports: [ConnectService, StoreStateService, StoresService],
 })
 export class StoresModule {}

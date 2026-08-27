@@ -258,6 +258,9 @@ describe('audit coverage (e2e)', () => {
         [AuditAction.STORE_RECONNECT_AUTHORIZED]: 'connect-handshake.e2e-spec',
         // Needs the whole handshake plus a PKCE redemption.
         [AuditAction.STORE_CONNECTED]: 'connect-handshake.e2e-spec',
+        // Needs a connected store with a live credential to replace.
+        [AuditAction.STORE_DISCONNECTED]: 'store-ownership.e2e-spec',
+        [AuditAction.STORE_CREDENTIAL_ROTATED]: 'store-ownership.e2e-spec',
       };
 
       /**
@@ -276,8 +279,19 @@ describe('audit coverage (e2e)', () => {
        * check fails once that step ships.
        */
       const awaitingItsStep: Record<string, string> = {
-        [AuditAction.STORE_DISCONNECTED]: '8g',
-        [AuditAction.STORE_REVOKED]: '8g',
+        /**
+         * `[8i]`, not `[8g]`.
+         *
+         * `[8f]` mapped this to `[8g]` on the assumption that disconnecting
+         * revokes — but `disconnect` moves a store to `DISCONNECTED`, and
+         * `rotate` does not transition at all. The state diagram labels this
+         * edge "cloud revokes", and M8.1b names its trigger: a `site_url`
+         * change requiring re-authorisation, which is `[8i]`.
+         *
+         * The expiry check below would have caught the wrong mapping the moment
+         * `[8g]` shipped, which is what it is for.
+         */
+        [AuditAction.STORE_REVOKED]: '8i',
         [AuditAction.STORE_ERRORED]: '8h',
       };
 
@@ -326,12 +340,15 @@ describe('audit coverage (e2e)', () => {
         AuditAction.STORE_CONNECT_AUTHORIZED,
         AuditAction.STORE_RECONNECT_AUTHORIZED,
         AuditAction.STORE_CONNECTED,
+        AuditAction.STORE_DISCONNECTED,
+        AuditAction.STORE_CREDENTIAL_ROTATED,
       ];
 
       const source = readFileSync('src/tenants/team.service.ts', 'utf8');
       const values = readFileSync('src/option-sets/option-values.service.ts', 'utf8');
       const connect = readFileSync('src/stores/connect.service.ts', 'utf8');
-      const both = source + values + connect;
+      const stores = readFileSync('src/stores/stores.service.ts', 'utf8');
+      const both = source + values + connect + stores;
 
       claimed.forEach((action) => {
         const constant = Object.entries(AuditAction).find(([, value]) => value === action)?.[0];

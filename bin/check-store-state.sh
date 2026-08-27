@@ -63,6 +63,13 @@ strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 #   `transition(… StoreStatus.X …)`   the machine performing the write
 #   `changes: { … status: … }`        an audit entry *recording* a write
 #   `INSERT INTO stores`              an initial state, not a transition
+#   `!==` / `===` comparisons         *reading* a state to decide something
+#   `return { status: … }`            reporting a state to the caller
+#
+# The last two are reads, and a read cannot corrupt state. They are listed
+# explicitly rather than by widening the pattern: `status: StoreStatus.X` alone
+# would also match a TypeORM update payload, which is exactly the hole this gate
+# closed once already.
 OFFENDERS=""
 
 for f in $(grep -rl "StoreStatus\." src --include='*.ts' 2>/dev/null \
@@ -77,7 +84,11 @@ for f in $(grep -rl "StoreStatus\." src --include='*.ts' 2>/dev/null \
   VIA_AUDIT=$(echo "$FLAT" | grep -oE "changes: \{[^}]*StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
   VIA_INSERT=$(echo "$FLAT" | grep -oE "INSERT INTO stores[^\`]*\`[^;]*StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
 
-  ACCOUNTED=$((VIA_TRANSITION + VIA_AUDIT + VIA_INSERT))
+  # Reads: a comparison, or a status reported back to the caller.
+  VIA_COMPARE=$(echo "$FLAT" | grep -oE "[!=]== StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+  VIA_RETURN=$(echo "$FLAT" | grep -oE "return \{[^}]*status: StoreStatus\.[A-Z_]+" | wc -l | tr -d ' ')
+
+  ACCOUNTED=$((VIA_TRANSITION + VIA_AUDIT + VIA_INSERT + VIA_COMPARE + VIA_RETURN))
 
   if [ "$NAMED" -gt "$ACCOUNTED" ]; then
     OFFENDERS="${OFFENDERS}${f} (names $NAMED, accounted $ACCOUNTED)\n"

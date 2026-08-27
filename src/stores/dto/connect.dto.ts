@@ -140,3 +140,18 @@ export class ExchangeDto {
   @ApiProperty({ type: String })
   site_url: string;
 }
+
+export class RotateCredentialDto {
+  /**
+   * Why the credential was rotated.
+   *
+   * Optional — a scheduled rotation has no story to tell, and requiring one
+   * would train merchants to type "rotation". Recorded on the audit entry;
+   * `store_credentials` has no column for it and does not need one.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
+  reason?: string;
+}
