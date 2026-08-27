@@ -1757,3 +1757,59 @@ largest cause is gone and a smaller one is not yet understood. The diagnostics
 added along the way — fixtures that report the response, and `newGroup` dumping
 the parent set's row — mean the next occurrence carries more evidence than the
 last.
+
+---
+
+## ADR-036 — The generated spec is checked against the contract, not trusted beside it
+
+**Status:** accepted
+**Date:** Phase 7, M7.7 / exit criterion
+
+### Context
+
+The plan is unusually specific about why OpenAPI is separate from
+`docs/API-CONTRACT.md`: the contract is the **design**, written before any
+controller exists; the spec is a **description**, derived from them. *"They will
+disagree, and that disagreement is the signal that a controller drifted — a
+generated spec presented as the contract would hide exactly that."*
+
+Generating a spec satisfies the exit criterion. It does not satisfy the
+reasoning: **a signal nobody reads is not a signal.** Two documents that may
+disagree, with nothing comparing them, is the same shape as a guard that reports
+success while inspecting nothing — the failure this codebase has now found in a
+doc checker, a contract checker, a capability guard and a test fixture.
+
+### Decision
+
+`bin/check-openapi.sh` compares the spec to the contract and fails on three
+things: a route documented `[built]` and missing from the spec, a spec route the
+contract does not describe, and any of the three identity realms no longer being
+declared.
+
+The missing-from-spec case is the one `check-api-contract` cannot catch. That
+script compares the **contract to the router**; a controller can register a route
+and still be absent from the spec — a decorator omitted, a controller never
+reaching `AppModule`. A generated client would simply lack the method, and nobody
+would notice until someone needed it. Verified by mutation: removing
+`AuditController` from its module fails with `GET /v1/audit-logs` named.
+
+It carries a **coverage floor** of 20 paths, like every other check here. An
+empty spec satisfies every comparison trivially.
+
+The three realms are declared as three security schemes rather than one. A store
+token must never be accepted on `/option-sets` (AC8), and one scheme would let a
+generated client offer them interchangeably.
+
+### Consequences
+
+The spec is served at `/docs` and `/docs/openapi.json` in every environment
+except production. The document is harmless — every path is known to anyone
+holding the plugin, which ships with the client that calls these routes — but the
+explorer issues live requests, and one pointed at production data is a footgun
+handed to whoever finds the URL. Gating the document itself would protect nothing
+and prevent the one thing it is for.
+
+`ignoreGlobalPrefix: false` keeps `/v1` on the paths, so the comparison against
+the contract is textual rather than a guess at how a name was derived. `/health`
+stays outside the prefix (ADR-011) and is excluded from the undocumented-route
+check by name.

@@ -34,13 +34,15 @@
     "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts",
     "check:docs": "bash bin/check-docs.sh",
     "test:e2e:cov": "jest --config test/jest-e2e.json --coverage",
-    "check:api": "bash bin/check-api-contract.sh"
+    "check:api": "bash bin/check-api-contract.sh",
+    "check:openapi": "bash bin/check-openapi.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/swagger": "^11.4.7",
     "@nestjs/terminus": "^11.1.1",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",

@@ -9,6 +9,7 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { ConfigurationError, loadConfig } from './config/env';
+import { serveOpenApi } from './common/openapi/openapi';
 
 /**
  * Application bootstrap.
@@ -122,6 +123,16 @@ async function bootstrap(): Promise<void> {
     exposedHeaders: ['X-Request-Id'],
   });
 
+  /**
+   * The generated OpenAPI description, and its explorer.
+   *
+   * **Off in production.** The spec itself is harmless — every path is already
+   * known to anyone holding the plugin — but the explorer issues live requests,
+   * and one pointed at production data is a footgun handed to whoever finds the
+   * URL.
+   */
+  serveOpenApi(app, !config.isProduction);
+
   // Flush a request in flight rather than dropping it when the orchestrator
   // sends SIGTERM.
   app.enableShutdownHooks();
@@ -130,6 +141,10 @@ async function bootstrap(): Promise<void> {
 
   logger.log(`Optionia API listening on port ${config.port} [${config.nodeEnv}]`);
   logger.log(`Health: http://localhost:${config.port}/health`);
+
+  if (!config.isProduction) {
+    logger.log(`API docs: http://localhost:${config.port}/docs`);
+  }
 }
 
 void bootstrap();

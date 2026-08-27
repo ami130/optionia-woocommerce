@@ -9,6 +9,17 @@ is a **description**. They will occasionally disagree, and that disagreement is
 the signal that a controller drifted from its contract — which is why the
 generated spec never replaces this file.
 
+**Both are now checked against each other.** `bin/check-openapi.sh` fails when a
+route documented `[built]` is missing from the spec, or a spec route is
+undocumented, or any of the three identity realms stops being declared. A signal
+nobody reads is not a signal.
+
+The spec is served at **`/docs`** (explorer) and **`/docs/openapi.json`** (raw),
+in every environment except production. The document itself is harmless — every
+path is already known to anyone holding the plugin — but the explorer issues live
+requests, and one pointed at production data is a footgun handed to whoever finds
+the URL.
+
 ---
 
 ## Why the contract comes first
