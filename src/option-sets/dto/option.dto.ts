@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
@@ -38,15 +39,18 @@ export class CreateOptionDto {
   @MinLength(1, { message: 'A key is required.' })
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
+  @ApiProperty({ type: String })
   key: string;
 
   @IsString()
   @MinLength(1, { message: 'A label is required.' })
   @MaxLength(200)
+  @ApiProperty({ type: String })
   label: string;
 
   /** The option's type. Must be registered — `radio` is the only one at Phase 7. */
   @IsEnum(Presentation, { message: 'Unknown option type.' })
+  @ApiProperty({ enum: Presentation })
   presentation: Presentation;
 
   /**
@@ -58,50 +62,61 @@ export class CreateOptionDto {
    */
   @IsOptional()
   @IsEnum(ValueKind, { message: 'Unknown value kind.' })
+  @ApiPropertyOptional({ enum: ValueKind })
   valueKind?: ValueKind;
 
   @IsOptional()
   @IsEnum(Cardinality, { message: 'Unknown cardinality.' })
+  @ApiPropertyOptional({ enum: Cardinality })
   cardinality?: Cardinality;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @ApiPropertyOptional({ type: String })
   description?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
   placeholder?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   helpText?: string;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isRequired?: boolean;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   defaultValue?: string;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   validation?: Record<string, unknown>;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   pricing?: Record<string, unknown>;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   display?: Record<string, unknown>;
 }
 
@@ -119,46 +134,56 @@ export class UpdateOptionDto {
   @IsString()
   @MinLength(1, { message: 'A label cannot be empty.' })
   @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
   label?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @ApiPropertyOptional({ type: String })
   description?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
   placeholder?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   helpText?: string;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isRequired?: boolean;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   defaultValue?: string;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   validation?: Record<string, unknown>;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   pricing?: Record<string, unknown>;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   display?: Record<string, unknown>;
 }
 
@@ -174,5 +199,6 @@ export class DuplicateOptionDto {
   @MinLength(1)
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
+  @ApiPropertyOptional({ type: String })
   key?: string;
 }

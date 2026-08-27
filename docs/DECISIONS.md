@@ -1813,3 +1813,36 @@ and prevent the one thing it is for.
 the contract is textual rather than a guess at how a name was derived. `/health`
 stays outside the prefix (ADR-011) and is excluded from the undocumented-route
 check by name.
+
+### Addendum — the floor measured the healthy dimension
+
+An audit of the generated spec found it structurally hollow, and the check
+passing over it.
+
+**All 21 schemas were `{"properties":{}}`.** Request bodies referenced them
+correctly and the references described nothing. **Zero of 42 operations declared
+security**, while all three realms sat defined in `components` — a generated
+client would have treated the whole API as public. And **no operation described
+any error status**, though the contract documents sixteen.
+
+The check had a coverage floor, and the floor counted **paths** — which were
+correct throughout. A floor only protects the dimension it counts, and this one
+measured the dimension that happened to be healthy. That is the same failure the
+floor exists to prevent, one level in.
+
+The `@nestjs/swagger` CLI plugin would populate schemas, and was rejected: it
+runs only under `nest build`, so every check and test here — all `ts-node` and
+`ts-jest` — would still see an empty spec while production saw a full one. A spec
+that differs by how it was compiled cannot be checked. Explicit `@ApiProperty` on
+all 93 DTO properties works everywhere.
+
+Applying errors surfaced a second defect: an `ApiResponse` on a method
+**suppresses the success response Nest would otherwise infer**, so declaring only
+errors left all 33 guarded operations describing nothing but failure. `ApiErrors`
+now takes the success status as a required first argument, because an optional
+one would be omitted exactly where it matters.
+
+The check gained four assertions — realms *applied* not merely defined, schemas
+describing properties, every operation declaring a success, and the error
+statuses present — plus a second floor on schema count. Each is mutation-proven,
+and each names the route or schema at fault.

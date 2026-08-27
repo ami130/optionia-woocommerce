@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
   IsInt,
@@ -27,6 +28,7 @@ export class CreateOptionSetDto {
   @IsString()
   @MinLength(1, { message: 'A name is required.' })
   @MaxLength(255)
+  @ApiProperty({ type: String })
   name: string;
 
   /**
@@ -37,6 +39,7 @@ export class CreateOptionSetDto {
    * options on the wrong storefront.
    */
   @IsUUID()
+  @ApiProperty({ type: String })
   storeId: string;
 }
 
@@ -45,6 +48,7 @@ export class UpdateOptionSetDto {
   @IsString()
   @MinLength(1, { message: 'A name cannot be empty.' })
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   name?: string;
 
   /**
@@ -65,6 +69,7 @@ export class UpdateOptionSetDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @ApiPropertyOptional({ type: Number })
   rowVersion?: number;
 }
 
@@ -72,16 +77,19 @@ export class UpdateOptionSetDto {
 export class ListOptionSetsDto {
   @IsOptional()
   @IsEnum(OptionSetStatus, { message: 'Unknown status.' })
+  @ApiPropertyOptional({ enum: OptionSetStatus })
   status?: OptionSetStatus;
 
   @IsOptional()
   @IsUUID()
+  @ApiPropertyOptional({ type: String })
   storeId?: string;
 
   /** Name search. Matched as a prefix, so an index can serve it later. */
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   q?: string;
 
   /**
@@ -92,12 +100,14 @@ export class ListOptionSetsDto {
   @IsInt()
   @Min(1)
   @Max(100)
+  @ApiPropertyOptional({ type: Number })
   limit?: number;
 
   /** Opaque cursor from a previous page. Clients must not construct one. */
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   cursor?: string;
 }
 
@@ -112,6 +122,7 @@ export class DuplicateOptionSetDto {
   @IsString()
   @MinLength(1)
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   name?: string;
 }
 
@@ -126,5 +137,6 @@ export class DeleteOptionSetDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @ApiPropertyOptional({ type: Number })
   rowVersion?: number;
 }

@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -28,24 +29,29 @@ export class CreateOptionGroupDto {
   @IsString()
   @MinLength(1, { message: 'A label is required.' })
   @MaxLength(160)
+  @ApiProperty({ type: String })
   label: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @ApiPropertyOptional({ type: String })
   description?: string;
 
   @IsOptional()
   @IsEnum(GroupDisplayType, { message: 'Unknown display type.' })
+  @ApiPropertyOptional({ enum: GroupDisplayType })
   displayType?: GroupDisplayType;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isCollapsible?: boolean;
 
   /** M7.2's escape hatch: created disabled, so a group can be built before it shows. */
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }
 
@@ -54,23 +60,28 @@ export class UpdateOptionGroupDto {
   @IsString()
   @MinLength(1, { message: 'A label cannot be empty.' })
   @MaxLength(160)
+  @ApiPropertyOptional({ type: String })
   label?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  @ApiPropertyOptional({ type: String })
   description?: string;
 
   @IsOptional()
   @IsEnum(GroupDisplayType, { message: 'Unknown display type.' })
+  @ApiPropertyOptional({ enum: GroupDisplayType })
   displayType?: GroupDisplayType;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isCollapsible?: boolean;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }
 
@@ -79,12 +90,14 @@ export class DuplicateOptionGroupDto {
   @IsString()
   @MinLength(1)
   @MaxLength(160)
+  @ApiPropertyOptional({ type: String })
   label?: string;
 }
 
 /** One group's new position. */
 export class ReorderEntryDto {
   @IsUUID()
+  @ApiProperty({ type: String })
   id: string;
 
   /**
@@ -93,6 +106,7 @@ export class ReorderEntryDto {
    */
   @IsInt()
   @Min(0)
+  @ApiProperty({ type: Number })
   sortOrder: number;
 }
 
@@ -106,5 +120,6 @@ export class ReorderGroupsDto {
   @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => ReorderEntryDto)
+  @ApiProperty({ type: () => [ReorderEntryDto] })
   groups: ReorderEntryDto[];
 }

@@ -33,6 +33,14 @@ import { buildOpenApiDocument } from '../src/common/openapi/openapi';
 /** Below this, the spec is empty enough that the comparison proves nothing. */
 const MINIMUM_PATHS = 20;
 
+/**
+ * A second floor, on a different dimension.
+ *
+ * The path floor passed while all 21 schemas were empty: routes were correct and
+ * the spec's substance was not. A floor only protects the dimension it counts.
+ */
+const MINIMUM_SCHEMAS = 15;
+
 let failed = false;
 
 function fail(message: string, items: string[] = []): void {
@@ -87,6 +95,31 @@ function contractRoutes(markdown: string): Set<string> {
   }
 
   return routes;
+}
+
+/** Every operation in the document, with its route for reporting. */
+function allOperations(
+  document: ReturnType<typeof buildOpenApiDocument>,
+): Array<{ route: string; operation: { security?: unknown; responses?: Record<string, unknown> } }> {
+  const operations: Array<{
+    route: string;
+    operation: { security?: unknown; responses?: Record<string, unknown> };
+  }> = [];
+
+  Object.entries(document.paths ?? {}).forEach(([path, item]) => {
+    ['get', 'post', 'patch', 'put', 'delete'].forEach((method) => {
+      const operation = (item as Record<string, unknown>)[method];
+
+      if (operation) {
+        operations.push({
+          route: `${method.toUpperCase()} ${path}`,
+          operation: operation as { security?: unknown; responses?: Record<string, unknown> },
+        });
+      }
+    });
+  });
+
+  return operations;
 }
 
 async function main(): Promise<void> {
@@ -160,6 +193,102 @@ async function main(): Promise<void> {
     fail('security schemes missing - the three realms must stay distinct:', missingSchemes);
   } else {
     pass('all three identity realms are declared');
+  }
+
+  /**
+   * Declaring a scheme is not applying one.
+   *
+   * The first version of this check asserted the three schemes existed in
+   * `components` and stopped there — and passed while **every one of 42
+   * operations declared no security at all**. A generated client would have
+   * treated the whole API as public. Defining a scheme nothing references is
+   * precisely the shape of guard this codebase keeps finding.
+   *
+   * `/auth/*` and `/health` are genuinely public and are excluded by name.
+   */
+  const operations = allOperations(document);
+  const shouldBeSecured = operations.filter(
+    ({ route }) => !route.includes('/v1/auth/') && !route.startsWith('GET /health'),
+  );
+  const unsecured = shouldBeSecured.filter(({ operation }) => !operation.security);
+
+  if (unsecured.length > 0) {
+    fail(
+      'operations with no security scheme applied (a client would treat them as public):',
+      unsecured.map(({ route }) => route).sort(),
+    );
+  } else {
+    pass(`${shouldBeSecured.length} guarded operations declare a realm`);
+  }
+
+  /**
+   * A schema that describes nothing.
+   *
+   * Every request body referenced a schema correctly, and all 21 of them were
+   * `{"properties":{}}` — the shape a spec has when no property carries an
+   * `@ApiProperty` and the CLI plugin is not running. Paths agreed with the
+   * contract throughout, which is why the earlier route-count floor said
+   * nothing: it measured the dimension that happened to be healthy.
+   */
+  const schemas = (document.components?.schemas ?? {}) as Record<
+    string,
+    { properties?: Record<string, unknown> }
+  >;
+  const emptySchemas = Object.entries(schemas)
+    .filter(([, schema]) => Object.keys(schema.properties ?? {}).length === 0)
+    .map(([name]) => name);
+
+  if (Object.keys(schemas).length < MINIMUM_SCHEMAS) {
+    fail(
+      `only ${Object.keys(schemas).length} schemas - below the floor of ${MINIMUM_SCHEMAS}. ` +
+        `A spec with no schemas describes no request bodies.`,
+    );
+  } else if (emptySchemas.length > 0) {
+    fail('schemas that describe no properties:', emptySchemas.sort());
+  } else {
+    pass(`${Object.keys(schemas).length} schemas, all describing properties`);
+  }
+
+  /**
+   * An operation with no success response.
+   *
+   * Adding an `ApiResponse` to a method suppresses the success response Nest
+   * would otherwise infer, so declaring only errors leaves an operation
+   * describing nothing but failure. That happened here — errors alone stripped
+   * the `2xx` from all 33 guarded operations — and no assertion noticed.
+   */
+  const withoutSuccess = operations.filter(
+    ({ operation }) =>
+      !Object.keys(operation.responses ?? {}).some((code) => code.startsWith('2')),
+  );
+
+  if (withoutSuccess.length > 0) {
+    fail(
+      'operations describing no success response:',
+      withoutSuccess.map(({ route }) => route).sort(),
+    );
+  } else {
+    pass('every operation declares a success status');
+  }
+
+  /**
+   * The contract documents sixteen error codes and their statuses. A spec that
+   * describes only success is not a description a client can be generated from.
+   */
+  const statuses = new Set<string>();
+
+  operations.forEach(({ operation }) =>
+    Object.keys(operation.responses ?? {}).forEach((code) => statuses.add(code)),
+  );
+
+  const missingStatuses = ['400', '401', '403', '404'].filter(
+    (code) => !statuses.has(code),
+  );
+
+  if (missingStatuses.length > 0) {
+    fail('no operation documents these statuses:', missingStatuses);
+  } else {
+    pass(`${statuses.size} distinct response statuses described`);
   }
 
   if (failed) {

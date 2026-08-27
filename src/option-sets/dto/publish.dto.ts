@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 /** Request shapes for publishing (M7.4). */
@@ -13,6 +14,7 @@ export class PublishDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @ApiPropertyOptional({ type: Number })
   rowVersion?: number;
 
   /**
@@ -24,6 +26,7 @@ export class PublishDto {
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   note?: string;
 }
 
@@ -31,6 +34,7 @@ export class RollbackDto {
   /** The version to restore. Published as a *new* version, never rewritten. */
   @IsInt()
   @Min(1)
+  @ApiProperty({ type: Number })
   version: number;
 
   /**
@@ -44,10 +48,12 @@ export class RollbackDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @ApiPropertyOptional({ type: Number })
   rowVersion?: number;
 
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   note?: string;
 }

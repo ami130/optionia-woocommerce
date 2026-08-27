@@ -83,6 +83,102 @@ describe('openapi (e2e)', () => {
       expect(paths).not.toContain('/v1/health');
     }, 60_000);
 
+    /**
+     * The spec passed every earlier assertion while all 21 schemas were
+     * `{"properties":{}}` — paths were right and the substance was empty. Route
+     * counts measure the dimension that happened to be healthy.
+     */
+    it('describes properties for every schema', () => {
+      const schemas = (buildOpenApiDocument(app).components?.schemas ?? {}) as Record<
+        string,
+        { properties?: Record<string, unknown> }
+      >;
+
+      expect(Object.keys(schemas).length).toBeGreaterThan(15);
+      Object.entries(schemas).forEach(([name, schema]) => {
+        expect({ name, properties: Object.keys(schema.properties ?? {}).length }).toEqual({
+          name,
+          properties: expect.any(Number),
+        });
+        expect(Object.keys(schema.properties ?? {}).length).toBeGreaterThan(0);
+      });
+    }, 60_000);
+
+    /**
+     * Defining a scheme is not applying one. Every operation declared no
+     * security while all three realms sat in `components`, so a generated client
+     * would have treated the API as public.
+     */
+    it('applies a realm to every guarded operation', () => {
+      const document = buildOpenApiDocument(app);
+      const unsecured: string[] = [];
+
+      Object.entries(document.paths ?? {}).forEach(([path, item]) => {
+        ['get', 'post', 'patch', 'delete'].forEach((method) => {
+          const operation = (item as Record<string, unknown>)[method] as
+            | { security?: unknown }
+            | undefined;
+
+          if (
+            operation &&
+            !operation.security &&
+            !path.includes('/v1/auth/') &&
+            path !== '/health'
+          ) {
+            unsecured.push(`${method.toUpperCase()} ${path}`);
+          }
+        });
+      });
+
+      expect(unsecured).toEqual([]);
+    }, 60_000);
+
+    /**
+     * Adding an `ApiResponse` suppresses the success response Nest infers, so
+     * declaring only errors leaves an operation describing nothing but failure.
+     */
+    it('declares a success status on every operation', () => {
+      const document = buildOpenApiDocument(app);
+      const withoutSuccess: string[] = [];
+
+      Object.entries(document.paths ?? {}).forEach(([path, item]) => {
+        ['get', 'post', 'patch', 'delete'].forEach((method) => {
+          const operation = (item as Record<string, unknown>)[method] as
+            | { responses?: Record<string, unknown> }
+            | undefined;
+
+          if (
+            operation &&
+            !Object.keys(operation.responses ?? {}).some((code) => code.startsWith('2'))
+          ) {
+            withoutSuccess.push(`${method.toUpperCase()} ${path}`);
+          }
+        });
+      });
+
+      expect(withoutSuccess).toEqual([]);
+    }, 60_000);
+
+    /** The contract documents sixteen error codes; the spec described none. */
+    it('describes the failures a caller must handle', () => {
+      const document = buildOpenApiDocument(app);
+      const statuses = new Set<string>();
+
+      Object.values(document.paths ?? {}).forEach((item) => {
+        ['get', 'post', 'patch', 'delete'].forEach((method) => {
+          const operation = (item as Record<string, unknown>)[method] as
+            | { responses?: Record<string, unknown> }
+            | undefined;
+
+          Object.keys(operation?.responses ?? {}).forEach((code) => statuses.add(code));
+        });
+      });
+
+      ['400', '401', '403', '404', '409'].forEach((code) =>
+        expect([...statuses]).toContain(code),
+      );
+    }, 60_000);
+
     it('names the contract as the authority, not itself', () => {
       expect(buildOpenApiDocument(app).info.description).toContain('API-CONTRACT.md');
     }, 60_000);

@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 /**
@@ -14,26 +15,31 @@ export class ListAuditDto {
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  @ApiPropertyOptional({ type: String })
   action?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  @ApiPropertyOptional({ type: String })
   resourceType?: string;
 
   @IsOptional()
   @IsUUID()
+  @ApiPropertyOptional({ type: String })
   resourceId?: string;
 
   @IsOptional()
   @IsInt()
   @Min(1)
   @Max(100)
+  @ApiPropertyOptional({ type: Number })
   limit?: number;
 
   /** Opaque cursor from a previous page. Clients must not construct one. */
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   cursor?: string;
 }

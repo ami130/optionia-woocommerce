@@ -14,6 +14,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { ApiBearerAuth } from '@nestjs/swagger';
+
+import { ApiErrors } from '../common/openapi/api-errors.decorator';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
@@ -48,6 +52,14 @@ import type { AuthoringOptionSet, PublishedOptionSet } from './serialization/pro
  * `CapabilityGuard` can enforce it.
  */
 @Controller('option-sets')
+/**
+ * Declares the realm in the generated spec (AC8).
+ *
+ * The guard chain below enforces it; this makes the spec say so, and a
+ * generated client send the right token. Without it every operation reads
+ * as public — the schemes were defined and referenced by nothing.
+ */
+@ApiBearerAuth('tenant')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class OptionSetsController {
   constructor(
@@ -57,6 +69,7 @@ export class OptionSetsController {
 
   @Get()
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 400, 401, 403, 429)
   async list(@Query() query: ListOptionSetsDto): Promise<PaginatedResult<OptionSet>> {
     const page = await this.service.list(query);
 
@@ -69,6 +82,7 @@ export class OptionSetsController {
 
   @Get(':id')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<OptionSet> {
     return this.service.findOne(id);
   }
@@ -76,12 +90,14 @@ export class OptionSetsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async create(@Body() dto: CreateOptionSetDto): Promise<OptionSet> {
     return this.service.create(dto.name, dto.storeId);
   }
 
   @Patch(':id')
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(200, 400, 401, 403, 404, 409, 429)
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateOptionSetDto,
@@ -98,6 +114,7 @@ export class OptionSetsController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequireCapability(Capability.OPTION_SETS_DELETE)
+  @ApiErrors(204, 400, 401, 403, 404, 409, 429)
   async remove(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: DeleteOptionSetDto,
@@ -118,6 +135,7 @@ export class OptionSetsController {
    */
   @Delete(':id/permanent')
   @RequireCapability(Capability.OPTION_SETS_DELETE)
+  @ApiErrors(200, 401, 403, 404, 409, 429)
   async purge(@Param('id', ParseUUIDPipe) id: string): Promise<PurgeResult> {
     return this.service.purge(id);
   }
@@ -131,6 +149,7 @@ export class OptionSetsController {
    */
   @Get(':id/detail')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 401, 403, 404, 429)
   async findOneDetailed(@Param('id', ParseUUIDPipe) id: string): Promise<AuthoringOptionSet> {
     return this.service.findOneDetailed(id);
   }
@@ -143,6 +162,7 @@ export class OptionSetsController {
    */
   @Get(':id/preview')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 401, 403, 404, 409, 429)
   async findOnePublished(@Param('id', ParseUUIDPipe) id: string): Promise<PublishedOptionSet> {
     return this.service.findOnePublished(id);
   }
@@ -155,6 +175,7 @@ export class OptionSetsController {
    */
   @Get(':id/publish-check')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(201, 400, 401, 403, 404, 409, 429)
   async publishCheck(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ findings: readonly PublishFinding[] }> {
@@ -163,6 +184,7 @@ export class OptionSetsController {
 
   @Post(':id/publish')
   @RequireCapability(Capability.OPTION_SETS_PUBLISH)
+  @ApiErrors(201, 400, 401, 403, 404, 409, 429)
   async publish(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PublishDto,
@@ -173,6 +195,7 @@ export class OptionSetsController {
   /** Version history, newest first. Snapshots are omitted — they are large. */
   @Get(':id/versions')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 401, 403, 404, 429)
   async versions(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ versions: readonly VersionSummary[] }> {
@@ -182,6 +205,7 @@ export class OptionSetsController {
   /** One snapshot, exactly as the storefront received it. */
   @Get(':id/versions/:version')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 401, 403, 404, 429)
   async version(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('version', ParseIntPipe) version: number,
@@ -198,6 +222,7 @@ export class OptionSetsController {
    */
   @Post(':id/rollback')
   @RequireCapability(Capability.OPTION_SETS_ROLLBACK)
+  @ApiErrors(201, 400, 401, 403, 404, 409, 429)
   async rollback(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RollbackDto,
@@ -208,6 +233,7 @@ export class OptionSetsController {
   @Post(':id/duplicate')
   @HttpCode(HttpStatus.CREATED)
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async duplicate(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DuplicateOptionSetDto,

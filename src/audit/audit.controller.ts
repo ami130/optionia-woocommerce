@@ -1,5 +1,9 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 
+import { ApiBearerAuth } from '@nestjs/swagger';
+
+import { ApiErrors } from '../common/openapi/api-errors.decorator';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
@@ -21,12 +25,21 @@ import { ListAuditDto } from './dto/list-audit.dto';
  * question, and the trail contains IP addresses that are personal data.
  */
 @Controller('audit-logs')
+/**
+ * Declares the realm in the generated spec (AC8).
+ *
+ * The guard chain below enforces it; this makes the spec say so, and a
+ * generated client send the right token. Without it every operation reads
+ * as public — the schemes were defined and referenced by nothing.
+ */
+@ApiBearerAuth('tenant')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class AuditController {
   constructor(private readonly audit: AuditQueryService) {}
 
   @Get()
   @RequireCapability(Capability.AUDIT_LOG_VIEW)
+  @ApiErrors(200, 400, 401, 403, 429)
   async list(@Query() query: ListAuditDto): Promise<PaginatedResult<AuditEntryView>> {
     const limit = query.limit ?? DEFAULT_AUDIT_PAGE_SIZE;
     const page = await this.audit.list({ ...query, limit });

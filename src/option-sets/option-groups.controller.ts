@@ -12,6 +12,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { ApiBearerAuth } from '@nestjs/swagger';
+
+import { ApiErrors } from '../common/openapi/api-errors.decorator';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
@@ -38,12 +42,21 @@ import { OptionGroupsService } from './option-groups.service';
  * repository's join — which is why it was built before any of these endpoints.
  */
 @Controller()
+/**
+ * Declares the realm in the generated spec (AC8).
+ *
+ * The guard chain below enforces it; this makes the spec say so, and a
+ * generated client send the right token. Without it every operation reads
+ * as public — the schemes were defined and referenced by nothing.
+ */
+@ApiBearerAuth('tenant')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class OptionGroupsController {
   constructor(private readonly service: OptionGroupsService) {}
 
   @Get('option-sets/:id/groups')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async list(
     @Param('id', ParseUUIDPipe) optionSetId: string,
   ): Promise<OptionGroup[]> {
@@ -53,6 +66,7 @@ export class OptionGroupsController {
   @Post('option-sets/:id/groups')
   @HttpCode(HttpStatus.CREATED)
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async create(
     @Param('id', ParseUUIDPipe) optionSetId: string,
     @Body() dto: CreateOptionGroupDto,
@@ -62,12 +76,14 @@ export class OptionGroupsController {
 
   @Get('groups/:id')
   @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 400, 401, 403, 404, 429)
   async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<OptionGroup> {
     return this.service.findOne(id);
   }
 
   @Patch('groups/:id')
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(200, 400, 401, 403, 404, 409, 429)
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateOptionGroupDto,
@@ -79,6 +95,7 @@ export class OptionGroupsController {
   @Delete('groups/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequireCapability(Capability.OPTION_SETS_DELETE)
+  @ApiErrors(201, 400, 401, 403, 404, 409, 429)
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.service.remove(id);
   }
@@ -86,6 +103,7 @@ export class OptionGroupsController {
   @Post('groups/:id/duplicate')
   @HttpCode(HttpStatus.CREATED)
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async duplicate(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DuplicateOptionGroupDto,
@@ -99,6 +117,7 @@ export class OptionGroupsController {
    */
   @Post('option-sets/:id/reorder')
   @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
   async reorder(
     @Param('id', ParseUUIDPipe) optionSetId: string,
     @Body() dto: ReorderGroupsDto,

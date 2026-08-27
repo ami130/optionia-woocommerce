@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
@@ -39,15 +40,18 @@ export class CreateOptionValueDto {
   @MinLength(1, { message: 'A value key is required.' })
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
+  @ApiProperty({ type: String })
   valueKey: string;
 
   @IsString()
   @MinLength(1, { message: 'A label is required.' })
   @MaxLength(200)
+  @ApiProperty({ type: String })
   label: string;
 
   @IsOptional()
   @IsEnum(PriceType, { message: 'Unknown price type.' })
+  @ApiPropertyOptional({ enum: PriceType })
   priceType?: PriceType;
 
   /**
@@ -57,38 +61,46 @@ export class CreateOptionValueDto {
   @IsInt({ message: 'A price must be an integer in minor units.' })
   @Min(-MAX_AMOUNT_MINOR)
   @Max(MAX_AMOUNT_MINOR)
+  @ApiPropertyOptional({ type: Number })
   priceAmountMinor?: number;
 
   /** Validated against the pricing schema in the service (M7.3). */
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   priceConfig?: Record<string, unknown>;
 
   @IsOptional()
   @IsUrl({ require_protocol: true }, { message: 'An image URL must be absolute.' })
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   imageUrl?: string;
 
   @IsOptional()
   @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'A colour must be a six-digit hex value, e.g. #1a2b3c.' })
+  @ApiPropertyOptional({ type: String })
   colorHex?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(40)
+  @ApiPropertyOptional({ type: String })
   skuSuffix?: string;
 
   @IsOptional()
   @IsInt()
+  @ApiPropertyOptional({ type: Number })
   weightDeltaGrams?: number;
 
   /** At most one default per option; the service clears any other. */
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isDefault?: boolean;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }
 
@@ -102,45 +114,55 @@ export class UpdateOptionValueDto {
   @IsString()
   @MinLength(1, { message: 'A label cannot be empty.' })
   @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
   label?: string;
 
   @IsOptional()
   @IsEnum(PriceType, { message: 'Unknown price type.' })
+  @ApiPropertyOptional({ enum: PriceType })
   priceType?: PriceType;
 
   @IsOptional()
   @IsInt({ message: 'A price must be an integer in minor units.' })
   @Min(-MAX_AMOUNT_MINOR)
   @Max(MAX_AMOUNT_MINOR)
+  @ApiPropertyOptional({ type: Number })
   priceAmountMinor?: number;
 
   @IsOptional()
   @IsObject()
+  @ApiPropertyOptional({ type: Object })
   priceConfig?: Record<string, unknown>;
 
   @IsOptional()
   @IsUrl({ require_protocol: true }, { message: 'An image URL must be absolute.' })
   @MaxLength(500)
+  @ApiPropertyOptional({ type: String })
   imageUrl?: string;
 
   @IsOptional()
   @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'A colour must be a six-digit hex value, e.g. #1a2b3c.' })
+  @ApiPropertyOptional({ type: String })
   colorHex?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(40)
+  @ApiPropertyOptional({ type: String })
   skuSuffix?: string;
 
   @IsOptional()
   @IsInt()
+  @ApiPropertyOptional({ type: Number })
   weightDeltaGrams?: number;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isDefault?: boolean;
 
   @IsOptional()
   @IsBoolean()
+  @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }

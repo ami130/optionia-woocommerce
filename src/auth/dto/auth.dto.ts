@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH } from '../../common/crypto/password';
@@ -18,6 +19,7 @@ import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH } from '../../common/crypto/pas
 export class RegisterDto {
   @IsEmail({}, { message: 'A valid email address is required.' })
   @MaxLength(320)
+  @ApiProperty({ type: String })
   email: string;
 
   /**
@@ -29,10 +31,12 @@ export class RegisterDto {
     message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
   })
   @MaxLength(MAX_PASSWORD_BYTES)
+  @ApiProperty({ type: String })
   password: string;
 
   @IsString()
   @MaxLength(255)
+  @ApiProperty({ type: String })
   name: string;
 
   /**
@@ -43,12 +47,14 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @ApiPropertyOptional({ type: String })
   tenantName?: string;
 }
 
 export class LoginDto {
   @IsEmail({}, { message: 'A valid email address is required.' })
   @MaxLength(320)
+  @ApiProperty({ type: String })
   email: string;
 
   /**
@@ -58,6 +64,7 @@ export class LoginDto {
    */
   @IsString()
   @MaxLength(MAX_PASSWORD_BYTES)
+  @ApiProperty({ type: String })
   password: string;
 }
 
@@ -65,18 +72,21 @@ export class VerifyEmailDto {
   @IsString()
   @MinLength(20)
   @MaxLength(200)
+  @ApiProperty({ type: String })
   token: string;
 }
 
 export class ResendVerificationDto {
   @IsEmail({}, { message: 'A valid email address is required.' })
   @MaxLength(320)
+  @ApiProperty({ type: String })
   email: string;
 }
 
 export class RequestPasswordResetDto {
   @IsEmail({}, { message: 'A valid email address is required.' })
   @MaxLength(320)
+  @ApiProperty({ type: String })
   email: string;
 }
 
@@ -84,6 +94,7 @@ export class ResetPasswordDto {
   @IsString()
   @MinLength(20)
   @MaxLength(200)
+  @ApiProperty({ type: String })
   token: string;
 
   @IsString()
@@ -91,6 +102,7 @@ export class ResetPasswordDto {
     message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
   })
   @MaxLength(MAX_PASSWORD_BYTES)
+  @ApiProperty({ type: String })
   password: string;
 }
 
@@ -98,5 +110,6 @@ export class RefreshDto {
   @IsOptional()
   @IsString()
   @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
   refreshToken?: string;
 }
