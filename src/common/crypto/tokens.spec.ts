@@ -1,11 +1,4 @@
-import {
-  expiresIn,
-  generateToken,
-  hasExpired,
-  hashToken,
-  TOKEN_PREFIX_LENGTH,
-  tokensMatch,
-} from './tokens';
+import { TOKEN_PREFIX_LENGTH, expiresIn, generateStoreToken, generateToken, hasExpired, hashToken, tokensMatch } from './tokens';
 
 describe('tokens', () => {
   describe('generateToken', () => {
@@ -102,6 +95,51 @@ describe('tokens', () => {
       expect(hasExpired(at, at)).toBe(true);
       expect(hasExpired(at, new Date('2025-12-31T23:59:59Z'))).toBe(false);
       expect(hasExpired(at, new Date('2026-01-01T00:00:01Z'))).toBe(true);
+    });
+  });
+
+  /**
+   * The store credential's visible marker, and the column that must still tell
+   * two credentials apart.
+   */
+  describe('generateStoreToken', () => {
+    it('carries the osk_live_ marker', () => {
+      expect(generateStoreToken().plaintext.startsWith('osk_live_')).toBe(true);
+    });
+
+    /**
+     * The whole point of the split. `token_prefix` is `CHAR(8)` and exists for
+     * support identification; the first eight characters of the token are
+     * `osk_live` for every credential ever issued, so storing those would make
+     * the column a constant.
+     */
+    it('stores a prefix that discriminates, not the marker', () => {
+      const prefixes = new Set(
+        Array.from({ length: 50 }, () => generateStoreToken().prefix),
+      );
+
+      expect(prefixes.has('osk_live')).toBe(false);
+      // 50 random 8-character samples should essentially never collide.
+      expect(prefixes.size).toBe(50);
+    });
+
+    it('hashes the full plaintext, marker included', () => {
+      const token = generateStoreToken();
+
+      expect(token.hash).toBe(hashToken(token.plaintext));
+      expect(token.hash).not.toBe(hashToken(token.plaintext.replace('osk_live_', '')));
+    });
+
+    it('keeps the full 32 bytes of entropy after the marker', () => {
+      const token = generateStoreToken();
+
+      expect(token.plaintext.slice('osk_live_'.length)).toHaveLength(43);
+    });
+
+    it('never repeats', () => {
+      const seen = new Set(Array.from({ length: 500 }, () => generateStoreToken().plaintext));
+
+      expect(seen.size).toBe(500);
     });
   });
 });

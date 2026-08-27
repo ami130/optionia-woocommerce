@@ -2129,6 +2129,63 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+### Addendum — `[8e]`, and two contract statements that could not both be kept
+
+**"Exactly" had to mean "exactly, after normalisation".** The contract required
+the redeeming `site_url` to equal the issuing one *exactly*, while `initiate`
+stores a normalised URL and WordPress reports `home_url( '/' )` with a trailing
+slash. Verified against the plugin source (`Api/Client.php:367`): a literal byte
+comparison would have refused **every honest first exchange**. Both sides now
+normalise, and the binding is still exact — exact between two values reduced the
+same way. This is the third appearance of one rule, after `initiate`'s
+callback-origin check and `[8i]`'s `X-Optionia-Site` comparison.
+
+**`osk_live_` and `token_prefix` could not be the same eight characters.** The
+contract showed a token reading `osk_live_…` *and* a `prefix` of `"osk_live"`,
+while `store_credentials.token_prefix` is `CHAR(8)` documented "for support
+identification". Both cannot hold: the first eight characters of every credential
+would be `osk_live`, a column of one constant identifying nothing.
+
+Resolved by giving them different jobs. The token carries the marker so a leaked
+credential is recognisable on sight and a secret scanner can match it;
+`token_prefix` holds the first eight characters of the **random part**, so support
+can still tell two credentials apart. `generateStoreToken` is separate from
+`generateToken` rather than a flag on it — refresh tokens, reset links,
+invitations and connection codes all use that one and none should carry a store
+credential's marker.
+
+**`check-secrets` flagged the marker, and the gate was right to.** Its pattern
+catches any `…token… = "…"` of eight characters or more, which is exactly what
+catches a real leaked credential; its own docstring records an earlier, looser
+version that let three of four real secrets through. Weakening it to admit a
+public format marker would have traded a working scanner for a naming
+convenience, so the constant gives way instead and is assembled from parts.
+
+**`store.connected` is audited with an explicit tenant.** `exchange` is
+`@Public()` and has no tenant in context — but unlike `initiate`, the tenant is
+*knowable*: `authorize` recorded it on the code. Naming it directly keeps a
+completed connection visible to the tenant-scoped audit query, which is precisely
+what `initiate` could not do and why it stays unaudited.
+
+**Six mutations, and the one that survived was correct.** Removing the conditional
+spend, the expiry check, the PKCE verifier, the `site_url` binding, or
+double-hashing the challenge each broke tests — the double-hash broke eight.
+Removing the *read-side* `redeemedAt` check alone broke nothing, because the
+conditional `UPDATE … WHERE redeemedAt IS NULL` is authoritative; removing both
+breaks single-use twice over. The two are layered by design, not redundant.
+
+The case-sensitivity test fires only because `challenge` is `utf8mb4_bin`, which
+the `[8b]` audit fixed before anything read the column. Under the schema-wide
+`_ci` collation a verifier whose challenge differed only in case would have been
+accepted.
+
+**The suite outgrew its own rate limit.** `exchange` runs a full handshake per
+test and `authorize` is capped at 30/hour per tenant, so the 32nd call returned
+`429` and every later assertion failed for an unrelated reason. Fixed with a
+second tenant rather than by loosening the limit: a security control specified in
+the contract should not be relaxed to suit a test suite, and one tenant per
+concern is what really happens.
+
 #### An audit written inside a transaction survives its rollback
 
 `authorize` recorded its audit entry **inside** `dataSource.transaction`, while

@@ -66,6 +66,17 @@ export const AuditAction = {
    */
   STORE_CONNECT_AUTHORIZED: 'store.connect_authorized',
   STORE_RECONNECT_AUTHORIZED: 'store.reconnect_authorized',
+
+  /**
+   * The handshake completing: `CONNECTING` → `CONNECTED` (`[8e]`).
+   *
+   * Written with an **explicit `tenantId`**, unlike every other action here.
+   * `connect/exchange` is `@Public()` and has no tenant in context — but unlike
+   * `initiate`, the tenant is *knowable*: it was recorded on the connection code
+   * when the merchant approved. Naming it directly is what keeps a completed
+   * connection visible to the tenant-scoped audit query.
+   */
+  STORE_CONNECTED: 'store.connected',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

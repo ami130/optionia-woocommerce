@@ -97,3 +97,46 @@ export class AuthorizeDto {
   @ApiProperty({ type: String })
   state: string;
 }
+
+export class ExchangeDto {
+  /**
+   * The authorization code from the callback.
+   *
+   * Range rather than a fixed length: the cloud mints 43 characters today, and a
+   * bound that assumed exactly that would break the moment the format changed —
+   * on software that cannot be redeployed (M7.7).
+   */
+  @IsString()
+  @Length(43, 128)
+  @Matches(BASE64URL, { message: 'code must be URL-safe' })
+  @ApiProperty({ type: String })
+  code: string;
+
+  /**
+   * The PKCE verifier, whose SHA-256 must equal the stored challenge.
+   *
+   * The plugin generated this at `initiate` and kept it locally; only its digest
+   * ever crossed the network. That is what stops an intercepted code being
+   * redeemed by whoever intercepted it.
+   */
+  @IsString()
+  @Length(43, 128)
+  @Matches(BASE64URL, { message: 'verifier must be URL-safe' })
+  @ApiProperty({ type: String })
+  verifier: string;
+
+  /**
+   * The site redeeming the code, which must be the one that requested it.
+   *
+   * Compared **after normalisation**, not byte for byte: `initiate` stored a
+   * normalised URL and WordPress reports `home_url( '/' )` with a trailing
+   * slash, so a literal comparison would refuse every honest exchange.
+   */
+  @IsString()
+  @MaxLength(255)
+  @Matches(/^https:\/\/[^\s]+$/, {
+    message: 'site_url must be an absolute https:// URL',
+  })
+  @ApiProperty({ type: String })
+  site_url: string;
+}

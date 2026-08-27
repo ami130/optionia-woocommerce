@@ -800,7 +800,7 @@ plugin. Every installation is treated as potentially hostile.
 |---|---|---|---|
 | `POST /connect/initiate` | none — `@Public()` | — | `[built]` |
 | `POST /connect/authorize` | tenant | `stores:connect` | `[built]` |
-| `POST /connect/exchange` | none — `@Public()` | — | `[8e]` |
+| `POST /connect/exchange` | none — `@Public()` | — | `[built]` |
 
 ### Four decisions, settled here
 
@@ -1006,7 +1006,7 @@ request), `INSUFFICIENT_ROLE`, `RATE_LIMITED`.
 
 ---
 
-### `POST /v1/connect/exchange` **[8e]**
+### `POST /v1/connect/exchange` **[built]**
 
 The plugin redeems its code for a store credential, server-to-server. The browser
 is not involved.
@@ -1029,11 +1029,43 @@ is not involved.
 |---|---|
 | `code` | 43–128 chars, URL-safe |
 | `verifier` | 43–128 chars — `base64url(SHA-256(verifier))` must equal the stored challenge |
-| `site_url` | must equal the URL the code was issued for, **exactly** |
+| `site_url` | must equal the URL the code was issued for, **exactly after normalisation** |
 
 **The code lives 5 minutes and is spent on first use** —
 [M8.1](../../developePlan.md)'s acceptance in full: single-use, short-lived, bound
 to `site_url`, and bound to a hash of `state`.
+
+**"Exactly" means after the same normalisation `initiate` applied**, and the
+distinction is the difference between a working flow and one that never succeeds.
+`initiate` stores `store_connection_codes.site_url` normalised — lowercased host,
+no trailing slash — while the plugin sends WordPress's `home_url( '/' )`, which
+carries the slash (`Api/Client.php`). A literal byte comparison would therefore
+refuse **every honest first exchange**:
+
+```text
+plugin sends   https://shop.example.com/
+initiate stored https://shop.example.com     → raw equality: false
+```
+
+Both sides normalise before comparing. The binding is still exact — a different
+host, scheme or port is still a refusal — it is exact between two values reduced
+the same way. This is the third place the same rule appears, after `initiate`'s
+callback-origin check and `[8i]`'s `X-Optionia-Site` comparison; it is one rule,
+not three.
+
+**The token carries a visible `osk_live_` prefix, and `token_prefix` stores the
+eight characters *after* it.**
+
+A constant prefix makes a leaked credential recognisable on sight and lets secret
+scanners match it, which is worth the nine characters. But it cannot also be what
+`store_credentials.token_prefix` holds: that column is `CHAR(8)` and exists "for
+support identification", and the first eight characters of every token would then
+be `osk_live` — identical for every credential in the system, identifying nothing.
+
+So the two serve different purposes and hold different things: the token reads
+`osk_live_<43 chars>`, and `token_prefix` holds the first eight characters of the
+random part. Support can still ask "which credential ends in…" and get an answer
+that discriminates.
 
 **Every check is a refusal, and they are indistinguishable.** A spent code, an
 expired one, a wrong verifier, a mismatched `site_url` — all answer
@@ -1047,6 +1079,13 @@ they do not recover it.
 **The store moves `CONNECTING` → `CONNECTED`** in the same transaction that spends
 the code, so a failure cannot leave a store connected with no credential or a
 credential with no store.
+
+**Audited** as `store.connected`, with an **explicit tenant**. `exchange` is
+`@Public()` and so has no tenant in context — but unlike `initiate`, the tenant is
+*knowable*: `store_connection_codes.tenant_id` was set when the merchant approved.
+The entry names it directly, so a completed connection is visible to the
+tenant-scoped audit query like every other transition. `initiate` remains
+unaudited because at that point no tenant exists to name.
 
 **Errors:** `VALIDATION_FAILED`, `TOKEN_INVALID`, `RATE_LIMITED`.
 

@@ -10,8 +10,13 @@ import { CapabilityGuard } from '../auth/permissions/capability.guard';
 import { RequireCapability } from '../auth/permissions/require-capability.decorator';
 import { requireTenantId } from '../common/context/request-context';
 import { ApiErrors } from '../common/openapi/api-errors.decorator';
-import { ConnectService, type AuthorizeResult, type InitiateResult } from './connect.service';
-import { AuthorizeDto, InitiateDto } from './dto/connect.dto';
+import {
+  ConnectService,
+  type AuthorizeResult,
+  type ExchangeResult,
+  type InitiateResult,
+} from './connect.service';
+import { AuthorizeDto, ExchangeDto, InitiateDto } from './dto/connect.dto';
 
 /**
  * The connection handshake (M8.2).
@@ -50,6 +55,26 @@ export class ConnectController {
    * should not be able to bind the tenant to a site they control. Owner and
    * admin hold it (M6.5).
    */
+  /**
+   * Redeem a code for a store credential, server-to-server.
+   *
+   * `@Public()` for the same reason as `initiate`: the plugin still holds no
+   * credential — obtaining one is the point of the call. The PKCE verifier is
+   * what authenticates it, and the rate limit bounds the rest.
+   *
+   * 20 per hour per site: a plugin redeems once per connection and retries a
+   * failed exchange a few times. It keys on `site_url` through the same tracker
+   * `initiate` uses, since the field is in the body.
+   */
+  @Post('exchange')
+  @Public()
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
+  @ApiErrors(200, 400, 401, 429)
+  async exchange(@Body() dto: ExchangeDto): Promise<ExchangeResult> {
+    return this.service.exchange(dto);
+  }
+
   @Post('authorize')
   @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
   @ApiBearerAuth('tenant')

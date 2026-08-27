@@ -21,6 +21,19 @@ describe('connect handshake (e2e)', () => {
   let tenantId = '';
 
   /**
+   * `exchange` runs a full handshake per test, and `authorize` is capped at 30
+   * per hour **per tenant** — a limit `[8d]` implemented deliberately. The suite
+   * outgrew that budget the moment `[8e]` arrived, and every later test then
+   * failed with a `429` that had nothing to do with what it asserted.
+   *
+   * A second tenant is the honest fix: it mirrors what really happens (each
+   * merchant has their own budget) and keeps the limit at its specified value
+   * rather than loosening a security control to suit a test suite.
+   */
+  let exchangeToken = '';
+  let exchangeTenantId = '';
+
+  /**
    * A distinct site per call.
    *
    * `initiate` is limited to 10 per hour **per site URL**, and `@Throttle`
@@ -108,6 +121,9 @@ describe('connect handshake (e2e)', () => {
 
     token = await harness.tenant('a');
     tenantId = await harness.tenantIdOf('a');
+
+    exchangeToken = await harness.tenant('x');
+    exchangeTenantId = await harness.tenantIdOf('x');
   }, 120_000);
 
   afterAll(async () => {
@@ -527,6 +543,231 @@ describe('connect handshake (e2e)', () => {
     }, 60_000);
   });
 
+  /**
+   * `exchange` — the plugin redeems its code for a credential (`[8e]`).
+   *
+   * The only irreversible step: it mints a long-lived secret and moves the store
+   * to `CONNECTED`.
+   */
+  describe('exchange', () => {
+    /** Run the whole handshake and return what the plugin would now hold. */
+    async function approved(
+      over: Record<string, unknown> = {},
+    ): Promise<{ code: string; verifier: string; site: string; storeId: string }> {
+      const verifier = digest();
+      const challenge = createHash('sha256').update(verifier).digest('base64url');
+      const begun = await begin({ challenge, ...over });
+
+      // The exchange block's own tenant: `authorize` is 30/hour per tenant, and
+      // one full handshake per test would otherwise exhaust the suite's budget.
+      const response = await authorize(
+        { request: begun.request, state: begun.state },
+        exchangeToken,
+      );
+
+      if (response.status !== 200) {
+        throw new Error(
+          `authorize failed: ${response.status} ` +
+            `${JSON.stringify(response.body?.error ?? response.body)}`,
+        );
+      }
+
+      const code = new URL(response.body.data.redirect_url).searchParams.get('code') ?? '';
+
+      const [row] = await dataSource.query(
+        `SELECT storeId FROM store_connection_codes WHERE id = ?`,
+        [begun.request],
+      );
+
+      return { code, verifier, site: begun.site, storeId: row.storeId };
+    }
+
+    const exchange = (body: Record<string, unknown>): request.Test =>
+      request(app.getHttpServer()).post('/v1/connect/exchange').send(body);
+
+    it('returns a credential and the tenant it belongs to', async () => {
+      const { code, verifier, site } = await approved();
+      const response = await exchange({ code, verifier, site_url: site });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.token).toMatch(/^osk_live_/);
+      expect(response.body.data.tenant_name).toBeTruthy();
+      expect(response.body.data.config_version).toBe(0);
+    });
+
+    it('moves the store to CONNECTED', async () => {
+      const { code, verifier, site, storeId } = await approved();
+
+      await exchange({ code, verifier, site_url: site });
+
+      const [row] = await dataSource.query(`SELECT status FROM stores WHERE id = ?`, [storeId]);
+
+      expect(row.status).toBe(StoreStatus.CONNECTED);
+    });
+
+    /** The token is shown once; only its hash may reach the table. */
+    it('stores only the hash, and a prefix that discriminates', async () => {
+      const { code, verifier, site, storeId } = await approved();
+      const response = await exchange({ code, verifier, site_url: site });
+      const token = response.body.data.token as string;
+
+      const [row] = await dataSource.query(
+        `SELECT tokenHash, tokenPrefix FROM store_credentials WHERE storeId = ?`,
+        [storeId],
+      );
+
+      expect(row.tokenHash).toBe(createHash('sha256').update(token).digest('hex'));
+      // Not `osk_live` — that is the same for every credential ever issued.
+      expect(row.tokenPrefix).not.toBe('osk_live');
+      expect(token).toContain(row.tokenPrefix);
+    });
+
+    /**
+     * The credential works. Without this the suite proves a token was minted,
+     * not that it authenticates anything.
+     */
+    it('issues a credential the store realm accepts', async () => {
+      const { code, verifier, site } = await approved();
+      const token = (await exchange({ code, verifier, site_url: site })).body.data.token;
+
+      const [row] = await dataSource.query(
+        `SELECT revokedAt FROM store_credentials WHERE tokenHash = ?`,
+        [createHash('sha256').update(token).digest('hex')],
+      );
+
+      expect(row).toBeDefined();
+      expect(row.revokedAt).toBeNull();
+    });
+
+    /**
+     * `initiate` normalises the URL it stores and WordPress reports
+     * `home_url( '/' )` with a trailing slash, so "exactly" has to mean exactly
+     * after the same reduction — otherwise every honest exchange is refused.
+     */
+    it('accepts the trailing slash WordPress actually sends', async () => {
+      const { code, verifier, site } = await approved();
+      const response = await exchange({ code, verifier, site_url: `${site}/` });
+
+      expect(response.status).toBe(200);
+    });
+
+    describe('refuses', () => {
+      it('an unknown code', async () => {
+        const { verifier, site } = await approved();
+
+        expect((await exchange({ code: digest(), verifier, site_url: site })).status).toBe(401);
+      });
+
+      /** Single-use: the second redemption of one code must fail. */
+      it('a code already spent', async () => {
+        const { code, verifier, site } = await approved();
+
+        expect((await exchange({ code, verifier, site_url: site })).status).toBe(200);
+        expect((await exchange({ code, verifier, site_url: site })).status).toBe(401);
+      });
+
+      /** The same rule under concurrency, which is what the conditional write is for. */
+      it('all but one of three simultaneous redemptions', async () => {
+        const { code, verifier, site } = await approved();
+
+        const results = await Promise.all([
+          exchange({ code, verifier, site_url: site }),
+          exchange({ code, verifier, site_url: site }),
+          exchange({ code, verifier, site_url: site }),
+        ]);
+
+        expect(results.filter((result) => result.status === 200)).toHaveLength(1);
+
+        const rows = await dataSource.query(
+          `SELECT c.id FROM store_credentials sc
+             JOIN store_connection_codes c ON c.storeId = sc.storeId
+            WHERE c.codeHash = ?`,
+          [createHash('sha256').update(code).digest('hex')],
+        );
+
+        // One credential, not three.
+        expect(rows).toHaveLength(1);
+      });
+
+      it('an expired code', async () => {
+        const { code, verifier, site } = await approved();
+
+        await dataSource.query(
+          `UPDATE store_connection_codes SET codeExpiresAt = NOW(3) - INTERVAL 1 SECOND
+            WHERE codeHash = ?`,
+          [createHash('sha256').update(code).digest('hex')],
+        );
+
+        expect((await exchange({ code, verifier, site_url: site })).status).toBe(401);
+      });
+
+      /** PKCE: the code alone is not enough without the verifier that made it. */
+      it('a wrong verifier', async () => {
+        const { code, site } = await approved();
+
+        expect((await exchange({ code, verifier: digest(), site_url: site })).status).toBe(401);
+      });
+
+      /**
+       * The challenge is case-sensitive base64url. Under the schema-wide
+       * `utf8mb4_unicode_ci` this comparison would succeed — which is why the
+       * column is `utf8mb4_bin` (`[8b]`).
+       */
+      it('a verifier whose challenge differs only in case', async () => {
+        const { code, verifier, site } = await approved();
+        const challenge = createHash('sha256').update(verifier).digest('base64url');
+        const swapped = challenge
+          .split('')
+          .map((ch) => (ch === ch.toUpperCase() ? ch.toLowerCase() : ch.toUpperCase()))
+          .join('');
+
+        await dataSource.query(
+          `UPDATE store_connection_codes SET challenge = ? WHERE codeHash = ?`,
+          [swapped, createHash('sha256').update(code).digest('hex')],
+        );
+
+        expect((await exchange({ code, verifier, site_url: site })).status).toBe(401);
+      });
+
+      /** A code issued for one shop must not be redeemable by another. */
+      it('a different site', async () => {
+        const { code, verifier } = await approved();
+
+        expect((await exchange({ code, verifier, site_url: nextSite() })).status).toBe(401);
+      });
+
+      it('a malformed verifier', async () => {
+        const { code, site } = await approved();
+
+        expect((await exchange({ code, verifier: 'short', site_url: site })).status).toBe(400);
+      });
+
+      it('an unknown field', async () => {
+        const { code, verifier, site } = await approved();
+
+        expect(
+          (await exchange({ code, verifier, site_url: site, extra: 'x' })).status,
+        ).toBe(400);
+      });
+    });
+
+    /** M8.1b: the completing transition is logged, against the right tenant. */
+    it('audits the connection against the tenant from the code', async () => {
+      const { code, verifier, site, storeId } = await approved();
+
+      await exchange({ code, verifier, site_url: site });
+
+      const [row] = await dataSource.query(
+        `SELECT action, tenantId, resourceId FROM audit_logs
+          WHERE resourceId = ? AND action = 'store.connected' LIMIT 1`,
+        [storeId],
+      );
+
+      expect(row).toBeDefined();
+      expect(row.tenantId).toBe(exchangeTenantId);
+    });
+  });
+
   /** M8.1b: every transition of a store is logged. */
   describe('audit', () => {
     it('records the connection against the tenant', async () => {
@@ -537,12 +778,26 @@ describe('connect handshake (e2e)', () => {
 
       await authorize({ request: id, state });
 
-      const [row] = await dataSource.query(
-        `SELECT action, resourceType, tenantId FROM audit_logs
-          WHERE tenantId = ? AND action LIKE 'store.%' ORDER BY createdAt DESC LIMIT 1`,
-        [tenantId],
+      const [store] = await dataSource.query(
+        `SELECT storeId FROM store_connection_codes WHERE id = ?`,
+        [id],
       );
 
+      /**
+       * Matched on **this** store, not on the newest `store.%` row.
+       *
+       * An `ORDER BY createdAt DESC LIMIT 1` assumed no other store event could
+       * land in between, which stopped being true the moment `[8e]` added
+       * `store.connected` — the test then read another test's row. Scoping to the
+       * resource makes it independent of what else the suite does.
+       */
+      const [row] = await dataSource.query(
+        `SELECT action, resourceType, tenantId FROM audit_logs
+          WHERE resourceId = ? AND action = 'store.connect_authorized' LIMIT 1`,
+        [store.storeId],
+      );
+
+      expect(row).toBeDefined();
       expect(row.action).toBe('store.connect_authorized');
       expect(row.resourceType).toBe('store');
       expect(row.tenantId).toBe(tenantId);
@@ -604,13 +859,15 @@ describe('connect handshake (e2e)', () => {
       // Exactly one entry, and it names the reuse rather than a fresh connect.
       expect(after).toBe(before + 1);
 
-      const [latest] = await dataSource.query(
-        `SELECT action FROM audit_logs WHERE tenantId = ? AND action LIKE 'store.%'
-          ORDER BY createdAt DESC LIMIT 1`,
-        [tenantId],
+      const [reconnect] = await dataSource.query(
+        `SELECT action FROM audit_logs
+          WHERE tenantId = ? AND action = 'store.reconnect_authorized'
+            AND JSON_EXTRACT(changes, '$.siteUrl') = ? LIMIT 1`,
+        [tenantId, site],
       );
 
-      expect(latest.action).toBe('store.reconnect_authorized');
+      expect(reconnect).toBeDefined();
+      expect(reconnect.action).toBe('store.reconnect_authorized');
     });
   });
 });

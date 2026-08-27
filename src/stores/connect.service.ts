@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { StorePlatform, StoreStatus } from '../common/database/enums';
-import { generateToken, hashToken, tokensMatch } from '../common/crypto/tokens';
+import {
+  generateStoreToken,
+  generateToken,
+  hashToken,
+  tokensMatch,
+} from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
-import { AuthorizeDto, InitiateDto } from './dto/connect.dto';
+import { AuthorizeDto, ExchangeDto, InitiateDto } from './dto/connect.dto';
 
 /** A pending request lives 30 minutes — a human signs up and reads a screen. */
 const REQUEST_TTL_MS = 30 * 60_000;
@@ -21,6 +27,14 @@ export interface InitiateResult {
 
 export interface AuthorizeResult {
   readonly redirect_url: string;
+}
+
+export interface ExchangeResult {
+  /** Shown once. `store_credentials` holds only its hash. */
+  readonly token: string;
+  readonly store_id: string;
+  readonly tenant_name: string;
+  readonly config_version: number;
 }
 
 /**
@@ -213,6 +227,110 @@ export class ConnectService {
   }
 
   /**
+   * Redeem a code for a store credential, server-to-server (M8.1).
+   *
+   * The last step, and the only irreversible one: it mints a long-lived secret
+   * and moves the store to `CONNECTED`. The browser is not involved.
+   */
+  async exchange(dto: ExchangeDto): Promise<ExchangeResult> {
+    const [row] = await this.dataSource.query(
+      `SELECT c.id, c.siteUrl, c.challenge, c.codeExpiresAt, c.redeemedAt,
+              c.tenantId, c.storeId, t.name AS tenantName
+         FROM store_connection_codes c
+         JOIN tenants t ON t.id = c.tenantId
+        WHERE c.codeHash = ? LIMIT 1`,
+      [hashToken(dto.code)],
+    );
+
+    /**
+     * Five ways to fail, one answer.
+     *
+     * Unknown code, already spent, expired, wrong verifier, wrong site — all
+     * `TOKEN_INVALID` with the same message. Telling an attacker which of the
+     * five they failed tells them exactly what to fix, and the code is one
+     * exchange away from a credential.
+     *
+     * The `JOIN` on `tenants` is part of the check rather than a convenience: a
+     * code whose tenant is gone resolves to no row, which is the same refusal
+     * instead of a crash on a missing name.
+     */
+    if (
+      !row ||
+      row.redeemedAt !== null ||
+      row.codeExpiresAt === null ||
+      new Date(row.codeExpiresAt).getTime() <= Date.now() ||
+      !tokensMatch(pkceChallenge(dto.verifier), row.challenge) ||
+      normaliseUrl(dto.site_url) !== row.siteUrl
+    ) {
+      throw ConnectService.invalidRequest();
+    }
+
+    const credential = generateStoreToken();
+
+    await this.dataSource.transaction(async (manager) => {
+      /**
+       * Spend the code with a conditional write, exactly as `authorize` claims
+       * a request.
+       *
+       * The read above rejects an already-spent code in the ordinary case; this
+       * is what decides between two simultaneous redemptions, because only one
+       * `UPDATE` can match `redeemedAt IS NULL`.
+       */
+      const spent = await manager.query(
+        `UPDATE store_connection_codes SET redeemedAt = NOW(3), updatedAt = NOW(3)
+          WHERE id = ? AND redeemedAt IS NULL`,
+        [row.id],
+      );
+
+      if (spent.affectedRows !== 1) {
+        throw ConnectService.invalidRequest();
+      }
+
+      await manager.query(
+        `INSERT INTO store_credentials
+           (id, createdAt, updatedAt, storeId, tokenHash, tokenPrefix, scopes)
+         VALUES (UUID(), NOW(3), NOW(3), ?, ?, ?, '')`,
+        [row.storeId, credential.hash, credential.prefix],
+      );
+
+      // Same transaction as the spend, so a failure cannot leave a store
+      // connected with no credential, or a credential with no connected store.
+      await manager.query(`UPDATE stores SET status = ?, updatedAt = NOW(3) WHERE id = ?`, [
+        StoreStatus.CONNECTED,
+        row.storeId,
+      ]);
+    });
+
+    /**
+     * Audited after the commit, with the tenant named explicitly.
+     *
+     * This route is `@Public()` and has no tenant in context — but unlike
+     * `initiate`, the tenant is knowable: `authorize` recorded it on the code.
+     * Naming it keeps a completed connection visible to the tenant-scoped audit
+     * query rather than writing a row nobody can read.
+     */
+    await this.audit.record({
+      action: AuditAction.STORE_CONNECTED,
+      resourceType: 'store',
+      resourceId: row.storeId,
+      tenantId: row.tenantId,
+      changes: { status: StoreStatus.CONNECTED, siteUrl: row.siteUrl },
+    });
+
+    const [store] = await this.dataSource.query(
+      `SELECT configVersion FROM stores WHERE id = ? LIMIT 1`,
+      [row.storeId],
+    );
+
+    return {
+      token: credential.plaintext,
+      store_id: row.storeId,
+      tenant_name: row.tenantName,
+      config_version: Number(store?.configVersion ?? 0),
+    };
+  }
+
+  /**
    * The store this approval refers to, creating it only if the tenant has none.
    *
    * **Reconnection reuses the row.** `uq_stores_tenant_url` is
@@ -301,4 +419,16 @@ function hostOf(value: string): string {
   } catch {
     return value.slice(0, 255);
   }
+}
+
+/**
+ * The PKCE S256 challenge for a verifier: `base64url(SHA-256(verifier))`.
+ *
+ * Produced here and compared against the stored challenge, which is kept exactly
+ * as the plugin sent it. Hashing the stored value again would compare
+ * `SHA-256(SHA-256(verifier))` against `SHA-256(verifier)` — a check that fails
+ * for every honest client while looking like defence in depth.
+ */
+function pkceChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier, 'utf8').digest('base64url');
 }
