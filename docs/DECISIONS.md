@@ -2070,3 +2070,34 @@ genuinely absent marker.
 `stores:rotate_credential` were in the matrix from M6.5, held by owner and admin.
 The contract initially assigned rotation to `stores:connect`; checking rather than
 assuming found the finer-grained one already drawn.
+
+### Addendum — an audit of the contract itself
+
+Auditing 8a against M7.7's nine required fields found the decisions sound and the
+**specification incomplete**. Six fixes, of which one mattered more than the rest.
+
+**The site-URL mechanism did not exist as written.** The draft said a credential is
+"bound to the `site_url` it was issued for" and that the check is against "the
+credential's own bound URL". `store_credentials` has **no URL column** — it reaches
+one only through `store_id`, so the "binding" was the store's own mutable field.
+`[8i]` would have built against a mechanism rather than a fact.
+
+The real mechanism was already shipping: the plugin sends `X-Optionia-Site` —
+`home_url()` — on every request, and a store's URL is recorded once at connection
+and never edited. A clone reports *its own* URL while the credential still names
+the original, which is exactly what makes the mismatch detectable. The contract now
+describes that comparison, requires both sides to normalise trailing slash and host
+case, and specifies `403` rather than `401` — the credential is genuine, the site
+presenting it is not, and a 401 sends the plugin into a reconnect loop that
+retrying cannot win.
+
+**Two lifetimes were missing, and they differ for a reason.** The code is 5 minutes
+(M8.1's acceptance, absent from the draft); a pending request is 30 minutes. Five
+minutes would fail a merchant who signs up and verifies an email mid-flow. The
+threats differ: a pending request grants nothing without a tenant sign-in, while a
+code is one exchange from a credential.
+
+Three endpoints also lacked the rate limits M8.2 requires, two lacked field-rule
+tables, and `disconnect` did not say it takes no body. All were written more
+loosely than the three endpoints drafted first — the tail of a document getting
+less care than its head, which an audit catches and a reader would not.

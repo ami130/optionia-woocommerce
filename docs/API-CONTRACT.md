@@ -833,6 +833,33 @@ followed by `fetch` and never seen by the application, and a JWT cannot ride a
 browser redirect. It returns `{ redirect_url }` and the dashboard navigates
 deliberately — consistent with every other tenant-realm endpoint.
 
+### Two lifetimes, and why they differ
+
+| Artefact | Lives | Single-use |
+|---|---|---|
+| **Connection request** | 30 minutes | yes |
+| **Authorization code** | 5 minutes | yes |
+
+**The code is 5 minutes** — [M8.1](../../developePlan.md)'s acceptance, and the
+reason is the window an intercepted code is useful in. Redemption is
+machine-to-machine and takes milliseconds; five minutes is generous for a retry
+after a network failure and short enough that a code captured from a redirect
+URL, a browser history or a proxy log is almost always already dead.
+
+**The request is 30 minutes** because a human is in the middle of it. A merchant
+who clicks *Connect* may have no account yet: they sign up, verify an email,
+possibly read the approval screen twice. Five minutes would fail that merchant
+routinely, and a connection flow that times out while someone reads it produces
+exactly the support ticket [M8.1b](../../developePlan.md) describes.
+
+The two differ because the threat differs: a pending *request* grants nothing —
+approving it still requires signing in as a tenant member — while a *code* is
+one exchange away from a credential.
+
+An expired request answers `TOKEN_INVALID` from `authorize`; an expired code
+answers the same from `exchange`. Both move the store to `DISCONNECTED` if it
+reached `CONNECTING`.
+
 ### Why two routes are unauthenticated
 
 Authentication is **global opt-out**: a route is protected unless it carries
@@ -893,6 +920,8 @@ The merchant, signed in to the dashboard, approves connecting a site to their
 tenant. This is the only step with a human in it.
 
 **Realm:** tenant. **Capability:** `stores:connect`.
+**Rate limit:** 30 per hour, per tenant — a merchant approves a handful of stores;
+a script enumerating request ids does not.
 **Response:** `200 OK`
 
 ```jsonc
@@ -903,11 +932,15 @@ tenant. This is the only step with a human in it.
 { "data": { "redirect_url": "https://shop.example.com/wp-admin/…?code=…&state=…" } }
 ```
 
+| Field | Rules |
+|---|---|
+| `request` | UUID. Must be pending, unexpired, and not already approved |
+
 Creates the store in `CONNECTING` and issues a one-time authorization code. The
 `redirect_url` carries the code and the merchant's original `state`.
 
-**A pending request is single-use and expires.** Approving twice must not mint two
-codes — the second call answers `TOKEN_INVALID`.
+**A pending request is single-use and lives 30 minutes.** Approving twice must not
+mint two codes — the second call answers `TOKEN_INVALID`.
 
 **Which capability.** `stores:connect` rather than `option_sets:edit`: connecting
 a storefront is an ownership act, and an editor who can build options should not
@@ -945,6 +978,10 @@ is not involved.
 | `verifier` | 43–128 chars — `base64url(SHA-256(verifier))` must equal the stored challenge |
 | `site_url` | must equal the URL the code was issued for, **exactly** |
 
+**The code lives 5 minutes and is spent on first use** —
+[M8.1](../../developePlan.md)'s acceptance in full: single-use, short-lived, bound
+to `site_url`, and bound to a hash of `state`.
+
 **Every check is a refusal, and they are indistinguishable.** A spent code, an
 expired one, a wrong verifier, a mismatched `site_url` — all answer
 `TOKEN_INVALID` with the same message. Telling an attacker which of four
@@ -981,9 +1018,13 @@ credential with no store.
 The merchant disconnects a store from the dashboard. Revokes every live credential
 and moves the store to `DISCONNECTED`.
 
+**Rate limit:** 20 per hour, per tenant. Tighter than the global default because
+this is a destructive ownership act, not a read.
 **Response:** `200 OK`
 
 ```jsonc
+// Request — no body. The store is named by the path.
+// Response
 { "data": { "status": "disconnected", "credentials_revoked": 1 } }
 ```
 
@@ -1004,15 +1045,21 @@ ability to publish, not their shop.
 Issues a new credential and revokes the old one. For a merchant who believes their
 token leaked, and for scheduled rotation.
 
+**Rate limit:** 20 per hour, per tenant — same reasoning as `disconnect`: each
+rotation invalidates a live credential.
 **Response:** `200 OK`
 
 ```jsonc
-// Request
-{ "reason": "suspected disclosure" }   // optional, ≤ 255 chars, recorded in the trail
+// Request — the body is optional; an empty body is valid.
+{ "reason": "suspected disclosure" }
 
 // Response
 { "data": { "token": "osk_live_…", "prefix": "osk_live", "rotated_at": "…" } }
 ```
+
+| Field | Rules |
+|---|---|
+| `reason` | optional, ≤ 255 chars. Recorded in the audit trail, shown to the merchant in the store's history |
 
 **The old credential is revoked immediately, not at a grace period.** A rotation a
 merchant asked for because they think the token leaked must take effect at once;
@@ -1119,16 +1166,37 @@ lapsed does not renew.
 
 ### Site-URL change detection
 
-A credential is bound to the `site_url` it was issued for. If a request arrives
-carrying a valid credential from a **different** origin — a staging clone, a
-domain migration — the cloud refuses it and requires re-authorization.
+Every plugin request carries **`X-Optionia-Site`**, the site's own `home_url()`.
+A store's URL is recorded once at connection and is not editable afterwards, so
+the check is a comparison: if the header does not match `stores.store_url`, the
+request is refused and re-authorization required.
 
 Without it, a cloned staging site inherits production's credential and begins
-reporting orders as though it were the live shop.
+reporting orders as though it were the live shop — the clone reports its own URL
+while the credential still names the original, which is precisely what makes the
+mismatch detectable.
 
-`uq_stores_tenant_url` is `(tenant_id, store_url)`, so the same URL may legitimately
-exist under two tenants — an agency and its client. The check is therefore against
-**the credential's own bound URL**, never a global uniqueness lookup.
+**The comparison is against the store's recorded URL, not a global lookup.**
+`uq_stores_tenant_url` is `(tenant_id, store_url)`, so the same URL may
+legitimately exist under two tenants — an agency and its client — and a global
+uniqueness check would refuse a connection that is entirely valid.
+
+> An earlier draft said the credential is "bound to the `site_url` it was issued
+> for" and that the check is against "the credential's own bound URL".
+> `store_credentials` has **no URL column**; it reaches one only through
+> `store_id`. Stating it that way described a binding that does not exist, and
+> would have had `[8i]` build against a mechanism rather than a fact.
+
+**Normalisation matters here.** `https://shop.example.com` and
+`https://shop.example.com/` are the same site and must compare equal; WordPress's
+`home_url( '/' )` returns the trailing slash. Both sides normalise to origin plus
+path without a trailing slash, lowercased host, before comparing — otherwise a
+merchant's own site fails the check and the feature reads as broken.
+
+**Errors:** a mismatch answers `403 FORBIDDEN` with `reauthorize: true` on the
+heartbeat, not `401`. The credential is genuine; the *site presenting it* is not
+the one it was issued to, and a 401 would send the plugin into a reconnect loop
+it cannot win by retrying.
 
 ---
 
