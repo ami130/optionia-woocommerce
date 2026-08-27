@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
 
 import { AUTHORING_LIMITS, assertWithinLimit } from './authoring-limits';
+import { buildPatch, pick } from './entity-patch';
+import { ParentSetService } from './parent-set';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
@@ -38,6 +40,7 @@ export class OptionGroupsService {
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly cascade: CascadeService,
+    private readonly parents: ParentSetService,
   ) {}
 
   async findOne(id: string): Promise<OptionGroup> {
@@ -76,7 +79,7 @@ export class OptionGroupsService {
       sortOrder: await this.groups.nextSortOrder(optionSetId),
     } as never);
 
-    await this.touchSet(optionSetId);
+    await this.parents.touchSet(optionSetId);
     await this.audit.record({
       action: AuditAction.OPTION_GROUP_CREATED,
       resourceType: 'option_group',
@@ -96,7 +99,7 @@ export class OptionGroupsService {
     }
 
     await this.groups.update({ id } as never, patch as never);
-    await this.touchSet(before.optionSetId);
+    await this.parents.touchSet(before.optionSetId);
 
     await this.audit.record({
       action: AuditAction.OPTION_GROUP_UPDATED,
@@ -133,7 +136,7 @@ export class OptionGroupsService {
       throw error;
     }
 
-    await this.touchSet(before.optionSetId);
+    await this.parents.touchSet(before.optionSetId);
 
     await this.audit.record({
       action: AuditAction.OPTION_GROUP_DELETED,
@@ -181,7 +184,7 @@ export class OptionGroupsService {
       return created;
     });
 
-    await this.touchSet(source.optionSetId);
+    await this.parents.touchSet(source.optionSetId);
     await this.audit.record({
       action: AuditAction.OPTION_GROUP_DUPLICATED,
       resourceType: 'option_group',
@@ -226,7 +229,7 @@ export class OptionGroupsService {
       }
     });
 
-    await this.touchSet(optionSetId);
+    await this.parents.touchSet(optionSetId);
     await this.audit.record({
       action: AuditAction.OPTION_SET_REORDERED,
       resourceType: 'option_set',
@@ -258,17 +261,6 @@ export class OptionGroupsService {
     }
   }
 
-  /**
-   * Advance the parent set's `rowVersion`.
-   *
-   * A group, option or value is part of its set, so editing one *is* editing the
-   * set. Without this, two people could edit different groups of one set and
-   * neither would see a conflict — which is precisely the silent overwrite
-   * M7.4b exists to prevent, arriving one level down where nobody looked.
-   */
-  private async touchSet(optionSetId: string): Promise<void> {
-    await this.sets.applyChange(optionSetId, {});
-  }
 }
 
 /**
@@ -367,35 +359,4 @@ export async function copyOptionsInto(
       );
     }
   }
-}
-
-/**
- * The subset of `changes` that differs from what is stored.
- *
- * An unchanged field is not a change: including it would burn a `rowVersion`
- * and write an audit entry for a save that altered nothing.
- */
-export function buildPatch<T extends object>(before: T, changes: Partial<T>): Partial<T> {
-  const patch: Partial<T> = {};
-
-  (Object.keys(changes) as Array<keyof T>).forEach((field) => {
-    const next = changes[field];
-
-    if (next === undefined) {
-      return;
-    }
-
-    const value = typeof next === 'string' ? (next.trim() as T[keyof T]) : next;
-
-    if (value !== before[field]) {
-      patch[field] = value;
-    }
-  });
-
-  return patch;
-}
-
-/** The named fields of an object, for diffing against a patch. */
-export function pick<T extends object>(source: T, fields: string[]): Record<string, unknown> {
-  return Object.fromEntries(fields.map((field) => [field, source[field as keyof T]]));
 }

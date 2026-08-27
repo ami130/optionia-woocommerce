@@ -576,6 +576,138 @@ describe('option authoring (e2e)', () => {
     }, 30_000);
   });
 
+  /**
+   * M7.2's lifecycle table is inherited by every level. Duplicate was built for
+   * groups and options and missed for values; reorder was built for groups
+   * only — so a merchant could rearrange groups but not the options inside one,
+   * nor the values a customer reads in order.
+   */
+  describe('the lifecycle set, at every level', () => {
+    it('duplicates a value within its option', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'dup_values');
+      const value = idOf(
+        await post(tokenA, `/options/${option}/values`, {
+          valueKey: 'red',
+          label: 'Red',
+          priceAmountMinor: 500,
+        }),
+        'value',
+      );
+
+      const copy = await post(tokenA, `/values/${value}/duplicate`);
+
+      expect(copy.status).toBe(201);
+      expect(copy.body.data.valueKey).toBe('red-copy');
+      expect(copy.body.data.label).toBe('Red (copy)');
+      // Everything else is carried across.
+      expect(copy.body.data.priceAmountMinor).toBe(500);
+    }, 60_000);
+
+    /** Two defaults on one option is a state no storefront can render. */
+    it('never lets a copy claim the default', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'dup_default');
+      const value = idOf(
+        await post(tokenA, `/options/${option}/values`, {
+          valueKey: 'only',
+          label: 'Only',
+          isDefault: true,
+        }),
+        'value',
+      );
+
+      const copy = await post(tokenA, `/values/${value}/duplicate`);
+
+      expect(copy.body.data.isDefault).toBe(false);
+
+      const values = await get(tokenA, `/options/${option}/values`);
+      expect(
+        values.body.data.filter((v: { isDefault: boolean }) => v.isDefault),
+      ).toHaveLength(1);
+    }, 60_000);
+
+    it('accepts an explicit key for the copy', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'dup_named');
+      const value = idOf(
+        await post(tokenA, `/options/${option}/values`, { valueKey: 'a', label: 'A' }),
+        'value',
+      );
+
+      const copy = await post(tokenA, `/values/${value}/duplicate`, { valueKey: 'b' });
+
+      expect(copy.body.data.valueKey).toBe('b');
+    }, 60_000);
+
+    it('reorders options within a group', async () => {
+      const group = await newGroup();
+      const first = await newOption(group, 'first');
+      const second = await newOption(group, 'second');
+
+      const response = await post(tokenA, `/groups/${group}/reorder`, {
+        options: [
+          { id: second, sortOrder: 10 },
+          { id: first, sortOrder: 20 },
+        ],
+      });
+
+      expect(response.status).toBe(201);
+
+      const listed = await get(tokenA, `/groups/${group}/options`);
+      expect(listed.body.data.map((o: { id: string }) => o.id)).toEqual([second, first]);
+    }, 60_000);
+
+    it('reorders values within an option', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'ordered_values');
+      const small = idOf(
+        await post(tokenA, `/options/${option}/values`, { valueKey: 's', label: 'Small' }),
+        'value',
+      );
+      const large = idOf(
+        await post(tokenA, `/options/${option}/values`, { valueKey: 'l', label: 'Large' }),
+        'value',
+      );
+
+      await post(tokenA, `/options/${option}/reorder`, {
+        values: [
+          { id: large, sortOrder: 10 },
+          { id: small, sortOrder: 20 },
+        ],
+      });
+
+      const listed = await get(tokenA, `/options/${option}/values`);
+      expect(listed.body.data.map((v: { id: string }) => v.id)).toEqual([large, small]);
+    }, 60_000);
+
+    /** A partial reorder leaves an arrangement nobody asked for. */
+    it.each([
+      ['options', 'groups', 'options'],
+      ['values', 'options', 'values'],
+    ])('refuses a whole %s reorder when an id is foreign', async (_label, parent, field) => {
+      const group = await newGroup();
+      const option = await newOption(group, `foreign_${field}`);
+      const value = idOf(
+        await post(tokenA, `/options/${option}/values`, { valueKey: 'v', label: 'V' }),
+        'value',
+      );
+
+      const path = parent === 'groups' ? `/groups/${group}/reorder` : `/options/${option}/reorder`;
+      const mine = parent === 'groups' ? option : value;
+
+      const response = await post(tokenA, path, {
+        [field]: [
+          { id: mine, sortOrder: 999 },
+          { id: randomUUID(), sortOrder: 1 },
+        ],
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe('VALIDATION_FAILED');
+    }, 90_000);
+  });
+
   describe('reorder', () => {
     it('applies new sort orders in one request', async () => {
       const set = await seedSetForA();

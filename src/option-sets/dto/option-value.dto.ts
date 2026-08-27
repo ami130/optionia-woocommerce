@@ -166,3 +166,19 @@ export class UpdateOptionValueDto {
   @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }
+
+export class DuplicateOptionValueDto {
+  /**
+   * Key for the copy. Generated as `key-copy` when omitted.
+   *
+   * The copy lands on the **same option**, where
+   * `uq_option_values_option_key` forbids repeating the key.
+   */
+  @ApiPropertyOptional({ type: String })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
+  valueKey?: string;
+}

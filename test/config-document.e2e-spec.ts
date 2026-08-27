@@ -1,13 +1,11 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { createHarness, idOf, type Harness } from './harness';
+
 import { runWithContext } from '../src/common/context/request-context';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -24,12 +22,12 @@ import type { ConfigDocument } from '../src/option-sets/serialization/projection
  * makes — including reading the contract file itself, so the two cannot drift.
  */
 describe('config document (e2e)', () => {
+  let harness: Harness;
   let app: INestApplication;
   let dataSource: DataSource;
   let builder: ConfigDocumentBuilder;
 
   const NS = 'cfg7k';
-  const PASSWORD = 'a-sufficiently-long-password';
   const CONTRACT = readFileSync('docs/CONFIG-CONTRACT.md', 'utf8');
 
   let token = '';
@@ -37,29 +35,13 @@ describe('config document (e2e)', () => {
   let storeId = '';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
-
-    dataSource = app.get(DataSource);
+    harness = await createHarness(NS);
+    app = harness.app;
+    dataSource = harness.dataSource;
     builder = app.get(ConfigDocumentBuilder);
-    await cleanup();
+    await harness.cleanup();
 
-    token = await tenant('a');
+    token = await harness.tenant('a');
 
     /**
      * The second tenant is provisioned **here**, not inside the test that needs
@@ -68,7 +50,7 @@ describe('config document (e2e)', () => {
      * answering 404 — from the run that added it. Fixtures belong in `beforeAll`
      * for the same reason every other one is here.
      */
-    await tenant('b');
+    await harness.tenant('b');
 
     const [row] = await dataSource.query(
       `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
@@ -87,61 +69,11 @@ describe('config document (e2e)', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await cleanup();
-    await app?.close();
+    await harness.cleanup();
+    await harness.close();
   });
 
-  async function cleanup(): Promise<void> {
-    const owned = `SELECT id FROM tenants WHERE slug LIKE '${NS}-%'`;
 
-    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE vv FROM option_set_versions vv JOIN option_sets s ON s.id = vv.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE p FROM presentational_items p JOIN option_groups g ON g.id = p.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE v FROM option_values v JOIN options o ON o.id = v.optionId
-         JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE o FROM options o JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE g FROM option_groups g JOIN option_sets s ON s.id = g.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(`DELETE FROM option_sets WHERE tenantId IN (${owned})`);
-    await dataSource.query(`DELETE FROM stores WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
-    );
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
-  }
-
-  async function tenant(which: string): Promise<string> {
-    const email = `${NS}-${which}@example.com`;
-
-    await request(app.getHttpServer())
-      .post('/v1/auth/register')
-      .send({ email, password: PASSWORD, name: which, tenantName: `${NS}-${which}` });
-    await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [email]);
-    await dataSource.query(
-      `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
-         JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
-      [`${NS}-${which}`, email],
-    );
-
-    return (
-      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD })
-    ).body.data.accessToken as string;
-  }
 
   const post = (path: string, body: object = {}) =>
     request(app.getHttpServer())
@@ -149,16 +81,6 @@ describe('config document (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send(body);
 
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
 
   /** A published set with one group, one option and two values. */
   async function publishedSet(name: string): Promise<string> {

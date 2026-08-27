@@ -1,12 +1,9 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { createHarness, idOf, type Harness } from './harness';
 
 /**
  * The serializer over HTTP, against real rows (M7.2b, step 7h).
@@ -18,11 +15,11 @@ import { RequestContextMiddleware } from '../src/common/context/request-context.
  * trip through MySQL.
  */
 describe('serialization (e2e)', () => {
+  let harness: Harness;
   let app: INestApplication;
   let dataSource: DataSource;
 
   const NS = 'ser7h';
-  const PASSWORD = 'a-sufficiently-long-password';
 
   let token = '';
   let tokenB = '';
@@ -32,30 +29,14 @@ describe('serialization (e2e)', () => {
   let optionId = '';
 
   beforeAll(async () => {
-    loadDotenv();
+    harness = await createHarness(NS);
+    app = harness.app;
+    dataSource = harness.dataSource;
+    await harness.cleanup();
 
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
-
-    dataSource = app.get(DataSource);
-    await cleanup();
-
-    token = await tenant('a');
-    tokenB = await tenant('b');
-    storeId = await store('a');
+    token = await harness.tenant('a');
+    tokenB = await harness.tenant('b');
+    storeId = await harness.store('a');
 
     setId = idOf(await post('/option-sets', { name: 'Serialized', storeId }), 'set');
     groupId = idOf(
@@ -96,75 +77,12 @@ describe('serialization (e2e)', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await cleanup();
-    await app?.close();
+    await harness.cleanup();
+    await harness.close();
   });
 
-  async function cleanup(): Promise<void> {
-    const owned = `SELECT id FROM tenants WHERE slug LIKE '${NS}-%'`;
 
-    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE p FROM presentational_items p JOIN option_groups g ON g.id = p.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE v FROM option_values v JOIN options o ON o.id = v.optionId
-         JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE o FROM options o JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE g FROM option_groups g JOIN option_sets s ON s.id = g.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(`DELETE FROM option_sets WHERE tenantId IN (${owned})`);
-    await dataSource.query(`DELETE FROM stores WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
-    );
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
-  }
 
-  async function tenant(which: string): Promise<string> {
-    const email = `${NS}-${which}@example.com`;
-
-    await request(app.getHttpServer())
-      .post('/v1/auth/register')
-      .send({ email, password: PASSWORD, name: which, tenantName: `${NS}-${which}` });
-    await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [email]);
-    await dataSource.query(
-      `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
-         JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
-      [`${NS}-${which}`, email],
-    );
-
-    return (
-      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD })
-    ).body.data.accessToken as string;
-  }
-
-  async function store(which: string): Promise<string> {
-    const [row] = await dataSource.query(
-      `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email = ?`,
-      [`${NS}-${which}@example.com`],
-    );
-    const id = randomUUID();
-
-    await dataSource.query(
-      `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, configVersion,
-                           createdAt, updatedAt)
-       VALUES (?, ?, 'woocommerce', 'store', ?, 'connected', 0, NOW(3), NOW(3))`,
-      [id, row.id, `https://${id}.example.com`],
-    );
-
-    return id;
-  }
 
   const post = (path: string, body: object = {}, auth = token) =>
     request(app.getHttpServer())
@@ -179,16 +97,6 @@ describe('serialization (e2e)', () => {
   const get = (path: string, auth = token) =>
     request(app.getHttpServer()).get(`/v1${path}`).set('Authorization', `Bearer ${auth}`);
 
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
 
   describe('authoring projection', () => {
     it('returns the whole tree in one request', async () => {

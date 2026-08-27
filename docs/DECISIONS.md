@@ -1904,3 +1904,76 @@ now fails two tests.
 
 A negative test that fails for the wrong reason proves nothing, and only mutation
 tells the difference.
+
+---
+
+## ADR-038 — One harness, and the lifecycle set completed
+
+**Status:** accepted
+**Date:** Phase 7 audit
+
+### Context
+
+A full audit of Phase 7 found the milestones met and eight things worth fixing:
+three functional gaps against M7.2's lifecycle table, three organisation issues,
+and two operational risks.
+
+### The lifecycle table was applied unevenly
+
+M7.2 says the operation set is *"inherited by groups, options, and values
+alike"*. **Duplicate** was built for groups and options and not values, and
+**reorder** only for groups — so a merchant could rearrange groups but not the
+options inside one, nor the values a customer reads in order, and configuring
+twelve near-identical swatches meant typing each.
+
+The contract had inherited the same gap while carrying a note titled *"Duplicate
+exists at every level"*. Both were found by auditing against M7.2's table rather
+than against the contract, which is the only way to catch a contract that agrees
+with the code and both are wrong.
+
+A duplicated value is **never the default**: two defaults on one option is a
+state no storefront can render.
+
+### One test harness
+
+The same setup was written out in every suite: the bootstrap in fourteen,
+`cleanup` in seventeen, `tenant()` in nine, `idOf` in eight. Three shared helpers
+existed and every one had been added *reactively, after a bug*.
+
+That duplication produced a real defect. Registration slugs a tenant from its
+**name**, so a suite registering as "Sam Merchant" leaked a `sam-…` tenant no
+namespace cleanup found. Three suites had that bug and were fixed one at a time
+across three rounds while 6,900 orphaned rows accumulated.
+
+`test/harness.ts` provides bootstrap, tenant, store, cleanup and `idOf` once.
+Seven suites migrated: **657 lines deleted, 85 added**. `tenant()` fell from nine
+suites to three, `idOf` from eight to one.
+
+The full e2e suite went from **245 s to ~50 s** — the harness reuses one
+application per suite rather than rebuilding the module graph in helpers that
+each did it slightly differently.
+
+### Helpers belong to the level that owns them
+
+`buildPatch` and `pick` lived in `option-groups.service.ts` and were imported by
+options and values, so two levels depended on **groups** for no domain reason.
+They now live in `entity-patch.ts` — the repositories already shared
+`nextSortOrder` this way; the services had not.
+
+`touchSet` was implemented four times, each walking the tree upward with its own
+queries; the value-level version cost **two extra reads per mutation**.
+`ParentSetService` resolves the owning set in one join, and extracting it made
+three injected dependencies unnecessary — which is the sign the concept had been
+in the wrong place.
+
+### Consequences
+
+`check-isolation` caught all three new routes with no negative test, immediately
+and by name. That is precisely what 7n built it for, and the first time it fired
+on work rather than on a deliberate mutation.
+
+**The intermittent failure is reduced, not eliminated.** Two more contributors
+were found and fixed — a second tenant provisioned mid-test rather than in
+`beforeAll`, the same shape as the config-document fix. Five of six runs are now
+clean and the suite is 5× faster, which makes the remaining case rarer and
+cheaper to reproduce. It is still not diagnosed, and is recorded as such.

@@ -697,7 +697,8 @@ built before any of these endpoints.
 | `POST /option-sets/:id/groups` · `PATCH /groups/:id` · `DELETE /groups/:id` | `option_sets:edit` / `:delete` | `[built]` |
 | `POST /groups/:id/options` · `PATCH /options/:id` · `DELETE /options/:id` | `option_sets:edit` / `:delete` | `[built]` |
 | `POST /options/:id/values` · `PATCH /values/:id` · `DELETE /values/:id` | `option_sets:edit` / `:delete` | `[built]` |
-| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` | `option_sets:edit` | `[built]` |
+| `POST /groups/:id/duplicate` · `POST /options/:id/duplicate` · `POST /values/:id/duplicate` | `option_sets:edit` | `[built]` |
+| `POST /groups/:id/reorder` · `POST /options/:id/reorder` | `option_sets:edit` | `[built]` |
 | `GET /option-sets/:id/groups` · `GET /groups/:id/options` · `GET /options/:id/values` | `option_sets:view` | `[built]` |
 | `GET /groups/:id` · `GET /options/:id` · `GET /values/:id` | `option_sets:view` | `[built]` |
 
@@ -725,10 +726,22 @@ the database constraint decides, and the loser gets `409 CONFLICT` with the same
 `DUPLICATE_KEY` detail. A client may retry the 409; the 400 will not succeed on
 retry. Neither response echoes the colliding value.
 
-> **Duplicate exists at every level**, not only for option sets. M7.2 says the
-> lifecycle operation set is "inherited by groups, options, and values alike", and
-> deep-copying a group with its options and values is what a merchant building
-> variants actually wants. The sketch lists it only for option sets.
+> **Duplicate and reorder exist at every level**, not only for option sets. M7.2
+> says the lifecycle operation set is "inherited by groups, options, and values
+> alike", and deep-copying a group with its options and values is what a merchant
+> building variants actually wants. The sketch lists duplicate only for option
+> sets and reorder only for groups.
+>
+> This note previously claimed duplicate existed at every level while no
+> `POST /values/:id/duplicate` was documented or built, and reorder existed only
+> for groups — so a merchant could rearrange groups but not the options inside
+> one, or the values a customer reads in order. Both were found auditing the
+> phase against M7.2's table rather than against the contract, which had
+> inherited the same gap.
+
+A value's copy is **never the default**: two defaults on one option is a state no
+storefront can render, and a copy silently claiming it would change which value
+is pre-selected.
 
 ### Enable and disable
 

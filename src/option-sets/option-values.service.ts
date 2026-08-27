@@ -6,10 +6,9 @@ import { AuditAction, AuditService } from '../audit/audit.service';
 import { PriceType } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
-import { buildPatch, pick } from './option-groups.service';
+import { buildPatch, pick } from './entity-patch';
+import { ParentSetService } from './parent-set';
 import { CascadeService } from './cascade.service';
-import { OptionGroupsRepository } from './option-groups.repository';
-import { OptionSetsRepository } from './option-sets.repository';
 import { OptionValuesRepository } from './option-values.repository';
 import { OptionsRepository } from './options.repository';
 import { OptionTypeValidator } from './types/option-type.validator';
@@ -45,11 +44,10 @@ export class OptionValuesService {
   constructor(
     private readonly values: OptionValuesRepository,
     private readonly options: OptionsRepository,
-    private readonly groups: OptionGroupsRepository,
-    private readonly sets: OptionSetsRepository,
     private readonly audit: AuditService,
     private readonly validator: OptionTypeValidator,
     private readonly cascade: CascadeService,
+    private readonly parents: ParentSetService,
   ) {}
 
   async findOne(id: string): Promise<OptionValue> {
@@ -103,7 +101,7 @@ export class OptionValuesService {
       await this.clearOtherDefaults(optionId, created.id);
     }
 
-    await this.touchSetForValue(optionId);
+    await this.parents.touchForValue(optionId);
     await this.audit.record({
       action: AuditAction.OPTION_VALUE_CREATED,
       resourceType: 'option_value',
@@ -132,7 +130,7 @@ export class OptionValuesService {
       await this.clearOtherDefaults(before.optionId, id);
     }
 
-    await this.touchSetForValue(before.optionId);
+    await this.parents.touchForValue(before.optionId);
     await this.audit.record({
       action: AuditAction.OPTION_VALUE_UPDATED,
       resourceType: 'option_value',
@@ -177,7 +175,7 @@ export class OptionValuesService {
     }
 
     await this.values.update({ id } as never, { deletedAt: new Date() } as never);
-    await this.touchSetForValue(before.optionId);
+    await this.parents.touchForValue(before.optionId);
 
     await this.audit.record({
       action: AuditAction.OPTION_VALUE_DELETED,
@@ -188,6 +186,133 @@ export class OptionValuesService {
         { valueKey: before.valueKey, deleted: true },
       ),
     });
+  }
+
+  /**
+   * Copy a value within its option (M7.2).
+   *
+   * The lifecycle table says the operation set is *"inherited by groups,
+   * options, and values alike"*, and duplicate was built for the first two and
+   * not the third — a merchant configuring twelve near-identical colour swatches
+   * had to type each one.
+   *
+   * The copy needs a new `valueKey`: it lands on the same option, where
+   * `uq_option_values_option_key` forbids a repeat.
+   *
+   * **Never the default.** Two defaults on one option is a state the storefront
+   * cannot render, and a copy silently claiming the default would change which
+   * value is pre-selected.
+   */
+  async duplicate(id: string, valueKey?: string): Promise<OptionValue> {
+    const source = await this.findOne(id);
+
+    assertWithinLimit(
+      await this.values.count({ where: { optionId: source.optionId } } as never),
+      AUTHORING_LIMITS.valuesPerOption,
+      'values',
+    );
+
+    const newKey = valueKey?.trim() || (await this.availableCopyKey(source.optionId, source.valueKey));
+
+    await this.assertValueKeyAvailable(source.optionId, newKey);
+
+    const created = await this.values.create(source.optionId, {
+      optionId: source.optionId,
+      valueKey: newKey,
+      label: `${source.label} (copy)`,
+      sortOrder: await this.values.nextSortOrder(source.optionId),
+      priceType: source.priceType,
+      priceAmountMinor: source.priceAmountMinor,
+      priceConfig: source.priceConfig,
+      imageUrl: source.imageUrl,
+      colorHex: source.colorHex,
+      skuSuffix: source.skuSuffix,
+      weightDeltaGrams: source.weightDeltaGrams,
+      isDefault: false,
+      // Disabled work stays disabled, as everywhere else.
+      isEnabled: source.isEnabled,
+    } as never);
+
+    await this.parents.touchForValue(source.optionId);
+    await this.audit.record({
+      action: AuditAction.OPTION_VALUE_DUPLICATED,
+      resourceType: 'option_value',
+      resourceId: created.id,
+      changes: { ...diff(null, { valueKey: created.valueKey, label: created.label }), copiedFrom: source.id },
+    });
+
+    return created;
+  }
+
+  /**
+   * A free key of the form `key-copy`, `key-copy-2`, …
+   *
+   * Bounded rather than looping forever: an unbounded loop against a unique
+   * constraint is a hang waiting to happen.
+   */
+  private async availableCopyKey(optionId: string, valueKey: string): Promise<string> {
+    for (let attempt = 1; attempt <= COPY_KEY_ATTEMPTS; attempt += 1) {
+      const candidate = attempt === 1 ? `${valueKey}-copy` : `${valueKey}-copy-${attempt}`;
+
+      if (
+        candidate.length <= VALUE_KEY_MAX_LENGTH &&
+        !(await this.values.valueKeyExists(optionId, candidate))
+      ) {
+        return candidate;
+      }
+    }
+
+    throw DomainException.conflict(
+      'Could not generate a free key for the copy. Supply one explicitly.',
+    );
+  }
+
+  /**
+   * Reorder an option's values in one request (M7.2).
+   *
+   * The order values appear in is what a customer reads — "Small, Medium,
+   * Large" rather than the order the merchant happened to type them.
+   */
+  async reorder(
+    optionId: string,
+    entries: ReadonlyArray<{ id: string; sortOrder: number }>,
+  ): Promise<OptionValue[]> {
+    await this.assertOptionExists(optionId);
+
+    const siblings = await this.values.listByOption(optionId);
+    const known = new Set(siblings.map((value) => value.id));
+    const unknown = entries.filter((entry) => !known.has(entry.id));
+
+    if (unknown.length > 0) {
+      throw DomainException.validation(
+        unknown.map((entry, index) => ({
+          field: `values.${index}.id`,
+          code: 'NOT_IN_OPTION',
+          params: { message: `Value ${entry.id} does not belong to this option.` },
+        })),
+      );
+    }
+
+    for (const entry of entries) {
+      await this.values.update({ id: entry.id } as never, {
+        sortOrder: entry.sortOrder,
+      } as never);
+    }
+
+    await this.parents.touchForValue(optionId);
+    await this.audit.record({
+      action: AuditAction.OPTION_REORDERED,
+      resourceType: 'option',
+      resourceId: optionId,
+      changes: {
+        values: {
+          from: siblings.map((value) => ({ id: value.id, sortOrder: value.sortOrder })),
+          to: entries.map((entry) => ({ id: entry.id, sortOrder: entry.sortOrder })),
+        },
+      },
+    });
+
+    return this.values.listByOption(optionId);
   }
 
   /**
@@ -224,18 +349,10 @@ export class OptionValuesService {
     }
   }
 
-  /** See `OptionGroupsService.touchSet` — a child edit is an edit to its set. */
-  private async touchSetForValue(optionId: string): Promise<void> {
-    const option = await this.options.findById(optionId);
-
-    if (!option) {
-      return;
-    }
-
-    const group = await this.groups.findById(option.optionGroupId);
-
-    if (group) {
-      await this.sets.applyChange(group.optionSetId, {});
-    }
-  }
 }
+
+/** Bounded so a unique-constraint collision cannot become an infinite loop. */
+const COPY_KEY_ATTEMPTS = 50;
+
+/** Matches `option_values.value_key`. */
+const VALUE_KEY_MAX_LENGTH = 64;

@@ -1,14 +1,7 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
-import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
-import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
-import { deleteTenantsFor } from './cleanup-tenants';
+import { createHarness, idOf, type Harness } from './harness';
 
 /**
  * The tenant isolation matrix (M6.6, extended by 7n to every Phase 7 endpoint).
@@ -32,11 +25,9 @@ import { deleteTenantsFor } from './cleanup-tenants';
  * then enumerate another tenant's data without ever seeing it (ADR-010).
  */
 describe('tenant isolation matrix (e2e)', () => {
-  let app: INestApplication;
-  let dataSource: DataSource;
+  let harness: Harness;
 
   const NS = 'matrix';
-  const PASSWORD = 'a-sufficiently-long-password';
 
   /** Tenant A owns everything below; tenant B is the intruder. */
   let tokenA = '';
@@ -51,30 +42,12 @@ describe('tenant isolation matrix (e2e)', () => {
   };
 
   beforeAll(async () => {
-    loadDotenv();
+    harness = await createHarness(NS);
+    await harness.cleanup();
 
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
-
-    dataSource = app.get(DataSource);
-    await cleanup();
-
-    tokenA = await tenant('a');
-    tokenB = await tenant('b');
-    storeA = await store('a');
+    tokenA = await harness.tenant('a');
+    tokenB = await harness.tenant('b');
+    storeA = await harness.store('a');
 
     owned.set = idOf(await post(tokenA, '/option-sets', { name: 'A', storeId: storeA }), 'set');
     owned.group = idOf(
@@ -103,98 +76,26 @@ describe('tenant isolation matrix (e2e)', () => {
   }, 180_000);
 
   afterAll(async () => {
-    await cleanup();
-    await app?.close();
+    await harness.cleanup();
+    await harness.close();
   });
 
-  async function cleanup(): Promise<void> {
-    const tenants = `SELECT id FROM tenants WHERE slug LIKE '${NS}-%'`;
-
-    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId IN (${tenants})`);
-    await dataSource.query(
-      `DELETE vv FROM option_set_versions vv JOIN option_sets s ON s.id = vv.optionSetId
-        WHERE s.tenantId IN (${tenants})`,
-    );
-    await dataSource.query(
-      `DELETE v FROM option_values v JOIN options o ON o.id = v.optionId
-         JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${tenants})`,
-    );
-    await dataSource.query(
-      `DELETE o FROM options o JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${tenants})`,
-    );
-    await dataSource.query(
-      `DELETE g FROM option_groups g JOIN option_sets s ON s.id = g.optionSetId
-        WHERE s.tenantId IN (${tenants})`,
-    );
-    await dataSource.query(`DELETE FROM option_sets WHERE tenantId IN (${tenants})`);
-    await dataSource.query(`DELETE FROM stores WHERE tenantId IN (${tenants})`);
-    await deleteTenantsFor(dataSource, NS);
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-  }
-
-  async function tenant(which: string): Promise<string> {
-    const email = `${NS}-${which}@example.com`;
-
-    await request(app.getHttpServer())
-      .post('/v1/auth/register')
-      .send({ email, password: PASSWORD, name: which, tenantName: `${NS}-${which}` });
-    await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [email]);
-    await dataSource.query(
-      `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
-         JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
-      [`${NS}-${which}`, email],
-    );
-
-    return (
-      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD })
-    ).body.data.accessToken as string;
-  }
-
-  async function store(which: string): Promise<string> {
-    const [row] = await dataSource.query(
-      `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email = ?`,
-      [`${NS}-${which}@example.com`],
-    );
-    const id = randomUUID();
-
-    await dataSource.query(
-      `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, configVersion,
-                           createdAt, updatedAt)
-       VALUES (?, ?, 'woocommerce', 'store', ?, 'connected', 0, NOW(3), NOW(3))`,
-      [id, row.id, `https://${id}.example.com`],
-    );
-
-    return id;
-  }
-
   const post = (token: string, path: string, body: object = {}) =>
-    request(app.getHttpServer())
+    request(harness.app.getHttpServer())
       .post(`/v1${path}`)
       .set('Authorization', `Bearer ${token}`)
       .send(body);
   const patch = (token: string, path: string, body: object = {}) =>
-    request(app.getHttpServer())
+    request(harness.app.getHttpServer())
       .patch(`/v1${path}`)
       .set('Authorization', `Bearer ${token}`)
       .send(body);
   const get = (token: string, path: string) =>
-    request(app.getHttpServer()).get(`/v1${path}`).set('Authorization', `Bearer ${token}`);
+    request(harness.app.getHttpServer()).get(`/v1${path}`).set('Authorization', `Bearer ${token}`);
   const del = (token: string, path: string) =>
-    request(app.getHttpServer()).delete(`/v1${path}`).set('Authorization', `Bearer ${token}`);
-
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
+    request(harness.app.getHttpServer())
+      .delete(`/v1${path}`)
+      .set('Authorization', `Bearer ${token}`);
 
   /**
    * Every tenant-scoped route that takes a foreign id, driven as tenant B.
@@ -248,6 +149,10 @@ describe('tenant isolation matrix (e2e)', () => {
     ['PATCH /v1/options/:id', () => patch(tokenB, `/options/${owned.option}`, { label: 'x' })],
     ['DELETE /v1/options/:id', () => del(tokenB, `/options/${owned.option}`)],
     ['POST /v1/options/:id/duplicate', () => post(tokenB, `/options/${owned.option}/duplicate`)],
+    ['POST /v1/groups/:id/reorder', () =>
+      post(tokenB, `/groups/${owned.group}/reorder`, {
+        options: [{ id: owned.option, sortOrder: 10 }],
+      })],
 
     // Values
     ['GET /v1/options/:id/values', () => get(tokenB, `/options/${owned.option}/values`)],
@@ -256,6 +161,11 @@ describe('tenant isolation matrix (e2e)', () => {
     ['GET /v1/values/:id', () => get(tokenB, `/values/${owned.value}`)],
     ['PATCH /v1/values/:id', () => patch(tokenB, `/values/${owned.value}`, { label: 'x' })],
     ['DELETE /v1/values/:id', () => del(tokenB, `/values/${owned.value}`)],
+    ['POST /v1/values/:id/duplicate', () => post(tokenB, `/values/${owned.value}/duplicate`)],
+    ['POST /v1/options/:id/reorder', () =>
+      post(tokenB, `/options/${owned.option}/reorder`, {
+        values: [{ id: owned.value, sortOrder: 10 }],
+      })],
   ];
 
   describe('direct access to another tenant’s resource', () => {
@@ -315,7 +225,7 @@ describe('tenant isolation matrix (e2e)', () => {
       expect(response.status).toBe(200);
 
       const ids = response.body.data.map((row: { id: string }) => row.id);
-      const [foreign] = await dataSource.query(
+      const [foreign] = await harness.dataSource.query(
         `SELECT COUNT(*) AS n FROM audit_logs
           WHERE id IN (?) AND tenantId <> (
             SELECT tm.tenantId FROM tenant_members tm JOIN users u ON u.id = tm.userId
@@ -361,14 +271,14 @@ describe('tenant isolation matrix (e2e)', () => {
      * tenant and changes exactly one thing.
      */
     async function tokenForRealm(audience: string): Promise<string> {
-      const [row] = await dataSource.query(
+      const [row] = await harness.dataSource.query(
         `SELECT u.id AS userId, tm.tenantId, tm.role
            FROM users u JOIN tenant_members tm ON tm.userId = u.id
           WHERE u.email = ?`,
         [`${NS}-a@example.com`],
       );
 
-      return app
+      return harness.app
         .get(JwtService)
         .sign(
           { tid: row.tenantId, role: row.role },
@@ -379,7 +289,7 @@ describe('tenant isolation matrix (e2e)', () => {
     it.each([['platform'], ['store']])(
       'refuses a %s token on a tenant route',
       async (audience) => {
-        const response = await request(app.getHttpServer())
+        const response = await request(harness.app.getHttpServer())
           .get('/v1/option-sets')
           .set('Authorization', `Bearer ${await tokenForRealm(audience)}`);
 
@@ -396,7 +306,7 @@ describe('tenant isolation matrix (e2e)', () => {
      * rejections above can only be about the realm.
      */
     it('accepts the same claims when the audience is right', async () => {
-      const response = await request(app.getHttpServer())
+      const response = await request(harness.app.getHttpServer())
         .get('/v1/option-sets')
         .set('Authorization', `Bearer ${await tokenForRealm('tenant')}`);
 

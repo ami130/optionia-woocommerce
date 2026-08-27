@@ -9,10 +9,10 @@ import { Cardinality, Presentation, ValueKind } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
-import { buildPatch, pick } from './option-groups.service';
+import { buildPatch, pick } from './entity-patch';
+import { ParentSetService } from './parent-set';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
-import { OptionSetsRepository } from './option-sets.repository';
 import { OptionsRepository } from './options.repository';
 import { OptionTypeValidator } from './types/option-type.validator';
 
@@ -51,11 +51,11 @@ export class OptionsService {
   constructor(
     private readonly options: OptionsRepository,
     private readonly groups: OptionGroupsRepository,
-    private readonly sets: OptionSetsRepository,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly validator: OptionTypeValidator,
     private readonly cascade: CascadeService,
+    private readonly parents: ParentSetService,
   ) {}
 
   async findOne(id: string): Promise<Option> {
@@ -118,7 +118,7 @@ export class OptionsService {
       sortOrder: await this.options.nextSortOrder(optionGroupId),
     } as never);
 
-    await this.touchSet(group.optionSetId);
+    await this.parents.touchSet(group.optionSetId);
     await this.audit.record({
       action: AuditAction.OPTION_CREATED,
       resourceType: 'option',
@@ -158,7 +158,7 @@ export class OptionsService {
     });
 
     await this.options.update({ id } as never, patch as never);
-    await this.touchSetForOption(before);
+    await this.parents.touchForOption(before.optionGroupId);
 
     await this.audit.record({
       action: AuditAction.OPTION_UPDATED,
@@ -187,7 +187,7 @@ export class OptionsService {
       throw error;
     }
 
-    await this.touchSetForOption(before);
+    await this.parents.touchForOption(before.optionGroupId);
 
     await this.audit.record({
       action: AuditAction.OPTION_DELETED,
@@ -270,7 +270,7 @@ export class OptionsService {
       return created;
     });
 
-    await this.touchSetForOption(source);
+    await this.parents.touchForOption(source.optionGroupId);
     await this.audit.record({
       action: AuditAction.OPTION_DUPLICATED,
       resourceType: 'option',
@@ -300,6 +300,59 @@ export class OptionsService {
     throw DomainException.conflict(
       'Could not generate a free key for the copy. Supply one explicitly.',
     );
+  }
+
+  /**
+   * Reorder a group's options in one request (M7.2).
+   *
+   * The lifecycle table lists Reorder as inherited by every level, and only
+   * groups had it — so a merchant could rearrange groups but not the options
+   * inside one, which meant deleting and recreating them in order.
+   *
+   * **Every id is verified before anything is written**, for the same reason as
+   * groups: a partial reorder leaves an arrangement the merchant did not ask for
+   * and cannot easily undo.
+   */
+  async reorder(
+    optionGroupId: string,
+    entries: ReadonlyArray<{ id: string; sortOrder: number }>,
+  ): Promise<Option[]> {
+    await this.assertGroupExists(optionGroupId);
+
+    const siblings = await this.options.listByGroup(optionGroupId);
+    const known = new Set(siblings.map((option) => option.id));
+    const unknown = entries.filter((entry) => !known.has(entry.id));
+
+    if (unknown.length > 0) {
+      throw DomainException.validation(
+        unknown.map((entry, index) => ({
+          field: `options.${index}.id`,
+          code: 'NOT_IN_GROUP',
+          params: { message: `Option ${entry.id} does not belong to this group.` },
+        })),
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      for (const entry of entries) {
+        await manager.update(Option, { id: entry.id }, { sortOrder: entry.sortOrder });
+      }
+    });
+
+    await this.parents.touchForOption(optionGroupId);
+    await this.audit.record({
+      action: AuditAction.OPTION_GROUP_REORDERED,
+      resourceType: 'option_group',
+      resourceId: optionGroupId,
+      changes: {
+        options: {
+          from: siblings.map((option) => ({ id: option.id, sortOrder: option.sortOrder })),
+          to: entries.map((entry) => ({ id: entry.id, sortOrder: entry.sortOrder })),
+        },
+      },
+    });
+
+    return this.options.listByGroup(optionGroupId);
   }
 
   /** Refuse a create that would exceed the structural ceiling. */
@@ -333,18 +386,6 @@ export class OptionsService {
     return group;
   }
 
-  /** See `OptionGroupsService.touchSet` — a child edit is an edit to its set. */
-  private async touchSet(optionSetId: string): Promise<void> {
-    await this.sets.applyChange(optionSetId, {});
-  }
-
-  private async touchSetForOption(option: Option): Promise<void> {
-    const group = await this.groups.findById(option.optionGroupId);
-
-    if (group) {
-      await this.touchSet(group.optionSetId);
-    }
-  }
 }
 
 /** Bounded so a unique-constraint collision cannot become an infinite loop. */

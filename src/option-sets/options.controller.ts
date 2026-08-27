@@ -21,6 +21,7 @@ import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
 import { CapabilityGuard } from '../auth/permissions/capability.guard';
 import { RequireCapability } from '../auth/permissions/require-capability.decorator';
+import { ReorderOptionsDto } from './dto/option-group.dto';
 import { CreateOptionDto, DuplicateOptionDto, UpdateOptionDto } from './dto/option.dto';
 import type { Option } from './entities/option.entity';
 import { OptionsService } from './options.service';
@@ -58,6 +59,17 @@ export class OptionsController {
     @Body() dto: CreateOptionDto,
   ): Promise<Option> {
     return this.service.create(groupId, dto);
+  }
+
+  /** Bulk reorder within a group. Editing, not a destructive act. */
+  @Post('groups/:id/reorder')
+  @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async reorder(
+    @Param('id', ParseUUIDPipe) groupId: string,
+    @Body() dto: ReorderOptionsDto,
+  ): Promise<Option[]> {
+    return this.service.reorder(groupId, dto.options);
   }
 
   @Get('options/:id')

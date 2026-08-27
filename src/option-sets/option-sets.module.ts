@@ -8,6 +8,7 @@ import { OptionSet } from './entities/option-set.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
 import { CascadeService } from './cascade.service';
+import { ParentSetService } from './parent-set';
 import { PublishService } from './publishing/publish.service';
 import { ConfigDocumentBuilder } from './serialization/config-document';
 import { OptionSetTreeLoader } from './serialization/option-set-tree.loader';
@@ -67,6 +68,7 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionSetTreeLoader,
     PublishService,
     ConfigDocumentBuilder,
+    ParentSetService,
   ],
   exports: [
     OptionSetsRepository,
@@ -84,6 +86,7 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionSetTreeLoader,
     PublishService,
     ConfigDocumentBuilder,
+    ParentSetService,
   ],
 })
 export class OptionSetsModule {}

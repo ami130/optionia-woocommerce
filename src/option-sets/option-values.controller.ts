@@ -21,7 +21,12 @@ import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
 import { CapabilityGuard } from '../auth/permissions/capability.guard';
 import { RequireCapability } from '../auth/permissions/require-capability.decorator';
-import { CreateOptionValueDto, UpdateOptionValueDto } from './dto/option-value.dto';
+import { ReorderValuesDto } from './dto/option-group.dto';
+import {
+  CreateOptionValueDto,
+  DuplicateOptionValueDto,
+  UpdateOptionValueDto,
+} from './dto/option-value.dto';
 import type { OptionValue } from './entities/option-value.entity';
 import { OptionValuesService } from './option-values.service';
 
@@ -60,6 +65,34 @@ export class OptionValuesController {
     @Body() dto: CreateOptionValueDto,
   ): Promise<OptionValue> {
     return this.service.create(optionId, dto);
+  }
+
+  /** Bulk reorder within an option. The order a customer reads. */
+  @Post('options/:id/reorder')
+  @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async reorder(
+    @Param('id', ParseUUIDPipe) optionId: string,
+    @Body() dto: ReorderValuesDto,
+  ): Promise<OptionValue[]> {
+    return this.service.reorder(optionId, dto.values);
+  }
+
+  /**
+   * Copy a value within its option.
+   *
+   * M7.2's lifecycle set is inherited by values too; this was built for groups
+   * and options and missed here.
+   */
+  @Post('values/:id/duplicate')
+  @HttpCode(HttpStatus.CREATED)
+  @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 409, 429)
+  async duplicate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DuplicateOptionValueDto,
+  ): Promise<OptionValue> {
+    return this.service.duplicate(id, dto.valueKey);
   }
 
   @Get('values/:id')

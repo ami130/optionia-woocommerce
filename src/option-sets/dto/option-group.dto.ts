@@ -123,3 +123,29 @@ export class ReorderGroupsDto {
   @ApiProperty({ type: () => [ReorderEntryDto] })
   groups: ReorderEntryDto[];
 }
+
+/**
+ * Reordering options within a group, or values within an option.
+ *
+ * The same shape as `ReorderGroupsDto` with a field named for its level, so a
+ * client reads what it is ordering rather than inferring it from the path.
+ */
+export class ReorderOptionsDto {
+  @ApiProperty({ type: () => [ReorderEntryDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => ReorderEntryDto)
+  options: ReorderEntryDto[];
+}
+
+export class ReorderValuesDto {
+  @ApiProperty({ type: () => [ReorderEntryDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => ReorderEntryDto)
+  values: ReorderEntryDto[];
+}

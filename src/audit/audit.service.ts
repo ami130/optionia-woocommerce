@@ -40,15 +40,18 @@ export const AuditAction = {
   OPTION_GROUP_UPDATED: 'option_group.updated',
   OPTION_GROUP_DELETED: 'option_group.deleted',
   OPTION_GROUP_DUPLICATED: 'option_group.duplicated',
+  OPTION_GROUP_REORDERED: 'option_group.reordered',
 
   OPTION_CREATED: 'option.created',
   OPTION_UPDATED: 'option.updated',
   OPTION_DELETED: 'option.deleted',
   OPTION_DUPLICATED: 'option.duplicated',
+  OPTION_REORDERED: 'option.reordered',
 
   OPTION_VALUE_CREATED: 'option_value.created',
   OPTION_VALUE_UPDATED: 'option_value.updated',
   OPTION_VALUE_DELETED: 'option_value.deleted',
+  OPTION_VALUE_DUPLICATED: 'option_value.duplicated',
   OPTION_VALUE_DELETE_REFUSED: 'option_value.delete_refused',
 } as const;
 

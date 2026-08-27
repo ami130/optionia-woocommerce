@@ -1,13 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { createHarness, idOf, type Harness } from './harness';
 import { AuditAction } from '../src/audit/audit.service';
 
 /**
@@ -23,6 +20,7 @@ import { AuditAction } from '../src/audit/audit.service';
  * `AuditService` does by design.
  */
 describe('audit coverage (e2e)', () => {
+  let harness: Harness;
   let app: INestApplication;
   let dataSource: DataSource;
 
@@ -33,29 +31,17 @@ describe('audit coverage (e2e)', () => {
   let tenantId = '';
   let storeId = '';
 
+  /** A second workspace, provisioned once, with a trail of its own. */
+  let otherTenantToken = '';
+  let otherStoreId = '';
+
   beforeAll(async () => {
-    loadDotenv();
+    harness = await createHarness(NS);
+    app = harness.app;
+    dataSource = harness.dataSource;
+    await harness.cleanup();
 
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
-
-    dataSource = app.get(DataSource);
-    await cleanup();
-
-    token = await tenant('a');
+    token = await harness.tenant('a');
 
     const [row] = await dataSource.query(
       `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
@@ -71,68 +57,23 @@ describe('audit coverage (e2e)', () => {
        VALUES (?, ?, 'woocommerce', 'store', ?, 'connected', 0, NOW(3), NOW(3))`,
       [storeId, tenantId, `https://${storeId}.example.com`],
     );
+
+    otherTenantToken = await harness.tenant('other');
+    otherStoreId = await harness.store('other');
+
+    // Give them something to record, so a leak would have material to leak.
+    await request(harness.app.getHttpServer())
+      .post('/v1/option-sets')
+      .set('Authorization', `Bearer ${otherTenantToken}`)
+      .send({ name: 'Theirs', storeId: otherStoreId });
   }, 120_000);
 
   afterAll(async () => {
-    await cleanup();
-    await app?.close();
+    await harness.cleanup();
+    await harness.close();
   });
 
-  async function cleanup(): Promise<void> {
-    const owned = `SELECT id FROM tenants WHERE slug LIKE '${NS}-%'`;
 
-    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE vv FROM option_set_versions vv JOIN option_sets s ON s.id = vv.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE r FROM option_rules r JOIN option_sets s ON s.id = r.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE p FROM presentational_items p JOIN option_groups g ON g.id = p.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE v FROM option_values v JOIN options o ON o.id = v.optionId
-         JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE o FROM options o JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE g FROM option_groups g JOIN option_sets s ON s.id = g.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(`DELETE FROM option_sets WHERE tenantId IN (${owned})`);
-    await dataSource.query(`DELETE FROM stores WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
-    );
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
-  }
-
-  async function tenant(which: string): Promise<string> {
-    const email = `${NS}-${which}@example.com`;
-
-    await request(app.getHttpServer())
-      .post('/v1/auth/register')
-      .send({ email, password: PASSWORD, name: which, tenantName: `${NS}-${which}` });
-    await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [email]);
-    await dataSource.query(
-      `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
-         JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
-      [`${NS}-${which}`, email],
-    );
-
-    return (
-      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD })
-    ).body.data.accessToken as string;
-  }
 
   const post = (path: string, body: object = {}) =>
     request(app.getHttpServer())
@@ -147,16 +88,6 @@ describe('audit coverage (e2e)', () => {
   const del = (path: string) =>
     request(app.getHttpServer()).delete(`/v1${path}`).set('Authorization', `Bearer ${token}`);
 
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
 
   /** Actions recorded for one resource. */
   async function actionsFor(resourceId: string): Promise<string[]> {
@@ -210,6 +141,10 @@ describe('audit coverage (e2e)', () => {
     const setCopy = idOf(await post(`/option-sets/${set}/duplicate`), 'set copy');
 
     await post(`/option-sets/${set}/reorder`, { groups: [{ id: group, sortOrder: 20 }] });
+    await post(`/groups/${group}/reorder`, { options: [{ id: option, sortOrder: 20 }] });
+    await post(`/options/${option}/reorder`, { values: [{ id: value, sortOrder: 20 }] });
+
+    const valueCopy = idOf(await post(`/values/${value}/duplicate`), 'value copy');
 
     const published = await post(`/option-sets/${set}/publish`, {});
 
@@ -226,7 +161,7 @@ describe('audit coverage (e2e)', () => {
     await del(`/option-sets/${setCopy}`);
     await del(`/option-sets/${setCopy}/permanent`);
 
-    return { set, group, option, value, groupCopy, optionCopy, setCopy };
+    return { set, group, option, value, groupCopy, optionCopy, setCopy, valueCopy };
   }
 
   describe('every mutation is recorded', () => {
@@ -489,50 +424,16 @@ describe('audit coverage (e2e)', () => {
      * test, which is exactly the shape of hole this codebase keeps finding.
      */
     it('never shows another tenant’s entries', async () => {
-      // A second workspace with a trail of its own.
-      const otherEmail = `${NS}-other@example.com`;
-
-      await request(app.getHttpServer())
-        .post('/v1/auth/register')
-        .send({
-          email: otherEmail,
-          password: PASSWORD,
-          name: 'other',
-          tenantName: `${NS}-other`,
-        });
-      await dataSource.query(`UPDATE users SET emailVerifiedAt = NOW(3) WHERE email = ?`, [
-        otherEmail,
-      ]);
-      await dataSource.query(
-        `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
-           JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
-        [`${NS}-other`, otherEmail],
-      );
-
-      const otherToken = (
-        await request(app.getHttpServer())
-          .post('/v1/auth/login')
-          .send({ email: otherEmail, password: PASSWORD })
-      ).body.data.accessToken as string;
-
-      const [otherTenant] = await dataSource.query(
-        `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
-          WHERE u.email = ?`,
-        [otherEmail],
-      );
-
-      // Give them a store and a set, so they have entries to leak.
-      const otherStore = randomUUID();
-      await dataSource.query(
-        `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, configVersion,
-                             createdAt, updatedAt)
-         VALUES (?, ?, 'woocommerce', 'theirs', ?, 'connected', 0, NOW(3), NOW(3))`,
-        [otherStore, otherTenant.id, `https://${otherStore}.example.com`],
-      );
-      await request(app.getHttpServer())
-        .post('/v1/option-sets')
-        .set('Authorization', `Bearer ${otherToken}`)
-        .send({ name: 'Theirs', storeId: otherStore });
+      /**
+       * The second workspace is provisioned in `beforeAll`, not here.
+       *
+       * Registering mid-test runs the auth stack while other suites' fixtures
+       * are in flight, and this test failed intermittently for exactly that
+       * reason — the same shape found in the config-document suite. Fixtures
+       * belong in setup.
+       */
+      const otherToken = otherTenantToken;
+      const otherTenant = { id: await harness.tenantIdOf('other') };
 
       const [theirRows] = await dataSource.query(
         `SELECT COUNT(*) AS n FROM audit_logs WHERE tenantId = ?`,

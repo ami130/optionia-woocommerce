@@ -1,5 +1,5 @@
 import { nextSortOrder, SORT_ORDER_STEP } from './option-groups.repository';
-import { buildPatch, pick } from './option-groups.service';
+import { buildPatch, pick } from './entity-patch';
 
 describe('nextSortOrder', () => {
   it('starts at the first step when there are no siblings', () => {

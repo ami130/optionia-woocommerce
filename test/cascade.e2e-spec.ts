@@ -1,13 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
+import { createHarness, idOf, type Harness } from './harness';
 import { runWithContext } from '../src/common/context/request-context';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
 import { OptionsRepository } from '../src/option-sets/options.repository';
 
 /**
@@ -18,6 +15,7 @@ import { OptionsRepository } from '../src/option-sets/options.repository';
  * than inferred from a delete appearing to work.
  */
 describe('cascade and hard delete (e2e)', () => {
+  let harness: Harness;
   let app: INestApplication;
   let dataSource: DataSource;
 
@@ -29,26 +27,10 @@ describe('cascade and hard delete (e2e)', () => {
   let storeId = '';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
-
-    dataSource = app.get(DataSource);
-    await cleanup();
+    harness = await createHarness(NS);
+    app = harness.app;
+    dataSource = harness.dataSource;
+    await harness.cleanup();
 
     const email = `${NS}-a@example.com`;
 
@@ -83,49 +65,10 @@ describe('cascade and hard delete (e2e)', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await cleanup();
-    await app?.close();
+    await harness.cleanup();
+    await harness.close();
   });
 
-  async function cleanup(): Promise<void> {
-    const owned = `SELECT id FROM tenants WHERE slug LIKE '${NS}-%'`;
-    const stores = `SELECT id FROM stores WHERE tenantId IN (${owned})`;
-
-    await dataSource.query(`DELETE FROM audit_logs WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE os FROM order_selections os JOIN order_events oe ON oe.id = os.orderEventId
-        WHERE oe.storeId IN (${stores})`,
-    );
-    await dataSource.query(`DELETE FROM order_events WHERE storeId IN (${stores})`);
-    await dataSource.query(
-      `DELETE v FROM option_values v JOIN options o ON o.id = v.optionId
-         JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE o FROM options o JOIN option_groups g ON g.id = o.optionGroupId
-         JOIN option_sets s ON s.id = g.optionSetId WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE g FROM option_groups g JOIN option_sets s ON s.id = g.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE r FROM option_rules r JOIN option_sets s ON s.id = r.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(
-      `DELETE a FROM option_set_assignments a JOIN option_sets s ON s.id = a.optionSetId
-        WHERE s.tenantId IN (${owned})`,
-    );
-    await dataSource.query(`DELETE FROM option_sets WHERE tenantId IN (${owned})`);
-    await dataSource.query(`DELETE FROM stores WHERE tenantId IN (${owned})`);
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
-    );
-    await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
-  }
 
   const post = (path: string, body: object = {}) =>
     request(app.getHttpServer())
@@ -141,16 +84,6 @@ describe('cascade and hard delete (e2e)', () => {
     return tenantId;
   }
 
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
 
   /** A set with one group, one option and two values. */
   async function tree(): Promise<{
