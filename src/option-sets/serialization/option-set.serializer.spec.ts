@@ -142,9 +142,13 @@ describe('OptionSetSerializer', () => {
     /**
      * The sentinel is an implementation detail of soft deletion (ADR-014).
      * A client seeing `deletedAt: 1970-01-01` on every live row learns nothing.
+     *
+     * Matched as `1970-01-01`, not `1970`: a UUIDv7 contains the four digits
+     * `1970` roughly once in 3,400, so the looser assertion failed at random —
+     * about a 0.3% chance per document — and looked like a serialization bug.
      */
     it('does not leak the soft-delete sentinel', () => {
-      expect(JSON.stringify(serializer.toAuthoring(tree()))).not.toContain('1970');
+      expect(JSON.stringify(serializer.toAuthoring(tree()))).not.toContain('1970-01-01');
     });
 
     it('keeps disabled things, because the editor must show them', () => {
@@ -220,7 +224,7 @@ describe('OptionSetSerializer', () => {
       ['audit timestamps', 'createdAt'],
       ['the enable flag', 'isEnabled'],
       ['parent ids', 'optionGroupId'],
-      ['the soft-delete sentinel', '1970'],
+      ['the soft-delete sentinel', '1970-01-01'],
     ])('omits %s', (_label, needle) => {
       expect(JSON.stringify(serializer.toPublished(tree()))).not.toContain(needle);
     });

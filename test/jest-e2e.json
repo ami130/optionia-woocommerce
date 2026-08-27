@@ -24,5 +24,6 @@
   "coverageDirectory": "coverage-e2e",
   "setupFiles": [
     "<rootDir>/test/setup-e2e.ts"
-  ]
+  ],
+  "globalTeardown": "<rootDir>/test/teardown-e2e.ts"
 }

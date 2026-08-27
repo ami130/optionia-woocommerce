@@ -431,6 +431,42 @@ answerable after the fact.
 
 ---
 
+## AUDIT — `/v1/audit-logs`
+
+**Realm:** tenant.
+
+| Route | Capability | State |
+|---|---|---|
+| `GET /audit-logs` | `audit_log:view` | `[built]` |
+
+Every privileged action is recorded with **actor, diff and IP** (M7.6). This is
+how a merchant reads that back.
+
+`audit_log:view` is held by **owner and admin only** — not editor. An editor
+changes configuration; *who* changed what, from which address, is an ownership
+question, and the trail contains IP addresses, which are personal data.
+
+**Filters:** `action` (exact, e.g. `option_set.deleted`), `resourceType`,
+`resourceId`. Deliberately narrow — `audit_logs` carries `(tenant_id, created_at)`
+and `(resource_type, resource_id)` indexes, and these are the queries those
+indexes answer. A filter for every column invites queries nothing serves.
+
+**Paginated newest-first**, cursor as everywhere else. The cursor encodes the
+row id rather than `(created_at, id)`: `audit_logs.id` is a monotonic `BIGINT`,
+so it is already a total order, and two rows written in the same millisecond
+still page correctly.
+
+`ip` is returned **readable**, unpacked from the 16 bytes the column stores.
+
+> ⚠️ An IP is personal data under GDPR. Retention is
+> [Phase 26b](../../developePlan.md)'s, and the column is subject to it — the
+> trail is not kept indefinitely.
+
+**Errors:** `VALIDATION_FAILED` (400) for a malformed cursor;
+`INSUFFICIENT_ROLE` (403) for an editor or viewer.
+
+---
+
 ## OPTION SETS — `/v1/option-sets/*`
 
 **Realm:** tenant. Every route tenant-scoped at the data layer, not by a predicate

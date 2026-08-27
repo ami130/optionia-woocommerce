@@ -1667,3 +1667,69 @@ not bump `schema_version`" true rather than aspirational.
 
 Both were caught by probing behaviour rather than by reading the code, and both
 had passed every existing test.
+
+---
+
+## ADR-035 — The audit trail is readable, and the flakiness was ours
+
+**Status:** accepted
+**Date:** Phase 7, M7.6
+
+### Context
+
+M7.6 asks for *"every option-set mutation recorded with actor, diff, IP"*. That
+recording was built incrementally across 7e–7k rather than deferred, on the
+plan's own advice — discovering it at 7l would have meant rewriting six services.
+
+Verification confirmed it: all twenty audit actions the domain defines fire when
+the nineteen mutating routes are driven, and every row carries an actor, a
+packed IP and a non-empty diff.
+
+**The trail was write-only.** `AuditService` exposed only `record()`.
+`AUDIT_LOG_VIEW` existed in the permission matrix and was granted to owner and
+admin, and **no route consumed it** — so the data a merchant is told is kept for
+their protection could not be shown to them, and "who deleted that option set?"
+was answerable only with database access.
+
+### Decision
+
+`GET /audit-logs`, with `AuditQueryService` separate from `AuditService`.
+`record()` deliberately swallows its failures — the action it describes has
+already happened. Reading has the opposite disposition: a query that fails must
+say so, because a trail that silently returns nothing is indistinguishable from
+a clean history.
+
+The cursor encodes the row id alone rather than the shared `(createdAt, id)`
+pair: `audit_logs.id` is a monotonic `BIGINT`, already a total order, so two rows
+written in the same millisecond page correctly without a tie-break.
+
+The keyset cursor helpers moved to `common/pagination`, because a second copy of
+that logic is a second place for the malformed-cursor defect found in 7e to live,
+and a duplicate would not have inherited the fix.
+
+### Consequences — the intermittent failure was test residue
+
+An intermittent full-suite failure had been reported since 7j: roughly one run in
+six, never reproducible in isolation, moving between tests. It was chased through
+three disproved theories across two audits and honestly reported as undiagnosed.
+
+The cause was **6,900 orphaned tenant rows**. Registration provisions a tenant
+whose slug comes from the tenant *name*, not the suite's namespace — a test
+registering as "Sam Merchant" or "Owner" produces `sam-…` or `owner-…`, which a
+cleanup matching `slug LIKE 'authsvc-%'` never finds. Each run leaked a handful.
+Once the table was large enough, the added latency turned other suites' fixture
+creates into 404s that looked like a product bug.
+
+Fixed in three places: the per-suite cleanups now find tenants through their
+members, a `globalTeardown` sweeps anything with no members, stores or option
+sets, and the accumulated 6,899 were purged. Four consecutive full runs are clean
+and one orphan remains, which is the demo seed.
+
+A second, independent flake was found in the same pass: five assertions checked a
+document did not contain `1970`, and a UUIDv7 contains those digits about once in
+3,400 — roughly a 0.3% false failure per document. They now match `1970-01-01`,
+which is the sentinel's actual form.
+
+**Neither was a product defect, and both looked like one.** The hardened fixtures
+from 7f — which report the response rather than dereferencing `undefined` — are
+what kept every occurrence legible enough to eventually trace.

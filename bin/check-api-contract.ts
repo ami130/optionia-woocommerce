@@ -38,8 +38,15 @@ interface Route {
 
 /** Routes Express has registered, normalised to `METHOD /v1/path`. */
 async function registeredRoutes(): Promise<Route[]> {
+  /**
+   * `logger: false` silences Nest's boot chatter, which would otherwise bury
+   * this check's output — but it also silences the dependency-resolution error
+   * that explains a failure to boot. `errorLogger` keeps the one that matters:
+   * without it a module missing an import exits 1 with no message at all, and
+   * the reader is left running the app by hand to find out why.
+   */
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: false,
+    logger: ['error'],
   });
   app.setGlobalPrefix('v1', { exclude: ['health'] });
   await app.init();

@@ -206,7 +206,7 @@ describe('serialization (e2e)', () => {
       const body = JSON.stringify((await get(`/option-sets/${setId}/detail`)).body.data);
 
       expect(body).not.toContain('tenantId');
-      expect(body).not.toContain('1970');
+      expect(body).not.toContain('1970-01-01');
       expect(body).not.toContain('deletedAt');
     }, 60_000);
 
@@ -261,7 +261,7 @@ describe('serialization (e2e)', () => {
       ['audit timestamps', 'createdAt'],
       ['enable flags', 'isEnabled'],
       ['parent ids', 'optionGroupId'],
-      ['the sentinel', '1970'],
+      ['the sentinel', '1970-01-01'],
     ])('omits %s', async (_label, needle) => {
       const body = JSON.stringify((await get(`/option-sets/${setId}/preview`)).body.data);
 

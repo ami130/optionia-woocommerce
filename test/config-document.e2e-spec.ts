@@ -412,7 +412,7 @@ describe('config document (e2e)', () => {
       ['enable flags', 'isEnabled'],
       ['parent ids', 'optionGroupId'],
       ['the publisher', 'publishedBy'],
-      ['the soft-delete sentinel', '1970'],
+      ['the soft-delete sentinel', '1970-01-01'],
     ])('omits %s, as the contract says', async (_label, needle) => {
       await publishedSet('Absent');
 

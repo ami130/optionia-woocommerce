@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AuthModule } from '../auth/auth.module';
+import { AuditController } from './audit.controller';
+import { AuditQueryService } from './audit-query.service';
 import { AuditService } from './audit.service';
 import { AuditLog } from './entities/audit-log.entity';
 
@@ -18,8 +21,12 @@ import { AuditLog } from './entities/audit-log.entity';
  * consumer fail at boot, in a message naming the consumer rather than the cause).
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([AuditLog])],
-  providers: [AuditService],
-  exports: [AuditService, TypeOrmModule],
+  // `AuthModule` for the guard chain on the read endpoint. It does not import
+  // this module, so there is no cycle — the dependency runs one way, from the
+  // trail's reader to authentication.
+  imports: [TypeOrmModule.forFeature([AuditLog]), AuthModule],
+  controllers: [AuditController],
+  providers: [AuditService, AuditQueryService],
+  exports: [AuditService, AuditQueryService, TypeOrmModule],
 })
 export class AuditModule {}
