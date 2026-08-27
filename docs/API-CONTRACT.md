@@ -815,12 +815,15 @@ the cloud's URL shape into software installed on thousands of merchant sites tha
 **cannot be redeployed**. Renaming a query parameter would then be impossible.
 This is the decision that makes `initiate` an endpoint rather than a constant.
 
-**2. `state` is opaque to the cloud: echoed, never stored.**
-The plugin generates it, the cloud returns it in the redirect, the plugin compares
-it to what it kept. That is the CSRF defence, and it works *because* the cloud
-cannot influence the value. M8.1's acceptance requires the code be "bound to
-`state`" — the binding is to a **hash** of the state, so `exchange` can verify it
-without the cloud ever holding the plaintext.
+**2. `state` is opaque to the cloud: hashed at rest, echoed through the browser.**
+The plugin generates it, the cloud stores only `SHA-256(state)`, and the plaintext
+travels `authorize_url` → dashboard → `authorize` → callback. The plugin compares
+what returns against what it kept. That is the CSRF defence, and it works *because*
+the cloud cannot influence the value.
+
+M8.1's acceptance requires the code be "bound to `state`", and the binding is to
+the hash — so a database dump yields no usable token, and `exchange` still verifies
+the binding.
 
 **3. PKCE is S256 only. There is no `plain` fallback.**
 The plugin requires PHP 7.4+, where `hash('sha256', …)` is always available.
@@ -895,20 +898,36 @@ a handful of times; a script does not.
   "plugin_version": "1.0.0" }
 
 // Response
-{ "data": { "authorize_url": "https://app.optionia.com/connect?request=01a0…" } }
+{ "data": { "authorize_url": "https://app.optionia.com/connect?request=01a0…&state=…" } }
 ```
 
 | Field | Rules |
 |---|---|
 | `site_url` | absolute `https://` URL, ≤ 255 chars. **`http://` is refused** — a credential must never cross a plaintext connection |
 | `callback` | absolute URL whose origin **equals** `site_url`'s; ≤ 500 chars |
-| `state` | 43–128 chars, URL-safe. Never stored in plaintext |
+| `state` | 43–128 chars, URL-safe. Stored as a SHA-256 hash; the plaintext is echoed, never persisted |
 | `challenge` | 43 chars, base64url — exactly one SHA-256 digest |
 | `plugin_version` | semver, ≤ 20 chars |
 
 **The callback must share the site's origin.** Accepting an arbitrary callback
 would let an attacker start a connection for someone else's shop and have the
 code delivered to a host they control.
+
+**`authorize_url` carries `state` back, and that is deliberate.** The cloud stores
+only `SHA-256(state)`, so it cannot reconstruct the plaintext to put in the final
+redirect — and the plugin must receive its original `state` on the callback or it
+cannot verify the response is the one it started.
+
+Carrying it through the browser exposes nothing new: the value is already destined
+for that browser, arriving on the callback URL either way. What matters is that it
+never reaches the database in a readable form, so a dump of `store_connection_codes`
+yields no usable CSRF token.
+
+> An earlier draft said `state` is "never stored in plaintext" while `authorize`
+> returned "the merchant's original `state`" from a body carrying only a request
+> id. Both cannot be true — the cloud had no source for the plaintext. Found while
+> analysing what `[8b]`'s table must hold, which is the point of settling a schema
+> against a contract rather than alongside it.
 
 **Errors:** `VALIDATION_FAILED`, `RATE_LIMITED`.
 
@@ -926,7 +945,8 @@ a script enumerating request ids does not.
 
 ```jsonc
 // Request
-{ "request": "01a0…" }       // the id from `authorize_url`
+{ "request": "01a0…",        // the id from `authorize_url`
+  "state": "…" }             // echoed from `authorize_url`, verified against its hash
 
 // Response
 { "data": { "redirect_url": "https://shop.example.com/wp-admin/…?code=…&state=…" } }
@@ -935,9 +955,11 @@ a script enumerating request ids does not.
 | Field | Rules |
 |---|---|
 | `request` | UUID. Must be pending, unexpired, and not already approved |
+| `state` | must hash to the value stored at `initiate` — a mismatch is `TOKEN_INVALID` |
 
 Creates the store in `CONNECTING` and issues a one-time authorization code. The
-`redirect_url` carries the code and the merchant's original `state`.
+`redirect_url` carries the code and the `state` the dashboard read from
+`authorize_url` — the cloud holds only its hash and cannot produce it otherwise.
 
 **A pending request is single-use and lives 30 minutes.** Approving twice must not
 mint two codes — the second call answers `TOKEN_INVALID`.

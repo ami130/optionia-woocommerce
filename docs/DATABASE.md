@@ -191,6 +191,48 @@ merchant.
 `INDEX (token_hash)`. Rotation creates a new row rather than updating, so a
 compromised credential's usage history survives its revocation.
 
+### `store_connection_codes`
+
+One connection handshake, from `initiate` to `exchange`
+([M8.1](../../developePlan.md)).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | CHAR(36) PK | The `request` id carried by `authorize_url` |
+| `site_url` | VARCHAR(255) | The site that started it. `exchange` requires an exact match |
+| `callback` | VARCHAR(500) | Where the code is delivered; must share `site_url`'s origin |
+| `state_hash` | CHAR(64) | **SHA-256.** The plaintext travels the browser and is never persisted |
+| `challenge` | CHAR(43) | PKCE S256, stored **as sent** — it is already a digest |
+| `plugin_version` | VARCHAR(20) NULL | Telemetry: which build began the handshake |
+| `code_hash` | CHAR(64) NULL | **SHA-256.** Null until a merchant approves |
+| `tenant_id` | CHAR(36) FK NULL | Known only at `authorize` |
+| `store_id` | CHAR(36) FK NULL | Created at `authorize` |
+| `request_expires_at` | DATETIME(3) | 30 minutes — a human signs up and reads an approval screen |
+| `approved_at` | DATETIME(3) NULL | |
+| `code_expires_at` | DATETIME(3) NULL | 5 minutes from approval (M8.1) |
+| `redeemed_at` | DATETIME(3) NULL | Single-use, enforced by `UPDATE … WHERE redeemed_at IS NULL` |
+
+`UNIQUE (code_hash)`, `INDEX (tenant_id)`.
+
+**One row, two clocks.** The flow is strictly linear — created, approved once,
+redeemed once — and its two artefacts differ in lifetime rather than identity.
+Two tables would need a foreign key between rows that both expire, which is a
+reference to something that may already be gone.
+
+**`tenant_id` and `store_id` are nullable because the handshake precedes both.**
+`initiate` is called by a plugin holding no credential at all; which workspace the
+site joins is exactly what the merchant decides on the approval screen.
+
+**Nothing here is readable as a secret.** `state` and the code are SHA-256 hashes;
+`challenge` is already a digest by construction and hashing it again would make
+PKCE verification compare two different things. A dump of this table yields no
+usable CSRF token and no redeemable code — which is what lets `state` travel
+through the browser safely.
+
+⚠️ **This table is never pruned**, like the three token tables before it, and it
+grows with every *attempted* connection rather than every successful one.
+Retention is [Phase 34](../../developePlan.md)'s alongside `refresh_tokens`.
+
 ---
 
 ## 3. Option domain (M5.4)
@@ -613,6 +655,8 @@ impersonation_sessions.tenant_id     → tenants(id)  ON DELETE RESTRICT
 -- Stores -------------------------------------------------------------------
 stores.tenant_id           → tenants(id)            ON DELETE RESTRICT
 store_credentials.store_id → stores(id)             ON DELETE CASCADE
+store_connection_codes.tenant_id → tenants(id)         ON DELETE CASCADE
+store_connection_codes.store_id  → stores(id)          ON DELETE CASCADE
 store_products.store_id    → stores(id)             ON DELETE CASCADE
 
 -- Option domain ------------------------------------------------------------

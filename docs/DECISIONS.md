@@ -2032,8 +2032,15 @@ have five endpoints, not six.
 **`state` is opaque to the cloud.** The plugin generates it, the cloud echoes it,
 the plugin compares. That is the CSRF defence and it works *because* the cloud
 cannot influence the value. M8.1 requires the code be bound to `state`; the
-binding is to a **hash**, so `exchange` verifies without the cloud holding the
-plaintext — and `state` never enters the schema.
+binding is to a **hash**, so `exchange` verifies without the cloud ever holding
+the plaintext.
+
+> **Corrected in `[8b]`.** This paragraph originally ended "and `state` never
+> enters the schema", which was wrong in a way that only became visible when the
+> table was built: the *hash* is a stored column, `state_hash`. The security
+> claim survives — no plaintext is persisted — but the schema claim did not, and
+> a reader building `[8d]` against the stronger sentence would have looked for a
+> column that had to exist.
 
 **PKCE is S256 only.** The plugin requires PHP 7.4+, where `hash('sha256', …)` is
 always available. `plain` exists for clients that cannot hash; WordPress is not
@@ -2101,3 +2108,33 @@ Three endpoints also lacked the rate limits M8.2 requires, two lacked field-rule
 tables, and `disconnect` did not say it takes no body. All were written more
 loosely than the three endpoints drafted first — the tail of a document getting
 less care than its head, which an audit catches and a reader would not.
+
+### Addendum — the handshake's storage, `[8b]`
+
+**One table, not two.** The handshake produces two artefacts — a pending request
+and an approved code — and they differ in *lifetime* (30 minutes, 5 minutes)
+rather than in identity. The flow is strictly linear: created once, approved once,
+redeemed once. Splitting it would put a foreign key between two rows that both
+expire, which is a reference to something that may already have been collected.
+The two clocks live as two nullable columns on one row.
+
+**`tenant_id` and `store_id` are nullable, and that is the point.** `initiate` is
+called by a plugin holding no credential and belonging to no workspace — which
+workspace the site joins is precisely what the merchant chooses on the approval
+screen. A `NOT NULL` here would require inventing a tenant before a human has
+picked one. Both are `ON DELETE CASCADE`: a deleted tenant's in-flight handshakes
+are meaningless, not orphans worth keeping.
+
+**`challenge` is stored as sent, and is the one value that is not re-hashed.** It
+arrives as a PKCE S256 digest already. Hashing it again would make `exchange`
+compare `SHA-256(SHA-256(verifier))` against `SHA-256(verifier)` — a check that
+fails for every honest client while looking like defence in depth.
+
+**Nothing in the table is readable as a secret**, which is what lets `state` cross
+the browser at all: `state_hash` and `code_hash` are digests, `challenge` is one by
+construction. A dump yields no usable CSRF token and no redeemable code.
+
+⚠️ **It is a fourth accumulating table.** It grows per *attempted* connection, not
+per successful one — so unlike `refresh_tokens` its growth is driven by traffic
+that never becomes a customer. Retention is Phase 34's, alongside the three token
+tables already waiting there.
