@@ -12,3 +12,12 @@ Thumbs.db
 
 # The backend is its own repository — see optioniaWooCommerceBackend/.git
 /optioniaWooCommerceBackend/
+
+# The Shopify Optionia app is a **separate project** that happens to sit here for
+# reference while its features are ported. It has nothing to do with this
+# repository and must never be committed into it.
+#
+# Added after `git add -A` from this directory swept all 357 of its files into a
+# WooCommerce commit: the two sub-repos above were already excluded, this was not,
+# so it was the one unignored neighbour a broad add could reach.
+/optionia-app/

@@ -4,6 +4,132 @@
 **Status:** Authoritative build sequence
 **Owner:** Omi Hasan / ParseLab LLC
 **Created:** 2026-08-21
+**Revised:** 2026-08-27 — gaps closed against the `optionia-app` (Shopify) analysis in
+`optioniaapp.md`. See [Appendix E](#appendix-e--revision-log-2026-08-27) for what changed and why.
+
+---
+
+<a id="status"></a>
+
+# 📍 STATUS — read this first, every session
+
+> **This block is the only thing that needs updating as work proceeds.** Everything below it
+> is reference material. Update it at the end of each milestone; never let it go stale — a
+> wrong status is worse than no status.
+>
+> **Last updated:** 2026-08-27
+
+## Where we are
+
+```text
+BACKEND   optioniaWooCommerceBackend    Phase 7 CLOSED  ✅  (commit 0ad7082 "Phase 7 closes")
+                                        → NEXT: Phase 8 — Store Connection
+PLUGIN    optioniaWooCommercePlugin     Phase 3 CLOSED  ✅  (commit 44aa707)
+                                        → BLOCKED on Phase 8 (needs a store credential)
+DASHBOARD optioniaWooCommerceFrontend   NOT CREATED     ⬜  → Phase 13
+WP ENV    local Studio site             READY           ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
+                                                            HPOS on · block cart/checkout
+```
+
+## ▶ THE NEXT THING TO DO
+
+**[Phase 8 — Store Connection](#phase-8--store-connection)**, milestone M8.1.
+
+Use the prompt template in [Appendix D](#appendix-d--working-with-this-plan). One milestone at
+a time. Do not start Phase 9 until Phase 8's exit criteria all pass.
+
+## ⛔ BLOCKERS — these stop work, resolve them first
+
+| # | Blocker | Blocks | Who resolves |
+|---|---|---|---|
+| ~~B1~~ | ~~`optionia-app-api` not on this machine~~ — **WITHDRAWN 2026-08-27.** Not a blocker. Your NestJS backend already owns the schema (808-line `DATABASE.md`, 32 entities, 5 applied migrations, Phase 7 closed). The Shopify app's schema is Shopify-shaped (shop domains, GIDs, one DB per merchant) and its multi-tenant design is **worse** than yours. [M5.0](#m50--reconcile-the-domain-model-against-optionia-app) is a review of the *existing* schema, needing no external file | — |
+| B2 | **D1 — billing provider** undecided (Stripe vs Paddle vs Lemon Squeezy) | [Phase 22](#phase-22--billing-integration) | **You** — needs company jurisdiction |
+| B3 | **D6 — styling ownership** undecided (theme templates / dashboard / both) | [Phase 21c](#phase-21c--option-styling--presentation-control) | **You** — [M1.9](#m19--decide-d6-styling-and-presentation-ownership) |
+| B4 | **D7 — Design Lab in or out** | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) | **You** — [M1.10](#m110--decide-d7-design-lab-scope-and-position) |
+| B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
+
+**Nothing blocks Phase 8.** B2–B5 are business decisions due before their own phases; B1 was
+withdrawn. Work continues now.
+
+> ⚠️ **Terminology — two different "backends".** `optioniaWooCommerceBackend` (NestJS) is **the
+> API for this project**, and the only one. `optionia-app-api` (Express) is the *Shopify*
+> product's server and has **no role here** — it is not a dependency, not a reference
+> implementation, and not something to run. Same for `optionia-app-admin`. If a section of this
+> plan reads as though a second API were needed, it is wrong: there is one API, and you have
+> already built it through Phase 7.
+
+## 🔴 Carry these into every milestone
+
+Five things the Shopify app got wrong and this project must not (full detail in
+[Appendix E](#appendix-e--revision-log-2026-08-27)):
+
+1. **Ids never change on an edit** — [M5.0a](#m50--reconcile-the-domain-model-against-optionia-app). Regenerating them destroys a downgraded merchant's config.
+2. **One measure function** for per-character pricing, the counter, and length limits — [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display).
+3. **Hidden options are rejected server-side, not just hidden** — [M17.4](#phase-17--conditional-logic-engine).
+4. **A plan change invalidates cached config** — [M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish). Not just a publish.
+5. **Money is integer minor units, never floats** — [M11.2](#m112--php-evaluator).
+
+## Phase ledger
+
+Tick a phase only when **every** exit criterion passes.
+
+```text
+STAGE 0-1  [x] 1 Foundations*   [x] 2 WooCommerce   [x] 3 Plugin skeleton  [x] 4 Prototype
+STAGE 2    [x] 5 Data model     [x] 6 Tenancy/Auth  [x] 7 Authoring API    [ ] 8 Store connection ◀ HERE
+           [ ] 9 Config sync    [ ] 10 Renderer     [ ] 11 Pricing         [ ] 12 Cart/Order
+           [ ] 13 Builder UI    [ ] 🚩 GATE 1
+STAGE 3    [ ] 14 Type library  [ ] 15 File upload  [ ] 16 Adv. pricing    [ ] 17 Cond. logic
+           [ ] 18 Groups        [ ] 19 Product sync [ ] 20 Full builder    [ ] 20b Onboarding
+           [ ] 21 Preview       [ ] 21b Cart price  [ ] 21c Styling        [ ] 🚩 GATE 2
+STAGE 4    [ ] 22 Billing       [ ] 23 Webhooks     [ ] 24 Limits          [ ] 25 Analytics
+           [ ] 26 Super admin   [ ] 26b Compliance
+STAGE 4B   [ ] 26c Design geom. [ ] 26d Authoring   [ ] 26e Storefront/order   (gated on D7)
+STAGE 5    [ ] 27 Security      [ ] 28 Performance  [ ] 29 Compatibility   [ ] 29b Diagnostics
+           [ ] 30 Tests         [ ] 31 Monitoring   [ ] 32 Docs            [ ] 🚩 GATE 3
+STAGE 6    [ ] 33 Closed beta   [ ] 34 Prod deploy  [ ] 35 Distribution
+```
+
+\* Phase 1 partially: M1.1/M1.2/M1.7 done via Phase 5 Step 0; **M1.3 (D1), M1.4 (D2/D3),
+M1.8 (ADR-007), M1.9 (D6), M1.10 (D7) still open** — see Blockers.
+
+---
+
+<a id="adr-001-amendment"></a>
+
+## ⚠️ Amendment to ADR-001 (2026-08-27)
+
+`optioniaWooCommerceBackend/docs/DECISIONS.md` **ADR-001** and [S0](#s0-project-scope-and-starting-point)
+below both state that this project is standalone with *"no prior implementation to extract
+business logic from."* **That is correct about the three repositories it assessed and wrong
+about a fourth it did not.**
+
+Verified 2026-08-27 (`optioniaapp.md` §0):
+
+| Repo | What it is | Relevance |
+|---|---|---|
+| `optionia-backends` | NestJS **marketing-site CMS** (blog, pages, pricing, sitemap) | none — ADR-001 correct |
+| `optionia-websites` | Next.js **public marketing site** | marketing copy only |
+| `optionia-dashboards` | Vite/React **admin panel for that CMS** | none — ADR-001 correct |
+| **`optionia-app`** | **The same product, built for Shopify** — ~68,700 LOC, mature, documented | **the product specification** |
+
+ADR-001's *reasoning* stands: a CMS deploy must never be able to take down merchant
+storefronts, so no code is shared with the marketing stack. **Its scope was too narrow.**
+`optionia-app` lives inside this workspace and is the same product on another platform.
+
+**Consequence for this plan.** `optionia-app` is treated as:
+- the **product specification** — its feature set is the parity target;
+- the **source** for genuinely platform-agnostic code (its domain types, design-scene
+  geometry, storefront HTML/CSS builders, and client runtime carry **zero** Shopify imports —
+  verified file by file);
+- a **record of solved edge cases** — its documentation carries specific, dated bugs
+  (pixel-parity drift, a plan-downgrade model that destroyed merchant data, two exploitable
+  URL validators) that this project would otherwise rediscover.
+
+⚠️ **Name collision — do not repeat the ADR-001 mistake.** `optionia-backends` ≠
+`optionia-app-api` (the product's Express API); `optionia-dashboards` ≠ `optionia-app-admin`
+(the product's internal admin). The second of each pair is **not on this machine** and holds
+`base_schema_V001.sql`, a stated source of truth for the per-merchant data model. **Obtain it
+before [M5.0](#m50--reconcile-the-domain-model-against-optionia-app).**
 
 ---
 
@@ -65,6 +191,8 @@ Scope is unchanged. Every roadmap phase is mapped in
   - [Phase 20 — Full Builder UI](#phase-20--full-builder-ui)
   - [Phase 20b — Onboarding & Activation](#phase-20b--onboarding--activation)
   - [Phase 21 — Live Preview](#phase-21--live-preview)
+  - [Phase 21b — Cart & Checkout Price Presentation](#phase-21b--cart--checkout-price-presentation)
+  - [Phase 21c — Option Styling & Presentation Control](#phase-21c--option-styling--presentation-control)
   - [🚩 GATE 2 — Feature Complete](#-gate-2--feature-complete)
 - [Part VI — Stage 4: Become A Business](#part-vi--stage-4-become-a-business)
   - [Phase 22 — Billing Integration](#phase-22--billing-integration)
@@ -73,10 +201,15 @@ Scope is unchanged. Every roadmap phase is mapped in
   - [Phase 25 — Analytics](#phase-25--analytics)
   - [Phase 26 — Super Admin](#phase-26--super-admin)
   - [Phase 26b — Data Protection & Compliance](#phase-26b--data-protection--compliance)
+- [Part VI-B — Stage 4B: The Visual Differentiator](#part-vi-b--stage-4b-the-visual-differentiator)
+  - [Phase 26c — Design Lab: Foundations & Geometry](#phase-26c--design-lab-foundations--geometry)
+  - [Phase 26d — Design Lab: Authoring](#phase-26d--design-lab-authoring)
+  - [Phase 26e — Design Lab: Storefront & Order Output](#phase-26e--design-lab-storefront--order-output)
 - [Part VII — Stage 5: Production Hardening](#part-vii--stage-5-production-hardening)
   - [Phase 27 — Security Audit](#phase-27--security-audit)
   - [Phase 28 — Performance](#phase-28--performance)
   - [Phase 29 — Compatibility Matrix](#phase-29--compatibility-matrix)
+  - [Phase 29b — Merchant-Facing Theme Diagnostics](#phase-29b--merchant-facing-theme-diagnostics)
   - [Phase 30 — Test Suite](#phase-30--test-suite)
   - [Phase 31 — Monitoring](#phase-31--monitoring)
   - [Phase 32 — Documentation](#phase-32--documentation)
@@ -86,6 +219,7 @@ Scope is unchanged. Every roadmap phase is mapped in
   - [Phase 34 — Production Deploy](#phase-34--production-deploy)
   - [Phase 35 — Plugin Distribution](#phase-35--plugin-distribution)
 - [Appendices](#appendix-a--why-the-sequence-changed)
+  - [Appendix E — Revision Log (2026-08-27)](#appendix-e--revision-log-2026-08-27)
 
 ---
 ---
@@ -94,18 +228,31 @@ Scope is unchanged. Every roadmap phase is mapped in
 
 ## S0. Project Scope And Starting Point
 
-### This is a standalone, greenfield project
+### This is a standalone project with one prior implementation to learn from
 
-> **Optionia WooCommerce is a separate project. It starts from zero.**
->
-> Other directories under `parselabllc/` share the name "optionia" but are a **different
-> product**. Nothing in this project touches, reuses, imports from, extends, migrates, or
-> depends on them. They are out of scope entirely and are not referenced anywhere else in
-> this plan.
+> **Revised 2026-08-27** — see the [ADR-001 amendment](#adr-001-amendment). The paragraph
+> below originally read *"It starts from zero… no prior implementation to extract business
+> logic from."* That was correct about the **marketing stack** and wrong about `optionia-app`.
 
-New repositories, new database, new infrastructure, new codebase. There is no legacy to
-port, no existing schema to inherit, and no prior implementation to extract business logic
-from. Every design decision in this plan is made fresh on its merits.
+**Standalone from the marketing stack — unchanged.** `optionia-backends` (a NestJS CMS),
+`optionia-websites` (the public marketing site) and `optionia-dashboards` (that CMS's admin
+panel) are a different product. Nothing here touches, reuses, imports from, extends, or
+depends on them. New repositories, new database, new infrastructure.
+
+**But `optionia-app` is the same product, built for Shopify** — ~68,700 LOC, mature,
+documented, and inside this workspace. It is therefore:
+
+- the **parity specification** — analysed in full in `optioniaapp.md`;
+- the **source** for code verified to carry zero platform-specific imports (domain types, design-scene geometry, storefront HTML/CSS builders, client runtime);
+- a **register of solved edge cases** — its docs carry dated, specific defects (pixel-parity drift across four render surfaces, a plan-downgrade model that destroyed merchant data, two exploitable URL validators) that this project would otherwise rediscover.
+
+There is still **no legacy schema to inherit and no code migration to perform** — the WooCommerce
+data model is designed fresh ([Phase 5](#phase-5--data-model--migrations)), informed by
+`optionia-app`'s model rather than constrained by it ([M5.0](#m50--reconcile-the-domain-model-against-optionia-app)).
+
+⚠️ **Name collision:** `optionia-backends` ≠ `optionia-app-api`; `optionia-dashboards` ≠
+`optionia-app-admin`. The second of each pair belongs to the product and is **not on this
+machine**.
 
 ### What exists today
 
@@ -193,9 +340,9 @@ which is favourable early-stage economics:
 Three decisions gate real work. Each has a recommendation, the reasoning, and the phase
 that cannot start until it is resolved.
 
-Because this is a greenfield project ([S0](#s0-project-scope-and-starting-point)), the
-stack decisions are settled rather than contested — there is no legacy codebase pulling in
-another direction:
+Because no code is inherited ([S0](#s0-project-scope-and-starting-point)), the stack
+decisions are settled rather than contested — `optionia-app` is a specification to match, not
+a codebase whose stack constrains this one:
 
 ```text
 optioniaWooCommerceBackend    NestJS 11 · TypeScript · TypeORM · MySQL
@@ -655,6 +802,9 @@ never ships.
 ✓ Storefront rendering, classic AND block themes
 ✓ Server-authoritative pricing
 ✓ Cart, checkout, order metadata, admin order display
+✓ Cart price presentation verified on all five cart surfaces (Phase 21b)
+✓ Options visually native to the theme by default (M21c.1) + render-time
+     style validation (M21c.4) — the rest of Phase 21c follows D6
 ✓ Minimum viable builder UI
 ✓ Subscription billing: Free + one paid tier
 ✓ Plan limits enforced
@@ -676,7 +826,17 @@ never ships.
 → Templates/presets (M20.7)        — strong onboarding lever, not blocking
 → Import/export option sets        — fast-follow
 → Super admin polish (Phase 26)    — ops queue needed; metrics can wait
+→ Design Lab (Phases 26c–26e)      — ~8.5k LOC equivalent; a D5 differentiator,
+                                     gated on D7. Planned, not launch-blocking
+→ Dashboard style layer (21c)      — beyond M21c.1/M21c.4; scope set by D6
+→ Theme diagnostics (Phase 29b)    — support-cost lever; ship soon after launch
 ```
+
+> **Why 21b and part of 21c are IN and the rest is out.** A customer who cannot tell why a
+> line costs what it costs will not complete the purchase, and options that look foreign to
+> the theme read as broken — both are launch-blocking for the sentence this MVP must prove.
+> A *dashboard* for styling is not: template overrides cover the agency case, and M21c.4's
+> render-time validation is a security floor rather than a feature.
 
 ### Why this line and not another
 
@@ -728,9 +888,15 @@ now, expensive later.
 **Blocks:** Phases 5 onward
 **Resolves:** [D1](#d1--billing-provider)–[D3](#d3--positioning-against-one-time-purchase-competitors)
 
-> There is no Phase 0. This is a greenfield project
-> ([S0](#s0-project-scope-and-starting-point)) — nothing exists to remediate, migrate, or
-> extract. Phase numbering starts here and runs to 35.
+> There is no Phase 0 **as a build phase** — nothing exists to remediate or migrate, and the
+> WooCommerce codebase starts fresh ([S0](#s0-project-scope-and-starting-point)). Phase
+> numbering starts here and runs to 35.
+>
+> **Revised 2026-08-27:** the roadmap's Phase 0 (*analyse the prior platform*) was originally
+> dismissed as inapplicable. It is not — that analysis exists as `optioniaapp.md` and is
+> adopted through [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) and
+> [M5.0](#m50--reconcile-the-domain-model-against-optionia-app). It is a **reading and
+> reconciliation input**, not a phase of construction.
 
 ### M1.1 — Repository and tooling setup
 
@@ -829,6 +995,58 @@ here on gets an entry: the decision, the alternatives considered, the reasoning,
 
 Seed it with D1–D3 and the stack choices from [S1](#s1-blocking-decisions).
 
+### M1.8 — Amend ADR-001 and adopt `optionia-app` as the specification
+
+**Added 2026-08-27.** ADR-001 rules out the three marketing repositories correctly but never
+assessed `optionia-app`, which is the same product built for Shopify (see the
+[amendment](#adr-001-amendment) at the top of this document).
+
+Write **ADR-007**: keep ADR-001's standalone-from-the-marketing-stack decision, and record
+that `optionia-app` is (a) the parity specification, (b) the source for verified
+platform-agnostic code, and (c) a register of solved edge cases. **Name all four repositories
+explicitly** so the collision cannot recur.
+
+Then read `optioniaapp.md` §6b–§6d before Phase 5 — the implementation-level findings there
+are inputs to the data model, the pricing engine, and the renderer.
+
+**Acceptance:** ADR-007 written and cross-referenced from ADR-001, naming all four
+repositories and stating explicitly that **`optionia-app` is a specification to read, never a
+codebase to depend on or run** — this project has exactly one API, `optioniaWooCommerceBackend`.
+
+### M1.9 — Decide D6: styling and presentation ownership
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.3). This plan has **no design-system milestone**:
+its implicit answer is that themes override PHP templates
+([Principle 4](#phase-3--plugin-skeleton)). `optionia-app` instead ships a dashboard-authored
+design system — six style groups, per-option overrides frozen at save time, and plan-limited
+named themes.
+
+Both are defensible. Template overrides are more WordPress-native and cost nothing; a
+dashboard design system is what a merchant who has never edited a PHP template expects, and
+it is a cloud-only capability (part of the answer to [D3](#d3--positioning-against-one-time-purchase-competitors)).
+
+**This is a product decision that is currently unmade rather than made.** Decide it, record it
+as an ADR, and let it set the scope of [Phase 21c](#phase-21c--option-styling--presentation-control).
+
+**Recommendation:** ship template overrides for agencies **and** a small dashboard style layer
+for everyone else — but decide the *scope* of that layer here, not during Phase 21c.
+
+### M1.10 — Decide D7: Design Lab scope and position
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.2, Gap 1). The Design Lab — a canvas where the
+merchant composes artwork on the product photo, which the customer personalises live and which
+is baked into a flat image on the order — is **8,449 LOC in `optionia-app` and appeared nowhere
+in this plan** before this revision. It is now
+[Phases 26c–26e](#part-vi-b--stage-4b-the-visual-differentiator), deliberately placed **after**
+Gate 2 and the business layer.
+
+Decide: **in or out**, and if in, whether it stays post-MVP. It is a large subsystem *and* one
+of the three genuinely cloud-only differentiators (with analytics and multi-store) that answer
+D3. Leaving it undecided is what kept it invisible to the schedule.
+
+**Recommendation:** in scope, post-launch, planned now — so the D3 positioning story can
+reference it and the estimate includes it.
+
 ### Phase 1 exit criteria
 
 ```text
@@ -842,6 +1060,10 @@ Seed it with D1–D3 and the stack choices from [S1](#s1-blocking-decisions).
 [ ] Competitive analysis complete, with weaknesses identified
 [ ] MVP line confirmed
 [ ] docs/DECISIONS.md started
+[ ] ADR-007 written — optionia-app adopted as specification, all four repos named
+[ ] ADR-007 states plainly: optionia-app is a spec to READ; this project has ONE API
+[ ] D6 decided — styling ownership (template overrides / dashboard / both)
+[ ] D7 decided — Design Lab in or out of scope
 ```
 
 ---
@@ -1666,6 +1888,55 @@ validated or corrected, at a point where correction is still cheap.
 > competitive teardown ([M1.5](#m15--competitive-teardown)) as input: the option models
 > those plugins expose are a decade of accumulated evidence about what merchants actually
 > configure.
+
+### M5.0 — Review the existing schema against `optionia-app`'s option model
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.2 Gap 2, §6c.4). **Revised same day** — see the note
+below.
+
+> ⚠️ **This is a REVIEW of the schema you already have, not an import of anyone else's.**
+> `optioniaWooCommerceBackend` owns the data model: 808 lines of `DATABASE.md`, 32 entities, 5
+> applied migrations, Phase 7 closed. Nothing here replaces that. And **do not copy
+> `optionia-app`'s schema** — it is Shopify-shaped (shop domains, Shopify GIDs, one database per
+> merchant) and its isolation model is *worse* than this project's `tenant_id` scoping. The only
+> thing worth taking from it is **which fields merchants actually configure**, which its
+> `app/types/` captures in ~1,200 platform-independent lines.
+>
+> Consequence: this milestone needs **no external repository**. It is one careful pass over the
+> entities that exist, with `optioniaapp.md` §3.2–§3.4 open beside them.
+
+Two structural differences to note deliberately rather than discover later:
+
+| `optionia-app` | this plan | Note |
+|---|---|---|
+| `OptionSet → Option → OptionChoice` (3 levels; a choice may carry child options) | `OptionSet → OptionGroup → Option → OptionValue` (4 levels) | Our extra grouping level is an improvement; the mapping must be written down |
+| `OptionChoice` | `OptionValue` | Same concept, different name — pick one and use it everywhere |
+| `number` options store bounds in **`minLength`/`maxLength`** | — | **Do not copy this.** Give numeric options their own `min_value`/`max_value` columns; the reuse is a JSON-blob habit that becomes permanent confusion in SQL |
+
+**🔴 M5.0a — Option and value IDs MUST be stable across an update.**
+
+`optionia-app`'s plan-gate enforcement matches the previously-stored tree **by id** to decide
+what is grandfathered: a pre-existing id is *frozen* (its gated fields restored from storage),
+a new id is treated as a *create* (and rejected if gated). The consequence is not obvious and
+is severe:
+
+> **If the authoring API regenerates ids on save — the natural implementation of a
+> "replace the whole tree" endpoint — then every edit by a downgraded merchant is seen as
+> creating new gated content, and their existing configuration is rejected instead of
+> preserved.** That is precisely the outcome [M24.4](#m244--downgrade-handling) forbids
+> (*"Never silently delete merchant work"*).
+
+Requirements:
+- `PUT`/`PATCH` on an option set **preserves** the `id` of every group, option and value that
+  the payload identifies as existing. Only genuinely new items get new UUIDv7s.
+- A client-supplied id that does not belong to this tenant's option set is rejected, never
+  silently adopted (tenant isolation, [AC5](#ac5--tenant-isolation-is-enforced-at-the-data-access-layer)).
+- Deletion is explicit, never implied by absence from a payload — otherwise a partial payload
+  destroys data.
+
+**Acceptance:** a test saves an option set, edits one label via the API, and asserts **every**
+group/option/value id is unchanged. A second test asserts a foreign id is rejected with 403,
+not adopted. Both run in CI.
 
 ### M5.1 — Bootstrap `optioniaWooCommerceBackend`
 
@@ -2687,6 +2958,19 @@ Lookups stay fast — `tokenHash` is uniquely indexed — so this is storage and
 indefinitely with no stated retention period. A scheduled prune of rows past
 `expiresAt` belongs with the worker in [M34.1](#m341--infrastructure-topology).
 
+The same prune must cover **`store_connection_codes`** (added in `[8b]`), and its
+growth has a shape the token tables do not. A refresh token is written for a
+session that exists; a connection code is written for every *attempted*
+handshake — abandoned installs, mistyped site URLs, and anyone probing the
+endpoint. Its volume is therefore driven by traffic that never becomes a
+customer, and unlike `refresh_tokens` it cannot be bounded by estimating the user
+base. Rows are prunable once `requestExpiresAt` has passed and, for approved
+rows, once `codeExpiresAt` has: after redemption the durable artefact is the
+store credential, and the handshake row holds nothing worth keeping.
+
+`email_verification_tokens` and `password_reset_tokens` accumulate the same way
+and belong in the same sweep — four tables, one scheduled job, not four.
+
 **3. Logout does not revoke the access token, by design and undocumented.** The
 refresh family dies immediately; the access token keeps working until it expires.
 That is the trade `AuthJwtService` makes deliberately — revocation lives with the
@@ -3417,6 +3701,34 @@ recorded in `webhook_deliveries`.
 **Acceptance:** publish → live storefront in under 30 seconds on a healthy store, and
 within 15 minutes even if push delivery fails entirely.
 
+### M9.4b — Every trigger that must invalidate, not just publish
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.3, §6c.7). M9.4 above is written entirely around
+**publish**, driven by `option_sets.version`. But the config document is a join over more
+merchant state than the option tree, and the equivalent Shopify endpoint proves it: it fetches
+**six** things per request — option sets, styling, translations, **plan gates**, general
+preferences, and cart settings — and serves them `no-store` precisely because any of the six
+can change independently.
+
+Enumerate every trigger and bump `config_version` on each:
+
+| Trigger | Origin | Why it is easy to miss |
+|---|---|---|
+| Option set published | authoring | already covered by M9.4 |
+| Product assignment changed | authoring | covered if it bumps the version — verify |
+| Styling / presentation changed | authoring | depends on [D6](#m19--decide-d6-styling-and-presentation-ownership) |
+| **Plan or subscription changed** | **billing** | **🔴 not covered.** A plan change is *not* a publish, so nothing currently bumps the version. A merchant who upgrades keeps a stale config and **cannot see the features they just paid for** until the ≤15-minute cron — which reads as "I paid and nothing happened" |
+| Store settings changed (currency, tax display) | store | may arrive by webhook, not by an authoring action |
+| Plugin reconnected / credential rotated | store | forces a full pull rather than a delta |
+
+The plan-change trigger crosses the billing→authoring boundary, which is why no single phase
+owns it. Wire it in [Phase 23](#phase-23--billing-webhooks): the subscription webhook that
+updates plan state must also bump `config_version` and enqueue the invalidation ping.
+
+**Acceptance:** upgrading a plan makes a previously plan-locked option visible on the
+storefront within the M9.4 window, without an authoring action. Same for a downgrade, in
+reverse.
+
 ### M9.5 — Schema version negotiation
 
 If `schema_version` exceeds what the plugin understands: keep the last good config, raise
@@ -3580,6 +3892,37 @@ apply to (base only, vs. base + prior deltas), rounding mode and precision, tax
 inclusive/exclusive interaction, and multi-currency behaviour.
 
 **Deliverable:** `docs/PRICING-SPEC.md` — normative for both implementations.
+
+#### M11.1a — One measure function, shared by pricing and display
+
+**Added 2026-08-27** (`optioniaapp.md` §6c.2 — a live bug in `optionia-app`, inherited here
+unless specified away).
+
+`per_char → strlen(text)` above counts **every** character including spaces. But the character
+counter and the `min_length`/`max_length` limits are a separate concern
+([M14](#phase-14--option-type-library) gives text options `trim_whitespace` and a counter
+`partial`), and in `optionia-app` they were implemented with a *different* rule — non-whitespace
+characters only, on the stated reasoning that *"a gap between words is not a character."*
+
+The result is live in production there: **for `"AB CD"` the customer is charged for 5
+characters while the counter next to the field shows 4.** Nothing is over- or under-charged
+relative to the preview — display and server agree with each other — which is exactly why it
+survived: it is not a pricing bug, it is a **credibility** bug, and it lands on engraving, one
+of the best-fit segments ([S0](#s0-project-scope-and-starting-point)).
+
+Therefore:
+- `PRICING-SPEC.md` defines **one** normative `measure(text)` function, and states whether
+  whitespace counts. **Recommendation: it does not** — the merchant said "per character", and
+  the counter is what the customer believes.
+- The **same** function backs `per_char` pricing, the character counter, and `min_length` /
+  `max_length` validation, in both languages. `strlen` is not it (it is also byte-length, which
+  is wrong for multi-byte text — use a grapheme- or code-point-aware count).
+- [M11.4](#m114--cross-language-fixture-suite) carries a fixture asserting **the measure used
+  for pricing equals the measure used for limits**, including a string with inner spaces, a
+  multi-byte string, and an emoji.
+
+**Acceptance:** a per-character option priced on `"AB CD"` charges and displays the same count,
+in PHP and TS, and the counter agrees with the amount charged.
 
 ### M11.2 — PHP evaluator
 
@@ -4694,6 +5037,133 @@ documented rather than surprising.
 
 ---
 
+## Phase 21b — Cart & Checkout Price Presentation
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.2 Gap 3, §3.14).
+**Depends on:** Phases 11, 12
+
+> **Why this is its own phase.** [Phase 12](#phase-12--cart-checkout-order) makes the cart
+> *charge* correctly and shows the customer's *selections* via `woocommerce_get_item_data`.
+> Neither of those is the same as the customer **understanding** the price. `optionia-app`
+> needed a dedicated 1,099-line bundle for this on Shopify, and while WooCommerce computes
+> totals natively — so most of that work disappears — the surfaces where it renders are far
+> more varied: classic cart template, Cart block, mini-cart widget, AJAX drawer fragments, and
+> whatever a page builder does. This phase is verification and presentation, not arithmetic.
+
+### M21b.1 — Add-on breakdown on the cart line
+
+Show *why* a line costs what it costs: base plus each priced selection, or a single
+"customisation" subtotal — merchant-configurable. Rendered through
+`woocommerce_get_item_data`, so **every value must already be a pre-formatted scalar string**
+(the Store API silently discards an item-data element containing a non-scalar — see
+[M12.2](#phase-12--cart-checkout-order)).
+
+### M21b.2 — Totals correctness across every cart surface
+
+The same cart must read correctly in: the classic cart template, the **Cart block**, the
+mini-cart widget, an AJAX-refreshed drawer, and the Checkout block's order summary. Verify
+line unit price, line subtotal, cart subtotal, and order total in all five.
+
+> `optionia-app`'s hard-won lesson here transfers even though its mechanism does not:
+> **identify DOM targets by matching cart *data*, never by CSS class lists** — and *"only ever
+> WRITE to the DOM; never scrape a price to compute with."* Any place this phase has to touch
+> the DOM at all (drawer fragments, third-party carts), that is the rule.
+
+### M21b.3 — Quantity, coupons, tax display
+
+Change quantity on a customised line and confirm the add-on scales as specified (per-unit vs
+per-line is a `PRICING-SPEC.md` decision, not an implementation detail). Verify with a
+percentage coupon, a fixed-cart coupon, tax-inclusive and tax-exclusive display, and a
+zero-decimal currency.
+
+### M21b.4 — Order confirmation, emails, and admin
+
+The breakdown survives into the thank-you page, the customer and admin emails, the packing
+slip, and the admin order screen — the last of which is where the merchant actually fulfils
+([M12.5](#phase-12--cart-checkout-order)). Test with **HPOS on and off**.
+
+### M21b.5 — Third-party cart drawers
+
+Document a supported-integration policy rather than chasing every plugin: a documented filter
+other plugins can call, plus verification against the two or three most common drawer plugins
+found during [M1.5](#m15--competitive-teardown). Anything unrecognised must degrade to correct
+totals with a plain breakdown, never to a wrong number.
+
+**Exit:** on a customised line, base and add-on are legible and arithmetically correct in all
+five cart surfaces, through quantity changes, coupons and both tax modes, and the same
+breakdown appears on the order, the emails and the admin screen. No surface shows a price that
+disagrees with what is charged.
+
+---
+
+## Phase 21c — Option Styling & Presentation Control
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.3, §3.6).
+**Depends on:** Phase 10, [D6](#m19--decide-d6-styling-and-presentation-ownership)
+
+> **Scope is set by D6, decided in Phase 1.** This plan's original answer to styling was
+> template overrides ([Phase 3](#phase-3--plugin-skeleton) Principle 4) — excellent for
+> agencies, useless for a merchant who has never opened a PHP file. `optionia-app` ships a
+> dashboard design system instead. If D6 chose template-overrides-only, this phase reduces to
+> M21c.1 and M21c.5 and the rest is explicitly out of scope — **which is a fine outcome, as
+> long as it is recorded rather than defaulted into.**
+
+### M21c.1 — Inherit the theme by default
+
+With no styling configured, options must look like they belong to the theme: inherit fonts,
+colours, input borders and focus rings. This is the single highest-value styling behaviour and
+it is worth more than any control panel.
+
+### M21c.2 — The style model
+
+Per-shop defaults with per-option overrides. `optionia-app` groups them as: shared hover
+effect; text and label colours plus layout (title/description/placeholder/entered-text, one
+**accent colour** driving every selected/focus state, gaps, choice direction, help-text
+position); and box geometry (swatch size with optional locked ratio, border style/colour/
+radius/width, padding). Reuse that grouping — it is a working taxonomy, not a first draft.
+
+**Two decisions to copy deliberately:**
+- **Emit no `!important`.** Merchant CSS must always be able to win; a theme conflict is the merchant's to resolve, and `!important` takes that away.
+- **Freeze an option's resolved styles at save time**, so changing shop defaults later never silently restyles existing options. (`optionia-app` has an outstanding backfill job for options saved before it did this — do it from the start instead.)
+
+### M21c.3 — Named style presets
+
+Merchants save and switch named presets, count-limited by plan
+([Phase 24](#phase-24--plan-limits--enforcement)). Cheap to build on M21c.2 and a visible
+upgrade lever.
+
+### M21c.4 — Render-time value validation
+
+**Non-negotiable, and it applies even if D6 chose template-overrides-only.** The plugin renders
+a config document fetched from the cloud, so every style value is untrusted input at the point
+of emission: re-validate colours against a strict hex/rgb pattern, clamp numeric sizes to sane
+integer ranges, and allowlist enum-ish values. `optionia-app` does exactly this — *"to prevent
+any CSS injection"* — and it is the difference between a bad config being ugly and a bad config
+being an injection vector on a merchant's storefront.
+
+Pair it with the [M9.6](#m96--degradation-matrix) posture: an option whose styles cannot be
+validated renders with defaults; the option set still renders.
+
+### M21c.5 — Presentational item rendering is not free
+
+[M5.4c](#m54c--presentational-items-are-not-options) models headings, paragraphs and dividers
+as first-class presentational items. Their *rendering* carries more work than the name
+suggests, and `optionia-app` is the evidence: its divider supports ten styles, of which **three
+have no CSS equivalent** and are synthesized (an inline-SVG sine wave as a repeating data URI;
+a `repeating-linear-gradient` to fake a triple rule; a forced ≥3px floor for bevelled styles
+that are invisible below it), and its heading always emits font-size and a level-independent
+margin inline so browser `h1`–`h6` defaults cannot leak in.
+
+Decide the supported style list explicitly and budget for it. It is the classic
+underestimated-because-it-sounds-trivial item.
+
+**Exit:** unstyled options are visually native to Storefront and Twenty Twenty-Five;
+configured styles render identically in preview and storefront; a hostile config produces
+defaults rather than injected CSS; and the supported presentational styles are documented and
+tested.
+
+---
+
 ## 🚩 GATE 2 — Feature Complete
 
 ```text
@@ -4708,6 +5178,12 @@ documented rather than surprising.
 [ ] Version history + rollback working; concurrent edits 409 rather than overwrite
 [ ] weight_delta/sku_suffix correct; stock position documented
 [ ] Preview faithful for rules and pricing
+[ ] Add-on pricing legible + correct in all five cart surfaces (21b)
+[ ] Breakdown survives to order, emails, packing slip, admin — HPOS on and off (21b)
+[ ] Unstyled options inherit the theme; hostile style config yields defaults, not injection (21c)
+[ ] One measure function backs per-char pricing, the counter and length limits (M11.1a)
+[ ] Option/value ids proven stable across an edit; foreign ids rejected (M5.0a)
+[ ] Plan change alone invalidates cached config within the M9.4 window (M9.4b)
 [ ] Every pricing-page promise either delivered or corrected
 [ ] Gate 1 canonical E2E still green
 ```
@@ -4989,6 +5465,203 @@ match what the code actually does.
 ---
 ---
 
+# Part VI-B — Stage 4B: The Visual Differentiator
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.2 Gap 1). **Gated on [D7](#m110--decide-d7-design-lab-scope-and-position).**
+
+**Goal:** the merchant composes artwork on the product photo; the customer personalises it and
+sees the result live on the real product image; the order carries a print-ready flat file.
+
+**Why it is a Part of its own, here.** This is ~8,500 LOC in `optionia-app` — comparable to the
+whole file-upload subsystem — and it was **absent from every phase of this plan** until this
+revision, which meant it was invisible to the schedule rather than deliberately deferred. It
+sits after Gate 2 and after the business layer because nothing else depends on it and it must
+not delay launch. It sits **before** hardening because it is a product differentiator, not a
+polish item: with analytics and multi-store it is one of the three genuinely cloud-only
+capabilities that answer [D3](#d3--positioning-against-one-time-purchase-competitors) — a
+self-hosted one-time-purchase plugin structurally cannot ship it.
+
+**Prerequisite:** [Phase 15](#phase-15--file-upload-subsystem) (media storage, presigned
+uploads, MIME/magic-byte verification) — the Design Lab is a heavy consumer of it.
+
+> **The single most important engineering constraint in this Part.** `optionia-app` renders the
+> same design on **four** surfaces — the editor canvas, the dashboard preview, the storefront
+> overlay, and the flattened order image — and its documentation records **eight** separate
+> pixel-parity defects, each needing numerically verified fixes, with four more still open.
+> Every one traces to the same two causes: **an absolute pixel constant leaking into a chain
+> that must be ratio-only**, and **resolving geometry against the wrong aspect ratio**.
+>
+> **Therefore: all design geometry stays in one place, in TypeScript, and PHP never computes
+> any of it.** The plugin receives a design payload and mounts an SVG; the order image is
+> rendered **in the cloud** and the plugin stores only a URL. This is a deliberate exception to
+> the AC2 pattern of porting engine logic into PHP — geometry is not evaluation, and a
+> cross-language reimplementation of it would be four surfaces in two languages.
+
+---
+
+## Phase 26c — Design Lab: Foundations & Geometry
+
+**Depends on:** Phase 15, [D7](#m110--decide-d7-design-lab-scope-and-position)
+
+### M26c.1 — Port the shared scene model
+
+`optionia-app/app/components/design-lab/designScene.ts` (~880 lines) is framework-free and
+imports nothing platform-specific (verified). It resolves a stored design into a
+resolution-independent scene and serialises it to SVG. **Port it as the single source of
+geometry**, not as a reference to reimplement — it carries the eight verified parity fixes, and
+re-deriving them is the most expensive avoidable work in this project.
+
+**Fix two things on the way in** (`optioniaapp.md` §6c.3):
+- The line-height `1.25` appears as a **bare literal in six places across five surfaces**, held together only by a comment reading *"must match…"*. Export it as a named constant and import it everywhere. A one-line divergence here is a silently wrong print file.
+- Four measured, unfixed defects are documented (screen-space vs local-space mixing that scales an overlay by *k²* under a CSS transform; sizing to the `<img>` border box while `object-fit` paints the content box; a baseline derived from `hhea` metrics where browsers use the platform's; sub-pixel canvas rounding). Fix the first two — they are visible, not sub-pixel.
+
+### M26c.2 — The persistence contract: fractions, never pixels
+
+Every stored coordinate, size, letter-spacing and font size is a **fraction of the canvas**, so
+a design re-places exactly at any display size and at print resolution. The editor works in
+pixels; conversion happens in exactly **two** functions (export and import) and nowhere else.
+
+Enforce it: a CI check that fails on an absolute pixel constant inside the geometry module
+(the same shape as the existing no-float-in-`src/Engine/` check).
+
+### M26c.3 — Aspect ratio is part of the geometry
+
+Width-fractions scale with width and height-fractions with height, so **every wrap point,
+shrink result and curve radius depends on the canvas aspect ratio.** Two consequences, both
+learned the hard way in `optionia-app`:
+- Resolve a design against the **product image's** aspect, never a decorative backdrop's.
+- One option set assigned to products with **different** image aspects cannot be served by one stored design. Either store the authoring aspect alongside the design and letterbox into it, or scope a design to an assignment. **Decide this in M26c.3, not after merchants have data.**
+
+### M26c.4 — Text metrics
+
+Curved and shrink-to-fit text need real glyph widths, not an average. Measure in the browser at
+authoring time and persist the measured advance ratio with the design, so the storefront and
+the order renderer reproduce the same layout without measuring again.
+
+### M26c.5 — Cross-surface parity fixtures
+
+The [M11.4](#m114--cross-language-fixture-suite) pattern, applied to geometry: a fixture set of
+designs, each with expected bounding boxes, line counts and resolved font sizes, asserted
+across **every** rendering surface in CI. This is the mechanism that keeps parity from
+regressing; `optionia-app` had no such suite, which is why the same class of defect recurred
+eight times.
+
+**Exit:** one geometry module, ratio-only persistence enforced in CI, aspect policy decided and
+documented, and parity fixtures green across every surface.
+
+---
+
+## Phase 26d — Design Lab: Authoring
+
+**Depends on:** Phase 26c, Phase 20
+
+### M26d.1 — Canvas editor
+
+Layer model over the product image: add, reorder, lock, hide, duplicate, delete; move, resize,
+rotate; opacity; fit modes (free / cover / contain / full-width / full-height). Undo/redo over
+snapshots.
+
+> `optionia-app` implements this as an explicit state engine with subscribe/notify rather than
+> React state, and that choice is load-bearing — a canvas mutates on every pointer move, and
+> reconciliation on each one is why naive implementations feel laggy. Adopt the pattern.
+
+### M26d.2 — Frames and masks
+
+Clip a layer to a shape (rounded rectangle, circle, and a small curated set), with the image
+independently positioned *inside* the frame — its own fit mode, offset and rotation. This
+nested-placement model is where most of the geometry complexity lives; it is also what makes
+the output look designed rather than pasted.
+
+### M26d.3 — Text authoring
+
+Font (a curated, licence-cleared list — **verify print/embedding rights**, not just web use),
+size, weight, style, colour with alpha, alignment, letter-spacing, a fixed-height box with
+shrink-to-fit, and arc/curve including a closed circle. The merchant's text is a **sample**;
+the customer's input replaces it live.
+
+### M26d.4 — Which options carry a design
+
+Bind designs to the option model: an image or colour choice carries a design; a text option
+carries a text design. Reuse the presentational/functional axis from
+[M5.4b](#m54b--type-model-kind-cardinality-and-presentation-as-separate-axes) rather than
+inventing a parallel type system.
+
+### M26d.5 — Asset library
+
+Merchant uploads for overlays and masks, scoped per tenant, served from
+[Phase 15](#phase-15--file-upload-subsystem) storage with the same MIME and magic-byte
+verification. **SVG stays rejected** ([M15](#phase-15--file-upload-subsystem)) — a design lab is
+not a reason to accept an XSS vector.
+
+### M26d.6 — Dashboard preview
+
+The saved design rendered through the M26c.1 scene module — never a second renderer.
+
+**Exit:** a merchant composes a multi-layer design with framed images and curved text, saves,
+reopens it unchanged, and sees a preview that matches what the storefront will render.
+
+---
+
+## Phase 26e — Design Lab: Storefront & Order Output
+
+**Depends on:** Phase 26c, Phase 10, Phase 12
+
+### M26e.1 — Storefront overlay
+
+The plugin mounts the server-built SVG over the theme's real product image and updates it live
+as the customer types or selects. **No geometry computed in PHP** — the payload arrives
+resolved.
+
+### M26e.2 — Finding the product image in an arbitrary theme
+
+The hardest problem in this Part, and materially harder than on Shopify.
+
+`optionia-app` matches the featured-image URL, then excludes non-product contexts
+**structurally** — an ancestor containing the options root is our product's territory; a
+recommendation card is not — and additionally drops any image inside a link to a *different*
+product, so a design never leaks onto a "you may also like" tile. Port that logic, and add:
+- a merchant-configurable selector override, filtered through the same exclusion rules;
+- **an explicit no-overlay fallback** — if the product image cannot be identified confidently, render the options without a live overlay rather than overlaying the wrong image. A design on the wrong product is worse than no preview.
+
+### M26e.3 — Zoom, gallery and variation changes
+
+Themes bring lightboxes, zoom panes, sliders and variation-driven image swaps. Define supported
+behaviour per interaction and verify on the [Phase 29](#phase-29--compatibility-matrix) theme
+set. Document the limits rather than chasing every theme.
+
+### M26e.4 — Order image rendering (cloud-side)
+
+On add-to-cart, the cloud renders the resolved scene to a flat raster at print resolution and
+returns a URL, which rides on the cart line and into order meta. Requirements: **text rendered
+as glyph outlines** so no font needs installing at render time; merchant-configurable
+resolution and format; idempotent (a retry must not produce a second file).
+
+**This must never run on the merchant's server** — no `sharp`, no Imagick, no GD dependency in
+the plugin. It is also the correct division of labour: rasterising is exactly the kind of work
+a self-hosted plugin cannot do well, which is the differentiator.
+
+### M26e.5 — Fulfilment output
+
+The merchant needs a print-ready file from the order screen: the flat raster, the source
+design, and a human-readable summary of the customer's inputs. Verify on a real printed packing
+slip, as [Gate 2](#-gate-2--feature-complete) already requires for options generally.
+
+### M26e.6 — Failure modes
+
+| Condition | Behaviour |
+|---|---|
+| Render service unavailable at add-to-cart | Allow the purchase; queue the render; alert. **Never block a sale on artwork generation.** |
+| Render permanently fails | Order flagged for manual attention; source design retained so it can be re-rendered |
+| Product image unidentifiable | Options render, no overlay (M26e.2) |
+| Design references a deleted asset | Render without that layer; flag it in the dashboard |
+
+**Exit:** a customer personalises a design on a real storefront across the
+[Phase 29](#phase-29--compatibility-matrix) themes, buys, and the merchant retrieves a
+print-ready file from the order — with every row of the failure matrix tested.
+
+---
+---
+
 # Part VII — Stage 5: Production Hardening
 
 ---
@@ -5211,6 +5884,61 @@ documented with workarounds.
 
 ---
 
+## Phase 29b — Merchant-Facing Theme Diagnostics
+
+**Added 2026-08-27** (`optioniaapp.md` §7b.3, §3.18).
+**Depends on:** Phase 29
+
+> **Why this is separate from Phase 29.** Phase 29 is *our* compatibility matrix — internal QA
+> against a chosen theme set. This phase is the merchant's, and it exists because of an
+> arithmetic fact: **we cannot test the combinations that actually exist.** WooCommerce runs
+> under thousands of theme × page-builder × cart-plugin combinations, and the ones that break
+> will be ones nobody tested. The choice is between discovering that through support tickets or
+> giving the merchant a self-diagnostic.
+>
+> `optionia-app` already built the primitive — a console call reporting the live status of every
+> merchant-configured selector (configured value, matched count, which element was picked) — and
+> its documentation states the intent was to surface it as an admin "Theme compatibility" panel.
+> That never happened there. Do it here, where theme variance is worse.
+
+### M29b.1 — Health checks
+
+A named check per integration point, each returning pass / warn / fail with a specific remedy:
+options render on the product page · add-to-cart interception works on this theme · cart
+displays selections (classic **and** block) · totals patch correctly in the mini-cart or drawer
+· configured selectors match exactly one element · config cache is fresh · the product image is
+identifiable (if [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) shipped).
+
+### M29b.2 — A real page, in the merchant's own theme
+
+Run the checks against an actual product page rather than a synthetic fixture, so the result
+reflects the merchant's live theme, plugins and caching. Report a specific remedy, never
+"something went wrong."
+
+### M29b.3 — Surfaced in WooCommerce → Status
+
+Findings appear in the plugin's own screen **and** in `WooCommerce → Status`, where support
+staff and other developers already look. Include the
+[M9.7](#m97--cache-observability) cache state and a copyable diagnostic report.
+
+### M29b.4 — Support-facing summary
+
+The copyable report carries versions (WP, WC, PHP, plugin, config), HPOS state, cart/checkout
+implementation (classic vs block), active theme, check results, and the last sync — **with no
+customer PII** ([Phase 26b](#phase-26b--data-protection--compliance)). One paste should replace
+the first three messages of every support conversation.
+
+### M29b.5 — Feed it back
+
+Aggregate anonymised check results, subject to the same opt-in telemetry rules as
+[Phase 26b](#phase-26b--data-protection--compliance). Repeated failures against a theme we
+never tested are the highest-signal input to the next Phase 29 pass.
+
+**Exit:** a merchant on an untested theme can self-diagnose a broken integration point and
+either fix it or produce one paste that lets support fix it, without a developer.
+
+---
+
 ## Phase 30 — Test Suite
 
 **Depends on:** all feature phases
@@ -5373,6 +6101,9 @@ an article for every common failure; legal documents reflect the actual data flo
 [ ] Support playbook ready; intake channel live
 [ ] Performance budgets met and CI-enforced
 [ ] Compatibility matrix published and honest
+[ ] Merchant can self-diagnose a broken theme integration (29b) — if shipped by launch
+[ ] Cart price presentation correct on all five surfaces, incl. block cart + a drawer (21b)
+[ ] Options render theme-native unstyled; hostile style config yields defaults (M21c.1/21c.4)
 [ ] Full test suite green in CI; canonical E2E green
 [ ] Monitoring and alerting live with runbooks
 [ ] Documentation complete
@@ -5643,12 +6374,37 @@ the real architecture — cloud authoring, signed connection, cached sync, PHP e
 order persistence — before option type #2 exists. If the sync model, the trust boundary, or
 the cache design is wrong, it is found while it is still cheap.
 
-### Change 3 — Phase 0 was dropped entirely
+### Change 3 — Phase 0 was dropped entirely — ⚠️ REVERSED 2026-08-27
 
-Both spec documents open with a Phase 0 that analyzes an existing implementation on another
-platform and extracts reusable business logic from it. **This project is greenfield**
-([S0](#s0-project-scope-and-starting-point)) — there is nothing to extract. Phase numbering
+Both spec documents open with a Phase 0 that analyses an existing implementation on another
+platform and extracts reusable business logic from it. This plan originally dropped it,
+reasoning that *"this project is greenfield — there is nothing to extract."*
+
+**That reasoning was wrong, and this is where the error entered the plan.** It was inherited by
+ADR-001, by [S0](#s0-project-scope-and-starting-point), and by the "no Phase 0" note in
+[Phase 1](#phase-1--foundations--decisions). The check performed was against three sibling
+repositories that are genuinely unrelated — a NestJS marketing CMS, a Next.js marketing site,
+and that CMS's admin panel. **`optionia-app`, the same product built for Shopify, was never
+assessed**, despite living inside this workspace. See the
+[ADR-001 amendment](#adr-001-amendment).
+
+**The roadmap was right.** A prior-platform analysis was needed, and its absence cost this plan
+four things it should have had from the start — a Design Lab phase, a styling decision, cart
+price presentation, and the ID-stability requirement in
+[M5.0a](#m50--reconcile-the-domain-model-against-optionia-app) — all added in
+[Appendix E](#appendix-e--revision-log-2026-08-27).
+
+**How it is resolved.** Not as a construction phase — nothing is migrated and no code is
+inherited — but as a reading-and-reconciliation input:
+[M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) adopts `optioniaapp.md`
+as the specification, and [M5.0](#m50--reconcile-the-domain-model-against-optionia-app)
+reconciles the domain model against it before Phase 5 hardens the schema. Phase numbering still
 starts at 1.
+
+**The transferable lesson:** "is there prior work to learn from?" is a question about the
+*product*, not about the directory you happen to be standing in. Enumerate every candidate
+repository by what it *does*, and record the enumeration — which is why the amendment names all
+four.
 
 What replaces it is more useful: [Phase 1](#phase-1--foundations--decisions) sets up the
 repositories with secret hygiene and CI from the first commit, settles the three decisions
@@ -5750,7 +6506,7 @@ Every roadmap phase is accounted for. Nothing was dropped.
 
 | Roadmap | This plan |
 |---|---|
-| 0 — Prior-platform analysis | **Dropped** — greenfield project; replaced by [Phase 1](#phase-1--foundations--decisions) foundations + [M1.5](#m15--competitive-teardown) teardown |
+| 0 — Prior-platform analysis | **Reinstated 2026-08-27** — was "Dropped — greenfield project", which rested on the ADR-001 scope error ([amendment](#adr-001-amendment)). The roadmap was right that a prior-platform analysis is needed: it exists as `optioniaapp.md`, and is adopted via [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) + [M5.0](#m50--reconcile-the-domain-model-against-optionia-app). [M1.5](#m15--competitive-teardown) remains a separate input |
 | 1 — Environment ✅ | Complete; context in [Phase 2](#phase-2--woocommerce-competence) |
 | 2 — Learn WooCommerce | [Phase 2](#phase-2--woocommerce-competence) (+ M2.8 block themes) |
 | 3 — Plugin fundamentals | [Phase 3](#phase-3--plugin-skeleton) |
@@ -5770,6 +6526,10 @@ Every roadmap phase is accounted for. Nothing was dropped.
 | 17 — Next.js dashboard | [Phase 13](#phase-13--minimum-builder-ui) → [20](#phase-20--full-builder-ui) |
 | 18 — Option builder | [Phase 20](#phase-20--full-builder-ui) |
 | 19 — Preview | [Phase 21](#phase-21--live-preview) |
+| — (new) Cart price presentation | [Phase 21b](#phase-21b--cart--checkout-price-presentation) — added 2026-08-27; no roadmap equivalent |
+| — (new) Option styling | [Phase 21c](#phase-21c--option-styling--presentation-control) — added 2026-08-27; scope set by [D6](#m19--decide-d6-styling-and-presentation-ownership) |
+| — (new) Design Lab | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator), Phases [26c](#phase-26c--design-lab-foundations--geometry)/[26d](#phase-26d--design-lab-authoring)/[26e](#phase-26e--design-lab-storefront--order-output) — added 2026-08-27; gated on [D7](#m110--decide-d7-design-lab-scope-and-position). Absent from BOTH the roadmap and this plan until then |
+| — (new) Theme diagnostics | [Phase 29b](#phase-29b--merchant-facing-theme-diagnostics) — added 2026-08-27; merchant-facing counterpart to [Phase 29](#phase-29--compatibility-matrix) |
 | 20 — Storefront renderer | [Phase 10](#phase-10--storefront-renderer) |
 | 21 — Cart/checkout/order | [Phase 12](#phase-12--cart-checkout-order) |
 | 22 — Billing | [Phase 22](#phase-22--billing-integration) |
@@ -5871,6 +6631,8 @@ STAGE 3 — WIDEN THE PRODUCT
 [ ] Phase 20 — Full Builder UI
 [ ] Phase 20b— Onboarding & Activation
 [ ] Phase 21 — Live Preview
+[ ] Phase 21b— Cart & Checkout Price Presentation
+[ ] Phase 21c— Option Styling & Presentation Control
 [ ] 🚩 GATE 2 — FEATURE COMPLETE
 
 STAGE 4 — BECOME A BUSINESS
@@ -5881,10 +6643,16 @@ STAGE 4 — BECOME A BUSINESS
 [ ] Phase 26 — Super Admin
 [ ] Phase 26b— Data Protection & Compliance
 
+STAGE 4B — THE VISUAL DIFFERENTIATOR  (gated on D7)
+[ ] Phase 26c— Design Lab: Foundations & Geometry
+[ ] Phase 26d— Design Lab: Authoring
+[ ] Phase 26e— Design Lab: Storefront & Order Output
+
 STAGE 5 — PRODUCTION HARDENING
 [ ] Phase 27 — Security Audit
 [ ] Phase 28 — Performance
 [ ] Phase 29 — Compatibility Matrix
+[ ] Phase 29b— Merchant-Facing Theme Diagnostics
 [ ] Phase 30 — Test Suite
 [ ] Phase 31 — Monitoring
 [ ] Phase 32 — Documentation
@@ -5903,22 +6671,31 @@ STAGE 6 — LAUNCH
 ### The milestone loop
 
 ```text
-Read the milestone in this file
+Read the STATUS block at the top of this file   ← always start here
+  → it names the next milestone
   → inspect the current code
   → plan, and get the plan reviewed
   → implement
   → test against the acceptance criteria
-  → verify the Definition of Done
+  → verify the Definition of Done (S3)
   → commit
+  → UPDATE THE STATUS BLOCK          ← the step everyone forgets
   → next milestone
 ```
 
+**One milestone per session.** Not one phase. A phase is 5–15 milestones and will not fit in
+one working context; attempting it produces shallow work on all of them instead of finished
+work on one.
+
 ### Prompt template
+
+Copy this as-is. The only thing you fill in is the milestone — and the
+[STATUS block](#status) already tells you which one.
 
 ```text
 We are building Optionia for WooCommerce.
 
-Read developePlan.md, then OptioniaStartRoadmap.md for scope context.
+Read the STATUS block at the top of developePlan.md, then the milestone it names.
 
 Current position:
   PHASE <n> — <name>
@@ -5954,10 +6731,19 @@ And on completion:
 The milestone is working.
 
 Verify the Definition of Done (S3).
+Confirm the five carry-forward rules in the STATUS block still hold.
+Update the STATUS block: phase ledger, "next thing to do", and any blocker
+  that this milestone resolved or created.
 Update affected documentation.
 Give a concise completion summary.
 Do not start the next milestone.
 ```
+
+### If you only remember three things
+
+1. **Start at the [STATUS block](#status).** It is the entry point; the rest of this file is reference.
+2. **One milestone at a time**, ending with the STATUS block updated. An un-updated status means the next session starts by guessing.
+3. **Never skip a Gate**, and never tick a phase whose exit criteria have not all passed.
 
 ### Guardrails
 
@@ -5970,6 +6756,100 @@ Do not start the next milestone.
 6. **Never ship a secret in the plugin** ([AC8](#ac8--no-saas-secret-ever-ships-inside-the-plugin)).
 7. **Record every architectural decision** in `docs/DECISIONS.md`.
 8. When this plan and reality disagree, **update this plan** — it is a living document.
+
+---
+---
+
+# Appendix E — Revision Log (2026-08-27)
+
+## What prompted it
+
+A full analysis of `optionia-app` — the same product built for Shopify, ~68,700 LOC — recorded
+in **`optioniaapp.md`**. Its §7b compares every finding against this plan, finding by finding.
+
+**Result: of ~25 checkable findings, 18 were already covered here, and in five cases this plan
+was already more rigorous than the analysis recommended.** Worth naming those, because they are
+the reason the additions below are narrow:
+
+| This plan already had | Which the Shopify app does *not* |
+|---|---|
+| **M11.7** adversarial suite including **cross-tenant** option keys | — |
+| **M11.5** identifying the second `add_to_cart_validation` signature as *the reorder-flow path* | — |
+| **`before_calculate_totals`** idempotency with a **measured** 5-fires-per-request | — |
+| **SVG rejected outright** as an XSS vector | allows SVG, offloading the risk to a CDN header |
+| **M5.4c** sanitising merchant HTML at **publish *and* render** | sanitises client-side only |
+| **M17.4** *"Hidden options must be rejected, not merely invisible"* | never enforced server-side at all |
+
+That last row is the most significant: the analysis initially called unenforced conditional-reveal
+visibility "the most serious finding," and it is — **in the Shopify app.** M17.4 already
+specifies the fix here, including the conditionally-required half. It is a **delivery risk**
+(M17.4 sits mid-Phase-17 and nothing else fails without it), not a planning gap.
+
+## Additions — three genuine gaps
+
+| # | Gap | Evidence it was a gap | Added as |
+|---|---|---|---|
+| 1 | **The Design Lab was absent entirely** — ~8,500 LOC and one of three cloud-only differentiators | `design lab`, `designlab`, `canvas`, `overlay` across 5,976 lines returned five incidental word-hits and no milestone | **Part VI½ — Phases 26c / 26d / 26e**, gated on new **D7** ([M1.10](#m110--decide-d7-design-lab-scope-and-position)) |
+| 2 | **Option/value ID stability across an edit was unspecified** | `id stab`, `preserve.*id`, `regenerat` → zero hits. Plan-gate freezing matches the stored tree *by id*, so regenerating ids on save rejects a downgraded merchant's grandfathered content — the outcome M24.4 forbids | **[M5.0a](#m50--reconcile-the-domain-model-against-optionia-app)** with two CI tests |
+| 3 | **Cart-page and drawer price *presentation* had no milestone** | `cart drawer`, `mini.cart` → zero hits. Phase 12 charges correctly and shows *selections*; neither is the customer understanding the price across five cart surfaces | **[Phase 21b](#phase-21b--cart--checkout-price-presentation)** |
+
+## Additions — four partials
+
+| # | What existed | What was missing | Added as |
+|---|---|---|---|
+| 4 | **M9.4** push invalidation, driven by `option_sets.version` *"on publish"* | **A plan change is not a publish.** An upgrading merchant keeps a stale config and cannot see features they just paid for | **[M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish)** — all six triggers enumerated; the billing webhook wired in Phase 23 |
+| 5 | `per_char → strlen(text)` in the pricing spec; a character counter in M14 | `strlen` counts whitespace and is byte-length; the counter used a different rule in `optionia-app`, so `"AB CD"` charges 5 and displays 4 — live there today | **[M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)** — one normative measure function, fixture-asserted |
+| 6 | Theme-overridable templates (Phase 3, Principle 4) | No design-system milestone at all. Defensible and more WordPress-native — but **an unmade decision, not a made one** | **D6** ([M1.9](#m19--decide-d6-styling-and-presentation-ownership)) + **[Phase 21c](#phase-21c--option-styling--presentation-control)**, whose scope D6 sets |
+| 7 | **Phase 29** compatibility matrix (internal QA) | No **merchant-facing** self-diagnostic, on a platform where the breaking combinations are the untested ones | **[Phase 29b](#phase-29b--merchant-facing-theme-diagnostics)** |
+
+Plus **[M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification)** (amend ADR-001;
+write ADR-007) and **[M5.0](#m50--reconcile-the-domain-model-against-optionia-app)** (reconcile
+the domain model, including *not* copying the `number`-bounds-in-`minLength` field reuse), and
+seven new Gate 2 criteria.
+
+## The pattern behind all of it
+
+`developePlan.md` was written from a competitive teardown plus a WooCommerce-hooks study. That
+shows: it models the **transaction** superbly — pricing, tamper resistance, cart mechanics,
+degradation — and the **presentation layer** thinly. Every one of the three genuine gaps is
+visual: Design Lab, styling, cart presentation. The fourth partial (diagnostics) is about
+*seeing* whether presentation worked.
+
+That is precisely the half `optionia-app` has already solved, in files verified to carry zero
+platform-specific imports. **The two documents are complementary rather than competing** — which
+is the practical argument for the [ADR-001 amendment](#adr-001-amendment) at the
+top of this document, and why every addition above cites the Shopify implementation as evidence
+rather than as an authority.
+
+## Consistency pass — the stale premise, removed everywhere
+
+Adding phases was the easy half. The ADR-001 scope error had propagated into **six** places
+that still asserted the old premise, and a plan that contradicts itself is worse than one with
+a gap. All six now read consistently:
+
+| Location | Was | Now |
+|---|---|---|
+| **[S0](#s0-project-scope-and-starting-point)** — the plan's ground truth | *"It starts from zero… no prior implementation to extract business logic from"* | Standalone **from the marketing stack** (unchanged); `optionia-app` named as the parity spec and code source. Still no inherited schema or code migration |
+| **[S1](#s1-blocking-decisions)** stack aside | *"greenfield… no legacy codebase pulling in another direction"* | No code inherited; `optionia-app` is a spec to match, not a stack constraint |
+| **[Phase 1](#phase-1--foundations--decisions)** note | *"There is no Phase 0. This is a greenfield project — nothing exists to extract"* | No Phase 0 **as a build phase**; the roadmap's Phase 0 is a reading input, satisfied by M1.8 + M5.0 |
+| **[Appendix A](#appendix-a--why-the-sequence-changed) Change 3** | *"Phase 0 was dropped entirely… there is nothing to extract"* | **Reversed.** This is where the error entered the plan and propagated from — now says so, and names the transferable lesson |
+| **[Appendix B](#appendix-b--roadmap-phase-mapping)** row 0 | *"Dropped — greenfield project"* | **Reinstated**; the roadmap was right |
+| **[S4](#s4-mvp-scope--what-ships-first)** MVP line | silent on the new phases | 21b and M21c.1/M21c.4 moved **in scope**; Design Lab, the 21c dashboard layer and 29b listed as deliberate deferrals with reasoning |
+
+Also updated so the gates cannot pass while the new work is missing: **[Gate 2](#-gate-2--feature-complete)**
+(+7 criteria) and **[Gate 3](#-gate-3--launch-ready)** (+3), and **Appendix C**'s master
+checklist (+6 phases, new Stage 4B block).
+
+> **Why 21b and part of 21c are launch-blocking.** The MVP must prove *"a merchant can sell a
+> customised product through their own checkout and fulfil it from the order screen."* A
+> customer who cannot tell why a line costs what it does will not complete that purchase, and
+> options that look foreign to the theme read as broken. A styling *dashboard* is genuinely
+> deferrable; a legible price and theme-native rendering are not.
+
+## Still open, and not closable by planning
+
+- ~~`optionia-app-api` is needed for `base_schema_V001.sql`~~ — **WITHDRAWN.** Raised, then correctly challenged: this project's NestJS backend already owns its schema (Phase 7 closed, 32 entities, 5 migrations), and the Shopify app's schema is Shopify-shaped with a *worse* tenancy model. M5.0 is a review of the existing entities and needs no external repo. **There is one API in this project.**
+- **D1** (billing provider), **D2/D3** (free tier, positioning), **D4** (production email), **D6** (styling), **D7** (Design Lab) all await business input.
 
 ---
 
