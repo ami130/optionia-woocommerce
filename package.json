@@ -35,7 +35,8 @@
     "check:docs": "bash bin/check-docs.sh",
     "test:e2e:cov": "jest --config test/jest-e2e.json --coverage",
     "check:api": "bash bin/check-api-contract.sh",
-    "check:openapi": "bash bin/check-openapi.sh"
+    "check:openapi": "bash bin/check-openapi.sh",
+    "check:isolation": "bash bin/check-isolation.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

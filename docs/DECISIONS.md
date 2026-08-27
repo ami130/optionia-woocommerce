@@ -1846,3 +1846,61 @@ The check gained four assertions — realms *applied* not merely defined, schema
 describing properties, every operation declaring a success, and the error
 statuses present — plus a second floor on schema count. Each is mutation-proven,
 and each names the route or schema at fault.
+
+---
+
+## ADR-037 — Isolation coverage is measured, not accumulated
+
+**Status:** accepted
+**Date:** Phase 7, M6.6 extended by 7n
+
+### Context
+
+M6.6 asks that *"every tenant-scoped endpoint has a passing negative test"*, and
+by the end of Phase 7 twelve suites contained a cross-tenant assertion. That was
+the problem rather than the answer: **no single place could say whether the set
+was complete.** A route added without a negative test would join a green suite
+and stay there.
+
+Scattered assertions accumulate coverage. They cannot measure it.
+
+### Decision
+
+`test/isolation-matrix.e2e-spec.ts` drives all 33 tenant-scoped routes as tenant
+B against tenant A's data and asserts `404` — never `403`, because a 403 confirms
+the resource exists and walking ids would then enumerate another tenant's data
+without ever reading it (ADR-010).
+
+`bin/check-isolation.sh` asserts the matrix knows about every route **the router
+registers** — the part a test of the routes cannot check about itself. A new
+tenant-scoped endpoint fails the gate until someone adds a probe.
+
+Three routes take no foreign id and cannot answer 404. They are named in
+`COVERED_BY_LEAKAGE_TEST` with the opposite assertion — that tenant B's results
+never contain tenant A's rows — and a second check fails on an exemption naming
+a route that no longer exists, so the list cannot become a way to silence the
+gate rather than satisfy it.
+
+The suite asserts the **effect** as well as the answer: after thirty refused
+attempts, tenant A's tree and version history are byte-for-byte unchanged. A 404
+returned while the write succeeded would pass every status assertion.
+
+### Consequences
+
+The guarantee is now mutation-proven end to end. Removing the tenant predicate
+from `TenantScopedRepository` fails 4 tests; removing it from
+`ParentScopedRepository` fails 5; dropping a probe fails the gate naming the
+route; a stale exemption fails naming itself.
+
+**Checking Phase 7's exit criteria found an untested one.** *"User-JWT and
+store-token realms strictly separated"* was enforced — `JwtService.verify` checks
+the `aud` claim and answers 401, not 403, so a forger cannot learn which part
+worked — and **nothing asserted it**. The test added for it then escaped its own
+mutation: it forged a token with a made-up tenant id, so the 401 came from a
+tenant that did not resolve rather than from the realm. It now carries the real
+user and the real tenant and changes exactly one thing, with a control asserting
+the same claims succeed when the audience is right. Removing the audience check
+now fails two tests.
+
+A negative test that fails for the wrong reason proves nothing, and only mutation
+tells the difference.
