@@ -9,6 +9,7 @@ import { loadConfig } from '../config/env';
 import { ConnectController } from './connect.controller';
 import { ConnectService } from './connect.service';
 import { StoreConnectionCode } from './entities/store-connection-code.entity';
+import { StoreStateService } from './store-state.service';
 import { StoreCredential } from './entities/store-credential.entity';
 import { Store } from './entities/store.entity';
 
@@ -32,16 +33,21 @@ import { Store } from './entities/store.entity';
   ],
   controllers: [ConnectController],
   providers: [
+    StoreStateService,
     {
       provide: ConnectService,
-      inject: [DataSource, AuditService],
-      useFactory: (dataSource: DataSource, audit: AuditService): ConnectService =>
+      inject: [DataSource, AuditService, StoreStateService],
+      useFactory: (
+        dataSource: DataSource,
+        audit: AuditService,
+        state: StoreStateService,
+      ): ConnectService =>
         // The dashboard URL is read once, here, so no flow builds a link from a
         // value it guessed — `authorize_url` must point at the dashboard, never
         // at the API.
-        new ConnectService(dataSource, audit, loadConfig().appUrl),
+        new ConnectService(dataSource, audit, state, loadConfig().appUrl),
     },
   ],
-  exports: [ConnectService],
+  exports: [ConnectService, StoreStateService],
 })
 export class StoresModule {}

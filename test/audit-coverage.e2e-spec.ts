@@ -260,11 +260,53 @@ describe('audit coverage (e2e)', () => {
         [AuditAction.STORE_CONNECTED]: 'connect-handshake.e2e-spec',
       };
 
+      /**
+       * Declared with the state machine, produced by a step not yet built.
+       *
+       * `[8f]` declares every state's audit action alongside M8.1b's transition
+       * table rather than letting each later step invent its own — that is what
+       * makes a missing entry a compile error instead of an oversight. The cost
+       * is a window where an action exists and no route reaches it.
+       *
+       * **This list is not `coveredElsewhere`.** That one claims another suite
+       * exercises the action; this one admits nothing does, and names the step
+       * that will. `records every action claimed as covered elsewhere` verifies
+       * the first list honestly, and the assertion below does the same for this
+       * one: a name may sit here only while its owning step is unbuilt, and the
+       * check fails once that step ships.
+       */
+      const awaitingItsStep: Record<string, string> = {
+        [AuditAction.STORE_DISCONNECTED]: '8g',
+        [AuditAction.STORE_REVOKED]: '8g',
+        [AuditAction.STORE_ERRORED]: '8h',
+      };
+
       const unaccounted = Object.values(AuditAction).filter(
-        (action) => !produced.has(action) && !(action in coveredElsewhere),
+        (action) =>
+          !produced.has(action) &&
+          !(action in coveredElsewhere) &&
+          !(action in awaitingItsStep),
       );
 
       expect(unaccounted).toEqual([]);
+
+      /**
+       * The exemption expires on its own.
+       *
+       * Once the owning step marks its routes `[built]` in the contract, the
+       * action must be produced rather than excused — otherwise this list is a
+       * way to silence the gate permanently.
+       */
+      const contract = readFileSync('docs/API-CONTRACT.md', 'utf8');
+
+      Object.entries(awaitingItsStep).forEach(([action, step]) => {
+        if (!contract.includes(`[${step}]`)) {
+          throw new Error(
+            `${action} is excused pending [${step}], but no [${step}] marker remains in ` +
+              `the contract — that step has shipped, so the action must now be exercised.`,
+          );
+        }
+      });
     }, 60_000);
 
     /**

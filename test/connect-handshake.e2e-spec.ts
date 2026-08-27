@@ -595,14 +595,78 @@ describe('connect handshake (e2e)', () => {
       expect(response.body.data.config_version).toBe(0);
     });
 
-    it('moves the store to CONNECTED', async () => {
+    it('moves the store to CONNECTED and stamps connectedAt', async () => {
       const { code, verifier, site, storeId } = await approved();
 
       await exchange({ code, verifier, site_url: site });
 
-      const [row] = await dataSource.query(`SELECT status FROM stores WHERE id = ?`, [storeId]);
+      const [row] = await dataSource.query(
+        `SELECT status, connectedAt FROM stores WHERE id = ?`,
+        [storeId],
+      );
 
       expect(row.status).toBe(StoreStatus.CONNECTED);
+      // The column existed from the initial schema and nothing wrote it, so
+      // "connected since when?" had no answer for any store.
+      expect(row.connectedAt).not.toBeNull();
+    });
+
+    /**
+     * The transition M8.1b's machine exists to refuse.
+     *
+     * A code redeemed after the merchant disconnected must not silently
+     * reconnect the store — reachable with no attacker: a failed exchange the
+     * plugin retries, and an impatient merchant clicking Disconnect in between.
+     */
+    it('refuses to reconnect a store the merchant disconnected', async () => {
+      const { code, verifier, site, storeId } = await approved();
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.DISCONNECTED,
+        storeId,
+      ]);
+
+      expect((await exchange({ code, verifier, site_url: site })).status).toBe(401);
+
+      const [row] = await dataSource.query(`SELECT status FROM stores WHERE id = ?`, [storeId]);
+
+      expect(row.status).toBe(StoreStatus.DISCONNECTED);
+    });
+
+    /** And the same for a store the cloud revoked. */
+    it('refuses to reconnect a revoked store', async () => {
+      const { code, verifier, site, storeId } = await approved();
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.REVOKED,
+        storeId,
+      ]);
+
+      expect((await exchange({ code, verifier, site_url: site })).status).toBe(401);
+    });
+
+    /**
+     * Refusing must not spend the code.
+     *
+     * If it did, a merchant who disconnected mid-handshake could never redeem
+     * the code they legitimately hold — the refusal would consume it.
+     */
+    it('leaves the code unspent when the transition is refused', async () => {
+      const { code, verifier, site, storeId } = await approved();
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.DISCONNECTED,
+        storeId,
+      ]);
+
+      await exchange({ code, verifier, site_url: site });
+
+      const [row] = await dataSource.query(
+        `SELECT redeemedAt FROM store_connection_codes WHERE codeHash = ?`,
+        [createHash('sha256').update(code).digest('hex')],
+      );
+
+      expect(row.redeemedAt).toBeNull();
     });
 
     /** The token is shown once; only its hash may reach the table. */

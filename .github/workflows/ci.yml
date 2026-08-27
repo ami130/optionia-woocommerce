@@ -127,6 +127,11 @@ jobs:
       # merchant sites, so drift is more expensive here than elsewhere.
       - name: API contract matches the routes
         run: bash bin/check-api-contract.sh
+
+      # M8.1b: connection state is written in one place, or the illegal
+      # transitions are the ones nobody wrote down.
+      - name: Connection state machine is the only writer
+        run: bash bin/check-store-state.sh
         env:
           NODE_ENV: test
           PORT: 4000

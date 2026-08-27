@@ -2129,6 +2129,81 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+### Addendum — `[8f]`, the state machine, and a store that could rise from the dead
+
+`[8f]` has no route and no contract entry. It is **M8.1b**, the one part of Phase 8
+that is infrastructure rather than an endpoint — which is exactly why it had to
+land before `[8g]`.
+
+**A disconnected store could silently reconnect itself, with no attacker
+involved.** `[8e]` wrote `UPDATE stores SET status = 'connected' WHERE id = ?`
+with no precondition:
+
+```text
+t0     merchant clicks Connect        → code issued, store CONNECTING
+t0+10s the plugin's exchange fails    → a network blip; it will retry
+t0+30s merchant clicks Disconnect     → credentials revoked, DISCONNECTED
+t0+60s the plugin retries with its still-valid code
+       → the store returns to CONNECTED with a fresh credential,
+         moments after the merchant disconnected it
+```
+
+That is M8.1b's stated nightmare almost verbatim — *"the merchant sees connected,
+the cloud disagrees, and nobody can tell which is right"* — reached by a failed
+exchange and an impatient merchant. The five-minute code TTL bounds the window; it
+does not close it. `[8g]` was about to make step three a one-click act.
+
+**`→ CONNECTING` is legal from every state, and that is deliberate.**
+Re-authorising is always legitimate: reconnecting a revoked store, retrying a
+failed connection, or re-linking one that already works — `[8d]`'s reuse path
+already depended on it. The guard that matters is on *completing* a handshake, not
+on starting one, so only `CONNECTING` and `ERROR` may reach `CONNECTED`.
+
+**Every `stores.status` write now goes through `StoreStateService`, and
+`check-store-state` makes that mandatory rather than conventional.** Three
+scattered writes existed; `[8g]`, `[8h]` and `[8i]` were about to add four more.
+Seven ad-hoc writes across four steps is how two sides drift apart, and a rule
+that lives only in a comment is one the next step forgets. The gate carries a
+coverage floor: it fails both on a rogue write and when its pattern stops matching
+anything, and both are mutation-proven.
+
+**All five states' audit actions are declared with the transition table**, not by
+whichever step first needs one. Adding them piecemeal made the coverage gate
+unable to tell a missing action from a deliberate omission — it caught exactly
+that in `[8d]` and again in `[8e]`.
+
+That leaves three actions declared with no route producing them, which the
+coverage gate correctly flagged. They are listed as **awaiting their step**, a
+category deliberately distinct from `coveredElsewhere`: that one claims another
+suite exercises the action, while this one admits nothing does and names the step
+that will. The exemption **expires on its own** — once the owning step marks its
+routes `[built]`, the marker disappears from the contract and the check fails
+until the action is genuinely exercised. Mutation-proven.
+
+**`connected_at` is now written.** The column shipped in the initial schema, is
+documented in `DATABASE.md`, and nothing had ever set it — so "connected since
+when?", the first question a support ticket asks, had no answer for any store.
+
+### Deferred — M8.4's signed timestamp
+
+M8.4 requires "every request over HTTPS with `Authorization: Bearer`, a
+plugin-version header, **and a signed timestamp to limit replay**". The contract
+specifies the first two and has never mentioned the third; the plugin does not
+send one.
+
+**Not built, and recorded rather than dropped.** A replayed store request buys an
+attacker nothing they could not do by replaying the credential itself, which they
+must already hold — the token is a bearer secret over TLS, not a signature over a
+request, so a timestamp would authenticate freshness without authenticating
+anything else. The defences that do matter are already specified: immediate
+revocation (`[8c]`), site-URL binding (`[8i]`), and a credential that never
+appears in a URL.
+
+The cost of being wrong is asymmetric, though: under M7.7 the installed plugin
+cannot be redeployed to start sending a header later. If a signed timestamp is
+ever wanted, it must be added **before** the plugin ships in `[8k]`–`[8m]`, and
+that is the decision point — not this one.
+
 ### Addendum — `[8e]`, and two contract statements that could not both be kept
 
 **"Exactly" had to mean "exactly, after normalisation".** The contract required

@@ -77,6 +77,20 @@ export const AuditAction = {
    * connection visible to the tenant-scoped audit query.
    */
   STORE_CONNECTED: 'store.connected',
+
+  /**
+   * The remaining states of M8.1b's machine, declared here rather than by
+   * whichever step first needs one.
+   *
+   * `[8g]` disconnects, `[8h]` reports failure and recovery, `[8i]` revokes on a
+   * site-URL change. Adding each action alongside its step made the coverage
+   * gate unable to tell a missing action from a deliberate omission — it caught
+   * exactly that twice already. Declaring the set with the state machine means a
+   * transition without an audit entry is a compile error, not an oversight.
+   */
+  STORE_DISCONNECTED: 'store.disconnected',
+  STORE_REVOKED: 'store.revoked',
+  STORE_ERRORED: 'store.errored',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

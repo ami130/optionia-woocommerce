@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { AuditAction, AuditService } from '../audit/audit.service';
@@ -14,6 +14,7 @@ import {
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { AuthorizeDto, ExchangeDto, InitiateDto } from './dto/connect.dto';
+import { StoreStateService } from './store-state.service';
 
 /** A pending request lives 30 minutes — a human signs up and reads a screen. */
 const REQUEST_TTL_MS = 30 * 60_000;
@@ -49,6 +50,7 @@ export class ConnectService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly state: StoreStateService,
     private readonly appUrl: string,
   ) {}
 
@@ -293,12 +295,25 @@ export class ConnectService {
         [row.storeId, credential.hash, credential.prefix],
       );
 
-      // Same transaction as the spend, so a failure cannot leave a store
-      // connected with no credential, or a credential with no connected store.
-      await manager.query(`UPDATE stores SET status = ?, updatedAt = NOW(3) WHERE id = ?`, [
-        StoreStatus.CONNECTED,
-        row.storeId,
-      ]);
+      /**
+       * Same transaction as the spend, so a failure cannot leave a store
+       * connected with no credential, or a credential with no connected store.
+       *
+       * **Guarded**: only a store still `CONNECTING` (or recovering from
+       * `ERROR`) may arrive at `CONNECTED`. Without that precondition a code
+       * redeemed after the merchant disconnected would silently undo the
+       * disconnection — reachable with no attacker, just a failed exchange the
+       * plugin retries and an impatient merchant in between. The refusal is the
+       * same `TOKEN_INVALID` as every other, so the caller learns nothing about
+       * why.
+       */
+      const moved = await this.state.transition(row.storeId, StoreStatus.CONNECTED, {
+        manager,
+      });
+
+      if (!moved.moved) {
+        throw ConnectService.invalidRequest();
+      }
     });
 
     /**
@@ -346,7 +361,7 @@ export class ConnectService {
    * alone. Matching on URL would let one tenant's approval seize another's store.
    */
   private async createOrReuseStore(
-    manager: { query(sql: string, params?: unknown[]): Promise<never> },
+    manager: EntityManager,
     tenantId: string,
     siteUrl: string,
   ): Promise<{ storeId: string; reconnected: boolean }> {
@@ -356,10 +371,10 @@ export class ConnectService {
     );
 
     if (existing[0]) {
-      await manager.query(
-        `UPDATE stores SET status = ?, updatedAt = NOW(3) WHERE id = ?`,
-        [StoreStatus.CONNECTING, existing[0].id],
-      );
+      // Every state may begin a handshake, so this cannot legitimately refuse —
+      // it goes through the machine anyway so one place decides state, and so
+      // `check-store-state` has nothing to flag.
+      await this.state.transition(existing[0].id, StoreStatus.CONNECTING, { manager });
 
       return { storeId: existing[0].id, reconnected: true };
     }
