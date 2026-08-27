@@ -212,3 +212,36 @@ export interface PublishedOptionSet {
   readonly groups: readonly PublishedGroup[];
   readonly rules: readonly PublishedRule[];
 }
+
+/**
+ * The config document a storefront fetches (M7.5).
+ *
+ * **The single most important interface in the system.** It is read by a
+ * WordPress plugin that cannot be redeployed across thousands of merchant sites,
+ * so its shape is frozen at `schema_version: 1` and documented in
+ * `docs/CONFIG-CONTRACT.md`.
+ *
+ * Assembled from **published snapshots**, never from live rows: the live rows
+ * are the merchant's working draft, and a document built from them would ship
+ * edits nobody published.
+ */
+export interface ConfigDocument {
+  /**
+   * The document's shape, not its content.
+   *
+   * Separate from `config_version` so a plugin too old to understand a document
+   * can refuse it and keep its last good copy — which the shipped plugin
+   * already does. Bumped only for a breaking change to this shape.
+   */
+  readonly schema_version: number;
+
+  /** The store's content revision. Advances on every publish and rollback. */
+  readonly config_version: number;
+
+  readonly store_id: string;
+
+  /** When this document was assembled, not when it was published. */
+  readonly generated_at: string;
+
+  readonly option_sets: readonly PublishedOptionSet[];
+}

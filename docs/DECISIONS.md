@@ -1580,3 +1580,65 @@ so what a merchant reviews is what a storefront receives.
 Publish now records **which** warnings it proceeded through, by code, not how many.
 A count answers "were there any?"; support is asked "did anyone know this set was
 assigned to nothing when it went live?", and only the codes answer that.
+
+---
+
+## ADR-034 — The config contract is verified against the code that produces it
+
+**Status:** accepted
+**Date:** Phase 7, M7.5
+
+### Context
+
+M7.5 calls the config document "the single most important interface in the
+system" and asks for `docs/CONFIG-CONTRACT.md` as the reference for both
+implementations — the TypeScript that produces it and the PHP that consumes it.
+
+Every other contract in this repository can be revised by deploying. This one is
+read by a plugin installed on merchant servers that cannot be redeployed on
+demand, so a change the shipped plugin does not understand takes storefronts
+down.
+
+The step also revealed a gap: the serializer produced the per-set shape, and
+**nothing built the outer envelope** — `schema_version`, `config_version`,
+`store_id`, `generated_at`. Writing a contract for a shape no code produces
+would document an aspiration.
+
+### Decision
+
+`ConfigDocumentBuilder` assembles the document from **published snapshots, never
+live rows**. The live rows are the merchant's working draft; a document built
+from them would ship every edit as it was typed, making M7.4's "an edit does not
+immediately reach storefronts" false.
+
+`CONFIG_SCHEMA_VERSION` is frozen at 1, matching the shipped plugin's
+`SUPPORTED_SCHEMA_VERSION`. The contract states which changes bump it — removing
+or renaming a key, changing a type or a meaning — and which do not. Additive
+changes do not, which is why the envelope already carries `assignments` and
+`rules` as empty arrays while Phase 13 and Phase 17 remain unbuilt: a plugin
+written against v1 handles them from its first release.
+
+**The contract is tested against the code.** The suite reads
+`CONFIG-CONTRACT.md` and asserts that every envelope field the builder emits is
+documented, that every pricing type the registry can produce appears, and that
+the version-bump rule is stated. A contract nobody checks drifts, and the drift
+is discovered by a storefront.
+
+### Consequences
+
+Adding an undocumented field to the envelope is a **compile error**, not a
+failing test: `ConfigDocument` is an explicit interface, so the field must be
+declared before it can be emitted, and the declaration is what the contract
+describes.
+
+**One mutation escaped and exposed dead-looking code.** Removing the
+`status = published` filter broke nothing, because an unpublished set has no
+snapshot at version 0 and the snapshot lookup drops it anyway. The filter earns
+its place only for a set that *was* published and is no longer — a state M7.4's
+model includes via `unpublish`, which is not yet built. Rather than delete a
+guard the state model requires, the test now reaches that state directly, so
+removing the filter fails two tests instead of none.
+
+A published set whose snapshot is missing is skipped rather than fatal. That
+cannot arise — publish writes both in one transaction — but one corrupted set
+must not take a whole storefront's configuration down with it.

@@ -1,0 +1,272 @@
+# Config Document Contract
+
+**Schema version 1. Frozen.**
+
+The JSON a storefront fetches and renders from. The reference for both
+implementations — the TypeScript that produces it and the PHP that consumes it —
+so neither has to read the other's source to know what a field means.
+
+This is **the single most important interface in the system**. Every other
+contract in this repository can be revised by deploying; this one is read by a
+plugin installed on merchant servers that cannot be redeployed on demand. A
+change here that a shipped plugin does not understand takes storefronts down.
+
+---
+
+## The rule that makes this safe
+
+`schema_version` describes the document's **shape**. `config_version` describes
+its **content**.
+
+The plugin refuses a document whose `schema_version` exceeds what it supports and
+**keeps its previous copy** — `Config\Repository::store()` does this today, with
+`SUPPORTED_SCHEMA_VERSION = 1`. A merchant on an old build keeps selling with
+their last known-good configuration rather than losing their options.
+
+That protection only works if the version is honest:
+
+| Change | Bumps `schema_version`? |
+|---|---|
+| Adding a key a reader can ignore | **No** |
+| Adding a member to an existing array | **No** |
+| Removing a key, or renaming one | **Yes** |
+| Changing a value's type or units | **Yes** |
+| Changing what an existing key means | **Yes** |
+
+**Bumping is a release, not an edit.** It ships with a plugin build that
+understands the new shape, and every storefront on an older build stops receiving
+updates until it upgrades. Nothing in Phase 7 bumps it.
+
+Additive changes are why the envelope already carries `assignments` and `rules`
+as empty arrays while Phase 13 and Phase 17 remain unbuilt: a plugin written
+against v1 handles them from its first release, so filling them later is not a
+breaking change.
+
+---
+
+## The document
+
+```jsonc
+{
+  "schema_version": 1,
+  "config_version": 42,
+  "store_id": "01a03f9e-…",
+  "generated_at": "2026-08-27T10:00:00.000Z",
+  "option_sets": [
+    {
+      "id": "01a03f9e-…",
+      "version": 7,
+      "assignments": [],
+      "groups": [
+        {
+          "id": "01a03fa1-…",
+          "label": "Customization",
+          "description": "Make it yours",     // omitted when unset
+          "display_type": "inline",
+          "sort_order": 10,
+          "is_collapsible": false,
+          "options": [
+            {
+              "id": "01a03fa4-…",
+              "key": "print_placement",
+              "type": "radio",
+              "value_kind": "choice",
+              "cardinality": "one",
+              "label": "Print placement",
+              "is_required": true,
+              "sort_order": 10,
+              "values": [
+                {
+                  "value_key": "none",
+                  "label": "None",
+                  "sort_order": 10,
+                  "price_config": { "type": "fixed", "amount_minor": 0 },
+                  "is_default": true             // present only when true
+                },
+                {
+                  "value_key": "front",
+                  "label": "Front",
+                  "sort_order": 20,
+                  "price_config": { "type": "fixed", "amount_minor": 1000 }
+                }
+              ]
+            }
+          ],
+          "items": [
+            { "kind": "heading", "content": "Make it yours", "sort_order": 5 }
+          ]
+        }
+      ],
+      "rules": []
+    }
+  ]
+}
+```
+
+---
+
+## Envelope
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | The shape. `1`. See above. |
+| `config_version` | int | The store's content revision; advances on every publish and rollback. The plugin polls it to decide whether to re-fetch. |
+| `store_id` | string | UUID of the store this document is for. |
+| `generated_at` | string | ISO 8601 UTC, when the document was **assembled** — not when anything was published. The same content fetched twice differs only here. |
+| `option_sets` | array | Published sets, oldest first. Empty is legal: a store with nothing published. |
+
+`config_version` is `BIGINT` on both sides — `stores.config_version` here, and
+`config_version bigint(20) unsigned` in the plugin's own table. It is a counter,
+not a timestamp, and never decreases: a rollback advances it like any other
+publish, because storefronts must re-fetch after one.
+
+---
+
+## Option set
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | UUID. The join key for analytics and order selections. |
+| `version` | int | The publish that produced this content. Matches the snapshot it came from. |
+| `assignments` | array | Where the set applies. **Always empty in Phase 7** (Phase 13). |
+| `groups` | array | Ordered by `sort_order`, then `id`. |
+| `rules` | array | Conditional logic. **Always empty in Phase 7** (Phase 17). |
+
+## Group
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | UUID. |
+| `label` | string | Shown to the customer. |
+| `description` | string | **Omitted when unset.** |
+| `display_type` | string | `inline` · `accordion` · `tab` · `modal` |
+| `sort_order` | int | Ascending. Gaps are normal and intentional. |
+| `is_collapsible` | bool | |
+| `options` | array | |
+| `items` | array | Headings, paragraphs, dividers — presentation only, no cart data. |
+
+## Option
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | UUID. Order selections reference the **`key`**, not this. |
+| `key` | string | Stable identifier. Immutable after first publish, because order meta stores it. |
+| `type` | string | The presentation. `radio` is the only type in Phase 7. |
+| `value_kind` | string | What the option produces: `choice` · `text` · `number` · `file` · `date` · `colour` |
+| `cardinality` | string | `one` · `many` |
+| `label` | string | |
+| `description`, `placeholder`, `help_text` | string | **Omitted when unset.** |
+| `is_required` | bool | |
+| `sort_order` | int | |
+| `default_value` | string | **Omitted when unset.** For non-choice types. |
+| `validation`, `pricing`, `display` | object | Type-specific. **Omitted when unset.** Shapes are per type; `radio` uses none of them. |
+| `values` | array | |
+
+## Value
+
+| Field | Type | Notes |
+|---|---|---|
+| `value_key` | string | Stable identifier. Stored in order meta. |
+| `label` | string | Snapshotted per order, so renaming later does not rewrite history. |
+| `sort_order` | int | |
+| `price_config` | object | Always present. See below. |
+| `image_url`, `color_hex`, `sku_suffix`, `weight_delta_grams` | | **Omitted when unset.** |
+| `is_default` | `true` | **Present only when true.** Never `false`. |
+
+## Presentational item
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | string | `heading` · `paragraph` · `divider` · `rich_text` |
+| `content` | string | For `rich_text`, merchant-authored markup — sanitised at publish **and** at render. |
+| `sort_order` | int | |
+| `display` | object | **Omitted when unset.** |
+
+---
+
+## Pricing
+
+**Money is an integer count of minor units. Always.** `1000` is £10.00. There is
+no decimal, no float, and no currency in the document — the store's currency
+governs, and a number that means different things in two places is a rounding
+error waiting to reach a merchant's revenue.
+
+Percentages are **basis points**: `250` is 2.5%. Same reason — `0.1 + 0.2 !== 0.3`
+in binary floating point, and a percentage that drifts produces a different total
+on two machines.
+
+```jsonc
+{ "type": "fixed",      "amount_minor": 1000 }
+{ "type": "per_unit",   "amount_minor": 50 }
+{ "type": "percentage", "basis_points": 250 }
+{ "type": "per_char",   "amount_minor": 25, "free_characters": 10 }
+{ "type": "tiered",     "tiers": [
+    { "min_quantity": 1,  "max_quantity": 9,    "amount_minor": 100 },
+    { "min_quantity": 10, "max_quantity": null, "amount_minor": 80 }
+]}
+```
+
+`price_config` is **always present**, whichever way a value was priced. A value
+configured through the pricing JSON and one priced through its columns produce
+the same shape — anything else puts two spellings of one field in a document two
+evaluators read ([ADR-032](DECISIONS.md#adr-032--the-published-projection-is-a-type-not-a-convention)).
+
+`max_quantity: null` means open-ended and is **explicit**, never omitted: a
+reader must tell "no upper bound" from "not specified".
+
+Negative amounts are legal. A value may be a discount.
+
+---
+
+## What is deliberately absent
+
+The document sits on merchant servers and is fetched by storefronts. Anything
+unnecessary is needless exposure, so a field appears only if the plugin needs it.
+
+| Absent | Why |
+|---|---|
+| `tenant_id` | Identifies the merchant's account, not their storefront. |
+| `row_version` | An editor's optimistic lock. Meaningless to a renderer. |
+| `created_at`, `updated_at`, `deleted_at` | Audit fields. Freshness is `config_version` and `generated_at`. |
+| `published_by` | A user id. A storefront document naming a merchant's staff serves nobody. |
+| `is_enabled` | **Disabled things are absent entirely.** |
+| Parent ids | The document is a tree; a child naming its parent is the same fact twice, and two ways to disagree. |
+| Drafts | Only published snapshots. An edit does not reach a storefront until it is published. |
+
+**Disabled is absence, not a flag.** A disabled group, option or value does not
+appear. Shipping it with a flag makes every consumer — renderer, evaluator, PHP
+and TypeScript alike — responsible for remembering to check it, and one of them
+will forget. The failure is an option appearing on a storefront the merchant
+switched off.
+
+---
+
+## Reading it safely
+
+1. **Check `schema_version` first.** Refuse anything higher than you support and
+   keep the previous copy. Do not attempt partial parsing.
+2. **Treat absent as absent, not as false.** `is_default` missing means "not the
+   default"; `description` missing means there is none.
+3. **Ignore keys you do not recognise.** They are additive by definition, and a
+   reader that rejects them turns a compatible change into an outage.
+4. **Never write to it.** It is a snapshot of what was published; the source of
+   truth is the dashboard.
+5. **Money is an integer.** Do not parse it as a float, and do not format it
+   without the store's currency.
+
+---
+
+## Provenance
+
+Produced by `ConfigDocumentBuilder` from **immutable published snapshots**, never
+from live rows — the live rows are the merchant's working draft. Each set
+contributes the snapshot its most recent publish wrote, so the same document
+requested twice is identical unless something was published in between.
+
+A published set whose snapshot is missing is **skipped rather than fatal**. That
+state cannot arise — publish writes both in one transaction — but one corrupted
+set must not take a whole storefront's configuration down with it.
+
+Ordering is deterministic throughout: sets by creation, and every child list by
+`sort_order` then `id`. Two builds of unchanged data produce the same bytes, so a
+merchant comparing documents sees only real differences.
