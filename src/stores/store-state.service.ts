@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 
-import { AuditAction, AuditService } from '../audit/audit.service';
 import { StoreStatus } from '../common/database/enums';
 import { allowedPredecessors } from './store-state';
 
@@ -13,28 +12,29 @@ export interface TransitionResult {
   readonly from: StoreStatus | null;
 }
 
-/** The audit action recording arrival in each state (M8.1b: every transition is logged). */
-const ACTION_FOR: Readonly<Record<StoreStatus, AuditAction>> = {
-  [StoreStatus.CONNECTING]: AuditAction.STORE_CONNECT_AUTHORIZED,
-  [StoreStatus.CONNECTED]: AuditAction.STORE_CONNECTED,
-  [StoreStatus.ERROR]: AuditAction.STORE_ERRORED,
-  [StoreStatus.DISCONNECTED]: AuditAction.STORE_DISCONNECTED,
-  [StoreStatus.REVOKED]: AuditAction.STORE_REVOKED,
-};
-
 /**
  * Performs connection-state transitions, and refuses the ones M8.1b forbids.
  *
- * Every `stores.status` write goes through here. `bin/check-store-state.ts`
- * enforces that: a raw `UPDATE stores SET status` anywhere else fails the build,
+ * Every `stores.status` write goes through here. `bin/check-store-state.sh`
+ * enforces that: naming a `StoreStatus` value anywhere else fails the build,
  * because a convention that is merely documented is one the next step forgets.
+ *
+ * ## It does not audit, deliberately
+ *
+ * An earlier version carried a `record()` that derived the audit action from the
+ * destination state. It had **no callers**, and the reason it never acquired any
+ * is that the mapping cannot work: `[8d]` distinguishes a fresh connection from a
+ * reconnection, and both arrive at `CONNECTING`. Any caller using it would have
+ * logged every reconnect as a first-time connect.
+ *
+ * Audit entries therefore stay at the call site, which is the only place that
+ * knows what the transition *meant*. That also keeps them after the transaction
+ * commits — an entry written inside one that later rolls back survives it and
+ * reports a change that never happened.
  */
 @Injectable()
 export class StoreStateService {
-  constructor(
-    private readonly dataSource: DataSource,
-    private readonly audit: AuditService,
-  ) {}
+  constructor(private readonly dataSource: DataSource) {}
 
   /**
    * Move a store to `to`, but only from a state the machine allows.
@@ -56,7 +56,7 @@ export class StoreStateService {
   async transition(
     storeId: string,
     to: StoreStatus,
-    options: { manager?: EntityManager; tenantId?: string; reason?: string } = {},
+    options: { manager?: EntityManager } = {},
   ): Promise<TransitionResult> {
     const runner = options.manager ?? this.dataSource;
     const from = allowedPredecessors(to);
@@ -94,28 +94,5 @@ export class StoreStateService {
     }
 
     return { moved: true, from: null };
-  }
-
-  /**
-   * Record a completed transition.
-   *
-   * Separate from `transition` and deliberately so: audit rows are written
-   * **after** the transaction commits, and `transition` often runs inside one.
-   * An entry written inside a transaction that later rolls back survives it and
-   * reports a change that never happened — demonstrated, and the reason every
-   * service here audits after its commit.
-   */
-  async record(
-    storeId: string,
-    to: StoreStatus,
-    options: { tenantId?: string; changes?: Record<string, unknown> } = {},
-  ): Promise<void> {
-    await this.audit.record({
-      action: ACTION_FOR[to],
-      resourceType: 'store',
-      resourceId: storeId,
-      tenantId: options.tenantId,
-      changes: { status: to, ...options.changes },
-    });
   }
 }

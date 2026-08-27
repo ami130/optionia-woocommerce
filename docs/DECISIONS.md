@@ -2184,6 +2184,45 @@ until the action is genuinely exercised. Mutation-proven.
 documented in `DATABASE.md`, and nothing had ever set it — so "connected since
 when?", the first question a support ticket asks, had no answer for any store.
 
+#### The gate I shipped caught one spelling, not the rule
+
+An audit of `[8f]` found `check-store-state` catching **none of three** realistic
+evasions: multi-line SQL, `manager.update(Store, id, { status })`, and an entity
+mutation followed by `save()`. Its pattern required `UPDATE stores SET … status`
+on one line, so it proved only that nobody had written that particular spelling —
+the shape I had in mind while writing it, and the same error as `[8d]`'s
+hardcoded lookalike callback.
+
+It now matches on **`StoreStatus`**, the enum every legitimate status value must
+come from. Enumerating TypeORM's write APIs is a losing game — `update`, `save`,
+`upsert`, `createQueryBuilder().update()`, plain assignment — but all of them must
+name a value, and the raw-SQL check separately flattens newlines so a statement
+split across lines reads as one.
+
+Three allowances, each narrow: the machine itself, an `INSERT` creating a store
+(an initial state has no prior state to guard), and an audit entry recording a
+change. That last one had to require its `changes: {` context — allowing a bare
+`status: StoreStatus.X` let `manager.update(Store, id, { status: … })` straight
+through, because an audit entry and a TypeORM write are the same six characters
+and only the surrounding key tells them apart. All three evasions are now caught,
+and the floor fails if the enum is renamed.
+
+#### `record()` was dead, and could not have worked
+
+`StoreStateService.record()` had **no callers**, proven by deletion: removing it
+orphaned both `ACTION_FOR` and the injected `AuditService`.
+
+It never acquired a caller because the mapping cannot work. `ACTION_FOR` was keyed
+on the destination state, and `[8d]` distinguishes a fresh connection from a
+reconnection — both of which arrive at `CONNECTING`. Any caller would have logged
+every reconnect as a first-time connect.
+
+Removed rather than repaired. The call site is the only place that knows what a
+transition *meant*, which is also where the audit belongs so it lands after the
+transaction commits. `transition()` lost its `tenantId` and `reason` parameters
+for the same reason: both were declared and silently discarded, and a parameter
+that looks maintained and is not is the defect this codebase keeps finding.
+
 ### Deferred — M8.4's signed timestamp
 
 M8.4 requires "every request over HTTPS with `Authorization: Bearer`, a

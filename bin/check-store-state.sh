@@ -12,8 +12,20 @@
 # merchant disconnected silently reconnect the store — no attacker needed, just a
 # failed exchange the plugin retries and an impatient merchant in between.
 #
-# `[8g]`, `[8h]` and `[8i]` each add transitions. This makes the state machine
-# the only route rather than the recommended one.
+# ## Why this matches `StoreStatus`, not `UPDATE stores`
+#
+# The first version of this gate matched `UPDATE[[:space:]]+stores[...]status` on
+# a single line. Audited against realistic evasions it caught **none of three**:
+# multi-line SQL, `manager.update(Store, id, { status })`, and `repo.save()` all
+# passed a green build. It proved only that nobody had written one particular
+# spelling — the shape I had in mind while writing it.
+#
+# Enumerating TypeORM's write APIs is a losing game (`update`, `save`, `upsert`,
+# `createQueryBuilder().update()`, plain entity mutation). Every one of them must
+# name a **value** to write, and every legitimate value comes from the
+# `StoreStatus` enum. So the enum is the signal: a file outside the state machine
+# that mentions `StoreStatus.` is either writing state or doing something that
+# deserves to be looked at.
 #
 # Usage: bash bin/check-store-state.sh
 
@@ -27,34 +39,78 @@ pass() { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 
 printf '\nChecking connection-state writes...\n\n'
 
-# The state machine itself, plus migrations and seeds, legitimately write status.
-ALLOWED='src/stores/store-state.service.ts|src/migrations/|src/seeds/'
+# Files that may name a status value.
+#
+#   store-state.ts / .service.ts  the machine itself
+#   enums.ts                      the declaration
+#   store.entity.ts               the column default
+#   migrations, seeds             fixed data, no transitions
+ALLOWED='src/stores/store-state\.ts|src/stores/store-state\.service\.ts|src/common/database/enums\.ts|src/stores/entities/store\.entity\.ts|src/migrations/|src/seeds/'
 
 # Drop comment lines, so the scanner cannot flag its own documentation — the same
-# reason `check-secrets` strips them. A doc comment describing the pattern is not
-# a write; treating it as one trains everyone to phrase comments around the gate.
+# reason `check-secrets` strips them.
 strip_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*|/\*)'; }
 
-HITS=$(grep -rnE "UPDATE[[:space:]]+stores[[:space:]]+SET[^\`\"']*status" src 2>/dev/null \
-       | strip_comments \
-       | grep -vE "$ALLOWED" || true)
+# A status value is *read* legitimately when comparing or reporting. It is
+# *written* when it reaches a persistence call. Rather than guess which is which
+# from one line, every mention outside the machine must be justified — and the
+# only justification the codebase needs today is passing one to
+# `StoreStateService.transition`, or naming one in an audit entry's `changes`.
+# `.spec.ts` files exercise the machine rather than bypass it — and the machine's
+# own tests must name every state to assert the table at all.
+CANDIDATES=$(grep -rn "StoreStatus\." src 2>/dev/null \
+             | grep -vE "$ALLOWED" \
+             | grep -vE '\.spec\.ts:' \
+             | strip_comments || true)
 
-if [ -n "$HITS" ]; then
-  fail "stores.status written outside StoreStateService (use it, so the machine decides):"
-  echo "$HITS" | sed 's/^/      /'
+# Allowed uses, each narrow and each visible in one grep:
+#
+#   `transition(..., StoreStatus.X`   the machine performing the write
+#   `changes: { … status: … }`        an audit entry *recording* a write
+#   `INSERT INTO stores`              an initial state, not a transition —
+#                                     there is no prior state to guard
+#
+# ⚠️ The audit allowance requires the `changes:` context, not a bare
+# `status: StoreStatus.X`. Allowing the bare key let
+# `manager.update(Store, id, { status: StoreStatus.CONNECTED })` through — an
+# audit entry and a TypeORM write are the same six characters, and only the
+# surrounding key tells them apart.
+OFFENDERS=$(echo "$CANDIDATES" \
+            | grep -vE "transition\(|changes: \{[^}]*status: StoreStatus\.|StoreStatus\.[A-Z_]+ \}, siteUrl" \
+            | grep -vE "INSERT INTO stores|StoreStatus\.CONNECTING\],?$" \
+            | grep -v '^$' || true)
+
+if [ -n "$OFFENDERS" ]; then
+  fail "connection state named outside StoreStateService (route it through transition()):"
+  echo "$OFFENDERS" | sed 's/^/      /'
 else
-  pass "every stores.status write goes through the state machine"
+  pass "every connection-state write goes through the state machine"
 fi
 
-# A floor: the check must be looking at something. A refactor that renamed the
-# table or the column would otherwise leave this passing while verifying nothing.
-TOTAL=$(grep -rnE "UPDATE[[:space:]]+stores[[:space:]]+SET[^\`\"']*status" src 2>/dev/null \
-        | strip_comments | wc -l | tr -d ' ')
+# Raw SQL, across lines. `tr` flattens the file so a statement broken over three
+# lines reads the same as one written on a single line — the evasion the first
+# version of this gate missed.
+RAW=$(for f in $(grep -rl "UPDATE" src --include='*.ts' 2>/dev/null | grep -vE "$ALLOWED"); do
+        if tr '\n' ' ' < "$f" | grep -qiE "UPDATE[[:space:]]+stores[[:space:]]+SET[^;]*status"; then
+          echo "$f"
+        fi
+      done || true)
 
-if [ "$TOTAL" -lt 1 ]; then
-  fail "found no stores.status writes at all — the pattern no longer matches anything"
+if [ -n "$RAW" ]; then
+  fail "raw SQL writing stores.status outside the state machine:"
+  echo "$RAW" | sed 's/^/      /'
 else
-  pass "$TOTAL status write(s) found and accounted for"
+  pass "no raw SQL writes stores.status outside the machine"
+fi
+
+# The floor. A refactor that renamed the enum would otherwise leave both checks
+# above passing while inspecting nothing at all.
+TOTAL=$(grep -rn "StoreStatus\." src 2>/dev/null | strip_comments | wc -l | tr -d ' ')
+
+if [ "$TOTAL" -lt 5 ]; then
+  fail "found only $TOTAL StoreStatus reference(s) — the pattern no longer matches the code"
+else
+  pass "$TOTAL status reference(s) scanned"
 fi
 
 echo
