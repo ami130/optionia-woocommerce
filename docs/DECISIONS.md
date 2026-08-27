@@ -2002,3 +2002,71 @@ Removing each resolver now fails 12, 5 and 5 tests respectively.
 
 The lesson is the one this codebase keeps relearning in new places: **a green
 suite is evidence only after you have asked what it would take to make it red.**
+
+---
+
+## ADR-039 — The connection handshake, decided before it is built
+
+**Status:** accepted
+**Date:** Phase 8, M8.1 / M8.2 / M8.5
+
+### Context
+
+M7.7's rule holds hardest here: the plugin is a client installed on thousands of
+merchant sites that **cannot be redeployed**. An endpoint shaped by an
+implementation accident becomes permanent.
+
+M8.1's handshake is a sketch, and four things it leaves open change the shape of
+the phase. Each is decided below with the alternative that was rejected, so a
+later reader disagrees with an argument rather than guesses at intent.
+
+### The four
+
+**The cloud returns the redirect URL.** `initiate` takes the site's parameters and
+returns `authorize_url` complete. The alternative — the plugin assembling
+`app.optionia.com/connect?…` itself — bakes the cloud's URL shape into
+un-redeployable software, making a renamed query parameter impossible. This is
+what makes `initiate` an endpoint rather than a constant; without it Phase 8 would
+have five endpoints, not six.
+
+**`state` is opaque to the cloud.** The plugin generates it, the cloud echoes it,
+the plugin compares. That is the CSRF defence and it works *because* the cloud
+cannot influence the value. M8.1 requires the code be bound to `state`; the
+binding is to a **hash**, so `exchange` verifies without the cloud holding the
+plaintext — and `state` never enters the schema.
+
+**PKCE is S256 only.** The plugin requires PHP 7.4+, where `hash('sha256', …)` is
+always available. `plain` exists for clients that cannot hash; WordPress is not
+one, and offering both lets an attacker choose the weaker.
+
+**`authorize` returns JSON, not a 302.** The dashboard is a SPA holding a tenant
+JWT in memory: a redirect would be followed by `fetch` and never seen, and a JWT
+cannot ride a browser redirect.
+
+### A store credential is an opaque token, not a JWT
+
+Already decided in 7a — the realm table names `StoreTokenGuard` and "Store token".
+Recorded here with the reason: **M8.6 requires revocation to be immediate, and a
+JWT cannot be un-issued.** A revoked store would keep working until expiry.
+
+`TokenAudience.STORE` exists in the Phase 6 JWT enum, is used by nothing, and
+contradicts this by implying a store presents a JWT. Removed in `[8c]`.
+
+### Consequences
+
+**The deferred table was misattributing three surfaces.** One row read
+`/stores/* → 8` while its four endpoints span Phases 8, 13 and 19; another read
+`/store/heartbeat → 8–9` while M8.5 places it squarely in 8. A coarse row lets a
+later phase build against a contract that never described its endpoint, which is
+the failure that table exists to prevent. Rows are now per-surface.
+
+**The contract checker's marker pattern was `[7a-n]`** — correct while Phase 7 was
+the only phase with steps, and silently wrong the moment `[8d]` appeared: an
+unrecognised marker reads as *missing*, so the first Phase 8 entry failed a gate
+that was itself out of date. Now `[\d+a-z]`, and mutation-proven to still catch a
+genuinely absent marker.
+
+**Two capabilities already existed.** `stores:connect` and
+`stores:rotate_credential` were in the matrix from M6.5, held by owner and admin.
+The contract initially assigned rotation to `stores:connect`; checking rather than
+assuming found the finer-grained one already drawn.

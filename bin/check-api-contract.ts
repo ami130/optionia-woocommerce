@@ -135,7 +135,15 @@ function documentedRoutes(markdown: string): {
     const isDeclaration = line.startsWith('|') || line.startsWith('###');
     const isBuilt = line.includes('[built]');
     // `[built]`, `[7a]`…`[7n]`, or `[phase N]`.
-    const hasMarker = isBuilt || /\[7[a-n]\]|\[phase \d+\]/i.test(line);
+    /**
+     * `[built]`, a step marker like `[7a]` or `[8d]`, or `[phase N]`.
+     *
+     * The step pattern was `[7a-n]` — correct while Phase 7 was the only phase
+     * with steps, and silently wrong the moment Phase 8 documented `[8d]`. A
+     * marker the checker does not recognise reads as *missing*, so the first
+     * Phase 8 contract entry failed a gate that was really out of date.
+     */
+    const hasMarker = isBuilt || /\[\d+[a-z]\]|\[phase \d+\]/i.test(line);
 
     for (const match of line.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
       const method = match[1].toUpperCase();
@@ -267,7 +275,7 @@ async function main(): Promise<void> {
   for (const key of documented.all) {
     if (!documented.marked.has(key)) {
       failures.push(
-        `${key} is documented without a build marker ([built], [7x] or [phase N])`,
+        `${key} is documented without a build marker ([built], [8d] or [phase N])`,
       );
     }
   }

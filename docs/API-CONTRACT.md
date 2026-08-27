@@ -791,6 +791,347 @@ every sibling.
 
 ---
 
+## CONNECTION — `/v1/connect/*`
+
+**Implements:** [AC8](../../developePlan.md) — no SaaS secret ever ships inside the
+plugin. Every installation is treated as potentially hostile.
+
+| Route | Realm | Capability | State |
+|---|---|---|---|
+| `POST /connect/initiate` | none — `@Public()` | — | `[8d]` |
+| `POST /connect/authorize` | tenant | `stores:connect` | `[8d]` |
+| `POST /connect/exchange` | none — `@Public()` | — | `[8e]` |
+
+### Four decisions, settled here
+
+The handshake in [M8.1](../../developePlan.md) is a sketch. Four things it leaves
+open change the shape of the phase, and each is decided below with its reasoning
+so a reader can disagree with the argument rather than guess at the intent.
+
+**1. The cloud returns the redirect URL; the plugin does not build it.**
+`initiate` takes the site's parameters and returns `authorize_url` complete. The
+alternative — the plugin assembling `app.optionia.com/connect?…` itself — bakes
+the cloud's URL shape into software installed on thousands of merchant sites that
+**cannot be redeployed**. Renaming a query parameter would then be impossible.
+This is the decision that makes `initiate` an endpoint rather than a constant.
+
+**2. `state` is opaque to the cloud: echoed, never stored.**
+The plugin generates it, the cloud returns it in the redirect, the plugin compares
+it to what it kept. That is the CSRF defence, and it works *because* the cloud
+cannot influence the value. M8.1's acceptance requires the code be "bound to
+`state`" — the binding is to a **hash** of the state, so `exchange` can verify it
+without the cloud ever holding the plaintext.
+
+**3. PKCE is S256 only. There is no `plain` fallback.**
+The plugin requires PHP 7.4+, where `hash('sha256', …)` is always available.
+`plain` exists in the OAuth spec for constrained clients that cannot hash;
+WordPress is not one. Offering both lets an attacker choose the weaker.
+
+**4. `authorize` returns JSON, not a 302.**
+The dashboard is a single-page app holding a tenant JWT in memory. A 302 would be
+followed by `fetch` and never seen by the application, and a JWT cannot ride a
+browser redirect. It returns `{ redirect_url }` and the dashboard navigates
+deliberately — consistent with every other tenant-realm endpoint.
+
+### Why two routes are unauthenticated
+
+Authentication is **global opt-out**: a route is protected unless it carries
+`@Public()`. `initiate` and `exchange` are the only unauthenticated endpoints in
+the API outside `/auth/*`, which needs justifying rather than assuming.
+
+`initiate` is called by a plugin that **holds no credential yet** — that is the
+point of the handshake. It creates nothing durable, stores nothing, and returns
+only a URL. Its defence is rate limiting.
+
+`exchange` is called server-to-server by the plugin, and **the code is the
+credential**. Its defences are the four M8.1 requires: single-use, ≤5 minutes,
+bound to `site_url`, and bound to a `state` hash — plus the PKCE verifier, which
+is what stops an intercepted code being redeemed by anyone but its originator.
+
+---
+
+### `POST /v1/connect/initiate` **[8d]**
+
+Begins a connection. Called by the plugin when a merchant clicks *Connect
+Optionia*, before any credential exists.
+
+**Rate limit:** 10 per hour, per site URL — a merchant retries a failed connection
+a handful of times; a script does not.
+**Response:** `200 OK`
+
+```jsonc
+// Request
+{ "site_url": "https://shop.example.com",
+  "callback": "https://shop.example.com/wp-admin/admin.php?page=optionia-connect",
+  "state": "…",              // opaque, plugin-generated
+  "challenge": "…",          // base64url(SHA-256(verifier))
+  "plugin_version": "1.0.0" }
+
+// Response
+{ "data": { "authorize_url": "https://app.optionia.com/connect?request=01a0…" } }
+```
+
+| Field | Rules |
+|---|---|
+| `site_url` | absolute `https://` URL, ≤ 255 chars. **`http://` is refused** — a credential must never cross a plaintext connection |
+| `callback` | absolute URL whose origin **equals** `site_url`'s; ≤ 500 chars |
+| `state` | 43–128 chars, URL-safe. Never stored in plaintext |
+| `challenge` | 43 chars, base64url — exactly one SHA-256 digest |
+| `plugin_version` | semver, ≤ 20 chars |
+
+**The callback must share the site's origin.** Accepting an arbitrary callback
+would let an attacker start a connection for someone else's shop and have the
+code delivered to a host they control.
+
+**Errors:** `VALIDATION_FAILED`, `RATE_LIMITED`.
+
+---
+
+### `POST /v1/connect/authorize` **[8d]**
+
+The merchant, signed in to the dashboard, approves connecting a site to their
+tenant. This is the only step with a human in it.
+
+**Realm:** tenant. **Capability:** `stores:connect`.
+**Response:** `200 OK`
+
+```jsonc
+// Request
+{ "request": "01a0…" }       // the id from `authorize_url`
+
+// Response
+{ "data": { "redirect_url": "https://shop.example.com/wp-admin/…?code=…&state=…" } }
+```
+
+Creates the store in `CONNECTING` and issues a one-time authorization code. The
+`redirect_url` carries the code and the merchant's original `state`.
+
+**A pending request is single-use and expires.** Approving twice must not mint two
+codes — the second call answers `TOKEN_INVALID`.
+
+**Which capability.** `stores:connect` rather than `option_sets:edit`: connecting
+a storefront is an ownership act, and an editor who can build options should not
+be able to attach the workspace to a site they control. Held by owner and admin —
+the permission matrix from [M6.5](../../developePlan.md) already drew that line,
+and rotation carries its own `stores:rotate_credential` for the same reason.
+
+**Errors:** `VALIDATION_FAILED`, `TOKEN_INVALID` (unknown, spent or expired
+request), `INSUFFICIENT_ROLE`, `RATE_LIMITED`.
+
+---
+
+### `POST /v1/connect/exchange` **[8e]**
+
+The plugin redeems its code for a store credential, server-to-server. The browser
+is not involved.
+
+**Rate limit:** 20 per hour, per site URL.
+**Response:** `200 OK`
+
+```jsonc
+// Request
+{ "code": "…", "verifier": "…", "site_url": "https://shop.example.com" }
+
+// Response
+{ "data": { "token": "osk_live_…",        // shown once, never recoverable
+            "store_id": "01a0…",
+            "tenant_name": "Sam's Store",
+            "config_version": 0 } }
+```
+
+| Field | Rules |
+|---|---|
+| `code` | 43–128 chars, URL-safe |
+| `verifier` | 43–128 chars — `base64url(SHA-256(verifier))` must equal the stored challenge |
+| `site_url` | must equal the URL the code was issued for, **exactly** |
+
+**Every check is a refusal, and they are indistinguishable.** A spent code, an
+expired one, a wrong verifier, a mismatched `site_url` — all answer
+`TOKEN_INVALID` with the same message. Telling an attacker which of four
+conditions they failed tells them what to fix.
+
+**The token is returned once.** `store_credentials` holds only a SHA-256 hash and
+an 8-character prefix for support identification. A merchant who loses it rotates;
+they do not recover it.
+
+**The store moves `CONNECTING` → `CONNECTED`** in the same transaction that spends
+the code, so a failure cannot leave a store connected with no credential or a
+credential with no store.
+
+**Errors:** `VALIDATION_FAILED`, `TOKEN_INVALID`, `RATE_LIMITED`.
+
+---
+
+## STORES — `/v1/stores/*`
+
+**Realm:** tenant.
+
+| Route | Capability | State |
+|---|---|---|
+| `POST /stores/:id/disconnect` | `stores:connect` | `[8g]` |
+| `POST /stores/:id/rotate-credential` | `stores:rotate_credential` | `[8g]` |
+
+> The store **list** and **detail** reads belong to Phase 13
+> ([M13.3](../../developePlan.md)), and product listing to Phase 19. They are in
+> the deferred table, not here, because a contract row is a commitment to a shape
+> and Phase 8 does not know theirs.
+
+### `POST /v1/stores/:id/disconnect` **[8g]**
+
+The merchant disconnects a store from the dashboard. Revokes every live credential
+and moves the store to `DISCONNECTED`.
+
+**Response:** `200 OK`
+
+```jsonc
+{ "data": { "status": "disconnected", "credentials_revoked": 1 } }
+```
+
+**The storefront keeps working.** Revocation stops the plugin receiving *new*
+configuration; it does not stop it serving the copy it already has
+([AC3](../../developePlan.md)). A merchant who disconnects by accident loses the
+ability to publish, not their shop.
+
+**Idempotent.** Disconnecting an already-disconnected store answers `200` with
+`credentials_revoked: 0`. A merchant clicking twice is not an error.
+
+**Errors:** `NOT_FOUND` (unknown, or another tenant's), `INSUFFICIENT_ROLE`.
+
+---
+
+### `POST /v1/stores/:id/rotate-credential` **[8g]**
+
+Issues a new credential and revokes the old one. For a merchant who believes their
+token leaked, and for scheduled rotation.
+
+**Response:** `200 OK`
+
+```jsonc
+// Request
+{ "reason": "suspected disclosure" }   // optional, ≤ 255 chars, recorded in the trail
+
+// Response
+{ "data": { "token": "osk_live_…", "prefix": "osk_live", "rotated_at": "…" } }
+```
+
+**The old credential is revoked immediately, not at a grace period.** A rotation a
+merchant asked for because they think the token leaked must take effect at once;
+a window in which both work is a window in which the leaked one still works.
+
+The plugin's next request answers `401` and it surfaces a reconnect notice —
+[M8.6](../../developePlan.md)'s path, and the storefront keeps serving cache
+throughout.
+
+**Errors:** `NOT_FOUND`, `INSUFFICIENT_ROLE`, `CONFLICT` (store is not connected).
+
+---
+
+## STORE — `/v1/store/*`
+
+**Realm:** store. **Guard:** `StoreTokenGuard`.
+
+| Route | State |
+|---|---|
+| `POST /store/heartbeat` | `[8h]` |
+
+> **A store credential is an opaque token, not a JWT.** `store_credentials` stores
+> a SHA-256 hash and an 8-character prefix; the plaintext exists only in the
+> plugin. That is deliberate: [M8.6](../../developePlan.md) requires revocation to
+> be *immediate*, and a JWT cannot be un-issued — a revoked store would keep
+> working until expiry.
+>
+> `TokenAudience.STORE` exists in the JWT audience enum from Phase 6 and is used by
+> nothing. It contradicts this decision by implying a store presents a JWT, and is
+> removed in `[8c]`.
+
+### `POST /v1/store/heartbeat` **[8h]**
+
+A daily authenticated ping. The support and analytics backbone
+([M8.5](../../developePlan.md)): it reveals stale installs and dead connections
+before a merchant reports them.
+
+**Rate limit:** 60 per hour, per store — a daily job with retries, not a stream.
+**Response:** `200 OK`
+
+```jsonc
+// Request
+{ "plugin_version": "1.0.0", "wp_version": "6.5.2", "wc_version": "8.7.0",
+  "php_version": "8.2.15",
+  "connection_state": "connected",        // the plugin's own view
+  "config_version": 42,                   // what it currently serves
+  "cache_age_seconds": 3600 }
+
+// Response
+{ "data": { "config_version": 43,          // what the cloud has
+            "status": "connected",         // the cloud's view
+            "reauthorize": false } }
+```
+
+| Field | Rules |
+|---|---|
+| `plugin_version`, `wp_version`, `wc_version`, `php_version` | ≤ 20 chars each |
+| `connection_state` | one of the five states |
+| `config_version` | integer ≥ 0 |
+| `cache_age_seconds` | integer ≥ 0 |
+
+**The response is how a plugin learns it is behind.** `config_version` higher than
+the one sent means new configuration is waiting; `reauthorize: true` means the
+cloud requires a fresh handshake — a site URL change, or a credential revoked
+elsewhere.
+
+**Reconciliation.** `connection_state` is the plugin's *own* view, and it can
+disagree with `stores.status` — a database restore, a migrated site, a cloned
+staging environment. A mismatch is recorded as an operations item
+([Phase 26](../../developePlan.md)) rather than silently overwritten, because
+whichever side is wrong, guessing produces the support ticket M8.1b describes.
+
+**Errors:** `VALIDATION_FAILED`, `UNAUTHENTICATED` (unknown or revoked
+credential), `RATE_LIMITED`.
+
+---
+
+## Connection state machine
+
+Connection state is an **explicit, persisted state machine on both sides** — never
+inferred from whether a token happens to be present. Ambiguous state is the
+largest source of support tickets in this category of product: the merchant sees
+"connected", the cloud disagrees, and nobody can tell which is right.
+
+| From | To | Trigger |
+|---|---|---|
+| `DISCONNECTED` | `CONNECTING` | `authorize` approves a request |
+| `CONNECTING` | `CONNECTED` | `exchange` redeems the code |
+| `CONNECTING` | `DISCONNECTED` | the code expires unredeemed |
+| `CONNECTED` | `ERROR` | repeated authenticated failures |
+| `ERROR` | `CONNECTED` | a request succeeds |
+| `CONNECTED` · `ERROR` | `REVOKED` | the cloud revokes, or a rotation supersedes |
+| any | `DISCONNECTED` | the merchant disconnects |
+
+**Every transition is recorded in the audit trail** with actor, previous state and
+new state — M8.1b's acceptance is that both sides agree after any transition, and
+a transition nobody logged cannot be reconciled afterwards.
+
+**`ERROR` and `REVOKED` never stop the storefront.** A store in either state still
+sells; it simply cannot receive new configuration
+([AC3](../../developePlan.md)). This is the trust commitment, not an
+implementation detail: a merchant whose shop breaks because a SaaS credential
+lapsed does not renew.
+
+### Site-URL change detection
+
+A credential is bound to the `site_url` it was issued for. If a request arrives
+carrying a valid credential from a **different** origin — a staging clone, a
+domain migration — the cloud refuses it and requires re-authorization.
+
+Without it, a cloned staging site inherits production's credential and begins
+reporting orders as though it were the live shop.
+
+`uq_stores_tenant_url` is `(tenant_id, store_url)`, so the same URL may legitimately
+exist under two tenants — an agency and its client. The check is therefore against
+**the credential's own bound URL**, never a global uniqueness lookup.
+
+---
+
 ## Concurrency
 
 Every mutating request on an option set carries the `rowVersion` it loaded.
@@ -853,10 +1194,20 @@ its controller is written"*, not all sixty-five now. Documenting an endpoint who
 shape is still a guess produces a contract that has to be rewritten, which is the
 opposite of what a contract is for.
 
+> **A row here names one phase, so a surface spanning several cannot share one.**
+> `/stores/*` was a single row marked Phase 8, and its four endpoints belong to
+> three different phases — disconnect and rotate to 8, the list screen to 13,
+> products to 19. `/store/heartbeat` sat in a row marked "8–9" while
+> [M8.5](../../developePlan.md) places it squarely in 8. A coarse row lets a
+> later phase build against a contract that never described its endpoint, which
+> is the failure this table exists to prevent.
+
 | Surface | Phase |
 |---|---|
-| `/connect/*`, `/stores/*` | 8 |
-| `/store/config`, `/store/heartbeat`, `/store/events`, `/store/orders` | 8–9 |
+| `GET /stores`, `GET /stores/:id` | `[phase 13]` — [M13.3](../../developePlan.md), the dashboard's store screen |
+| `GET /stores/:id/products` | `[phase 19]` — [M19](../../developePlan.md), product sync |
+| `/store/config` | **9** — [M9.1](../../developePlan.md), config delivery |
+| `/store/events`, `/store/orders` | 9 |
 | `/option-sets/:id/rules/*` | **17** — the table exists, the engine does not |
 | `/option-sets/:id/assignments`, `/effective-options` | 13 |
 | `/plans`, `/subscription/*`, `/usage` | 22 |
