@@ -2129,6 +2129,38 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+#### The capability requirement was declared and never tested
+
+Both `[8g]` routes carried `stores:connect` and `stores:rotate_credential`, and
+nothing proved it. Mutation: pointing **both** at `option_sets:view` — which
+`viewer` holds — passed all nineteen tests. A viewer could have disconnected a
+merchant's store and rotated its credential with nothing failing.
+
+`[8d]` already tested this for `authorize`; the pattern simply was not carried
+into the step whose routes are the most destructive in the phase.
+
+**Writing the tests exposed a second, subtler problem.** The obvious helper —
+register a user and demote them — produces a viewer of *their own* empty tenant,
+so every request is refused for belonging to another tenant rather than for
+lacking a capability. The two are indistinguishable from outside: `CapabilityGuard`
+answers `403` and a cross-tenant store answers `404`, and a test asserting `403`
+cannot tell which it got.
+
+The admin case is what surfaced it — expecting `200`, receiving `404`. The viewer
+and editor cases had "passed" while proving less than they appeared to.
+
+The fix is to put the caller **inside the owner's tenant**, leaving role as the
+only variable: revoke their own membership, insert one into the owner's tenant,
+then log in. The order matters — `primaryMembership` picks the oldest live
+membership and `tid` is fixed when the token is signed, so a token minted before
+those writes still names the wrong tenant.
+
+**One mutation survives deliberately.** Swapping the two capabilities between the
+routes changes nothing, because no role holds one without the other — owner and
+admin hold both, everyone else neither. No HTTP test can separate them, so the
+distinction is asserted against the controller source instead: each route names
+its own capability, and neither falls back to one a viewer holds.
+
 #### An audit of `[8g]` — rotation was refused where it was most needed
 
 **A store in `ERROR` could not rotate its credential.** The guard read

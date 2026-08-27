@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
@@ -58,6 +59,60 @@ describe('store ownership (e2e)', () => {
     );
 
     return { id, token: credential.plaintext };
+  }
+
+  /**
+   * A member **of the owner's tenant**, holding `role`.
+   *
+   * Registration makes every user the owner of a tenant of their own, so simply
+   * demoting them tests the wrong thing: they would be a viewer of *their* empty
+   * workspace, and every request against this suite's store would be refused for
+   * belonging to another tenant rather than for lacking a capability.
+   *
+   * Caught while writing these: the admin case returned `404`, which is what a
+   * cross-tenant request answers (ADR-010). The viewer and editor cases had
+   * "passed" — but a `403` from `CapabilityGuard` and a refusal for the wrong
+   * tenant are indistinguishable from outside, so they proved less than they
+   * appeared to.
+   *
+   * Adding a membership row puts the caller inside the owner's tenant, leaving
+   * **role as the only variable**.
+   */
+  async function memberWithRole(which: string, role: string): Promise<string> {
+    const email = `own8g-${which}@example.com`;
+
+    await harness.tenant(which);
+
+    const [user] = await dataSource.query(`SELECT id FROM users WHERE email = ?`, [email]);
+
+    /**
+     * Revoke their own membership first, then join the owner's tenant.
+     *
+     * `primaryMembership` picks the **oldest** live membership, so a user who
+     * still owns their own tenant is issued a token naming it however many other
+     * tenants they belong to. Revoking it makes the owner's tenant the only
+     * candidate — and the token has to be minted *after* both writes, because
+     * `tid` is fixed when it is signed.
+     */
+    await dataSource.query(`UPDATE tenant_members SET revokedAt = NOW(3) WHERE userId = ?`, [
+      user.id,
+    ]);
+
+    await dataSource.query(
+      `INSERT INTO tenant_members (id, tenantId, userId, role, acceptedAt, createdAt, updatedAt)
+       VALUES (UUID(), ?, ?, ?, NOW(3), NOW(3), NOW(3))`,
+      [tenantId, user.id, role],
+    );
+
+    const login = await request(app.getHttpServer())
+      .post('/v1/auth/login')
+      .send({ email, password: 'a-sufficiently-long-password' });
+
+    if (login.status !== 200) {
+      throw new Error(`login failed for ${email}: ${login.status}`);
+    }
+
+    return login.body.data.accessToken as string;
   }
 
   const post = (path: string, token: string, body: object = {}): request.Test =>
@@ -219,6 +274,62 @@ describe('store ownership (e2e)', () => {
 
       expect(row).toBeDefined();
       expect(row.tenantId).toBe(tenantId);
+    });
+  });
+
+  /**
+   * Both routes are destructive ownership acts, and the permission matrix gives
+   * `stores:connect` and `stores:rotate_credential` to owner and admin only.
+   *
+   * Untested until now, and a mutation proved the gap: swapping **both** routes
+   * to `option_sets:view` — which `viewer` holds — passed all nineteen tests. A
+   * viewer could have disconnected a store and rotated its credential with
+   * nothing failing.
+   */
+  describe('capabilities', () => {
+    it('refuses a viewer on both routes', async () => {
+      const viewer = await memberWithRole('viewer', 'viewer');
+      const store = await connectedStore();
+
+      expect((await post(`/stores/${store.id}/disconnect`, viewer)).status).toBe(403);
+      expect((await post(`/stores/${store.id}/rotate-credential`, viewer)).status).toBe(403);
+
+      // And nothing was touched on the way to being refused.
+      expect(await liveCredentials(store.id)).toBe(1);
+    });
+
+    /** An editor can author options and still not own the connection. */
+    it('refuses an editor on both routes', async () => {
+      const editor = await memberWithRole('editor', 'editor');
+      const store = await connectedStore();
+
+      expect((await post(`/stores/${store.id}/disconnect`, editor)).status).toBe(403);
+      expect((await post(`/stores/${store.id}/rotate-credential`, editor)).status).toBe(403);
+    });
+
+    it('admits an admin on both routes', async () => {
+      const admin = await memberWithRole('admin', 'admin');
+      const store = await connectedStore();
+
+      expect((await post(`/stores/${store.id}/rotate-credential`, admin)).status).toBe(200);
+      expect((await post(`/stores/${store.id}/disconnect`, admin)).status).toBe(200);
+    });
+
+    /**
+     * The two routes must declare **different** capabilities.
+     *
+     * No role today holds one without the other — owner and admin hold both,
+     * everyone else neither — so no HTTP test can separate them. Asserting the
+     * declarations directly is what catches a route being pointed at the wrong
+     * capability, which is the mutation the tests above cannot see.
+     */
+    it('declares a distinct capability for each route', () => {
+      const source = readFileSync('src/stores/stores.controller.ts', 'utf8');
+
+      expect(source).toContain('Capability.STORES_CONNECT');
+      expect(source).toContain('Capability.STORES_ROTATE_CREDENTIAL');
+      // Neither route may fall back to a capability a viewer holds.
+      expect(source).not.toContain('Capability.OPTION_SETS_VIEW');
     });
   });
 
