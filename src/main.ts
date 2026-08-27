@@ -1,12 +1,12 @@
 import 'reflect-metadata';
 import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
-import type { ValidationError } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { config as loadDotenv } from 'dotenv';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
+import { flattenValidationErrors } from './common/validation/flatten-validation-errors';
 import { RequestContextMiddleware } from './common/context/request-context.middleware';
 import { ConfigurationError, loadConfig } from './config/env';
 import { serveOpenApi } from './common/openapi/openapi';
@@ -148,29 +148,3 @@ async function bootstrap(): Promise<void> {
 }
 
 void bootstrap();
-
-/**
- * Flatten class-validator's tree into one entry per failed constraint.
- *
- * A single field can fail several constraints, and each is a separate thing the
- * user has to fix — collapsing them would hide all but one.
- */
-function flattenValidationErrors(
-  errors: ValidationError[],
-  parentPath = '',
-): Array<{ field: string; message: string }> {
-  return errors.flatMap((error) => {
-    const path = parentPath ? `${parentPath}.${error.property}` : error.property;
-
-    const own = Object.values(error.constraints ?? {}).map((message) => ({
-      field: path,
-      message,
-    }));
-
-    const nested = error.children?.length
-      ? flattenValidationErrors(error.children, path)
-      : [];
-
-    return [...own, ...nested];
-  });
-}

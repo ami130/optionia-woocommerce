@@ -41,6 +41,16 @@ export interface RequestContext {
   tenantRole?: string;
 
   /**
+   * The store acting, when the request authenticated through the store realm.
+   *
+   * Set by `StoreTokenGuard` and never by a user's token: a merchant's JWT names
+   * a person and a tenant, not a store. Present exactly when `realm` is
+   * `'store'`, which is what lets a handler tell "this tenant" from "this store
+   * within the tenant" without re-reading the credential.
+   */
+  storeId?: string;
+
+  /**
    * When the access token was issued, in seconds.
    *
    * Compared against the user's `sessionsInvalidatedAt` so a token issued before
@@ -135,6 +145,16 @@ export function getTenantId(): string | null {
 /** The authenticated user, or null outside an authenticated request. */
 export function getUserId(): string | null {
   return storage.getStore()?.userId ?? null;
+}
+
+/**
+ * The store acting, or null.
+ *
+ * Null for every tenant- and platform-realm request, which is the normal case —
+ * so callers branch on it rather than treating absence as an error.
+ */
+export function getStoreId(): string | null {
+  return storage.getStore()?.storeId ?? null;
 }
 
 /**

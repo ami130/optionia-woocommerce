@@ -202,7 +202,7 @@ One connection handshake, from `initiate` to `exchange`
 | `site_url` | VARCHAR(255) | The site that started it. `exchange` requires an exact match |
 | `callback` | VARCHAR(500) | Where the code is delivered; must share `site_url`'s origin |
 | `state_hash` | CHAR(64) | **SHA-256.** The plaintext travels the browser and is never persisted |
-| `challenge` | CHAR(43) | PKCE S256, stored **as sent** — it is already a digest |
+| `challenge` | CHAR(43) **`utf8mb4_bin`** | PKCE S256, stored **as sent** — it is already a digest |
 | `plugin_version` | VARCHAR(20) NULL | Telemetry: which build began the handshake |
 | `code_hash` | CHAR(64) NULL | **SHA-256.** Null until a merchant approves |
 | `tenant_id` | CHAR(36) FK NULL | Known only at `authorize` |
@@ -229,9 +229,19 @@ PKCE verification compare two different things. A dump of this table yields no
 usable CSRF token and no redeemable code — which is what lets `state` travel
 through the browser safely.
 
+**`challenge` is the only `utf8mb4_bin` column in the database.** It holds
+base64url, which uses both cases; under the schema-wide `utf8mb4_unicode_ci`
+MySQL reports two genuinely different challenges as equal, silently weakening
+PKCE while every honest client still succeeds. The other hash columns are hex,
+where case-insensitivity is harmless. `check-docs` asserts this collation against
+`information_schema` on every run, because **TypeORM does not diff collation** and
+`migration:generate` will report "no changes" no matter how far it drifts.
+
 ⚠️ **This table is never pruned**, like the three token tables before it, and it
-grows with every *attempted* connection rather than every successful one.
-Retention is [Phase 34](../../developePlan.md)'s alongside `refresh_tokens`.
+grows with every *attempted* connection rather than every successful one — so its
+volume follows traffic that never becomes a customer. Retention is
+[M34.1](../../developePlan.md)'s, which now names this table alongside
+`refresh_tokens` and the two email-token tables: four tables, one sweep.
 
 ---
 

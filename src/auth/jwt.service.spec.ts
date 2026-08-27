@@ -28,12 +28,20 @@ describe('AuthJwtService', () => {
   /**
    * The separation that matters. A token minted for a merchant must not
    * authenticate a platform route, and the check happens before any role logic.
+   *
+   * `'store'` is asserted as a **literal**, not through `TokenAudience`, because
+   * `[8c]` removed that member — a store presents an opaque credential, never a
+   * JWT. The assertion is kept rather than deleted with the enum: the property
+   * under test is that a tenant token is refused for the `store` audience, and
+   * that must hold whether or not this codebase has a name for the value. Asking
+   * it of the literal is in fact the stronger question, since it no longer
+   * depends on us having declared it.
    */
   it('refuses a token presented to the wrong realm', () => {
     const token = build().signTenantAccess('user-1', 'tenant-1', 'owner');
 
     expect(build().verify(token, TokenAudience.PLATFORM)).toBeNull();
-    expect(build().verify(token, TokenAudience.STORE)).toBeNull();
+    expect(build().verify(token, 'store' as TokenAudience)).toBeNull();
     expect(build().verify(token, TokenAudience.TENANT)).not.toBeNull();
   });
 

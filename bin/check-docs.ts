@@ -144,6 +144,43 @@ async function main(): Promise<void> {
       );
     }
 
+    // A base64 column under a case-insensitive collation compares two genuinely
+    // different values as equal, which silently weakens any check built on it.
+    // Hex hashes are unaffected — hex has no two spellings of one value — so this
+    // names the columns that are base64 rather than sweeping every char column.
+    //
+    // ⚠️ **TypeORM does not diff collation**, so `migration:generate` cannot
+    // catch a regression here and reports "no changes" however far the entity and
+    // the database have drifted. This check is the only thing that would.
+    const BINARY_REQUIRED: ReadonlyArray<readonly [string, string]> = [
+      ['store_connection_codes', 'challenge'],
+    ];
+
+    for (const [table, column] of BINARY_REQUIRED) {
+      const rows = await dataSource.query(
+        `SELECT COLLATION_NAME AS c FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [db, table, column],
+      );
+
+      // A renamed or dropped column must fail loudly. Finding nothing and saying
+      // nothing is how a check comes to verify zero things while still passing.
+      if (rows.length === 0) {
+        failures.push(
+          `${table}.${column} is required to be utf8mb4_bin but no such column exists; ` +
+            `update BINARY_REQUIRED in bin/check-docs.ts if it was renamed`,
+        );
+        continue;
+      }
+
+      if (rows[0].c !== 'utf8mb4_bin') {
+        failures.push(
+          `${table}.${column} is ${rows[0].c}; it holds base64 and must be utf8mb4_bin, ` +
+            `or MySQL compares different values as equal`,
+        );
+      }
+    }
+
     if (failures.length > 0) {
       console.error('\ndocs/DATABASE.md disagrees with the schema:\n');
       failures.forEach((f) => console.error(`  ✗ ${f}`));
@@ -155,7 +192,8 @@ async function main(): Promise<void> {
 
     console.log(
       `All doc checks passed. ${liveTables.length} tables, ` +
-        `${liveForeignKeys.length} foreign keys, ${checked} stated delete rules.`,
+        `${liveForeignKeys.length} foreign keys, ${checked} stated delete rules, ` +
+        `${BINARY_REQUIRED.length} binary-collation column(s).`,
     );
   } finally {
     await dataSource.destroy();

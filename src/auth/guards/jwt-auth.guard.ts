@@ -7,6 +7,7 @@ import { DomainException } from '../../common/errors/domain.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { AuthJwtService, TokenAudience } from '../jwt.service';
 import { IS_PUBLIC } from './public.decorator';
+import { IS_STORE_ROUTE } from './store-route.decorator';
 
 /**
  * Requires a valid access token from the tenant realm.
@@ -33,6 +34,29 @@ export class JwtAuthGuard implements CanActivate {
     ]);
 
     if (isPublic) {
+      return true;
+    }
+
+    /**
+     * Stand aside for the store realm.
+     *
+     * A store presents an opaque credential, not a JWT, so this guard cannot
+     * authenticate it — and rejecting it here would make `/store/*` unreachable
+     * before `StoreTokenGuard` ever ran.
+     *
+     * **This is not an opt-out from authentication.** Returning true leaves the
+     * request unauthenticated *by this guard*, and `StoreTokenGuard` must then
+     * admit it: it sets `realm`, `tenantId` and the credential, and nothing in
+     * the store realm works without them. A route marked `@StoreRoute()` that
+     * forgets `StoreTokenGuard` therefore fails closed at the data layer —
+     * `requireTenantId()` throws rather than returning unscoped rows.
+     */
+    const isStoreRoute = this.reflector.getAllAndOverride<boolean>(IS_STORE_ROUTE, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (isStoreRoute) {
       return true;
     }
 

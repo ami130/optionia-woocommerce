@@ -1,10 +1,7 @@
-import { Controller, Get, INestApplication, Module, UseGuards, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { Controller, Get, INestApplication, Module, UseGuards } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
 import { AuthModule } from '../src/auth/auth.module';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../src/auth/guards/tenant.guard';
@@ -12,7 +9,7 @@ import { Capability } from '../src/auth/permissions/capabilities';
 import { CapabilityGuard } from '../src/auth/permissions/capability.guard';
 import { RequireCapability } from '../src/auth/permissions/require-capability.decorator';
 import { getContext } from '../src/common/context/request-context';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { bootstrapTestApp } from './harness';
 import { deleteTenantsFor } from './cleanup-tenants';
 
 /**
@@ -92,22 +89,11 @@ describe('guards (e2e)', () => {
   const PASSWORD = 'a-sufficiently-long-password';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule, GuardProbeModule],
-    }).compile();
-
-    app = moduleRef.createNestApplication();
-
-    // Mirrors main.ts. Without it the guards write into a context that does not
-    // exist, and every assertion about the context would pass vacuously.
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-    await app.init();
+    // The harness installs the context middleware and the pipe `main.ts` ships.
+    // This suite previously omitted `forbidNonWhitelisted` and
+    // `enableImplicitConversion`, so it asserted against a weaker pipe than the
+    // one guarding the real endpoints.
+    app = await bootstrapTestApp([GuardProbeModule]);
 
     dataSource = app.get(DataSource);
     await cleanup();

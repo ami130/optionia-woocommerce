@@ -14,10 +14,23 @@ import { JwtService as NestJwtService } from '@nestjs/jwt';
  * because the route should not admit it exists.
  */
 
+/**
+ * The realms that authenticate with a **JWT**.
+ *
+ * ⚠️ **There is deliberately no `STORE` member.** A store presents an opaque
+ * credential checked against `store_credentials`, never a JWT — M8.6 requires
+ * revocation to be immediate and a JWT cannot be un-issued. A `STORE` audience
+ * existed here from Phase 6 and was used by nothing but a test; keeping it would
+ * imply a store token this code could mint, which is the opposite of the
+ * decision. Removed in `[8c]`; see ADR-039.
+ *
+ * `PLATFORM` is unused *today* and stays: it is a genuine JWT audience whose
+ * routes arrive in Phase 26. The two are not the same case — one is waiting, the
+ * other was wrong.
+ */
 export const TokenAudience = {
   PLATFORM: 'platform',
   TENANT: 'tenant',
-  STORE: 'store',
 } as const;
 
 export type TokenAudience = (typeof TokenAudience)[keyof typeof TokenAudience];

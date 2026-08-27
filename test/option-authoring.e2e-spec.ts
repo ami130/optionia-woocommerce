@@ -1,12 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { bootstrapTestApp } from './harness';
+
 
 /**
  * Group, option and value authoring over HTTP (M7.2, M7.3).
@@ -28,23 +26,7 @@ describe('option authoring (e2e)', () => {
   let setA = '';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
+    app = await bootstrapTestApp();
 
     dataSource = app.get(DataSource);
     await cleanup();
@@ -217,14 +199,38 @@ describe('option authoring (e2e)', () => {
   }
 
   async function newOption(groupId: string, key: string): Promise<string> {
-    return idOf(
-      await post(tokenA, `/groups/${groupId}/options`, {
-        key,
-        label: 'Print placement',
-        presentation: 'radio',
-      }),
-      'option',
-    );
+    const response = await post(tokenA, `/groups/${groupId}/options`, {
+      key,
+      label: 'Print placement',
+      presentation: 'radio',
+    });
+
+    /**
+     * A 404 here means the group vanished between its create and this call.
+     *
+     * `newGroup` grew the same diagnostic while the orphaned-tenant bug was
+     * being chased; this one did not, so the failure it produced was a bare
+     * `404 {}` with nothing to distinguish "group deleted", "set deleted" and
+     * "tenant deleted". Reporting which of the three it is costs one query on a
+     * path that is already failing.
+     */
+    if (response.status === 404) {
+      const [row] = await dataSource.query(
+        `SELECT g.id, g.deletedAt AS groupDeletedAt, os.id AS setId,
+                os.deletedAt AS setDeletedAt, os.tenantId,
+                (SELECT COUNT(*) FROM tenants t WHERE t.id = os.tenantId) AS tenantExists
+           FROM option_groups g JOIN option_sets os ON os.id = g.optionSetId
+          WHERE g.id = ?`,
+        [groupId],
+      );
+
+      throw new Error(
+        `Fixture failed to create an option: the group ${groupId} is not visible. ` +
+          `Row: ${row ? JSON.stringify(row) : 'MISSING ENTIRELY'}`,
+      );
+    }
+
+    return idOf(response, 'option');
   }
 
   describe('groups', () => {

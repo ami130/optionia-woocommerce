@@ -1,3 +1,5 @@
+import { config as loadDotenv } from 'dotenv';
+
 /**
  * Environment for the e2e run, applied before any suite imports `AppModule`.
  *
@@ -18,3 +20,19 @@
 process.env.THROTTLE_SHORT_LIMIT ??= '100000';
 process.env.THROTTLE_DEFAULT_LIMIT ??= '100000';
 process.env.THROTTLE_SUSTAINED_LIMIT ??= '100000';
+
+/**
+ * Load `.env` here, before any suite's imports are evaluated.
+ *
+ * Suites have historically called `loadDotenv()` as the first line of
+ * `beforeAll`, which is late: a suite that declares a test-only `@Module` at file
+ * scope has its decorators evaluated at **import** time, and anything reading
+ * configuration then — `JwtModule.registerAsync`, for one — throws
+ * `Missing required environment variable` before `beforeAll` ever runs.
+ *
+ * `tenant-isolation` hit exactly that when it moved to the shared bootstrap. The
+ * per-suite call is not wrong, just too late to be relied on, and `dotenv` does
+ * not overwrite an existing variable — so loading here is idempotent and every
+ * later `loadDotenv()` becomes a no-op rather than a conflict.
+ */
+loadDotenv();

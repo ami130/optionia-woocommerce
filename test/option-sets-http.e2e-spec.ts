@@ -1,12 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { bootstrapTestApp } from './harness';
+
 
 /**
  * Option set CRUD over HTTP (M7.1).
@@ -29,26 +27,7 @@ describe('option sets (e2e)', () => {
   let setB = '';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        // Mirrors main.ts. Query parameters arrive as strings, so without this
-        // `?limit=2` fails `@IsInt` and the suite tests a pipe the application
-        // does not use — the same mistake as omitting the global prefix.
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    await app.init();
+    app = await bootstrapTestApp();
 
     dataSource = app.get(DataSource);
     await cleanup();

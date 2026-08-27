@@ -9,20 +9,16 @@ import {
   Patch,
   Query,
   UseGuards,
-  ValidationPipe,
 } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
 import * as request from 'supertest';
 import { DataSource, Repository } from 'typeorm';
 
-import { AppModule } from '../src/app.module';
 import { AuthModule } from '../src/auth/auth.module';
 import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../src/auth/guards/tenant.guard';
-import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
 import { TenantScopedRepository } from '../src/common/tenancy/tenant-scoped.repository';
 import { OptionSet } from '../src/option-sets/entities/option-set.entity';
+import { bootstrapTestApp } from './harness';
 
 /**
  * Tenant isolation, permanently (M6.6).
@@ -143,18 +139,12 @@ describe('tenant isolation (M6.6)', () => {
   const A_IDS = [`${NS}-a-set-1`, `${NS}-a-set-2`];
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule, IsolationModule],
-    }).compile();
-
-    app = moduleRef.createNestApplication();
-    const context = new RequestContextMiddleware();
-    app.use(context.use.bind(context));
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(new ValidationPipe({ transform: true }));
-    await app.init();
+    // Bootstrapped through the shared harness so the pipe matches `main.ts`.
+    // This suite previously ran `new ValidationPipe({ transform: true })` — no
+    // `whitelist`, no `forbidNonWhitelisted` — which meant the permanent
+    // acceptance criterion for tenant scoping was asserting against a pipe
+    // strictly weaker than the one shipped.
+    app = await bootstrapTestApp([IsolationModule]);
 
     dataSource = app.get(DataSource);
     await cleanup();

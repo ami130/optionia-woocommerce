@@ -71,8 +71,24 @@ export class StoreConnectionCode extends BaseEntity {
    * **Not hashed again.** It is already a digest, and `exchange` verifies by
    * hashing the presented verifier and comparing — a second hash here would
    * compare two different things and never match.
+   *
+   * ⚠️ **`utf8mb4_bin`, and it is the only column in the database that needs
+   * it.** Every other hash here is hex (`digest('hex')`), where the schema-wide
+   * `utf8mb4_unicode_ci` is harmless — hex has no two spellings of one value.
+   * base64url does: it uses both cases, so under `_ci` MySQL considers two
+   * genuinely different challenges equal. Verified against MySQL 9.6:
+   *
+   * ```sql
+   * SELECT 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'
+   *      = 'e9mELHOA2oWVfREmtjGUchAOEk1T8urwBUgjssTW-CM';  -- returns 1 under _ci
+   * ```
+   *
+   * That is a weakened PKCE check that no test would catch, because every
+   * honest client still succeeds — the failure is only visible to an attacker
+   * looking for it. Binary collation makes the comparison mean what it says
+   * whether `[8e]` verifies in SQL or in JS.
    */
-  @Column({ type: 'char', length: 43 })
+  @Column({ type: 'char', length: 43, collation: 'utf8mb4_bin' })
   challenge: string;
 
   /** Telemetry: which plugin build started this handshake. */

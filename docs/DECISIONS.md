@@ -2059,6 +2059,57 @@ JWT cannot be un-issued.** A revoked store would keep working until expiry.
 `TokenAudience.STORE` exists in the Phase 6 JWT enum, is used by nothing, and
 contradicts this by implying a store presents a JWT. Removed in `[8c]`.
 
+### Addendum — what `[8c]` actually contained
+
+"Remove an unused enum member" was the wrong description of this step in three
+ways, each found by looking rather than by assuming.
+
+**`TokenAudience.STORE` was not unused.** It had one reference:
+`jwt.service.spec.ts`, inside *"refuses a token presented to the wrong realm"* —
+the cross-realm test that is the API-boundary form of AC8. Deleting the member
+and then deleting the line the compiler complained about would have left that
+test passing, identically named, proving **one realm less**. The assertion is
+kept against the literal `'store'`: a tenant token must be refused for that
+audience whether or not this codebase has a name for the value, which is the
+stronger question anyway.
+
+**`PLATFORM` is in the same position and must stay.** It is also referenced only
+by the enum and that test. The difference is not usage but kind: `PLATFORM` is a
+genuine JWT audience awaiting its Phase 26 routes, while no `aud` value can ever
+be right for a store, because a store presents no JWT. Recorded because the next
+reader will otherwise "tidy up" the symmetry.
+
+**`@Public()` could not be used for store routes.** Authentication is global and
+`@Public()` is the only opt-out, but it means *no authentication at all* — a
+store route behind it whose guard was missing or short-circuited would be open to
+anyone, and every test would still pass. That is the fail-open shape
+`CapabilityGuard` was already bitten by. `@StoreRoute()` is narrower: it tells
+`JwtAuthGuard` to stand aside for a different realm, and a route carrying it
+without `StoreTokenGuard` reaches the handler with no realm, tenant or store —
+unusable rather than unprotected, since `requireTenantId()` throws instead of
+returning unscoped rows. A permanent probe asserts this rather than trusting the
+argument.
+
+**The context already modelled the realm.** `RequestContext.realm` was declared
+`'platform' | 'tenant' | 'store'` in Phase 6 and `userId` was already optional, so
+a store request needed no new shape — only `storeId`, added here. `audit_logs.user_id`
+is nullable, so a store-authenticated write audits with the actor absent rather
+than invented.
+
+**`last_used_at` is throttled to 5 minutes**, not written per request. Its
+consumers — support, stale-install detection — ask in days, and the heartbeat
+alone is 60 requests an hour per store. The write is also swallowed on failure: a
+telemetry column must not turn an authenticated request into a 500.
+
+**Eleven mutations, one of which survived.** Removing the revocation check, the
+expiry check, the stand-aside, the context write and the throttle each broke
+tests. Changing the guard's `INNER JOIN` to a `LEFT JOIN` broke **nothing** — the
+test named "refuses a credential whose store was deleted" never reached the join,
+because `store_credentials` cascades on store deletion and the row was already
+gone. The test proved the cascade while claiming to prove the join. Both are now
+tested separately, the second by creating an impossible row with the constraint
+suspended, and the mutation is caught.
+
 ### Consequences
 
 **The deferred table was misattributing three surfaces.** One row read
@@ -2130,11 +2181,93 @@ arrives as a PKCE S256 digest already. Hashing it again would make `exchange`
 compare `SHA-256(SHA-256(verifier))` against `SHA-256(verifier)` — a check that
 fails for every honest client while looking like defence in depth.
 
+**It is also the one column in the database that is `utf8mb4_bin`.** base64url
+uses both cases, so under the schema-wide `utf8mb4_unicode_ci` MySQL considers
+two genuinely different challenges equal — verified on 9.6, where
+`'E9Melhoa2Owv…' = 'e9mELHOA2oWV…'` returns `1`, and where inserting `'abc123'`
+then `'ABC123'` was rejected as a duplicate key. Every other hash column here is
+hex, which has no two spellings of one value, so this is the only column that
+needed it.
+
+The hazard was invisible in the ordinary way: no test fails, because every honest
+client still succeeds. Worse, **TypeORM does not diff collation** — after the
+entity was corrected, `migration:generate` reported "no changes", so the
+migration had to be hand-written and a generated one would have left the entity
+and the database permanently disagreeing. `check-docs` now asserts the collation
+directly against `information_schema`, and fails both when it is wrong and when
+the named column is missing entirely; both paths are mutation-proven.
+
 **Nothing in the table is readable as a secret**, which is what lets `state` cross
 the browser at all: `state_hash` and `code_hash` are digests, `challenge` is one by
 construction. A dump yields no usable CSRF token and no redeemable code.
 
 ⚠️ **It is a fourth accumulating table.** It grows per *attempted* connection, not
 per successful one — so unlike `refresh_tokens` its growth is driven by traffic
-that never becomes a customer. Retention is Phase 34's, alongside the three token
-tables already waiting there.
+that never becomes a customer and cannot be bounded by estimating the user base.
+Retention is **M34.1**'s, and the plan's prune note now names this table
+explicitly rather than leaving a doc pointing at an entry that never mentioned
+it.
+
+### Addendum — four suites were testing a pipe nobody ships
+
+Auditing `[8b]` led here indirectly. An intermittent e2e failure prompted a check
+of how suites bootstrap, which found the harness built during the Phase 7 audit
+covering **7 of 23 suites** — and, more seriously, that four of the unmigrated
+ones configured a `ValidationPipe` weaker than `main.ts`:
+
+| Suite | Missing |
+|---|---|
+| `tenant-isolation` | `whitelist`, `forbidNonWhitelisted`, `enableImplicitConversion` |
+| `guards`, `rate-limit` | `forbidNonWhitelisted`, `enableImplicitConversion` |
+| `auth-http` | `enableImplicitConversion`, and its own drifted `exceptionFactory` |
+
+Each would pass while the shipped pipe rejected the request under test. The worst
+was `tenant-isolation` — the permanent acceptance criterion for AC5 — asserting
+tenant scoping with no `whitelist` at all. All four now share `bootstrapTestApp`,
+and their assertions still hold under the stricter pipe, which is the result that
+makes the migration safe rather than merely tidy.
+
+**`flattenValidationErrors` is no longer private to `main.ts`.** It could not be
+imported, so suites needing the production error shape rewrote it, and
+`auth-http`'s copy read `error.property` directly — losing the nested path, so it
+reported `postcode` where the application reports `address.postcode`. It now lives
+in `src/common/validation/`, imported by both.
+
+**Nine suites were deliberately left alone.** They open a `DataSource` and never
+boot an application; the harness bootstraps one, so migrating them would add cost
+and prove less. `openapi` was also left: it installs no pipe on purpose. A
+migration that makes a suite test something different is not a refactor.
+
+**`.env` now loads in `setup-e2e.ts`.** Suites called `loadDotenv()` first thing
+in `beforeAll`, which is too late for a suite declaring a test-only `@Module` at
+file scope — its decorators evaluate at *import* time, and `tenant-isolation`
+threw `Missing required environment variable: JWT_SECRET` on the way to the
+shared bootstrap. `dotenv` never overwrites, so loading once up front is
+idempotent.
+
+**The flake itself remains open, and two theories were disproved.** It reproduces
+at roughly **1 run in 5** and always the same way: `option-authoring` creates a
+group, then `newOption` gets a 404 attaching to it moments later. What it is not:
+
+- **Not parallel contention.** `maxWorkers` is 1 — the suites run serially.
+- **Not the orphaned-tenant bug.** Measured directly: the suite leaks zero
+  tenants and zero users, and the table holds one row, not 6,900.
+- **Not a namespace collision.** All 17 suite namespaces are distinct, and every
+  `DELETE` in `test/` is namespace-scoped.
+- **Not introduced by `[8b]`.** `newGroup` already carried a diagnostic for it,
+  added earlier against "an intermittent cross-suite failure (roughly one run in
+  six)" — the same rate, predating this work.
+
+`newOption` now carries the diagnostic `newGroup` had, so the next occurrence
+reports whether the group, the set, or the tenant went missing instead of a bare
+`404 {}`. That is deliberately an instrument rather than a fix: the failure is
+rare enough that guessing at a cause would more likely bury it than close it.
+
+**`[8d]` must register the entity.** There is no `StoresModule` yet — `src/stores`
+holds entities only — so nothing declares
+`TypeOrmModule.forFeature([StoreConnectionCode])`. Migrations find the entity by
+glob, which is why every gate passes today and why the omission is invisible: the
+first symptom would be a resolution failure at runtime in `[8d]` itself. Creating
+the module now, with no controller or service to put in it, would be scaffolding
+built ahead of its purpose; recording the requirement here is the cheaper half of
+the trade.

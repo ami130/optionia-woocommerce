@@ -1,12 +1,10 @@
-import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { config as loadDotenv } from 'dotenv';
+import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
 import { deleteTenantsFor } from './cleanup-tenants';
 
-import { AppModule } from '../src/app.module';
+import { bootstrapTestApp } from './harness';
 
 /**
  * The auth endpoints over HTTP.
@@ -43,33 +41,12 @@ describe('auth endpoints (e2e)', () => {
   const PASSWORD = 'a-sufficiently-long-password';
 
   beforeAll(async () => {
-    loadDotenv();
-
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-
-    app = moduleRef.createNestApplication();
-    // Mirror main.ts. Without the prefix every request 404s, and without the
-    // pipe the validation tests would pass for the wrong reason.
-    app.setGlobalPrefix('v1', { exclude: ['health'] });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        // Mirrors main.ts. Without it these tests would assert on a shape the
-        // application does not produce.
-        exceptionFactory: (errors) =>
-          new BadRequestException(
-            errors.flatMap((error) =>
-              Object.values(error.constraints ?? {}).map((message) => ({
-                field: error.property,
-                message,
-              })),
-            ),
-          ),
-      }),
-    );
-    await app.init();
+    // The harness installs the prefix, the context middleware and the exact pipe
+    // `main.ts` ships — including its `exceptionFactory`. This suite used to
+    // build its own, and that copy read `error.property` directly, so a nested
+    // failure reported `postcode` where the application reports
+    // `address.postcode`. It also omitted `enableImplicitConversion`.
+    app = await bootstrapTestApp();
 
     dataSource = app.get(DataSource);
   }, 60_000);

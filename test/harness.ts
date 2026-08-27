@@ -1,4 +1,4 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { config as loadDotenv } from 'dotenv';
 import { randomUUID } from 'node:crypto';
@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 
 import { AppModule } from '../src/app.module';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { flattenValidationErrors } from '../src/common/validation/flatten-validation-errors';
 import { deleteTenantsFor } from './cleanup-tenants';
 
 /**
@@ -58,11 +59,27 @@ export interface Harness {
  * parameters arrive as strings, so `?limit=2` fails `@IsInt` and the suite
  * proves something about a configuration nobody ships. That was a real bug in
  * 7e, found only because a fixture happened to fail.
+ *
+ * It recurred. An audit after `[8b]` found four suites still bootstrapping by
+ * hand with weaker pipes than `main.ts` ships: two omitted both
+ * `forbidNonWhitelisted` and `enableImplicitConversion`, and `tenant-isolation`
+ * — the permanent acceptance criterion for tenant scoping — ran with no
+ * `whitelist` at all. Each would pass while the shipped pipe rejected the very
+ * request under test. Copying four options correctly is not the kind of thing
+ * that stays correct; calling one function is.
+ *
+ * `extraImports` exists for suites that mount a test-only controller, which is
+ * why they had hand-rolled bootstraps in the first place. Taking modules here
+ * lets them share this configuration instead of re-deriving it.
  */
-export async function bootstrapTestApp(): Promise<INestApplication> {
+export async function bootstrapTestApp(
+  extraImports: readonly unknown[] = [],
+): Promise<INestApplication> {
   loadDotenv();
 
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({
+    imports: [AppModule, ...extraImports],
+  } as never).compile();
   const app = moduleRef.createNestApplication();
   const context = new RequestContextMiddleware();
 
@@ -74,6 +91,12 @@ export async function bootstrapTestApp(): Promise<INestApplication> {
       forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
+
+      // The same factory `main.ts` installs, imported rather than re-written.
+      // Without it the pipe emits flat strings and every suite asserting on
+      // `{ field, message }` is asserting on a shape the application does not
+      // produce — which is what `auth-http` was doing with its own copy.
+      exceptionFactory: (errors) => new BadRequestException(flattenValidationErrors(errors)),
     }),
   );
 

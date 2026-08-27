@@ -20,6 +20,7 @@ import { AuthService } from './auth.service';
 import { AuthTokensService } from './auth-tokens.service';
 import { AuthJwtService } from './jwt.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { StoreTokenGuard } from './guards/store-token.guard';
 import { TenantGuard } from './guards/tenant.guard';
 import { CapabilityGuard } from './permissions/capability.guard';
 import { parseDuration, SessionsService } from './sessions.service';
@@ -60,6 +61,9 @@ import { RefreshToken } from './entities/refresh-token.entity';
     JwtAuthGuard,
     TenantGuard,
     CapabilityGuard,
+    // Injects only `DataSource`, which is global — so unlike `TenantGuard` it
+    // carries no repository requirement into the modules that apply it.
+    StoreTokenGuard,
     {
       provide: AuthJwtService,
       inject: [JwtService],
@@ -113,6 +117,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
     JwtAuthGuard,
     TenantGuard,
     CapabilityGuard,
+    StoreTokenGuard,
     // `TenantGuard` is a plain class, so Nest constructs it in whichever module
     // applies it — and that module needs the repository it injects. Exporting
     // the guard without this makes every consumer fail at boot, in a message

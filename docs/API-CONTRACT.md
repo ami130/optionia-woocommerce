@@ -1109,9 +1109,50 @@ throughout.
 > be *immediate*, and a JWT cannot be un-issued — a revoked store would keep
 > working until expiry.
 >
-> `TokenAudience.STORE` exists in the JWT audience enum from Phase 6 and is used by
-> nothing. It contradicts this decision by implying a store presents a JWT, and is
-> removed in `[8c]`.
+> `TokenAudience.STORE` existed in the JWT audience enum from Phase 6 and
+> contradicted this decision by implying a store presents a JWT. **Removed in
+> `[8c]`.** `PLATFORM` stays: it is a real JWT audience whose routes arrive in
+> Phase 26, so one was waiting and the other was wrong.
+
+### `StoreTokenGuard` **[8c]**
+
+**Credential:** `Authorization: Bearer <token>` — the same header shape as a
+tenant JWT carrying a different kind of secret. The plugin already ships this
+(`Api/Client.php`), and under [M7.7](../../developePlan.md) an installed plugin
+cannot be redeployed, so the cloud adapts to the header rather than choosing one.
+
+The guard resolves the credential by `SHA-256`, joins to `stores` for the tenant
+the credential does not carry, and checks three columns:
+
+| Check | Rule |
+|---|---|
+| `revoked_at` | non-null → refuse. This is why the credential is not a JWT |
+| `expires_at` | null means **no expiry**; a past value → refuse |
+| store row | absent → refuse, via an `INNER JOIN` rather than a null tenant |
+
+**Every failure is the same `401 UNAUTHENTICATED`** — missing, malformed,
+unknown, revoked, expired, or store-deleted. Distinguishing them tells an
+attacker which half of a guess was right, and gives the plugin one reconnect
+trigger instead of six.
+
+**Context established:** `realm: 'store'`, `tenant_id` (through the store), and
+`store_id`. **No user** — a store is not a person, and `audit_logs.user_id` is
+nullable so a store-authenticated write records an absent actor rather than an
+invented one.
+
+**`last_used_at` is throttled to one write per 5 minutes.** The column answers
+"when did this store last talk to us", a question asked in days; writing it on
+every request would turn a read path into a write path, and the heartbeat alone
+is 60 requests an hour per store. The write is also non-fatal: a failed
+timestamp must not turn an authenticated request into a `500`.
+
+**Routes in this realm carry `@StoreRoute()`, never `@Public()`.** Authentication
+is global and `@Public()` means *none* — a store route behind it that lost its
+guard would be open to anyone. `@StoreRoute()` instead tells `JwtAuthGuard` to
+stand aside for another realm: a route that carries it and forgets
+`StoreTokenGuard` reaches the handler with no realm, no tenant and no store, so
+it is unusable rather than unprotected. A permanent probe in
+`test/store-realm.e2e-spec.ts` asserts exactly that.
 
 ### `POST /v1/store/heartbeat` **[8h]**
 
