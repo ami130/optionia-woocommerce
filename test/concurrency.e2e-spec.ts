@@ -244,8 +244,13 @@ describe('optimistic locking (e2e)', () => {
 
     it('allows a delete carrying the current version', async () => {
       const { id, rowVersion } = await loaded();
+      const response = await del(`/option-sets/${id}?rowVersion=${rowVersion}`);
 
-      expect((await del(`/option-sets/${id}?rowVersion=${rowVersion}`)).status).toBe(204);
+      // Reports the body on failure: a bare status tells you a delete was
+      // refused, not which validator refused it.
+      expect(
+        response.status === 204 ? 204 : `${response.status} ${JSON.stringify(response.body)}`,
+      ).toBe(204);
     }, 60_000);
 
     /**
@@ -283,6 +288,78 @@ describe('optimistic locking (e2e)', () => {
 
       expect((await post(`/option-sets/${id}/publish`, { rowVersion: current })).status).toBe(201);
     }, 90_000);
+  });
+
+  describe('rollback', () => {
+    /** A set with two published versions, and the version a client would hold. */
+    async function published(): Promise<{ id: string; rowVersion: number }> {
+      const id = idOf(await post('/option-sets', { name: 'Rollable', storeId }), 'set');
+      const group = idOf(await post(`/option-sets/${id}/groups`, { label: 'G' }), 'group');
+      const option = idOf(
+        await post(`/groups/${group}/options`, { key: 'k', label: 'K', presentation: 'radio' }),
+        'option',
+      );
+      await post(`/options/${option}/values`, { valueKey: 'v', label: 'V' });
+
+      await post(`/option-sets/${id}/publish`, {});
+      await post(`/option-sets/${id}/publish`, {});
+
+      return { id, rowVersion: (await get(`/option-sets/${id}`)).body.data.rowVersion as number };
+    }
+
+    /**
+     * The most consequential write on a set: it changes what every storefront
+     * receives, and the merchant picks a version from a list that may have moved.
+     */
+    it('refuses a rollback whose history was stale', async () => {
+      const { id, rowVersion } = await published();
+
+      // A colleague publishes again; the merchant's history list is now stale.
+      await post(`/option-sets/${id}/publish`, {});
+
+      const conflict = await post(`/option-sets/${id}/rollback`, { version: 1, rowVersion });
+
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.error.code).toBe('VERSION_MISMATCH');
+    }, 120_000);
+
+    it('rolls back when the version is current', async () => {
+      const { id, rowVersion } = await published();
+
+      const response = await post(`/option-sets/${id}/rollback`, { version: 1, rowVersion });
+
+      expect(response.status).toBe(201);
+      // A new version, not a rewrite: 2 published + 1 rollback = 3.
+      expect(response.body.data.version).toBe(3);
+    }, 120_000);
+
+    it('accepts a rollback with no version, like every other write', async () => {
+      const { id } = await published();
+
+      expect((await post(`/option-sets/${id}/rollback`, { version: 1 })).status).toBe(201);
+    }, 120_000);
+
+    /**
+     * Rollback changes what storefronts receive, not what the editor shows — a
+     * rollback that overwrote the draft would destroy the edits the merchant was
+     * making when they hit the problem.
+     */
+    it('leaves the working draft untouched', async () => {
+      const { id, rowVersion } = await published();
+
+      const added = idOf(
+        await post(`/option-sets/${id}/groups`, { label: 'Draft work' }),
+        'group',
+      );
+      const current = (await get(`/option-sets/${id}`)).body.data.rowVersion;
+
+      await post(`/option-sets/${id}/rollback`, { version: 1, rowVersion: current });
+
+      const groups = (await get(`/option-sets/${id}/groups`)).body.data as Array<{ id: string }>;
+
+      expect(groups.some((group) => group.id === added)).toBe(true);
+      void rowVersion;
+    }, 120_000);
   });
 
   describe('when no version is sent', () => {

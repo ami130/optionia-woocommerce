@@ -33,6 +33,19 @@ export class RollbackDto {
   @Min(1)
   version: number;
 
+  /**
+   * The set's version the client loaded (M7.4b).
+   *
+   * Rollback is the most consequential write on an option set — it changes what
+   * every storefront receives — and the merchant picks a version from a history
+   * list. A stale list means reverting on the strength of something that has
+   * since changed.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  rowVersion?: number;
+
   @IsOptional()
   @IsString()
   @MaxLength(500)

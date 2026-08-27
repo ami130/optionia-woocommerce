@@ -202,7 +202,7 @@ export class OptionSetsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RollbackDto,
   ): Promise<PublishResult> {
-    return this.publishing.rollback(id, dto.version, dto.note);
+    return this.publishing.rollback(id, dto.version, dto.note, dto.rowVersion);
   }
 
   @Post(':id/duplicate')

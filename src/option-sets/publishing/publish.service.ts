@@ -167,7 +167,18 @@ export class PublishService {
       changes: {
         ...diff({ version: context.tree.set.version }, { version: result.version }),
         configVersion: result.configVersion,
-        warnings: findings.length,
+        /**
+         * **Which** warnings, not how many.
+         *
+         * A count answers "were there any?"; support is asked "did anyone know
+         * this set was assigned to nothing when it went live?" — and that needs
+         * the codes. The messages are omitted: they are English, they change,
+         * and the code is the stable fact.
+         */
+        warnings: findings.map((finding) => ({
+          code: finding.code,
+          subject: finding.subject,
+        })),
       },
     });
 
@@ -227,7 +238,24 @@ export class PublishService {
    * rollback that silently overwrote a merchant's working draft would destroy
    * the edits they were making when they hit the problem.
    */
-  async rollback(optionSetId: string, version: number, note?: string): Promise<PublishResult> {
+  async rollback(
+    optionSetId: string,
+    version: number,
+    note?: string,
+    expectedRowVersion?: number,
+  ): Promise<PublishResult> {
+    /**
+     * The optimistic lock matters **most** here (M7.4b).
+     *
+     * Rollback changes what every storefront receives, and a merchant chooses a
+     * version from a history list. If that list is stale — a colleague published
+     * while it was on screen — the merchant reverts based on something that is
+     * no longer true, and the version numbers they were reading have moved.
+     *
+     * Checked before the snapshot is read, so a stale request costs nothing.
+     */
+    assertVersionMatches((await this.trees.load(optionSetId)).set.rowVersion, expectedRowVersion);
+
     const snapshot = await this.version(optionSetId, version);
 
     const result = await this.dataSource.transaction(async (manager) => {

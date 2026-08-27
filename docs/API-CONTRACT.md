@@ -572,6 +572,18 @@ store's `config_version`, and trigger invalidation.
 > later phases. They are **registered extension points**, so Phase 14 and Phase 17
 > add a validator to a list rather than reopening the publish transaction.
 
+> **Two of the five checks above are also deferred, and for different reasons.**
+> *"Required options hidden by their own rule"* needs rule **evaluation**, which
+> is M17.3. *"Pricing referencing a removed value"* has no subject: no registered
+> pricing schema names a value id, so there is nothing to dangle until a type that
+> does exists. The three that run today — options with no values, rules whose
+> target was deleted, and a set assigned to nothing — are joined by a fourth this
+> phase added: a set with no enabled options at all.
+>
+> Findings carry a `severity`. A **blocker** refuses the publish (`400`); a
+> **warning** does not, and is recorded in the audit trail by code, so "did anyone
+> know this went live unassigned?" is answerable afterwards.
+
 **Publish is serialized per option set.** Two simultaneous publishes must not
 interleave into a half-built snapshot; the second waits and then sees the first's
 version.
@@ -590,7 +602,20 @@ history.** Version 8 rolling back to 5 produces version 9 whose content matches 
 Rewriting would make the audit trail a lie, and the merchant who needs rollback at
 9pm is exactly the one who will later need to know what happened.
 
-**Errors:** `NOT_FOUND` (404) for an unknown version; `INSUFFICIENT_ROLE` (403).
+**⚠️ Rollback restores what storefronts receive, not what the editor shows.**
+The snapshot becomes the published document; the live rows — the working draft —
+are left exactly as they are. Those are different things: a rollback that
+overwrote the draft would destroy the edits a merchant was making when they hit
+the problem, which is the work they are least willing to lose. A dashboard should
+say so, because an editor that looks unchanged after a rollback otherwise reads
+as a rollback that failed.
+
+It carries `rowVersion` like every other write. A merchant picks a version from a
+history list, and a list that went stale while it was on screen means reverting on
+the strength of something that has since changed.
+
+**Errors:** `NOT_FOUND` (404) for an unknown version; `VERSION_MISMATCH` (409) if
+the set changed since the history was loaded; `INSUFFICIENT_ROLE` (403).
 
 `GET /option-sets/:id/versions` lists history newest first **without** snapshots,
 which are large and rarely all wanted at once.

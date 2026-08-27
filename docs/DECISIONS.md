@@ -1561,3 +1561,22 @@ failed nothing, because the test's "unchanged" save differed from the current
 name and so reached the write path anyway; it now changes the set's version via a
 child edit while leaving the name alone, which is the only shape that exercises
 that branch.
+
+### Addendum — rollback was the one write without a lock
+
+A combined audit of 7i and 7j found `RollbackDto` had no `rowVersion`, so sending
+one was rejected as an unknown field. Every other write on an option set carried
+the lock; rollback did not — and it is the most consequential of them, because it
+changes what every storefront receives and the merchant chooses from a history
+list that may have moved while it was on screen.
+
+Two things were confirmed in the same audit rather than assumed. Five concurrent
+publishes, three times over, produced version numbers `[1,2,3,4,5]` — unique and
+contiguous every time, with `option_sets.version` matching the highest snapshot.
+M7.4b's "the second waits and then sees the first's version" is measured. And a
+published snapshot is byte-identical to `/preview` apart from its version stamp,
+so what a merchant reviews is what a storefront receives.
+
+Publish now records **which** warnings it proceeded through, by code, not how many.
+A count answers "were there any?"; support is asked "did anyone know this set was
+assigned to nothing when it went live?", and only the codes answer that.

@@ -529,5 +529,43 @@ describe('publish (e2e)', () => {
         expect(row.ip).not.toBeNull();
       });
     }, 120_000);
+
+    /**
+     * A count answers "were there any?". Support is asked "did anyone know this
+     * set was assigned to nothing when it went live?", and only the codes answer
+     * that.
+     */
+    it('records which warnings a publish proceeded with, not how many', async () => {
+      const { set } = await publishable();
+
+      // `publishable` assigns the set, so remove that to raise a warning the
+      // publish will proceed through.
+      await dataSource.query(`DELETE FROM option_set_assignments WHERE optionSetId = ?`, [set]);
+
+      await post(`/option-sets/${set}/publish`);
+
+      const [row] = await dataSource.query(
+        `SELECT changes FROM audit_logs WHERE resourceId = ? AND action = 'option_set.published'`,
+        [set],
+      );
+
+      expect(row.changes.warnings).toEqual([
+        { code: 'SET_HAS_NO_ASSIGNMENT', subject: `set:${set}` },
+      ]);
+    }, 120_000);
+
+    /** A clean publish records an empty list, not a missing field. */
+    it('records an empty warning list when nothing was wrong', async () => {
+      const { set } = await publishable();
+
+      await post(`/option-sets/${set}/publish`);
+
+      const [row] = await dataSource.query(
+        `SELECT changes FROM audit_logs WHERE resourceId = ? AND action = 'option_set.published'`,
+        [set],
+      );
+
+      expect(row.changes.warnings).toEqual([]);
+    }, 120_000);
   });
 });

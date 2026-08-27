@@ -189,7 +189,31 @@ describe('option authoring (e2e)', () => {
   }
 
   async function newGroup(label = 'Group'): Promise<string> {
-    return idOf(await post(tokenA, `/option-sets/${setA}/groups`, { label }), 'group');
+    const response = await post(tokenA, `/option-sets/${setA}/groups`, { label });
+
+    /**
+     * A 404 here means the parent set is not visible, which is the one failure
+     * this helper cannot diagnose from the response alone. Reported with the
+     * set's actual state, because "creating a group returned 404" and "the set
+     * it belongs to was deleted" are very different problems and only the second
+     * is actionable.
+     *
+     * Added after an intermittent cross-suite failure (roughly one run in six)
+     * that the plain message could not explain.
+     */
+    if (response.status === 404) {
+      const [row] = await dataSource.query(
+        `SELECT status, deletedAt, tenantId FROM option_sets WHERE id = ?`,
+        [setA],
+      );
+
+      throw new Error(
+        `Fixture failed to create a group: the set ${setA} is not visible. ` +
+          `Row: ${row ? JSON.stringify(row) : 'MISSING ENTIRELY'}`,
+      );
+    }
+
+    return idOf(response, 'group');
   }
 
   async function newOption(groupId: string, key: string): Promise<string> {
