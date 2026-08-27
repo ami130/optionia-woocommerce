@@ -2101,6 +2101,69 @@ consumers — support, stale-install detection — ask in days, and the heartbea
 alone is 60 requests an hour per store. The write is also swallowed on failure: a
 telemetry column must not turn an authenticated request into a 500.
 
+### Addendum — `[8d]`, and three gates that excluded by path
+
+**Reconnection reuses the store row.** `uq_stores_tenant_url` is
+`(tenant_id, store_url)` and M8.1b runs `REVOKED → DISCONNECTED → CONNECTING`,
+so re-approving a site the tenant already holds is the *recovery* path the plan
+sends merchants down after a revocation, a site-URL change or a rotation. A
+`409 CONFLICT` would tell a merchant who was told to reconnect that they cannot.
+Reuse also preserves `store_id`, and with it the store's history, analytics and
+every row referencing it — a second row would orphan all three silently.
+
+The lookup is `(tenantId, storeUrl)` and never URL alone, which is a security
+boundary rather than a detail: two tenants may legitimately hold one address, and
+matching on URL would let one tenant's approval seize the other's store. Verified
+by mutation — dropping `tenantId` from that query broke nothing until a test with
+two tenants at one URL existed.
+
+**`initiate` is not audited, and that is structural.** It is `@Public()` and
+carries no tenant, while `audit_logs` is read through a tenant-scoped query — an
+entry with a null tenant is invisible to every consumer, written to satisfy a rule
+nobody can read. M8.1b's "every transition is logged" is therefore read as every
+transition **of a store**, and a pending request is not yet a store: nothing
+exists to transition until `authorize` creates or reuses one.
+
+**Single-use is a conditional write, and the read-side check was hiding it.**
+`approvedAt !== null` rejects the ordinary second attempt, so removing
+`WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
+three simultaneous approvals exercise it, and that test now exists.
+
+#### Three gates excluded public routes by path
+
+`check-openapi`, `check-isolation` and the OpenAPI e2e suite each skipped
+`/v1/auth/` and `/health` **by name**. That was correct while those were the only
+unauthenticated routes and wrong the moment `/connect/initiate` appeared — but the
+worse half is the other direction: a route that *lost* its `@Public()` would have
+gone on being exempted, unguarded and unnoticed, by all three.
+
+All three now read the `@Public()` marker itself, from the handler and from the
+controller, because Nest resolves both and checking only one reported `/health` as
+unguarded. Mutation-proven in both directions: a route losing its realm fails, and
+a route losing `@Public()` immediately fails for want of one.
+
+`POST /v1/connect/authorize` is exempt from the isolation matrix with a reason —
+it names a connection request, not a tenant's resource, so there is no foreign id
+to refuse. The property that matters is asserted directly in the handshake suite
+instead.
+
+#### Seven mutations, four survived
+
+Removing the state-hash check, the expiry check and the capability each broke a
+test. Four did not, and each was a test passing for the wrong reason:
+
+| Mutation | Why it survived |
+|---|---|
+| origin → prefix check | the lookalike callback was hardcoded while the site was generated, so they shared no prefix |
+| single-use conditional | the read-side pre-check answered first; no concurrent test existed |
+| reuse by URL alone | no test had two tenants at one URL |
+| `https` → `https?` | both scheme tests passed on the *origin* check instead — protocol is part of an origin |
+
+The last is the one worth remembering: `http://` site with `https://` callback is
+refused because the origins differ, so **both** scheme rules could be deleted
+without failing a test. Only a plaintext site *and* callback on the same origin
+reaches the rule, and that test now exists.
+
 ### Addendum — an audit of `[8c]`, and four things it found
 
 **The OpenAPI spec still said `aud: store`.** The one artefact facing a client

@@ -10,6 +10,7 @@ import { AuthThrottlerGuard } from './auth/auth-throttler.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MailModule } from './mail/mail.module';
 import { OptionSetsModule } from './option-sets/option-sets.module';
+import { StoresModule } from './stores/stores.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { LoggingModule } from './common/logging/logging.module';
@@ -69,6 +70,7 @@ import { HealthModule } from './health/health.module';
 
     AuthModule,
     MailModule,
+    StoresModule,
     OptionSetsModule,
     HealthModule,
   ],

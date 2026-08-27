@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AppModule } from '../src/app.module';
+import { IS_PUBLIC } from '../src/auth/guards/public.decorator';
 
 /** Below this, the enumeration is broken and every comparison is vacuous. */
 const MINIMUM_ROUTES = 25;
@@ -37,6 +38,18 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'GET /v1/option-sets',
   'GET /v1/audit-logs',
   'POST /v1/option-sets',
+  /**
+   * `authorize` names a connection request, not a tenant's resource.
+   *
+   * There is no foreign id to refuse: a request id belongs to a pending
+   * handshake that has no tenant until this call gives it one, so the
+   * cross-tenant probe the matrix runs has nothing to ask for. The property that
+   * matters instead — that one tenant's approval cannot reach another tenant's
+   * store at the same URL — is asserted directly in
+   * `connect-handshake.e2e-spec`, and mutation-proven there by dropping
+   * `tenantId` from the reuse lookup.
+   */
+  'POST /v1/connect/authorize',
 ]);
 
 let failed = false;
@@ -67,6 +80,7 @@ async function tenantScopedRoutes(): Promise<string[]> {
     _router?: { stack: RouterLayer[] };
   };
   const stack = server.router?.stack ?? server._router?.stack ?? [];
+  const publicPaths = publicRoutePaths(app);
   const routes = new Set<string>();
 
   for (const layer of stack) {
@@ -81,8 +95,16 @@ async function tenantScopedRoutes(): Promise<string[]> {
       continue;
     }
 
-    // `/auth/*` is the unauthenticated realm: there is no tenant to cross.
-    if (route.path.startsWith('/v1/auth/')) {
+    /**
+     * A `@Public()` route has no tenant to cross.
+     *
+     * Decided by the marker rather than by path. This read
+     * `startsWith('/v1/auth/')`, which was right while `/auth/*` was the only
+     * unauthenticated realm and wrong the moment `/connect/initiate` appeared —
+     * and would have gone on exempting an `/auth` route that *lost* its
+     * `@Public()` and became tenant-scoped without a negative test.
+     */
+    if (publicPaths.has(route.path)) {
       continue;
     }
 
@@ -160,3 +182,80 @@ main().catch((error: unknown) => {
   console.error(`\ncheck-isolation failed to run: ${(error as Error).message}\n`);
   process.exitCode = 1;
 });
+
+/**
+ * Paths reachable without authentication, from `@Public()` rather than a list.
+ *
+ * Covers both placements: the marker on a controller (`/health`, `/auth/*`) and
+ * on an individual handler (`/connect/initiate`).
+ */
+function publicRoutePaths(app: {
+  container: {
+    getModules(): Map<
+      unknown,
+      { controllers: Map<unknown, { metatype?: new (...args: never[]) => unknown }> }
+    >;
+  };
+}): Set<string> {
+  const paths = new Set<string>();
+
+  const add = (base: unknown, route?: unknown): void => {
+    if (typeof base !== 'string') {
+      return;
+    }
+
+    const prefix = base.replace(/^\/+|\/+$/g, '');
+
+    if (typeof route === 'string') {
+      paths.add(`/v1/${prefix}/${route.replace(/^\/+/, '')}`.replace(/\/+$/, ''));
+
+      return;
+    }
+
+    paths.add(`/${prefix}`);
+    paths.add(`/v1/${prefix}`);
+  };
+
+  for (const [, module] of app.container.getModules()) {
+    for (const [, wrapper] of module.controllers) {
+      const controller = wrapper.metatype;
+
+      if (!controller) {
+        continue;
+      }
+
+      const base = Reflect.getMetadata('path', controller);
+
+      if (Reflect.getMetadata(IS_PUBLIC, controller) === true) {
+        add(base);
+
+        // Class-level: every handler's full path is public too.
+        const proto = controller.prototype as Record<string, unknown>;
+
+        for (const name of Object.getOwnPropertyNames(proto)) {
+          if (name !== 'constructor' && typeof proto[name] === 'function') {
+            add(base, Reflect.getMetadata('path', proto[name]));
+          }
+        }
+
+        continue;
+      }
+
+      const proto = controller.prototype as Record<string, unknown>;
+
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        const handler = proto[name];
+
+        if (
+          name !== 'constructor' &&
+          typeof handler === 'function' &&
+          Reflect.getMetadata(IS_PUBLIC, handler) === true
+        ) {
+          add(base, Reflect.getMetadata('path', handler));
+        }
+      }
+    }
+  }
+
+  return paths;
+}

@@ -253,6 +253,9 @@ describe('audit coverage (e2e)', () => {
         [AuditAction.MEMBER_JOINED]: 'team.e2e-spec',
         [AuditAction.MEMBER_ROLE_CHANGED]: 'team.e2e-spec',
         [AuditAction.MEMBER_REMOVED]: 'team.e2e-spec',
+        // Needs a full handshake: initiate, then a merchant's approval.
+        [AuditAction.STORE_CONNECT_AUTHORIZED]: 'connect-handshake.e2e-spec',
+        [AuditAction.STORE_RECONNECT_AUTHORIZED]: 'connect-handshake.e2e-spec',
       };
 
       const unaccounted = Object.values(AuditAction).filter(
@@ -276,11 +279,14 @@ describe('audit coverage (e2e)', () => {
         AuditAction.MEMBER_JOINED,
         AuditAction.MEMBER_ROLE_CHANGED,
         AuditAction.MEMBER_REMOVED,
+        AuditAction.STORE_CONNECT_AUTHORIZED,
+        AuditAction.STORE_RECONNECT_AUTHORIZED,
       ];
 
       const source = readFileSync('src/tenants/team.service.ts', 'utf8');
       const values = readFileSync('src/option-sets/option-values.service.ts', 'utf8');
-      const both = source + values;
+      const connect = readFileSync('src/stores/connect.service.ts', 'utf8');
+      const both = source + values + connect;
 
       claimed.forEach((action) => {
         const constant = Object.entries(AuditAction).find(([, value]) => value === action)?.[0];

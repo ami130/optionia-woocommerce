@@ -28,6 +28,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { AppModule } from '../src/app.module';
+import { IS_PUBLIC } from '../src/auth/guards/public.decorator';
 import { buildOpenApiDocument } from '../src/common/openapi/openapi';
 
 /** Below this, the spec is empty enough that the comparison proves nothing. */
@@ -135,6 +136,7 @@ async function main(): Promise<void> {
 
   const document = buildOpenApiDocument(app);
   const spec = specRoutes(document);
+  const publicPrefixes = publicControllerPrefixes(app);
 
   await app.close();
 
@@ -204,12 +206,15 @@ async function main(): Promise<void> {
    * treated the whole API as public. Defining a scheme nothing references is
    * precisely the shape of guard this codebase keeps finding.
    *
-   * `/auth/*` and `/health` are genuinely public and are excluded by name.
+   * **Exemption follows `@Public()`, not a list of paths.** This excluded
+   * `/auth/*` and `/health` by name, which failed the moment a public route
+   * appeared anywhere else — and, far worse, would have kept excluding one that
+   * *lost* its `@Public()`. The marker is the question that matters: a route is
+   * exempt because it is public, and the moment it stops being public it must
+   * declare a realm.
    */
   const operations = allOperations(document);
-  const shouldBeSecured = operations.filter(
-    ({ route }) => !route.includes('/v1/auth/') && !route.startsWith('GET /health'),
-  );
+  const shouldBeSecured = operations.filter(({ route }) => !isPublicRoute(route, publicPrefixes));
   const unsecured = shouldBeSecured.filter(({ operation }) => !operation.security);
 
   if (unsecured.length > 0) {
@@ -307,3 +312,81 @@ main().catch((error: unknown) => {
   console.error(`\ncheck-openapi failed to run: ${(error as Error).message}\n`);
   process.exitCode = 1;
 });
+
+/**
+ * The base path of every controller carrying `@Public()`, plus the paths of
+ * individually public handlers.
+ *
+ * Read from the container rather than hardcoded, so renaming or moving a public
+ * controller cannot leave a stale exemption behind.
+ */
+function publicControllerPrefixes(app: NestExpressApplication): Set<string> {
+  const container = (
+    app as unknown as {
+      container: {
+        getModules(): Map<
+          unknown,
+          { controllers: Map<unknown, { metatype?: new (...args: never[]) => unknown }> }
+        >;
+      };
+    }
+  ).container;
+
+  const prefixes = new Set<string>();
+
+  for (const [, module] of container.getModules()) {
+    for (const [, wrapper] of module.controllers) {
+      const controller = wrapper.metatype;
+
+      if (!controller) {
+        continue;
+      }
+
+      // Class-level `@Public()`: every route of the controller is public.
+      if (Reflect.getMetadata(IS_PUBLIC, controller) === true) {
+        const base = Reflect.getMetadata('path', controller);
+
+        if (typeof base === 'string') {
+          prefixes.add(base.replace(/^\/+|\/+$/g, ''));
+        }
+
+        continue;
+      }
+
+      // Method-level `@Public()`: only the marked handlers are.
+      const proto = controller.prototype as Record<string, unknown>;
+
+      for (const name of Object.getOwnPropertyNames(proto)) {
+        if (name === 'constructor') {
+          continue;
+        }
+
+        const handler = proto[name];
+
+        if (typeof handler === 'function' && Reflect.getMetadata(IS_PUBLIC, handler) === true) {
+          const base = Reflect.getMetadata('path', controller);
+          const route = Reflect.getMetadata('path', handler);
+
+          if (typeof base === 'string' && typeof route === 'string') {
+            prefixes.add(`${base.replace(/^\/+|\/+$/g, '')}/${route.replace(/^\/+/, '')}`);
+          }
+        }
+      }
+    }
+  }
+
+  return prefixes;
+}
+
+/** Whether a `"METHOD /v1/path"` route is one of the public ones. */
+function isPublicRoute(route: string, prefixes: Set<string>): boolean {
+  const path = route.split(' ')[1] ?? '';
+
+  for (const prefix of prefixes) {
+    if (path === `/${prefix}` || path === `/v1/${prefix}` || path.startsWith(`/v1/${prefix}/`)) {
+      return true;
+    }
+  }
+
+  return false;
+}

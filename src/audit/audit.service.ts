@@ -53,6 +53,19 @@ export const AuditAction = {
   OPTION_VALUE_DELETED: 'option_value.deleted',
   OPTION_VALUE_DUPLICATED: 'option_value.duplicated',
   OPTION_VALUE_DELETE_REFUSED: 'option_value.delete_refused',
+
+  /**
+   * Store connection transitions (M8.1b).
+   *
+   * `connect/initiate` is deliberately absent. It is `@Public()` and carries no
+   * tenant, while `audit_logs` is read through a tenant-scoped query — an entry
+   * with a null tenant would be invisible to every consumer, written to satisfy a
+   * rule nobody can read. M8.1b's "every transition is logged" is read as every
+   * transition **of a store**, and a pending request is not yet a store: nothing
+   * exists to transition until `authorize` creates or reuses one.
+   */
+  STORE_CONNECT_AUTHORIZED: 'store.connect_authorized',
+  STORE_RECONNECT_AUTHORIZED: 'store.reconnect_authorized',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

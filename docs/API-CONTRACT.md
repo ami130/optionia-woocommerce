@@ -798,8 +798,8 @@ plugin. Every installation is treated as potentially hostile.
 
 | Route | Realm | Capability | State |
 |---|---|---|---|
-| `POST /connect/initiate` | none — `@Public()` | — | `[8d]` |
-| `POST /connect/authorize` | tenant | `stores:connect` | `[8d]` |
+| `POST /connect/initiate` | none — `@Public()` | — | `[built]` |
+| `POST /connect/authorize` | tenant | `stores:connect` | `[built]` |
 | `POST /connect/exchange` | none — `@Public()` | — | `[8e]` |
 
 ### Four decisions, settled here
@@ -880,7 +880,7 @@ is what stops an intercepted code being redeemed by anyone but its originator.
 
 ---
 
-### `POST /v1/connect/initiate` **[8d]**
+### `POST /v1/connect/initiate` **[built]**
 
 Begins a connection. Called by the plugin when a merchant clicks *Connect
 Optionia*, before any credential exists.
@@ -933,7 +933,7 @@ yields no usable CSRF token.
 
 ---
 
-### `POST /v1/connect/authorize` **[8d]**
+### `POST /v1/connect/authorize` **[built]**
 
 The merchant, signed in to the dashboard, approves connecting a site to their
 tenant. This is the only step with a human in it.
@@ -961,6 +961,25 @@ Creates the store in `CONNECTING` and issues a one-time authorization code. The
 `redirect_url` carries the code and the `state` the dashboard read from
 `authorize_url` — the cloud holds only its hash and cannot produce it otherwise.
 
+**Reconnecting an existing site reuses its store row.** `uq_stores_tenant_url` is
+`(tenant_id, store_url)`, and reconnection is a *normal* path, not an error:
+[M8.1b](../../developePlan.md)'s state machine runs `REVOKED → DISCONNECTED →
+CONNECTING`, and the plan reaches it after a revocation, a site-URL change and a
+credential rotation. A tenant re-approving a site they already hold therefore
+moves that row back to `CONNECTING` rather than inserting a second one.
+
+The alternative — `409 CONFLICT` — was rejected because it makes the recovery
+path an error state. A merchant told to reconnect, who reconnects, would be told
+they cannot. Reuse also preserves `store_id`, so a reconnected store keeps its
+history, its analytics and any rows referencing it; a new row would silently
+orphan all three.
+
+⚠️ **Reuse is per tenant, and that is the security boundary.** The same URL under
+a *different* tenant is a different store, which `uq_stores_tenant_url` already
+permits — an agency and its client legitimately hold the same address. What must
+never happen is one tenant's `authorize` reaching another tenant's row, so the
+lookup is by `(tenant_id, store_url)` and never by URL alone.
+
 **A pending request is single-use and lives 30 minutes.** Approving twice must not
 mint two codes — the second call answers `TOKEN_INVALID`.
 
@@ -969,6 +988,18 @@ a storefront is an ownership act, and an editor who can build options should not
 be able to attach the workspace to a site they control. Held by owner and admin —
 the permission matrix from [M6.5](../../developePlan.md) already drew that line,
 and rotation carries its own `stores:rotate_credential` for the same reason.
+
+**Audited** as `store.connect_authorized`, with the store and the site URL. The
+merchant is a real actor in a real tenant, so the entry is scoped and queryable
+like any other.
+
+`initiate` is **not** audited, and the reason is structural rather than an
+omission: it is `@Public()` and carries no tenant, while `audit_logs` is read
+through a tenant-scoped query. An entry with a null tenant would be invisible to
+every consumer — a row written to satisfy a rule nobody can read. M8.1b's "every
+transition is logged" is therefore read as every transition **of a store**, and a
+pending request is not yet a store: nothing exists to transition until `authorize`
+creates or reuses one.
 
 **Errors:** `VALIDATION_FAILED`, `TOKEN_INVALID` (unknown, spent or expired
 request), `INSUFFICIENT_ROLE`, `RATE_LIMITED`.

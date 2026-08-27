@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { IS_PUBLIC } from '../src/auth/guards/public.decorator';
 import { buildOpenApiDocument, serveOpenApi } from '../src/common/openapi/openapi';
 
 /**
@@ -108,9 +109,18 @@ describe('openapi (e2e)', () => {
      * Defining a scheme is not applying one. Every operation declared no
      * security while all three realms sat in `components`, so a generated client
      * would have treated the API as public.
+     *
+     * **Exemption is decided by `@Public()`, not by a list of paths.** This
+     * originally skipped `/v1/auth/` and `/health` by name, which meant adding a
+     * genuinely public route anywhere else failed the check, and — far worse —
+     * that a route which *lost* its `@Public()` would still be skipped by the
+     * path list. Reading the metadata asks the question that matters: a route is
+     * exempt because it is public, and the moment it stops being public it must
+     * declare a realm.
      */
     it('applies a realm to every guarded operation', () => {
       const document = buildOpenApiDocument(app);
+      const publicPaths = publicRoutes(app);
       const unsecured: string[] = [];
 
       Object.entries(document.paths ?? {}).forEach(([path, item]) => {
@@ -119,18 +129,53 @@ describe('openapi (e2e)', () => {
             | { security?: unknown }
             | undefined;
 
-          if (
-            operation &&
-            !operation.security &&
-            !path.includes('/v1/auth/') &&
-            path !== '/health'
-          ) {
+          if (operation && !operation.security && !publicPaths.has(`${method} ${path}`)) {
             unsecured.push(`${method.toUpperCase()} ${path}`);
           }
         });
       });
 
       expect(unsecured).toEqual([]);
+    }, 60_000);
+
+    /**
+     * The exemption must not be able to swallow everything.
+     *
+     * A bug making `publicRoutes` return every route would turn the check above
+     * into a no-op that still passes — the failure mode this codebase keeps
+     * meeting. Asserted on the *documented* operations rather than on router
+     * internals: a guarded route must carry a realm, so if most operations
+     * stopped declaring one the count would collapse.
+     */
+    it('still requires a realm on the great majority of operations', () => {
+      const document = buildOpenApiDocument(app);
+      let secured = 0;
+      let total = 0;
+
+      Object.values(document.paths ?? {}).forEach((item) => {
+        ['get', 'post', 'patch', 'delete'].forEach((method) => {
+          const operation = (item as Record<string, unknown>)[method] as
+            | { security?: unknown }
+            | undefined;
+
+          if (!operation) {
+            return;
+          }
+
+          total += 1;
+
+          if (operation.security) {
+            secured += 1;
+          }
+        });
+      });
+
+      // 37 of 47 today: the ten without a realm are `/v1/auth/*` and
+      // `/connect/initiate`, every one of them genuinely `@Public()`. The floor
+      // is well below that so adding public routes does not fail the build,
+      // while a collapse — a realm decorator lost across the board — would.
+      expect(total).toBeGreaterThan(30);
+      expect(secured).toBeGreaterThan(total * 0.7);
     }, 60_000);
 
     /**
@@ -239,3 +284,91 @@ describe('openapi (e2e)', () => {
     });
   });
 });
+
+/**
+ * Every route path exempt from declaring a realm, because it is `@Public()`.
+ *
+ * Two sources, because `@Public()` may sit on a method **or** on a controller:
+ * the handler carries method-level metadata, and the container carries the
+ * class-level kind that `/health` and `/auth/*` use. Nest's own guard resolves
+ * both via `getAllAndOverride`; this mirrors that rather than picking one and
+ * silently missing the other — checking only the handler reported `/health` as
+ * unguarded, which is how this was found.
+ */
+function publicRoutes(app: INestApplication): Set<string> {
+  const found = new Set<string>();
+
+  // Class-level: every route of a controller marked `@Public()`.
+  const container = (app as unknown as { container: ClassContainer }).container;
+
+  /**
+   * The base path of every controller marked `@Public()`.
+   *
+   * Derived from the controller's own `@Controller('…')` metadata rather than
+   * hardcoded, so moving or renaming one cannot leave a stale exemption behind.
+   * `/health` is excluded from the global prefix, which is why both shapes are
+   * accepted.
+   */
+  const publicPrefixes: string[] = [];
+
+  for (const [, module] of container.getModules()) {
+    for (const [, wrapper] of module.controllers) {
+      if (!wrapper.metatype || Reflect.getMetadata(IS_PUBLIC, wrapper.metatype) !== true) {
+        continue;
+      }
+
+      const base = Reflect.getMetadata('path', wrapper.metatype);
+
+      if (typeof base === 'string' && base.length > 0) {
+        publicPrefixes.push(base.replace(/^\/+|\/+$/g, ''));
+      }
+    }
+  }
+
+  const server = app.getHttpServer() as RouterHost;
+  const router = server._events?.request?.router ?? server._events?.request?._router;
+
+  for (const layer of router?.stack ?? []) {
+    const handler = layer.route?.stack?.[0]?.handle;
+    const path = layer.route?.path;
+
+    if (!handler || typeof path !== 'string') {
+      continue;
+    }
+
+    const isPublic =
+      // Method-level `@Public()`, which the handler carries directly.
+      Reflect.getMetadata(IS_PUBLIC, handler) === true ||
+      // Class-level, matched on the controller's own base path.
+      publicPrefixes.some(
+        (prefix) => path === `/${prefix}` || path.startsWith(`/v1/${prefix}/`),
+      );
+
+    if (isPublic) {
+      Object.keys(layer.route?.methods ?? {}).forEach((method) => found.add(`${method} ${path}`));
+    }
+  }
+
+  return found;
+}
+
+interface ClassContainer {
+  getModules(): Map<unknown, { controllers: Map<unknown, { metatype?: { name: string } }> }>;
+}
+
+interface RouterHost {
+  _events?: {
+    request?: {
+      router?: { stack?: RouterLayer[] };
+      _router?: { stack?: RouterLayer[] };
+    };
+  };
+}
+
+interface RouterLayer {
+  route?: {
+    path?: string;
+    methods?: Record<string, boolean>;
+    stack?: Array<{ handle?: unknown }>;
+  };
+}
