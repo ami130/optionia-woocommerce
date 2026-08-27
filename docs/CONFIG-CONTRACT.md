@@ -263,6 +263,25 @@ from live rows — the live rows are the merchant's working draft. Each set
 contributes the snapshot its most recent publish wrote, so the same document
 requested twice is identical unless something was published in between.
 
+**No endpoint serves this yet.** `GET /store/config` is Phase 8–9 and needs
+store-token authentication, which does not exist. The builder is deliberately
+ahead of its consumer so the contract describes something real rather than
+something planned — but nothing in Phase 7 fetches a document.
+
+**Snapshots outlive the code that wrote them, so the shape is guaranteed on
+read.** A snapshot written before a key joined the envelope does not carry it,
+and shipping it verbatim would contradict this contract. Mandatory keys are
+filled in when the document is assembled; snapshots themselves are **never
+rewritten**, because they are the record of what was actually published. This is
+what makes "additive changes do not bump `schema_version`" true rather than
+aspirational.
+
+**Retention is not defined here.** `option_set_versions` grows one row per
+publish, and pruning is Phase 26b's (retention per plan). A consumer must not
+assume a version referenced by an older document is still fetchable — the
+document it holds is complete on its own, which is why it embeds content rather
+than referencing versions by number.
+
 A published set whose snapshot is missing is **skipped rather than fatal**. That
 state cannot arise — publish writes both in one transaction — but one corrupted
 set must not take a whole storefront's configuration down with it.

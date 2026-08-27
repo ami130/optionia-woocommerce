@@ -1642,3 +1642,28 @@ removing the filter fails two tests instead of none.
 A published set whose snapshot is missing is skipped rather than fatal. That
 cannot arise — publish writes both in one transaction — but one corrupted set
 must not take a whole storefront's configuration down with it.
+
+### Addendum — two claims that outran their enforcement
+
+An audit of 7k found both.
+
+`build()` looked the store up **by id alone**, and a comment said this was safe
+because "the store id is resolved from the authenticated token". No such
+mechanism exists: the request context carries a `store` realm but no store id. A
+probe confirmed one tenant could assemble another's entire published config. The
+predicate now lives in the query — narrowed by tenant when a tenant is present,
+unnarrowed for a store token, which legitimately has none because the token
+already resolved the store.
+
+Snapshots are immutable and **outlive the code that wrote them**. One written
+before `assignments` and `rules` joined the envelope carries neither key, and the
+builder shipped it verbatim — producing a document that contradicted the contract
+declaring both always present, on which a PHP reader would warn. Rewriting old
+snapshots was rejected: they are the record of what was actually published, and
+editing them makes history a lie for the same reason rollback does not rewrite
+it. They are normalised **on read** instead, filling only keys the contract makes
+mandatory and never altering content, which is what makes "additive changes do
+not bump `schema_version`" true rather than aspirational.
+
+Both were caught by probing behaviour rather than by reading the code, and both
+had passed every existing test.

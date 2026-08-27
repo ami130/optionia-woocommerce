@@ -427,6 +427,105 @@ describe('config document (e2e)', () => {
     }, 120_000);
   });
 
+  describe('scoping', () => {
+    /**
+     * A probe found one tenant could assemble another's full published config:
+     * the store was looked up by id alone, and a comment claimed the caller
+     * would supply a trustworthy id. Nothing enforced it.
+     */
+    it('refuses a store belonging to another tenant', async () => {
+      await publishedSet('Mine');
+
+      // A second real tenant, registered the same way as the first — building a
+      // row by hand would encode this table's shape into a test about scoping.
+      await tenant('b');
+      const [other] = await dataSource.query(
+        `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
+          WHERE u.email = ?`,
+        [`${NS}-b@example.com`],
+      );
+      const otherTenant = other.id as string;
+
+      await expect(
+        runWithContext({ requestId: 'test', startedAt: Date.now(), tenantId: otherTenant }, () =>
+          builder.build(storeId),
+        ),
+      ).rejects.toThrow();
+    }, 120_000);
+
+    /**
+     * A store token has no tenant — the token already resolved the store, so
+     * there is nothing to narrow by. This must keep working, or Phase 9's
+     * `GET /store/config` cannot be built on it.
+     */
+    it('serves a caller with no tenant, which is how a store token arrives', async () => {
+      await publishedSet('ForStoreToken');
+
+      const document = await runWithContext(
+        { requestId: 'test', startedAt: Date.now() },
+        () => builder.build(storeId),
+      );
+
+      expect(document.store_id).toBe(storeId);
+      expect(document.option_sets.length).toBeGreaterThan(0);
+    }, 120_000);
+  });
+
+  describe('snapshots older than the envelope', () => {
+    /**
+     * Snapshots are immutable and outlive the code that wrote them. One written
+     * before `assignments` and `rules` joined the envelope carries neither, and
+     * shipping it verbatim puts a document on a storefront that contradicts the
+     * contract — a reader doing `foreach ($set['rules'])` warns on a key the
+     * contract guarantees.
+     */
+    it('fills mandatory keys a older snapshot does not carry', async () => {
+      const set = await publishedSet('Legacy');
+
+      // A snapshot as 7g would have written it, before the envelope grew.
+      await dataSource.query(
+        `UPDATE option_set_versions SET snapshot = ? WHERE optionSetId = ? AND version = 1`,
+        [JSON.stringify({ id: set, version: 1, groups: [] }), set],
+      );
+
+      const document = await build();
+      const legacy = document.option_sets.find((candidate) => candidate.id === set);
+
+      expect(legacy?.assignments).toEqual([]);
+      expect(legacy?.rules).toEqual([]);
+      expect(legacy?.groups).toEqual([]);
+    }, 120_000);
+
+    /** Filling a gap must not rewrite what was actually published. */
+    it('does not alter the stored snapshot', async () => {
+      const set = await publishedSet('Untouched');
+
+      await dataSource.query(
+        `UPDATE option_set_versions SET snapshot = ? WHERE optionSetId = ? AND version = 1`,
+        [JSON.stringify({ id: set, version: 1, groups: [] }), set],
+      );
+
+      await build();
+
+      const [row] = await dataSource.query(
+        `SELECT snapshot FROM option_set_versions WHERE optionSetId = ? AND version = 1`,
+        [set],
+      );
+
+      expect(Object.keys(row.snapshot).sort()).toEqual(['groups', 'id', 'version']);
+    }, 120_000);
+
+    it('leaves a complete snapshot exactly as written', async () => {
+      const set = await publishedSet('Complete');
+
+      const document = await build();
+      const published = document.option_sets.find((candidate) => candidate.id === set);
+
+      expect(published?.groups).toHaveLength(1);
+      expect(published?.groups[0].options[0].values).toHaveLength(2);
+    }, 120_000);
+  });
+
   describe('reproducibility', () => {
     /**
      * The same content requested twice must be the same document. Only
