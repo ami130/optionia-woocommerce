@@ -420,8 +420,17 @@ beats 36 at millions of rows.
 `resource_type`, `resource_id`, `changes` JSON, `ip` VARBINARY(16), `user_agent`,
 `created_at`.
 
-`ip` as `VARBINARY(16)` holds IPv4 and IPv6 in one column. ⚠️ IP is personal data
-under GDPR — subject to the retention policy in Phase 26b.
+`ip` as `VARBINARY(16)` holds IPv4 and IPv6 in one column.
+
+⚠️ **Two columns hold personal data**, not one. `ip` is the obvious one. `changes`
+carries whatever a caller put in the diff, and `member.invited` records the
+invited email address — the address *is* the action, so omitting it would leave a
+trail saying someone was invited without saying who. Both are subject to the
+retention policy in Phase 26b.
+
+Read back through `GET /v1/audit-logs`, which requires `audit_log:view` — owner
+and admin only. `ip` is unpacked to a readable address there; the column stores
+bytes.
 
 ### `sync_jobs`
 

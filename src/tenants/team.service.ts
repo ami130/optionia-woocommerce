@@ -6,6 +6,7 @@ import { expiresIn, generateToken, hashToken, hasExpired } from '../common/crypt
 import { TenantRole } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
+import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { TenantInvitation } from './entities/tenant-invitation.entity';
 import { TenantMember } from './entities/tenant-member.entity';
@@ -136,7 +137,7 @@ export class TeamService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const member = await this.dataSource.transaction(async (manager) => {
       /**
        * Claim the invitation atomically.
        *
@@ -189,6 +190,33 @@ export class TeamService {
         }),
       );
     });
+
+    /**
+     * Somebody gained access to a workspace (M6.5).
+     *
+     * `MEMBER_JOINED` was defined and recorded nowhere — a constant that read as
+     * coverage while this path, the one that answers *"how did this person get
+     * access?"*, wrote nothing at all. Invite and role-change were both audited;
+     * the moment the grant actually took effect was not.
+     *
+     * Recorded **after** the transaction commits, not inside it: an entry for a
+     * join that then rolled back would be a trail asserting something that never
+     * happened.
+     *
+     * `tenantId` is passed explicitly because the acting user is not yet a member
+     * of this tenant when they accept — there is no tenant in the request context
+     * to fall back on.
+     */
+    await this.audit.record({
+      action: AuditAction.MEMBER_JOINED,
+      resourceType: 'tenant_member',
+      resourceId: member.id,
+      tenantId: invitation.tenantId,
+      userId,
+      changes: diff(null, { role: invitation.role, invitedBy: invitation.invitedBy }),
+    });
+
+    return member;
   }
 
   /**

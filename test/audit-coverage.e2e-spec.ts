@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { config as loadDotenv } from 'dotenv';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
@@ -292,22 +293,65 @@ describe('audit coverage (e2e)', () => {
     /**
      * The check that makes this a coverage test rather than a list.
      *
-     * Every action the codebase defines must have been produced by driving the
-     * routes above. An action defined and never reachable is a hole in the
-     * trail nobody notices, because the constant looks like proof it works.
+     * Every action the codebase defines must be produced by driving routes, or
+     * be listed below as covered elsewhere with a reason. An action defined and
+     * never reachable is a hole in the trail nobody notices, because the
+     * constant looks like proof it works.
+     *
+     * **This originally filtered to `^option[_.]` and so could not see the
+     * `member.*` actions at all** — which is how `member.joined` came to be
+     * defined and recorded nowhere while this test passed. It now covers every
+     * action, and anything not exercised here must be named.
      */
-    it('produces every audit action the option-set domain defines', async () => {
+    it('leaves no audit action defined but unreachable', async () => {
       const produced = new Set((await allRows()).map((row) => row.action));
 
-      const expected = Object.values(AuditAction).filter((action) =>
-        /^option[_.]/.test(action),
+      /**
+       * Covered by another suite, each for a stated reason. A name may only
+       * appear here if driving it from this suite is genuinely impossible.
+       */
+      const coveredElsewhere: Record<string, string> = {
+        // Needs a rule targeting the value; the cascade suite creates one.
+        [AuditAction.OPTION_VALUE_DELETE_REFUSED]: 'cascade.e2e-spec',
+        // Team lifecycle: a second user, an invitation and its acceptance.
+        [AuditAction.MEMBER_INVITED]: 'team.e2e-spec',
+        [AuditAction.MEMBER_JOINED]: 'team.e2e-spec',
+        [AuditAction.MEMBER_ROLE_CHANGED]: 'team.e2e-spec',
+        [AuditAction.MEMBER_REMOVED]: 'team.e2e-spec',
+      };
+
+      const unaccounted = Object.values(AuditAction).filter(
+        (action) => !produced.has(action) && !(action in coveredElsewhere),
       );
 
-      const missing = expected.filter((action) => !produced.has(action));
+      expect(unaccounted).toEqual([]);
+    }, 60_000);
 
-      // `delete_refused` needs a rule targeting the value, which the sweep
-      // above does not create — it has its own test in the cascade suite.
-      expect(missing).toEqual([AuditAction.OPTION_VALUE_DELETE_REFUSED]);
+    /**
+     * The other half of the same guarantee: every name claimed as "covered
+     * elsewhere" must actually be recorded by something.
+     *
+     * Without this, moving an action into that list is a way to silence the
+     * check above rather than satisfy it.
+     */
+    it('records every action claimed as covered elsewhere', async () => {
+      const claimed = [
+        AuditAction.OPTION_VALUE_DELETE_REFUSED,
+        AuditAction.MEMBER_INVITED,
+        AuditAction.MEMBER_JOINED,
+        AuditAction.MEMBER_ROLE_CHANGED,
+        AuditAction.MEMBER_REMOVED,
+      ];
+
+      const source = readFileSync('src/tenants/team.service.ts', 'utf8');
+      const values = readFileSync('src/option-sets/option-values.service.ts', 'utf8');
+      const both = source + values;
+
+      claimed.forEach((action) => {
+        const constant = Object.entries(AuditAction).find(([, value]) => value === action)?.[0];
+
+        expect(both).toContain(`AuditAction.${constant}`);
+      });
     }, 60_000);
   });
 

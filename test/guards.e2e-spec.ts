@@ -13,6 +13,7 @@ import { CapabilityGuard } from '../src/auth/permissions/capability.guard';
 import { RequireCapability } from '../src/auth/permissions/require-capability.decorator';
 import { getContext } from '../src/common/context/request-context';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { deleteTenantsFor } from './cleanup-tenants';
 
 /**
  * The guards, applied to a route in another module.
@@ -118,10 +119,9 @@ describe('guards (e2e)', () => {
   });
 
   async function cleanup(): Promise<void> {
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email LIKE '${NS}-%'`,
-    );
+    // Registering as `Owner` provisions a tenant slugged `owner-…`, which no
+    // namespace match finds — see `deleteTenantsFor`.
+    await deleteTenantsFor(dataSource, NS);
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
   }
 

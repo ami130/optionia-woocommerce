@@ -61,6 +61,15 @@ describe('config document (e2e)', () => {
 
     token = await tenant('a');
 
+    /**
+     * The second tenant is provisioned **here**, not inside the test that needs
+     * it. Registering mid-suite runs the auth stack while other tests' fixtures
+     * are in flight, and this suite began failing intermittently — a set create
+     * answering 404 — from the run that added it. Fixtures belong in `beforeAll`
+     * for the same reason every other one is here.
+     */
+    await tenant('b');
+
     const [row] = await dataSource.query(
       `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
         WHERE u.email = ?`,
@@ -436,9 +445,7 @@ describe('config document (e2e)', () => {
     it('refuses a store belonging to another tenant', async () => {
       await publishedSet('Mine');
 
-      // A second real tenant, registered the same way as the first — building a
-      // row by hand would encode this table's shape into a test about scoping.
-      await tenant('b');
+      // Provisioned in `beforeAll`; only its id is needed here.
       const [other] = await dataSource.query(
         `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId
           WHERE u.email = ?`,

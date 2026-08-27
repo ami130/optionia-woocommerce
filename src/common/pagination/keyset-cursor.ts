@@ -18,10 +18,14 @@ export interface CursorKey {
  * a client cannot read it, so it cannot come to depend on the ordering, and
  * changing that ordering later does not break anyone.
  *
- * Shared rather than per-repository. Every list endpoint pages the same way
- * (`createdAt`, then `id`), and a second copy of this logic is a second place
- * for the malformed-cursor defect to live — that one was found in 7e, and a
- * duplicate would not have inherited the fix.
+ * Shared rather than per-repository, so the malformed-cursor defect found in 7e
+ * has one home rather than one per list endpoint.
+ *
+ * ⚠️ **One consumer today.** The audit trail pages on a monotonic `BIGINT` id
+ * and needs no timestamp tie-break, so it deliberately does not use this — which
+ * means the duplication this was extracted to prevent has not yet happened. The
+ * reasoning holds for the next list endpoint keyed on `(createdAt, id)`; it is
+ * recorded here rather than left as a claim the code does not yet demonstrate.
  */
 export function encodeCursor(createdAt: Date, id: string): string {
   return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString('base64url');

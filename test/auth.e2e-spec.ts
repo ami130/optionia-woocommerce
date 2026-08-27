@@ -1,6 +1,8 @@
 import { config as loadDotenv } from 'dotenv';
 import { DataSource } from 'typeorm';
 
+import { deleteTenantsFor } from './cleanup-tenants';
+
 import { AuthService } from '../src/auth/auth.service';
 import { AuthTokensService } from '../src/auth/auth-tokens.service';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
@@ -79,35 +81,9 @@ describe('AuthService (integration)', () => {
   });
 
   async function cleanup(): Promise<void> {
-    /**
-     * Registration provisions a tenant, so removing the user is not enough —
-     * `tenants.plan_id` is RESTRICT and members reference both.
-     *
-     * **Tenants are found through their members, not by slug.** The slug comes
-     * from the tenant *name*, and these tests register as "Sam Merchant", which
-     * slugifies to `sam-…` and never matched this namespace. Every run leaked a
-     * tenant: 6,900 of them had accumulated, orphaned with no members, and once
-     * the table was large enough the extra latency turned other suites' fixture
-     * creates into 404s that looked like a product bug.
-     */
-    // Captured before the memberships are removed, because that link is the
-    // only thing tying these tenants to this suite.
-    const owned: Array<{ tenantId: string }> = await dataSource.query(
-      `SELECT DISTINCT tm.tenantId FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email LIKE '${NS}-%'`,
-    );
-
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email LIKE '${NS}-%'`,
-    );
-
-    if (owned.length > 0) {
-      await dataSource.query(`DELETE FROM tenants WHERE id IN (?)`, [
-        owned.map((row) => row.tenantId),
-      ]);
-    }
-
+    // Registering as `Sam Merchant` provisions a tenant slugged `sam-…`, which
+    // no namespace match finds — see `deleteTenantsFor`.
+    await deleteTenantsFor(dataSource, NS);
     await dataSource.query(
       `DELETE t FROM tenants t WHERE t.slug LIKE '${NS}-%' OR t.name LIKE '${NS}-%'`,
     );

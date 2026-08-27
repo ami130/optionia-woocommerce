@@ -349,6 +349,44 @@ describe('TeamService (integration)', () => {
     });
 
     /**
+     * The moment access actually takes effect.
+     *
+     * `MEMBER_JOINED` was defined and recorded nowhere: invite and role-change
+     * were both audited, and the join — the entry that answers *"how did this
+     * person get access?"* — wrote nothing. The constant read as coverage.
+     */
+    it('records a join, attributed to the person who joined', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      await team.accept(token, NEWCOMER, `${NEWCOMER}@example.com`);
+
+      const [row] = await entries('member.joined');
+
+      expect(row).toBeDefined();
+      // Attributed to the joiner, not the inviter: they performed this act.
+      expect(row.userId).toBe(NEWCOMER);
+      expect((row.changes as { role: unknown }).role).toEqual({ from: null, to: 'editor' });
+    });
+
+    /**
+     * Recorded after the transaction commits. An entry for a join that rolled
+     * back would assert something that never happened.
+     */
+    it('records no join when acceptance fails', async () => {
+      const token = await team.invite(
+        TENANT, OWNER, 'owner', `${NEWCOMER}@example.com`, TenantRole.EDITOR,
+      );
+
+      await expect(
+        team.accept(token, NEWCOMER, 'someone-else@example.com'),
+      ).rejects.toThrow();
+
+      expect(await entries('member.joined')).toHaveLength(0);
+    });
+
+    /**
      * The trail must never break the action. A row that cannot be written is an
      * operations problem; a role change that fails because of one is the
      * merchant's problem, and worse.

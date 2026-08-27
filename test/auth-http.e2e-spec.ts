@@ -4,6 +4,8 @@ import { config as loadDotenv } from 'dotenv';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { deleteTenantsFor } from './cleanup-tenants';
+
 import { AppModule } from '../src/app.module';
 
 /**
@@ -73,12 +75,19 @@ describe('auth endpoints (e2e)', () => {
   }, 60_000);
 
   afterAll(async () => {
+    // Registering as `x` provisions a tenant slugged `x-…`, which no namespace
+    // match finds — see `deleteTenantsFor`.
+    if (dataSource) {
+      await deleteTenantsFor(dataSource, NS);
+    }
+
     await dataSource?.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
     await dataSource?.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${NS}-%'`);
     await app?.close();
   });
 
   beforeEach(async () => {
+    await deleteTenantsFor(dataSource, NS);
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
   });
 

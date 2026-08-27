@@ -1733,3 +1733,27 @@ which is the sentinel's actual form.
 **Neither was a product defect, and both looked like one.** The hardened fixtures
 from 7f — which report the response rather than dereferencing `undefined` — are
 what kept every occurrence legible enough to eventually trace.
+
+### Addendum — the flakiness is reduced, not eliminated
+
+The tenant leak was real and is fixed: 1 tenant after 11 runs, against 6,900
+before. Three suites had the same defect and now share `deleteTenantsFor`, which
+finds tenants through their **members** rather than a slug that the tenant's
+*name* actually determines.
+
+But a residual remains. Across 19 full runs in the round that fixed it: **16
+clean, 3 failures**, always a different test, never reproducible in isolation —
+one suite run six times in a row passes every time. Each failure is a fixture
+create answering `404`, which is the same signature throughout.
+
+Two further contributors were found and fixed on the way: a test provisioning a
+second tenant **mid-suite** rather than in `beforeAll`, and five assertions
+matching the bare string `1970` where a UUIDv7 contains those digits about once
+in 3,400.
+
+This is recorded rather than declared solved. Three rounds of fixes have each
+reduced the rate without reaching zero, and the honest statement is that the
+largest cause is gone and a smaller one is not yet understood. The diagnostics
+added along the way — fixtures that report the response, and `newGroup` dumping
+the parent set's row — mean the next occurrence carries more evidence than the
+last.

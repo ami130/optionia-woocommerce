@@ -54,7 +54,19 @@ export class AuditLog {
   @Column({ type: 'varchar', length: 36, nullable: true })
   resourceId: string | null;
 
-  /** Before and after. What actually changed, not merely that something did. */
+  /**
+   * Before and after. What actually changed, not merely that something did.
+   *
+   * ⚠️ **May contain personal data.** `member.invited` records the invited email
+   * address, because the address *is* the action — recording "someone was
+   * invited" without saying who is not a trail. That makes this column subject
+   * to the Phase 26b retention policy alongside `ip`, which was previously the
+   * only column flagged.
+   *
+   * Nothing writes a credential here. `AuditService` is called with an explicit
+   * diff rather than a whole entity, so a field reaches this column only because
+   * a caller named it.
+   */
   @Column({ type: 'json', nullable: true })
   changes: Record<string, unknown> | null;
 
