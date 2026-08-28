@@ -86,15 +86,26 @@ export class SiteMatchGuard implements CanActivate {
      * `record` swallows its own failures, so a failed audit cannot turn a
      * refusal into a `500` — the request is refused either way, and an
      * incomplete trail is the lesser outcome.
+     *
+     * **Recorded once per distinct site, not once per request.** A clone sends
+     * the same wrong URL on every heartbeat, and at 60 an hour that is 1,440
+     * entries a day for one store — into a table with no retention sweep. The
+     * condition persists; the event does not repeat. A clone appearing at a
+     * *different* address is news and is recorded.
      */
-    await this.audit.record({
-      action: AuditAction.STORE_SITE_MISMATCH,
-      resourceType: 'store',
-      resourceId: ctx.storeId,
-      // The store realm carries no user; the tenant came from the credential.
-      tenantId: ctx.tenantId,
-      changes: { expected: ctx.storeUrl, presented: presented.trim().slice(0, 255) },
-    });
+    await this.audit.recordChange(
+      {
+        action: AuditAction.STORE_SITE_MISMATCH,
+        resourceType: 'store',
+        resourceId: ctx.storeId,
+        // The store realm carries no user; the tenant came from the credential.
+        tenantId: ctx.tenantId,
+        changes: { expected: ctx.storeUrl, presented: presented.trim().slice(0, 255) },
+      },
+      // `expected` is the store's own URL and cannot vary between requests, so
+      // the presented address is what makes one refusal different from another.
+      ['presented'],
+    );
 
     throw new DomainException(
       ErrorCode.FORBIDDEN,

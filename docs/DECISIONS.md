@@ -2175,6 +2175,33 @@ plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
 difference from earlier steps is that every assertion reads the **persisted row**
 rather than the response, which is entirely derived values.
 
+#### The same amplification, written twice
+
+An audit of `[8i]` found `store.site_mismatch` writing one audit row per refused
+request — measured, five identical refusals gave five rows. That is the defect the
+`[8h]` audit had found one step earlier in `store.state_mismatch`, fixed, and
+recorded in this document. I wrote the fix and then reproduced the bug in the next
+guard.
+
+The reason is instructive: `[8h]`'s fix was **local**. It read the previous entry
+inline in `stores.service.ts`, so the next call site had nothing to reuse and
+nothing to notice. Two occurrences is a pattern, and Phase 9's sync failures are
+the third.
+
+`AuditService.recordChange(entry, fields)` is that pattern, extracted. It records
+only when the named fields differ from the last entry of the same action on the
+same resource. `fields` matters: comparing the whole `changes` object would let
+any varying member — a timestamp, a message — defeat the check silently, and a
+mutation doing exactly that is caught.
+
+Two details worth keeping. A failed *lookup* records unconditionally rather than
+dropping the entry: recording twice is a worse trail than once, and losing it is
+worse than both. And deduplicating the record does not soften the refusal — every
+request from the wrong site is still refused, asserted separately, because a
+suppressed log line must never become a suppressed control.
+
+Verified end to end: **20 identical refusals, 20 blocked, 1 audit row.**
+
 ### Addendum — `[8i]`, and why a site mismatch must not revoke
 
 **Revoking on a mismatch is a denial-of-service vector.** `X-Optionia-Site` is a

@@ -161,6 +161,63 @@ export class AuditService {
    * Actor and tenant come from the request context by default, so a caller
    * cannot forget them and cannot attribute an action to someone else.
    */
+  /**
+   * Record an entry **only when it differs from the last one like it**.
+   *
+   * For conditions that persist rather than happen: a plugin reporting a state
+   * the cloud disagrees with, a cloned site presenting the wrong URL. Those
+   * recur on every request, and the trail is a log of *events* — a condition
+   * that has not changed is a repetition, not news.
+   *
+   * The scale is the reason this exists. A store that cannot be reconciled
+   * disagrees on every heartbeat: daily that is 365 entries a year, and against
+   * the 60-per-hour limit a misbehaving plugin writes **1,440 a day for one
+   * store** — into a table that has no retention sweep behind it.
+   *
+   * `fields` names what makes an entry "the same". Everything else in `changes`
+   * is carried but not compared, so a timestamp or a message can vary without
+   * defeating the check. Comparing the whole object would do exactly that.
+   *
+   * Extracted after the same deduplication was written twice — once for
+   * `store.state_mismatch` and again, missing, for `store.site_mismatch`. Two
+   * occurrences is a pattern, and Phase 9's sync failures are the third.
+   */
+  async recordChange(entry: AuditEntry, fields: readonly string[]): Promise<void> {
+    if (!entry.resourceId) {
+      // Nothing to key the comparison on; record it rather than drop it.
+      await this.record(entry);
+
+      return;
+    }
+
+    try {
+      const previous = await this.logs.findOne({
+        where: {
+          resourceType: entry.resourceType,
+          resourceId: entry.resourceId,
+          action: entry.action,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      const last = previous?.changes ?? null;
+      const next = entry.changes ?? null;
+
+      if (last && next && fields.every((field) => last[field] === next[field])) {
+        return;
+      }
+    } catch (error) {
+      // A failed lookup must not lose the entry — recording twice is a worse
+      // trail than recording once, and losing it entirely is worse than both.
+      this.logger.warn(
+        `Could not read the previous ${entry.action} entry; recording unconditionally: ` +
+          `${(error as Error).message}`,
+      );
+    }
+
+    await this.record(entry);
+  }
+
   async record(entry: AuditEntry): Promise<void> {
     const context = getContext();
 

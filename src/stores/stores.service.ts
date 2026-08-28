@@ -117,30 +117,12 @@ export class StoresService {
        * Record the disagreement **once**, not once per ping.
        *
        * A store that cannot be reconciled — a cloned site, a restored database —
-       * disagrees on every heartbeat. Daily that is 365 rows a year; against the
-       * 60-per-hour limit a misbehaving plugin writes **1,440 a day for one
-       * store**, and `audit_logs` has no retention sweep behind it.
-       *
-       * The trail is its own memory: the last recorded mismatch for this store
-       * says what was already reported, so an unchanged disagreement is a
-       * repetition rather than news. A *changed* one is news and is recorded.
-       *
-       * `ix_audit_resource` covers `(resourceType, resourceId)`, so this is one
-       * indexed lookup on a path that already writes.
+       * disagrees on every heartbeat. `recordChange` compares against the last
+       * entry of the same kind and writes only when something actually moved:
+       * a changed claim from the plugin, or a changed view from the cloud.
        */
-      const [previous] = await this.dataSource.query(
-        `SELECT changes FROM audit_logs
-          WHERE resourceType = 'store' AND resourceId = ? AND action = ?
-          ORDER BY createdAt DESC LIMIT 1`,
-        [storeId, AuditAction.STORE_STATE_MISMATCH],
-      );
-
-      const last = parseChanges(previous?.changes);
-      const unchanged =
-        last?.pluginState === dto.connection_state && last?.cloudState === store.status;
-
-      if (!unchanged) {
-        await this.audit.record({
+      await this.audit.recordChange(
+        {
           action: AuditAction.STORE_STATE_MISMATCH,
           resourceType: 'store',
           resourceId: storeId,
@@ -152,8 +134,11 @@ export class StoresService {
             cloudState: store.status,
             siteUrl: store.storeUrl,
           },
-        });
-      }
+        },
+        // `siteUrl` is carried but not compared: it identifies the store, not
+        // the disagreement, and comparing it would change nothing.
+        ['pluginState', 'cloudState'],
+      );
     }
 
     return {
@@ -361,15 +346,3 @@ function safeInteger(value: unknown, column: string): number {
   return parsed;
 }
 
-/** `audit_logs.changes` arrives as JSON or as an already-parsed object. */
-function parseChanges(value: unknown): Record<string, unknown> | null {
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  return (value as Record<string, unknown> | null) ?? null;
-}

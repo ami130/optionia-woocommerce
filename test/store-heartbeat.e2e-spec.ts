@@ -432,6 +432,44 @@ describe('store heartbeat (e2e)', () => {
     });
 
     /**
+     * A clone sends the same wrong URL on every heartbeat, and at 60 an hour
+     * that is 1,440 entries a day for one store — into a table with no
+     * retention sweep. The condition persists; the event does not repeat.
+     */
+    it('records a repeated refusal from the same site only once', async () => {
+      const store = await connected();
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await ping(store.token, {}, 'https://clone.example.com')).status).toBe(403);
+      }
+
+      expect(await siteMismatches(store.id)).toBe(1);
+    });
+
+    /** A clone appearing at a *different* address is news. */
+    it('records again when the presented site changes', async () => {
+      const store = await connected();
+
+      await ping(store.token, {}, 'https://clone-one.example.com');
+      await ping(store.token, {}, 'https://clone-one.example.com');
+      await ping(store.token, {}, 'https://clone-two.example.com');
+
+      expect(await siteMismatches(store.id)).toBe(2);
+    });
+
+    /**
+     * Deduplicating the *record* must not soften the *refusal*. Every request
+     * from the wrong site is refused, whether or not it was worth logging.
+     */
+    it('refuses every attempt, not only the first', async () => {
+      const store = await connected();
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        expect((await ping(store.token, {}, 'https://clone.example.com')).status).toBe(403);
+      }
+    });
+
+    /**
      * A missing header is not a mismatch. A proxy stripping unknown headers, or
      * an engineer with `curl`, must not be refused — they have told us nothing,
      * while a wrong header tells us something.
