@@ -155,6 +155,32 @@ describe('store heartbeat (e2e)', () => {
       expect(response.body.data.config_version).toBe(43);
     });
 
+    /**
+     * `configVersion` is a `BIGINT`, read here through a raw query.
+     *
+     * `bigintTransformer` throws rather than truncating a value JavaScript
+     * cannot represent, and a raw query bypasses it — so the same check is
+     * applied at this boundary. Unreachable in practice (one increment per
+     * publish, ~9 quadrillion to overflow), and asserted anyway because the
+     * guard exists precisely so the failure is loud rather than silent.
+     *
+     * Verified by mutation: removing the check broke no test until this one.
+     */
+    it('refuses a config version it cannot represent exactly', async () => {
+      const store = await connected();
+
+      // 2^53 + 1 — the smallest integer a double rounds away.
+      await dataSource.query(`UPDATE stores SET configVersion = ? WHERE id = ?`, [
+        '9007199254740993',
+        store.id,
+      ]);
+
+      const response = await ping(store.token);
+
+      // A 500, not a wrong number quietly returned to a plugin that trusts it.
+      expect(response.status).toBe(500);
+    });
+
     /** The cloud's view, never the plugin's echoed back. */
     it('answers the cloud’s status, not the plugin’s claim', async () => {
       const store = await connected(StoreStatus.ERROR);
@@ -200,6 +226,51 @@ describe('store heartbeat (e2e)', () => {
       await ping(store.token, { connection_state: StoreStatus.DISCONNECTED });
 
       expect((await storeRow(store.id)).status).toBe(StoreStatus.CONNECTED);
+    });
+
+    /**
+     * The amplification guard.
+     *
+     * A store that cannot be reconciled disagrees on **every** heartbeat: daily
+     * that is 365 entries a year, and against the 60-per-hour limit a
+     * misbehaving plugin writes 1,440 a day for one store — into a table with no
+     * retention sweep. An unchanged disagreement is a repetition, not news.
+     */
+    it('records a repeated, unchanged mismatch only once', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      for (let ping_ = 0; ping_ < 5; ping_ += 1) {
+        await ping(store.token, { connection_state: StoreStatus.ERROR });
+      }
+
+      expect(await mismatches(store.id)).toBe(1);
+    });
+
+    /** A *changed* disagreement is news, and is recorded. */
+    it('records again when the plugin’s claim changes', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      await ping(store.token, { connection_state: StoreStatus.ERROR });
+      await ping(store.token, { connection_state: StoreStatus.ERROR });
+      await ping(store.token, { connection_state: StoreStatus.DISCONNECTED });
+
+      expect(await mismatches(store.id)).toBe(2);
+    });
+
+    /** And when the *cloud's* view moves while the plugin's claim holds. */
+    it('records again when the cloud’s view changes', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      await ping(store.token, { connection_state: StoreStatus.ERROR });
+
+      await dataSource.query(`UPDATE stores SET status = ? WHERE id = ?`, [
+        StoreStatus.REVOKED,
+        store.id,
+      ]);
+
+      await ping(store.token, { connection_state: StoreStatus.ERROR });
+
+      expect(await mismatches(store.id)).toBe(2);
     });
 
     it('records nothing when the views agree', async () => {
@@ -289,7 +360,11 @@ describe('store heartbeat (e2e)', () => {
         expect((await ping(store.token, { connection_state: state })).status).toBe(200);
       }
 
-      // Four of the five disagree with CONNECTED.
+      /**
+       * Four of the five disagree with `CONNECTED`, and each is a *different*
+       * claim from the one before — so deduplication does not collapse them.
+       * A repeated identical claim is covered separately above.
+       */
       expect(await mismatches(store.id)).toBe(Object.values(StoreStatus).length - 1);
     });
   });

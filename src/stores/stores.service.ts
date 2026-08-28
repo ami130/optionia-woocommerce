@@ -113,23 +113,51 @@ export class StoresService {
      * not a disagreement.
      */
     if (dto.connection_state !== undefined && dto.connection_state !== store.status) {
-      await this.audit.record({
-        action: AuditAction.STORE_STATE_MISMATCH,
-        resourceType: 'store',
-        resourceId: storeId,
-        // The store realm carries no user, and `authorize` recorded the tenant on
-        // the store — so the entry stays visible to the tenant-scoped query.
-        tenantId: store.tenantId,
-        changes: {
-          pluginState: dto.connection_state,
-          cloudState: store.status,
-          siteUrl: store.storeUrl,
-        },
-      });
+      /**
+       * Record the disagreement **once**, not once per ping.
+       *
+       * A store that cannot be reconciled — a cloned site, a restored database —
+       * disagrees on every heartbeat. Daily that is 365 rows a year; against the
+       * 60-per-hour limit a misbehaving plugin writes **1,440 a day for one
+       * store**, and `audit_logs` has no retention sweep behind it.
+       *
+       * The trail is its own memory: the last recorded mismatch for this store
+       * says what was already reported, so an unchanged disagreement is a
+       * repetition rather than news. A *changed* one is news and is recorded.
+       *
+       * `ix_audit_resource` covers `(resourceType, resourceId)`, so this is one
+       * indexed lookup on a path that already writes.
+       */
+      const [previous] = await this.dataSource.query(
+        `SELECT changes FROM audit_logs
+          WHERE resourceType = 'store' AND resourceId = ? AND action = ?
+          ORDER BY createdAt DESC LIMIT 1`,
+        [storeId, AuditAction.STORE_STATE_MISMATCH],
+      );
+
+      const last = parseChanges(previous?.changes);
+      const unchanged =
+        last?.pluginState === dto.connection_state && last?.cloudState === store.status;
+
+      if (!unchanged) {
+        await this.audit.record({
+          action: AuditAction.STORE_STATE_MISMATCH,
+          resourceType: 'store',
+          resourceId: storeId,
+          // The store realm carries no user, and `authorize` recorded the tenant
+          // on the store — so the entry stays visible to the tenant-scoped query.
+          tenantId: store.tenantId,
+          changes: {
+            pluginState: dto.connection_state,
+            cloudState: store.status,
+            siteUrl: store.storeUrl,
+          },
+        });
+      }
     }
 
     return {
-      config_version: Number(store.configVersion ?? 0),
+      config_version: safeInteger(store.configVersion, 'stores.configVersion'),
       status: store.status as StoreStatus,
       /**
        * Structurally `false` until `[8i]`.
@@ -308,4 +336,40 @@ export class StoresService {
       rotated_at: rotatedAt.toISOString(),
     };
   }
+}
+
+/**
+ * A `BIGINT` read through a raw query, refused rather than truncated.
+ *
+ * `bigintTransformer` throws on a value JavaScript cannot represent exactly, and
+ * that guard exists because silent truncation is the failure it was written to
+ * prevent. A raw `dataSource.query` bypasses the transformer entirely, so the
+ * same check is applied here — otherwise the one query in the codebase that reads
+ * `configVersion` outside the entity is also the one that quietly opts out.
+ */
+function safeInteger(value: unknown, column: string): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  const parsed = typeof value === 'string' ? Number(value) : (value as number);
+
+  if (!Number.isSafeInteger(parsed)) {
+    throw new RangeError(`${column} holds ${String(value)}, which cannot be represented exactly.`);
+  }
+
+  return parsed;
+}
+
+/** `audit_logs.changes` arrives as JSON or as an already-parsed object. */
+function parseChanges(value: unknown): Record<string, unknown> | null {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  return (value as Record<string, unknown> | null) ?? null;
 }

@@ -2175,6 +2175,49 @@ plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
 difference from earlier steps is that every assertion reads the **persisted row**
 rather than the response, which is entirely derived values.
 
+#### An audit of `[8h]` — a guard opted out of, and an amplifier
+
+**The heartbeat bypassed the `BIGINT` safety guard.** `bigintTransformer` throws
+rather than truncating a value JavaScript cannot represent exactly — a deliberate
+defence against silent precision loss. A raw `dataSource.query` never runs the
+transformer, and the heartbeat is the **only** production raw query reading
+`configVersion`, so the one place that reads it outside the entity is also the one
+that quietly opted out.
+
+Unreachable in practice: `configVersion` increments once per publish, and
+overflowing a double needs roughly nine quadrillion of them. Fixed anyway, for the
+same reason the guard exists — this is the third instance of the pattern (`scopes`
+unread, `tokensMatch` uncalled) where a defence is built and then not reached.
+
+**Reconciliation wrote one audit row per ping.** Measured: five pings, five rows.
+A store that cannot be reconciled — a cloned site, a restored database —
+disagrees on *every* heartbeat, so daily that is 365 rows a year, and against the
+60-per-hour limit a misbehaving plugin writes **1,440 a day for one store**.
+
+Deduplicated at the source: the trail is its own memory, so the last recorded
+mismatch says what was already reported, and only a *changed* disagreement is
+news. It compares **both** views — a cloud-side change with the plugin's claim
+unchanged is still news, and a mutation deduplicating on the plugin's state alone
+is caught.
+
+No new column and no migration: `ix_audit_resource` already covers
+`(resource_type, resource_id)`, so this is one indexed lookup on a path that
+already writes.
+
+**`audit_logs` is now named in M34.1, on different terms from the token tables.**
+It is the fifth unpruned table and the only one that must *not* simply be swept —
+it is the trail a merchant is told is kept for their protection, and ADR-010's
+`SET NULL` rules already preserve it through erasure. It needs a retention
+*period* rather than a prune of expired rows, since it has no `expires_at` to key
+on.
+
+**Three mutations, one survived.** Removing the deduplication and narrowing it to
+the plugin's state alone each broke tests. Making `safeInteger` truncate instead
+of throwing broke **nothing** — the guard was added and never exercised, which is
+exactly the defect it was added to fix. A test now drives a `BIGINT` past 2^53 and
+asserts a `500`: a loud failure rather than a wrong number handed to a plugin that
+trusts it.
+
 #### `check-isolation` did not know about the store realm
 
 The heartbeat is authenticated but has no tenant id in its path — the credential

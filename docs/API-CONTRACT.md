@@ -1325,7 +1325,13 @@ because whichever side is wrong, guessing produces the support ticket M8.1b
 describes.
 
 **It is recorded as `store.state_mismatch` in the audit trail**, carrying both
-views. Phase 26's operations surface does not exist yet, and the audit trail is
+views — **once per disagreement, not once per ping.**
+
+A store that cannot be reconciled disagrees on every heartbeat: daily that is 365
+entries a year, and against the 60-per-hour limit a misbehaving plugin writes
+1,440 a day for one store. The trail is its own memory — the last recorded
+mismatch says what was already reported, so an unchanged disagreement is a
+repetition and a changed one is news. Phase 26's operations surface does not exist yet, and the audit trail is
 already the same shape as the requirement: something a human should see,
 attributable, timestamped, and queryable per tenant. Inventing an operations table
 now would build the wrong thing twice — Phase 26 will design one — and add a fifth
