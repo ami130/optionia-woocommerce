@@ -2971,6 +2971,19 @@ store credential, and the handshake row holds nothing worth keeping.
 `email_verification_tokens` and `password_reset_tokens` accumulate the same way
 and belong in the same sweep — four tables, one scheduled job, not four.
 
+**`audit_logs` belongs in the same conversation, on different terms.** It is the
+fifth unpruned table and the only one that must *not* simply be swept: it is the
+trail a merchant is told is kept for their protection, and ADR-010's delete rules
+already keep it intact through user erasure (`user_id` and `tenant_id` are
+`SET NULL`, never cascading).
+
+So it needs a **retention period**, not a prune of expired rows — there is no
+`expires_at` to key on. Two facts make it urgent rather than theoretical: the
+Phase 26 audit reader will query this table directly, and `[8h]`'s heartbeat can
+write to it from an unattended source. That path is deduplicated at the source, so
+a stuck plugin writes one row rather than one per ping — but a bounded growth rate
+is still growth with no ceiling.
+
 **3. Logout does not revoke the access token, by design and undocumented.** The
 refresh family dies immediately; the access token keeps working until it expires.
 That is the trade `AuthJwtService` makes deliberately — revocation lives with the
