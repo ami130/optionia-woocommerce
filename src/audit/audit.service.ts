@@ -90,7 +90,27 @@ export const AuditAction = {
    */
   STORE_DISCONNECTED: 'store.disconnected',
   STORE_REVOKED: 'store.revoked',
+
+  /**
+   * A sync or auth failure, which is **Phase 9's** to record.
+   *
+   * `[8f]` declared this expecting `[8h]` to produce it. The heartbeat cannot:
+   * it is the plugin *succeeding* at reaching the cloud, and the contract
+   * forbids writing `stores.status` from the plugin's own claim — that claim is
+   * one of the two things in dispute. The `CONNECTED → ERROR` edge is a config
+   * sync failing, which arrives with the sync itself.
+   */
   STORE_ERRORED: 'store.errored',
+
+  /**
+   * The plugin's view of its connection disagrees with the cloud's (M8.1b).
+   *
+   * Recorded rather than resolved: a database restore, a migrated site and a
+   * cloned staging environment all produce this, and each has a different right
+   * answer. Guessing is what M8.1b calls the largest source of support tickets in
+   * this category of product.
+   */
+  STORE_STATE_MISMATCH: 'store.state_mismatch',
 
   /**
    * A credential replaced without the store changing state.

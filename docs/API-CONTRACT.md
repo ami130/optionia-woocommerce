@@ -1201,7 +1201,7 @@ credential to rotate).
 
 | Route | State |
 |---|---|
-| `POST /store/heartbeat` | `[8h]` |
+| `POST /store/heartbeat` | `[built]` |
 
 > **A store credential is an opaque token, not a JWT.** `store_credentials` stores
 > a SHA-256 hash and an 8-character prefix; the plaintext exists only in the
@@ -1267,7 +1267,7 @@ stand aside for another realm: a route that carries it and forgets
 it is unusable rather than unprotected. A permanent probe in
 `test/store-realm.e2e-spec.ts` asserts exactly that.
 
-### `POST /v1/store/heartbeat` **[8h]**
+### `POST /v1/store/heartbeat` **[built]**
 
 A daily authenticated ping. The support and analytics backbone
 ([M8.5](../../developePlan.md)): it reveals stale installs and dead connections
@@ -1299,7 +1299,7 @@ gives all of them a single shared budget.
 | Field | Rules |
 |---|---|
 | `plugin_version`, `wp_version`, `wc_version`, `php_version` | ≤ 20 chars each |
-| `connection_state` | one of the five states |
+| `connection_state` | one of the five states — **all five accepted**, including the ones a healthy plugin would never report |
 | `config_version` | integer ≥ 0 |
 | `cache_age_seconds` | integer ≥ 0 |
 
@@ -1308,11 +1308,50 @@ the one sent means new configuration is waiting; `reauthorize: true` means the
 cloud requires a fresh handshake — a site URL change, or a credential revoked
 elsewhere.
 
+⚠️ **`reauthorize` is structurally `false` until `[8i]`**, and the field ships
+anyway. Neither trigger can fire here: a site-URL change is detected in `[8i]`,
+and a revoked credential never reaches this handler because `StoreTokenGuard`
+answers `401` first. The field exists from day one because the plugin **cannot be
+redeployed** (M7.7) to start reading it later.
+
+No test should assert `reauthorize === false` as though it proved logic — it
+asserts a constant, which is how a test comes to look like coverage while
+verifying nothing.
+
 **Reconciliation.** `connection_state` is the plugin's *own* view, and it can
 disagree with `stores.status` — a database restore, a migrated site, a cloned
-staging environment. A mismatch is recorded as an operations item
-([Phase 26](../../developePlan.md)) rather than silently overwritten, because
-whichever side is wrong, guessing produces the support ticket M8.1b describes.
+staging environment. A mismatch is recorded rather than silently overwritten,
+because whichever side is wrong, guessing produces the support ticket M8.1b
+describes.
+
+**It is recorded as `store.state_mismatch` in the audit trail**, carrying both
+views. Phase 26's operations surface does not exist yet, and the audit trail is
+already the same shape as the requirement: something a human should see,
+attributable, timestamped, and queryable per tenant. Inventing an operations table
+now would build the wrong thing twice — Phase 26 will design one — and add a fifth
+accumulating table to the four already awaiting retention in
+[M34.1](../../developePlan.md).
+
+The honest limit: an audit entry is a record, not a queue. Nobody is paged. That
+is equally true of a Phase 26 ops row until its reader exists, so this defers the
+same work without pretending otherwise.
+
+**The cloud never adopts the plugin's claim.** `stores.status` is not written from
+`connection_state` under any circumstance. The plugin's view is one of the two
+things in dispute — a cloned staging site reports on a production store it is
+impersonating, and believing it would let a clone degrade the original.
+
+**`ERROR` is not reachable from this endpoint**, and that follows from the same
+rule. The state machine's `CONNECTED → ERROR` edge is a *sync or auth failure*;
+a heartbeat is the plugin **succeeding** at reaching the cloud, which is the
+opposite event. Config-sync failures belong to `[phase 9]`, which owns that
+transition and its `store.errored` entry.
+
+**All five states are accepted, deliberately.** A plugin can only truthfully
+observe `connected` or `error` — it cannot know it was revoked, having received a
+`401` — so narrowing the field to those two looks tighter. It would reject the
+anomalous report at validation and lose the exact signal this endpoint exists to
+capture: a `400` says nothing, while a recorded mismatch says a site is confused.
 
 **Errors:** `VALIDATION_FAILED`, `UNAUTHENTICATED` (unknown or revoked
 credential), `RATE_LIMITED`.

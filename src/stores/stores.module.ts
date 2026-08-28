@@ -10,6 +10,7 @@ import { ConnectController } from './connect.controller';
 import { ConnectService } from './connect.service';
 import { StoreConnectionCode } from './entities/store-connection-code.entity';
 import { StoreStateService } from './store-state.service';
+import { StoreHeartbeatController } from './store-heartbeat.controller';
 import { StoresController } from './stores.controller';
 import { StoresRepository } from './stores.repository';
 import { StoresService } from './stores.service';
@@ -34,7 +35,7 @@ import { Store } from './entities/store.entity';
     AuthModule,
     AuditModule,
   ],
-  controllers: [ConnectController, StoresController],
+  controllers: [ConnectController, StoresController, StoreHeartbeatController],
   providers: [
     StoreStateService,
     StoresRepository,

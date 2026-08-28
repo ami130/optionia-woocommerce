@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { bootstrapTestApp } from './harness';
+import { bootstrapTestApp, idOf } from './harness';
 
 
 /**
@@ -137,26 +137,6 @@ describe('option authoring (e2e)', () => {
     request(app.getHttpServer()).delete(`/v1${path}`).set('Authorization', `Bearer ${token}`);
 
   /** A fresh group in tenant A's set. */
-  /**
-   * Fixture builders that **fail loudly**.
-   *
-   * Reading `.body.data.id` without checking the status returns `undefined`
-   * when a create fails, and the test then runs against a parent that does not
-   * exist — where a duplicate key genuinely does not collide, because the two
-   * rows are attached to different (missing) parents. That turns a fixture
-   * problem into a false assertion about the product, which is how an
-   * intermittent "duplicate value key returned 201" reached this suite.
-   */
-  function idOf(response: request.Response, what: string): string {
-    if (response.status !== 201) {
-      throw new Error(
-        `Fixture failed to create a ${what}: ${response.status} ` +
-          `${JSON.stringify(response.body?.error ?? response.body)}`,
-      );
-    }
-
-    return response.body.data.id as string;
-  }
 
   /**
    * Create a fixture and insist it worked.

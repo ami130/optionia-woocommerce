@@ -2129,6 +2129,66 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+### Addendum — `[8h]`, and two audit actions pointed at the wrong step
+
+**The heartbeat never writes `stores.status`.** M8.1b's reconciliation says a
+mismatch is "recorded rather than silently overwritten", and adopting the plugin's
+`connection_state` would be that overwrite. The plugin's view is one of the two
+things in dispute: a cloned staging site reports on a production store it is
+impersonating, and believing it would let a clone degrade the original.
+
+**`STORE_ERRORED` belongs to Phase 9, not `[8h]`.** `[8f]` declared it expecting
+the heartbeat to produce it. It cannot — a heartbeat is the plugin *succeeding* at
+reaching the cloud, which is the opposite of the `CONNECTED → ERROR` edge's "sync
+or auth failure". That failure is a config sync failing, and it arrives with the
+sync. This is the second action mis-assigned at declaration time (`STORE_REVOKED`
+was pointed at `[8g]` and belonged to `[8i]`), which suggests the mapping should
+be made when the *producing* step is designed rather than when the action is
+declared.
+
+**Reconciliation records `store.state_mismatch` in the audit trail**, not in a new
+operations table. The trail is already the shape of the requirement — something a
+human should see, attributable, timestamped, tenant-scoped — and Phase 26 will
+design an operations surface properly. Inventing one now would build the wrong
+thing twice and add a fifth accumulating table to the four already awaiting
+retention. The honest limit: an entry is a record, not a queue, and nobody is
+paged. That is equally true of a Phase 26 row until its reader exists.
+
+**`connection_state` accepts all five states deliberately.** A plugin can only
+truthfully observe `connected` or `error` — it cannot know it was revoked, having
+received a `401` — so narrowing the field looks tighter and is worse: it would
+reject the anomalous report at validation and lose the exact signal reconciliation
+exists to capture. A `400` says nothing; a recorded mismatch says a site is
+confused.
+
+**`reauthorize` ships structurally `false`.** Neither trigger can fire in `[8h]`:
+a site-URL change is `[8i]`'s, and a revoked credential never reaches the handler
+because `StoreTokenGuard` answers `401` first. The field exists from day one
+because the plugin cannot be redeployed (M7.7) to start reading it later — and it
+is documented as such rather than tested, since asserting `false` would assert a
+constant.
+
+**Seven mutations, no survivors** — a first for this project. Removing the
+mismatch check, recording one when the views agree, adopting the plugin's claim,
+dropping `COALESCE` from the telemetry write, skipping `lastSeenAt`, echoing the
+plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
+difference from earlier steps is that every assertion reads the **persisted row**
+rather than the response, which is entirely derived values.
+
+#### `check-isolation` did not know about the store realm
+
+The heartbeat is authenticated but has no tenant id in its path — the credential
+*is* the store — so the cross-tenant probe has nothing to ask for. The gate knew
+`@Public()` and not `@StoreRoute()`, and demanded a negative test that cannot be
+written. It now reads both markers, and a route that loses `@StoreRoute()` is
+demanded again, mutation-proven.
+
+#### `option-authoring` carried a duplicate `idOf`
+
+The suite defined its own copy, predating the harness migration, so the request-
+path diagnostic added to the shared helper never reached it — and it is the suite
+where the fixture `404` was reported most often. Removed; it uses the shared one.
+
 #### The intermittent e2e failure was self-inflicted
 
 A failure reported across five suites over several phases — `option-authoring`,

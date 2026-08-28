@@ -22,6 +22,7 @@ import { join } from 'node:path';
 
 import { AppModule } from '../src/app.module';
 import { IS_PUBLIC } from '../src/auth/guards/public.decorator';
+import { IS_STORE_ROUTE } from '../src/auth/guards/store-route.decorator';
 
 /** Below this, the enumeration is broken and every comparison is vacuous. */
 const MINIMUM_ROUTES = 25;
@@ -96,13 +97,21 @@ async function tenantScopedRoutes(): Promise<string[]> {
     }
 
     /**
-     * A `@Public()` route has no tenant to cross.
+     * A `@Public()` or `@StoreRoute()` route has no tenant to cross.
      *
      * Decided by the marker rather than by path. This read
      * `startsWith('/v1/auth/')`, which was right while `/auth/*` was the only
      * unauthenticated realm and wrong the moment `/connect/initiate` appeared —
      * and would have gone on exempting an `/auth` route that *lost* its
      * `@Public()` and became tenant-scoped without a negative test.
+     *
+     * **`@StoreRoute()` is exempt for a different reason than `@Public()`.** A
+     * store-realm route is authenticated, but by a credential that *is* the
+     * store: there is no id in the path and nothing for a caller to name, so the
+     * cross-tenant probe has nothing to ask for. Its isolation is the guard's —
+     * `StoreTokenGuard` resolves the tenant from the credential — and that is
+     * asserted directly in `store-heartbeat.e2e-spec`, where a merchant's JWT
+     * and another store's credential are both refused.
      */
     if (publicPaths.has(route.path)) {
       continue;
@@ -226,7 +235,10 @@ function publicRoutePaths(app: {
 
       const base = Reflect.getMetadata('path', controller);
 
-      if (Reflect.getMetadata(IS_PUBLIC, controller) === true) {
+      if (
+        Reflect.getMetadata(IS_PUBLIC, controller) === true ||
+        Reflect.getMetadata(IS_STORE_ROUTE, controller) === true
+      ) {
         add(base);
 
         // Class-level: every handler's full path is public too.
@@ -249,7 +261,8 @@ function publicRoutePaths(app: {
         if (
           name !== 'constructor' &&
           typeof handler === 'function' &&
-          Reflect.getMetadata(IS_PUBLIC, handler) === true
+          (Reflect.getMetadata(IS_PUBLIC, handler) === true ||
+            Reflect.getMetadata(IS_STORE_ROUTE, handler) === true)
         ) {
           add(base, Reflect.getMetadata('path', handler));
         }

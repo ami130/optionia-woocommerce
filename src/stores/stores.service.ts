@@ -6,12 +6,22 @@ import { StoreStatus } from '../common/database/enums';
 import { generateStoreToken } from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
+import { HeartbeatDto } from './dto/heartbeat.dto';
 import { StoresRepository } from './stores.repository';
 import { StoreStateService } from './store-state.service';
 
 export interface DisconnectResult {
   readonly status: StoreStatus;
   readonly credentials_revoked: number;
+}
+
+export interface HeartbeatResult {
+  /** What the cloud has, so a plugin learns it is behind. */
+  readonly config_version: number;
+  /** The cloud's view of the connection — never the plugin's, echoed back. */
+  readonly status: StoreStatus;
+  /** Whether a fresh handshake is required. Structurally false until `[8i]`. */
+  readonly reauthorize: boolean;
 }
 
 export interface RotateResult {
@@ -38,6 +48,100 @@ export class StoresService {
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * The daily ping from a connected plugin (M8.5).
+   *
+   * Authenticated by the store realm, so the store is already resolved from the
+   * credential — there is no id in the path and nothing for a caller to name.
+   *
+   * Records what the install is running, answers what the cloud has, and
+   * reconciles the two views of the connection without resolving them.
+   */
+  async heartbeat(storeId: string, dto: HeartbeatDto): Promise<HeartbeatResult> {
+    const [store] = await this.dataSource.query(
+      `SELECT id, tenantId, status, configVersion, storeUrl FROM stores WHERE id = ? LIMIT 1`,
+      [storeId],
+    );
+
+    if (!store) {
+      // The guard resolved a credential whose store has since gone. Same 401 as
+      // any other failure, so a caller learns nothing from which one it hit.
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    /**
+     * Telemetry, written every time.
+     *
+     * `lastSeenAt` is deliberately not throttled the way the guard throttles
+     * `lastUsedAt`: this is a **daily** request, and the column is indexed
+     * precisely so stale installs are visible without asking. Skipping the write
+     * would defeat the one thing it is for.
+     *
+     * The two columns are not duplicates — `stores.last_seen_at` answers "did
+     * this install check in", `store_credentials.last_used_at` answers "was this
+     * credential used".
+     */
+    await this.dataSource.query(
+      `UPDATE stores
+          SET lastSeenAt = NOW(3),
+              pluginVersion = COALESCE(?, pluginVersion),
+              wpVersion = COALESCE(?, wpVersion),
+              wcVersion = COALESCE(?, wcVersion),
+              phpVersion = COALESCE(?, phpVersion),
+              updatedAt = NOW(3)
+        WHERE id = ?`,
+      [
+        dto.plugin_version ?? null,
+        dto.wp_version ?? null,
+        dto.wc_version ?? null,
+        dto.php_version ?? null,
+        storeId,
+      ],
+    );
+
+    /**
+     * Reconciliation: record the disagreement, resolve nothing.
+     *
+     * **`stores.status` is never written from `connection_state`.** The plugin's
+     * view is one of the two things in dispute — a cloned staging site reports on
+     * a production store it is impersonating, and adopting its claim would let a
+     * clone degrade the original. M8.1b calls guessing here the largest source of
+     * support tickets in this category of product.
+     *
+     * Reported only when the plugin actually sent a view. A silent heartbeat is
+     * not a disagreement.
+     */
+    if (dto.connection_state !== undefined && dto.connection_state !== store.status) {
+      await this.audit.record({
+        action: AuditAction.STORE_STATE_MISMATCH,
+        resourceType: 'store',
+        resourceId: storeId,
+        // The store realm carries no user, and `authorize` recorded the tenant on
+        // the store — so the entry stays visible to the tenant-scoped query.
+        tenantId: store.tenantId,
+        changes: {
+          pluginState: dto.connection_state,
+          cloudState: store.status,
+          siteUrl: store.storeUrl,
+        },
+      });
+    }
+
+    return {
+      config_version: Number(store.configVersion ?? 0),
+      status: store.status as StoreStatus,
+      /**
+       * Structurally `false` until `[8i]`.
+       *
+       * Neither trigger can fire here: a site-URL change is detected in `[8i]`,
+       * and a revoked credential never reaches this handler because
+       * `StoreTokenGuard` answers `401` first. The field ships regardless — the
+       * plugin cannot be redeployed (M7.7) to start reading it later.
+       */
+      reauthorize: false,
+    };
+  }
 
   /**
    * Disconnect a store: revoke every live credential, move to `DISCONNECTED`.

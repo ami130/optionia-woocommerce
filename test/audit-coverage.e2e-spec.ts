@@ -261,6 +261,8 @@ describe('audit coverage (e2e)', () => {
         // Needs a connected store with a live credential to replace.
         [AuditAction.STORE_DISCONNECTED]: 'store-ownership.e2e-spec',
         [AuditAction.STORE_CREDENTIAL_ROTATED]: 'store-ownership.e2e-spec',
+        // Needs a store credential and a plugin reporting a state we disagree with.
+        [AuditAction.STORE_STATE_MISMATCH]: 'store-heartbeat.e2e-spec',
       };
 
       /**
@@ -292,7 +294,19 @@ describe('audit coverage (e2e)', () => {
          * `[8g]` shipped, which is what it is for.
          */
         [AuditAction.STORE_REVOKED]: '8i',
-        [AuditAction.STORE_ERRORED]: '8h',
+        /**
+         * Phase 9, not `[8h]`.
+         *
+         * `[8f]` assumed the heartbeat would set `ERROR`. It cannot: the
+         * contract forbids writing `stores.status` from the plugin's claim, and
+         * a heartbeat is the plugin *succeeding* at reaching the cloud. The
+         * `CONNECTED → ERROR` edge belongs to config sync.
+         *
+         * `phase 9` rather than a step letter — the expiry check below matches
+         * whatever marker the contract still carries, and Phase 9 has no step
+         * markers yet.
+         */
+        [AuditAction.STORE_ERRORED]: 'phase 9',
       };
 
       const unaccounted = Object.values(AuditAction).filter(
@@ -342,6 +356,7 @@ describe('audit coverage (e2e)', () => {
         AuditAction.STORE_CONNECTED,
         AuditAction.STORE_DISCONNECTED,
         AuditAction.STORE_CREDENTIAL_ROTATED,
+        AuditAction.STORE_STATE_MISMATCH,
       ];
 
       const source = readFileSync('src/tenants/team.service.ts', 'utf8');
