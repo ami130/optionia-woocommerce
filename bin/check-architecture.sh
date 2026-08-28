@@ -86,6 +86,56 @@ else
   pass "all PHP files carry a direct-access guard"
 fi
 
+# --- Reachability: every class is referenced by production code -------------
+#
+# `[8k]` shipped three correct, well-tested classes that **nothing could reach**:
+# no container registration, no caller, no UI. Every gate passed — the
+# architecture guards check layering, PHPCS checks style, and the unit tests
+# passed because they call the classes directly.
+#
+# Worse, the coverage floor *rewarded* it: it counts the classes a test imports,
+# so testing an unwired class raises the number. A merchant could not connect a
+# store, and nothing said so.
+#
+# A class referenced only by its own file and its tests is either dead or not
+# wired yet. Both are worth failing on: the second is a step reporting itself
+# finished before it is.
+UNREACHABLE=""
+while IFS= read -r file; do
+  class=$(basename "$file" .php)
+
+  # Interfaces are referenced by their implementors' `implements` clause and by
+  # type hints; both count, so no special case is needed. Autoloader and Plugin
+  # are the entry points — nothing in src/ refers to them by design.
+  # Autoloader and Plugin are entry points; nothing in src/ names them by design.
+  #
+  # `Money` is the one deliberate exception: a value object built in Phase 3 for
+  # pricing that arrives in Phase 9. It is listed by name rather than by a
+  # pattern, so it expires the moment someone asks why it is here — an exemption
+  # that cannot quietly widen.
+  case "$class" in
+    Autoloader|Plugin) continue ;;
+    Money) continue ;;
+  esac
+
+  # Referenced anywhere in src/ **or the entry file** other than its own?
+  #
+  # `optionia.php` is where WordPress hooks are registered, so a class reachable
+  # only from `register_deactivation_hook` lives there and nowhere else — as
+  # `Activation\Deactivator` does. Scanning src/ alone reported it dead.
+  if ! grep -rqE "(^|[^A-Za-z_])${class}(::|\(|;|,|\)|\s|$)" src optionia.php \
+       --include='*.php' --exclude="$(basename "$file")" 2>/dev/null; then
+    UNREACHABLE="${UNREACHABLE}${file}\n"
+  fi
+done < <(find src -name '*.php' -type f)
+
+if [ -n "$UNREACHABLE" ]; then
+  fail "class is not referenced by any other source file — dead, or built but not wired:"
+  printf "%b" "$UNREACHABLE" | sed 's/^/        /'
+else
+  pass "every class is reachable from production code"
+fi
+
 # --- Version consistency ---------------------------------------------------
 HEADER_VERSION=$(grep -m1 '^ \* Version:' optionia.php | sed 's/.*Version: *//' | tr -d ' \r')
 CONST_VERSION=$(grep -m1 "define( 'OPTIONIA_VERSION'" optionia.php | sed "s/.*'\\([0-9][^']*\\)'.*/\\1/")

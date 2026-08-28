@@ -32,6 +32,13 @@ final class SettingsPage {
 	private Settings $settings;
 
 	/**
+	 * Connection panel.
+	 *
+	 * @var ConnectionSection
+	 */
+	private ConnectionSection $connection;
+
+	/**
 	 * Query argument signalling a successful save after the redirect.
 	 */
 	private const SAVED_FLAG = 'optionia-saved';
@@ -39,10 +46,12 @@ final class SettingsPage {
 	/**
 	 * Constructor.
 	 *
-	 * @param Settings $settings Settings.
+	 * @param Settings          $settings   Settings.
+	 * @param ConnectionSection $connection Connection panel.
 	 */
-	public function __construct( Settings $settings ) {
-		$this->settings = $settings;
+	public function __construct( Settings $settings, ConnectionSection $connection ) {
+		$this->settings   = $settings;
+		$this->connection = $connection;
 	}
 
 	/**
@@ -98,6 +107,15 @@ final class SettingsPage {
 		if ( ! Request::user_can_manage() ) {
 			wp_die( esc_html__( 'You are not allowed to access this page.', 'optionia' ) );
 		}
+
+		/**
+		 * Connection first (M8.3).
+		 *
+		 * It is the only thing that matters on an unconnected shop, and the
+		 * settings below it — cache, logging, uninstall — do nothing until it is
+		 * done.
+		 */
+		$this->connection->render();
 
 		$api_url_overridden = defined( 'OPTIONIA_API_URL' );
 

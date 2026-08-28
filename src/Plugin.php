@@ -18,9 +18,12 @@ use Optionia\Activation\Migrator;
 use Optionia\Activation\Scheduler;
 use Optionia\Admin\Menu;
 use Optionia\Admin\Notices;
+use Optionia\Admin\ConnectionSection;
 use Optionia\Admin\SettingsPage;
 use Optionia\Admin\SystemStatus;
 use Optionia\Api\Client;
+use Optionia\Connection\Callback;
+use Optionia\Connection\Handshake;
 use Optionia\Api\CircuitBreaker;
 use Optionia\Api\ResponseValidator;
 use Optionia\Config\Repository;
@@ -204,6 +207,26 @@ final class Plugin {
 			)
 		);
 
+		// The connection flow (M8.3). Both take the API client through
+		// `PostsToCloud`, the seam that keeps `Client` final.
+		$this->container->set(
+			Handshake::class,
+			static fn ( Container $c ): Handshake => new Handshake( $c->get( Client::class ) )
+		);
+
+		$this->container->set(
+			Callback::class,
+			static fn ( Container $c ): Callback => new Callback( $c->get( Client::class ) )
+		);
+
+		$this->container->set(
+			ConnectionSection::class,
+			static fn ( Container $c ): ConnectionSection => new ConnectionSection(
+				$c->get( Handshake::class ),
+				$c->get( Callback::class )
+			)
+		);
+
 		$this->container->set(
 			Repository::class,
 			static fn ( Container $c ): Repository => new Repository( $c->get( Logger::class ) )
@@ -239,7 +262,10 @@ final class Plugin {
 
 		$this->container->set(
 			SettingsPage::class,
-			static fn ( Container $c ): SettingsPage => new SettingsPage( $c->get( Settings::class ) )
+			static fn ( Container $c ): SettingsPage => new SettingsPage(
+				$c->get( Settings::class ),
+				$c->get( ConnectionSection::class )
+			)
 		);
 
 		$this->container->set(
@@ -271,6 +297,7 @@ final class Plugin {
 		if ( is_admin() ) {
 			$this->container->get( Menu::class )->register();
 			$this->container->get( SettingsPage::class )->register();
+			$this->container->get( ConnectionSection::class )->register();
 		}
 
 		// Declares compatibility with High-Performance Order Storage. Without
