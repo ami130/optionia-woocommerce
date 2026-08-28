@@ -52,6 +52,75 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	 */
 	$GLOBALS['optionia_test_can'] = true;
 
+	/**
+	 * Output and escaping, as identity functions.
+	 *
+	 * `Admin\ConnectionSection::render()` is the merchant-facing half of M8.3,
+	 * and what it prints is the thing worth asserting: every state a merchant
+	 * can be in must produce a message they can act on. Escaping is WordPress's
+	 * job and is tested by WordPress; here it only has to not swallow the text.
+	 */
+	function __( string $text, string $domain = '' ): string {
+		unset( $domain );
+
+		return $text;
+	}
+
+	function esc_html( string $text ): string {
+		return $text;
+	}
+
+	function esc_attr( string $text ): string {
+		return $text;
+	}
+
+	function esc_url( string $url ): string {
+		return $url;
+	}
+
+	function esc_html__( string $text, string $domain = '' ): string {
+		unset( $domain );
+
+		return $text;
+	}
+
+	/**
+	 * Prints, as WordPress does.
+	 *
+	 * Returning an empty string instead would make a test asserting the field is
+	 * present pass against the stub rather than the code — the field would be
+	 * absent from the output and the assertion would be measuring nothing.
+	 */
+	function wp_nonce_field( string $action = '', string $name = '', bool $referer = true, bool $display = true ): void {
+		unset( $action, $referer, $display );
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- a test stub standing in for WordPress's own output.
+		echo '<input type="hidden" name="' . $name . '" value="nonce" />';
+	}
+
+	/**
+	 * WordPress adds slashes to superglobals; this undoes that.
+	 *
+	 * An identity function here, because the test data is never slashed — the
+	 * point is that the production code calls it, not that the stub reverses
+	 * anything.
+	 *
+	 * @param mixed $value Value to unslash.
+	 *
+	 * @return mixed
+	 */
+	function wp_unslash( $value ) {
+		return $value;
+	}
+
+	function sanitize_key( string $key ): string {
+		return strtolower( preg_replace( '/[^a-zA-Z0-9_\-]/', '', $key ) );
+	}
+
+	function admin_url( string $path = '' ): string {
+		return 'https://example.test/wp-admin/' . $path;
+	}
+
 	function current_user_can( string $capability ): bool {
 		unset( $capability );
 

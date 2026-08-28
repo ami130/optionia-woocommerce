@@ -60,6 +60,53 @@ final class CallbackTest extends TestCase {
 	}
 
 	/**
+	 * An array-valued parameter is not a callback, and emits no warning.
+	 *
+	 * `?code[]=a` is trivially craftable. Casting it with `(string)` emitted
+	 * "Array to string conversion" — printed into the admin screen wherever
+	 * `WP_DEBUG_DISPLAY` is on — before yielding the literal `'Array'`, which
+	 * then failed the state comparison. Refused, but noisily, and by accident
+	 * rather than by design.
+	 *
+	 * `failOnWarning` is on in `phpunit.xml.dist`, so this test fails on the
+	 * warning alone even if the outcome were still correct.
+	 */
+	public function test_an_array_parameter_is_not_a_callback(): void {
+		$GLOBALS['optionia_test_options'][ Keys::OPTION_HANDSHAKE ] = array(
+			'state'    => 'the-state',
+			'verifier' => 'the-verifier',
+			'expires'  => time() + 60,
+		);
+
+		$callback = new Callback( $this->unreachable_client() );
+
+		$this->assertSame(
+			Callback::RESULT_NONE,
+			$callback->handle(
+				array(
+					'code'  => array( 'a' ),
+					'state' => array( 'b' ),
+				)
+			)
+		);
+	}
+
+	/** A non-string of any shape is refused the same way. */
+	public function test_a_non_string_parameter_is_not_a_callback(): void {
+		$callback = new Callback( $this->unreachable_client() );
+
+		$this->assertSame(
+			Callback::RESULT_NONE,
+			$callback->handle(
+				array(
+					'code'  => 12345,
+					'state' => true,
+				)
+			)
+		);
+	}
+
+	/**
 	 * The capability is checked **before** the handshake is read.
 	 *
 	 * A subscriber following a crafted link must not bind this shop to a

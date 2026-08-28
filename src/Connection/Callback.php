@@ -69,8 +69,19 @@ final class Callback {
 	 * @param array<string, mixed> $query Query parameters, usually `$_GET`.
 	 */
 	public function handle( array $query ): string {
-		$code  = isset( $query['code'] ) ? (string) $query['code'] : '';
-		$state = isset( $query['state'] ) ? (string) $query['state'] : '';
+		/**
+		 * Strings only, never a cast.
+		 *
+		 * `?code[]=a` makes `$query['code']` an array, and `(string)` on an array
+		 * emits "Array to string conversion" — printed straight into the admin
+		 * screen wherever `WP_DEBUG_DISPLAY` is on — before yielding the literal
+		 * `'Array'`. The flow still refused it, because `'Array'` matches no
+		 * stored state, so this was noise rather than a hole. It is fixed anyway:
+		 * unvalidated input reaching a cast is the shape that becomes a real bug
+		 * the moment something downstream trusts the value.
+		 */
+		$code  = isset( $query['code'] ) && is_string( $query['code'] ) ? $query['code'] : '';
+		$state = isset( $query['state'] ) && is_string( $query['state'] ) ? $query['state'] : '';
 
 		if ( '' === $code || '' === $state ) {
 			return self::RESULT_NONE;
