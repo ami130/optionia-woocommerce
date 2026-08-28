@@ -69,11 +69,12 @@ export class StoreTokenGuard implements CanActivate {
       id: string;
       storeId: string;
       tenantId: string;
+      storeUrl: string;
       revokedAt: Date | null;
       expiresAt: Date | null;
       lastUsedAt: Date | null;
     }> = await this.dataSource.query(
-      `SELECT sc.id, sc.storeId, s.tenantId, sc.revokedAt, sc.expiresAt, sc.lastUsedAt
+      `SELECT sc.id, sc.storeId, s.tenantId, s.storeUrl, sc.revokedAt, sc.expiresAt, sc.lastUsedAt
          FROM store_credentials sc
          JOIN stores s ON s.id = sc.storeId
         WHERE sc.tokenHash = ?
@@ -113,6 +114,9 @@ export class StoreTokenGuard implements CanActivate {
       ctx.realm = 'store';
       ctx.tenantId = credential.tenantId;
       ctx.storeId = credential.storeId;
+      // For `SiteMatchGuard`, which runs next. Free here: the join is already
+      // being made to resolve the tenant.
+      ctx.storeUrl = credential.storeUrl;
       // `userId` stays undefined: a store is not a person, and inventing an
       // actor here would put a fabricated id on every audit entry it writes.
     }

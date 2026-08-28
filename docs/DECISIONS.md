@@ -2175,6 +2175,63 @@ plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
 difference from earlier steps is that every assertion reads the **persisted row**
 rather than the response, which is entirely derived values.
 
+### Addendum — `[8i]`, and why a site mismatch must not revoke
+
+**Revoking on a mismatch is a denial-of-service vector.** `X-Optionia-Site` is a
+plain HTTP header, and whoever holds the credential controls its value. If a
+mismatch revoked, then anyone who stole a token could **disconnect the merchant's
+live store** by sending one bad header — turning a read-only compromise into an
+outage — and a merchant migrating their domain legitimately would kill their own
+store on the first request from the new address.
+
+So `[8i]` refuses the request and leaves the store connected. That is what M8.1b
+asks for: *"a cloned site cannot **silently** reuse the original's credential."*
+**Silently** is the operative word — refusing without recording would leave
+`stores.status` reading `connected` while a clone hammered the endpoint and nobody
+learned it existed. Every mismatch is audited as `store.site_mismatch` naming both
+URLs, and revocation stays a decision a human makes.
+
+**`STORE_REVOKED` moves a third time**, to `[phase 26]`. `[8f]` assigned it to
+`[8g]`, `[8g]`'s audit moved it to `[8i]`, and `[8i]` turns out not to revoke
+either. It is an operator's act on the evidence, which is Phase 26's surface. Three
+moves is the argument for assigning an action when its **producer** is designed
+rather than when the action is declared — each move was caught by the self-expiry
+check, but none needed to happen.
+
+**The contract asked for `403` *with* `reauthorize: true`, which is impossible.**
+`reauthorize` lives in the heartbeat's `200` body and `ApiErrorResponse` is
+`{ error, meta }` with no `data` at all. Resolved as `403` alone: the status *is*
+the signal, and a plugin receiving it knows the cloud will not accept it from this
+address. `reauthorize` therefore stays structurally `false` until something can
+require re-authorisation **without** refusing the request — an operator action
+against a store that is still serving.
+
+**The check is its own guard, not part of `StoreTokenGuard`.** That guard holds an
+invariant worth keeping — every failure is the same `401`, so a caller learns
+nothing from which one they hit — and a `403` would break it. They answer
+different questions: *"is this credential valid"* and *"is this the site it was
+issued to"*. Separate also means Phase 9's config-sync routes inherit both by
+adding one decorator rather than by remembering a check.
+
+`storeUrl` rides on the request context because `StoreTokenGuard` already joins
+`stores` to resolve the tenant — one more column on a row it is fetching anyway,
+rather than a second query.
+
+**A missing header is not a mismatch.** Every shipped plugin sends it, but a
+proxy stripping unknown headers or an engineer with `curl` would not, and refusing
+them would make this guard an availability risk for no security gain. A caller
+that omits the header has told us nothing; one that sends the wrong header has told
+us something.
+
+**Six mutations, one survived.** Always admitting, comparing raw without
+normalisation, answering `401`, treating a missing header as a mismatch, and
+dropping the audit each broke tests. Failing **open** when no store is in context
+broke nothing — that branch is unreachable on the heartbeat, where both guards are
+declared together in order, and becomes reachable only when a future route applies
+this guard alone. A permanent probe controller now applies it alone and asserts the
+`401`, following the precedent `store-realm.e2e-spec` set for
+`@StoreRoute()`-without-its-guard.
+
 #### An audit of `[8h]` — a guard opted out of, and an amplifier
 
 **The heartbeat bypassed the `BIGINT` safety guard.** `bigintTransformer` throws

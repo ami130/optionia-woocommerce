@@ -9,6 +9,7 @@ import { loadConfig } from '../config/env';
 import { ConnectController } from './connect.controller';
 import { ConnectService } from './connect.service';
 import { StoreConnectionCode } from './entities/store-connection-code.entity';
+import { SiteMatchGuard } from '../auth/guards/site-match.guard';
 import { StoreStateService } from './store-state.service';
 import { StoreHeartbeatController } from './store-heartbeat.controller';
 import { StoresController } from './stores.controller';
@@ -37,6 +38,8 @@ import { Store } from './entities/store.entity';
   ],
   controllers: [ConnectController, StoresController, StoreHeartbeatController],
   providers: [
+    // Injects `AuditService`, which `AuditModule` provides to this module.
+    SiteMatchGuard,
     StoreStateService,
     StoresRepository,
     StoresService,

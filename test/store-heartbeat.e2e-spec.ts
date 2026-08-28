@@ -1,7 +1,11 @@
-import { INestApplication } from '@nestjs/common';
+import { Controller, Get, INestApplication, Module, UseGuards } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { AuditModule } from '../src/audit/audit.module';
+import { AuthModule } from '../src/auth/auth.module';
+import { SiteMatchGuard } from '../src/auth/guards/site-match.guard';
+import { StoreRoute } from '../src/auth/guards/store-route.decorator';
 import { StoreStatus } from '../src/common/database/enums';
 import { generateStoreToken } from '../src/common/crypto/tokens';
 
@@ -13,6 +17,31 @@ import { bootstrapTestApp, createHarness, type Harness } from './harness';
  * The store realm's first route, and the endpoint support depends on: it reveals
  * stale installs and dead connections before a merchant reports them.
  */
+/**
+ * `SiteMatchGuard` applied **without** `StoreTokenGuard` — the misordering the
+ * guard's own precondition exists to defend against.
+ *
+ * Unreachable on the heartbeat, where the two are declared together in order. It
+ * becomes reachable the moment a future route applies this guard alone, which is
+ * exactly when a silent admit would matter: the guard would be reading a context
+ * nothing had populated.
+ *
+ * Verified by mutation — making that branch `return true` broke no test until
+ * this probe existed.
+ */
+@Controller('store/orphan-site-probe')
+@StoreRoute()
+@UseGuards(SiteMatchGuard)
+class OrphanSiteProbeController {
+  @Get()
+  reached(): { ok: boolean } {
+    return { ok: true };
+  }
+}
+
+@Module({ imports: [AuthModule, AuditModule], controllers: [OrphanSiteProbeController] })
+class OrphanSiteProbeModule {}
+
 describe('store heartbeat (e2e)', () => {
   let app: INestApplication;
   let harness: Harness;
@@ -20,7 +49,7 @@ describe('store heartbeat (e2e)', () => {
   let tenantId = '';
 
   beforeAll(async () => {
-    app = await bootstrapTestApp();
+    app = await bootstrapTestApp([OrphanSiteProbeModule]);
     harness = await createHarness('hb8h');
     dataSource = app.get(DataSource);
 
@@ -58,11 +87,30 @@ describe('store heartbeat (e2e)', () => {
     return { id, token: credential.plaintext };
   }
 
-  const ping = (token: string, body: object = {}): request.Test =>
-    request(app.getHttpServer())
+  const ping = (token: string, body: object = {}, site?: string): request.Test => {
+    const call = request(app.getHttpServer())
       .post('/v1/store/heartbeat')
-      .set('Authorization', `Bearer ${token}`)
-      .send(body);
+      .set('Authorization', `Bearer ${token}`);
+
+    return (site ? call.set('X-Optionia-Site', site) : call).send(body);
+  };
+
+  /** The URL the harness connected a store at. */
+  const urlOf = async (storeId: string): Promise<string> => {
+    const [row] = await dataSource.query(`SELECT storeUrl FROM stores WHERE id = ?`, [storeId]);
+
+    return row.storeUrl as string;
+  };
+
+  const siteMismatches = async (storeId: string): Promise<number> => {
+    const [row] = await dataSource.query(
+      `SELECT COUNT(*) AS n FROM audit_logs
+        WHERE resourceId = ? AND action = 'store.site_mismatch'`,
+      [storeId],
+    );
+
+    return Number(row.n);
+  };
 
   const storeRow = async (id: string): Promise<Record<string, unknown>> => {
     const [row] = await dataSource.query(`SELECT * FROM stores WHERE id = ?`, [id]);
@@ -288,6 +336,133 @@ describe('store heartbeat (e2e)', () => {
       await ping(store.token, { plugin_version: '1.0.0' });
 
       expect(await mismatches(store.id)).toBe(0);
+    });
+  });
+
+  /**
+   * Site-URL change detection (M8.1b, `[8i]`).
+   *
+   * A cloned staging site inherits production's credential and would report
+   * orders as the live shop. It reports **its own** URL while the credential
+   * still names the original, which is what makes the mismatch detectable.
+   */
+  describe('the site it was issued to', () => {
+    it('admits a request from the store’s own URL', async () => {
+      const store = await connected();
+
+      expect((await ping(store.token, {}, await urlOf(store.id))).status).toBe(200);
+    });
+
+    /**
+     * WordPress reports `home_url( '/' )`, with the slash. `initiate` stored a
+     * normalised URL without one, so a byte comparison would refuse every honest
+     * plugin — the same rule as `[8e]`'s `site_url`.
+     */
+    it('admits the trailing slash WordPress actually sends', async () => {
+      const store = await connected();
+
+      expect((await ping(store.token, {}, `${await urlOf(store.id)}/`)).status).toBe(200);
+    });
+
+    it('admits a differently-cased host', async () => {
+      const store = await connected();
+      const url = await urlOf(store.id);
+
+      expect((await ping(store.token, {}, url.toUpperCase())).status).toBe(200);
+    });
+
+    /** The clone. `403` — the credential is genuine, the site is not. */
+    it('refuses a request from another site', async () => {
+      const store = await connected();
+      const response = await ping(store.token, {}, 'https://staging-clone.example.com');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('FORBIDDEN');
+    });
+
+    /**
+     * `403`, never `401`. A `401` would send the plugin into a reconnect loop it
+     * cannot win: the new credential would be presented from the same wrong
+     * address.
+     */
+    it('answers 403 rather than 401', async () => {
+      const store = await connected();
+
+      expect((await ping(store.token, {}, 'https://elsewhere.example.com')).status).not.toBe(401);
+    });
+
+    /**
+     * **It refuses; it never revokes.** The header is caller-controlled, so
+     * revoking would let a stolen credential disconnect the merchant's live
+     * store — and would kill a legitimate domain migration outright.
+     */
+    it('leaves the store connected and its credential live', async () => {
+      const store = await connected();
+
+      await ping(store.token, {}, 'https://staging-clone.example.com');
+
+      const row = await storeRow(store.id);
+
+      expect(row.status).toBe(StoreStatus.CONNECTED);
+
+      // And the original site still works.
+      expect((await ping(store.token, {}, await urlOf(store.id))).status).toBe(200);
+    });
+
+    /** Refusing without recording would leave nobody aware a clone exists. */
+    it('records the mismatch, naming both URLs', async () => {
+      const store = await connected();
+      const clone = 'https://staging-clone.example.com';
+
+      await ping(store.token, {}, clone);
+
+      const [row] = await dataSource.query(
+        `SELECT changes, tenantId FROM audit_logs
+          WHERE resourceId = ? AND action = 'store.site_mismatch' LIMIT 1`,
+        [store.id],
+      );
+
+      expect(row).toBeDefined();
+      expect(row.tenantId).toBe(tenantId);
+
+      const changes = typeof row.changes === 'string' ? JSON.parse(row.changes) : row.changes;
+
+      expect(changes.presented).toBe(clone);
+      expect(changes.expected).toBe(await urlOf(store.id));
+    });
+
+    /**
+     * A missing header is not a mismatch. A proxy stripping unknown headers, or
+     * an engineer with `curl`, must not be refused — they have told us nothing,
+     * while a wrong header tells us something.
+     */
+    it('admits a request that sends no header at all', async () => {
+      const store = await connected();
+
+      expect((await ping(store.token)).status).toBe(200);
+      expect(await siteMismatches(store.id)).toBe(0);
+    });
+
+    /**
+     * The guard fails **closed** when nothing established a store.
+     *
+     * Admitting there would make it a decoration on a route that is already
+     * unauthenticated — and `@StoreRoute()` tells the global `JwtAuthGuard` to
+     * stand aside, so nothing else would refuse the request either.
+     */
+    it('refuses when StoreTokenGuard did not run', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/v1/store/orphan-site-probe')
+        .set('X-Optionia-Site', 'https://anything.example.com');
+
+      expect(response.status).toBe(401);
+    });
+
+    /** An unparseable header fails to match rather than becoming a 500. */
+    it('refuses junk without crashing', async () => {
+      const store = await connected();
+
+      expect((await ping(store.token, {}, 'not-a-url')).status).toBe(403);
     });
   });
 

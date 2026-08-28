@@ -1308,11 +1308,16 @@ the one sent means new configuration is waiting; `reauthorize: true` means the
 cloud requires a fresh handshake — a site URL change, or a credential revoked
 elsewhere.
 
-⚠️ **`reauthorize` is structurally `false` until `[8i]`**, and the field ships
-anyway. Neither trigger can fire here: a site-URL change is detected in `[8i]`,
-and a revoked credential never reaches this handler because `StoreTokenGuard`
-answers `401` first. The field exists from day one because the plugin **cannot be
-redeployed** (M7.7) to start reading it later.
+⚠️ **`reauthorize` is structurally `false`**, and the field ships anyway. Neither
+trigger can fire on a `200`: a revoked credential never reaches this handler
+because `StoreTokenGuard` answers `401` first, and a site mismatch answers `403`
+from its own guard — an error response carries no `data`, so it cannot set this
+flag either.
+
+It becomes reachable when something can require re-authorisation **without
+refusing the request**, which is an operator action against a store that is still
+serving. The field exists from day one because the plugin **cannot be redeployed**
+(M7.7) to start reading it later.
 
 No test should assert `reauthorize === false` as though it proved logic — it
 asserts a constant, which is how a test comes to look like coverage while
@@ -1420,10 +1425,42 @@ uniqueness check would refuse a connection that is entirely valid.
 path without a trailing slash, lowercased host, before comparing — otherwise a
 merchant's own site fails the check and the feature reads as broken.
 
-**Errors:** a mismatch answers `403 FORBIDDEN` with `reauthorize: true` on the
-heartbeat, not `401`. The credential is genuine; the *site presenting it* is not
-the one it was issued to, and a 401 would send the plugin into a reconnect loop
-it cannot win by retrying.
+**Errors:** a mismatch answers `403 FORBIDDEN`, not `401`. The credential is
+genuine; the *site presenting it* is not the one it was issued to, and a 401 would
+send the plugin into a reconnect loop it cannot win by retrying.
+
+> An earlier draft said `403` **with `reauthorize: true`**. Those are mutually
+> exclusive: `reauthorize` lives in the heartbeat's `200` body, and an error
+> response is `{ error, meta }` with no `data` at all. The status is the signal —
+> a plugin that receives `403` from a site check knows the cloud will not accept
+> it from this address, which is the whole message.
+
+**A mismatch refuses the request. It does not revoke the store.**
+
+`X-Optionia-Site` is a plain HTTP header, and anyone holding the credential
+controls its value. If a mismatch revoked, then whoever stole a token could also
+**disconnect the merchant's live store** by sending one bad header — turning a
+read-only compromise into a denial of service. A merchant migrating their domain
+legitimately would kill their own store on the first request from the new address.
+
+So the clone is blocked and the original keeps working, which is the outcome
+[M8.1b](../../developePlan.md) actually asks for: *"a cloned site cannot silently
+reuse the original's credential."* Silently is the operative word — refusing
+without recording would leave `stores.status` reading `connected` while a clone
+hammered the endpoint, and nobody would learn it existed.
+
+**Every mismatch is therefore audited** as `store.site_mismatch`, naming both the
+expected and the presented URL. Revocation stays a decision a human makes —
+`POST /stores/:id/disconnect`, or an operator acting on the evidence in
+`[phase 26]` — because whichever site is wrong, the cloud cannot tell which one
+from a header alone.
+
+**Where the check runs.** In its own guard, applied alongside `StoreTokenGuard`
+rather than inside it. `StoreTokenGuard` answers *"is this credential valid"* and
+holds an invariant — every failure is the same `401` — that a `403` would break.
+This answers a different question, *"is this the site it was issued to"*, and
+keeping them separate means Phase 9's config-sync routes inherit both by adding
+one decorator.
 
 ---
 

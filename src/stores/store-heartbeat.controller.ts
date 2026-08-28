@@ -2,6 +2,7 @@ import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
+import { SiteMatchGuard } from '../auth/guards/site-match.guard';
 import { StoreRoute } from '../auth/guards/store-route.decorator';
 import { StoreTokenGuard } from '../auth/guards/store-token.guard';
 import { getStoreId } from '../common/context/request-context';
@@ -21,7 +22,12 @@ import { StoresService, type HeartbeatResult } from './stores.service';
  */
 @Controller('store')
 @StoreRoute()
-@UseGuards(StoreTokenGuard)
+/**
+ * `SiteMatchGuard` runs **after** `StoreTokenGuard`, and the order is the point:
+ * the first resolves the store from the credential, the second checks the
+ * request came from that store's address (M8.1b).
+ */
+@UseGuards(StoreTokenGuard, SiteMatchGuard)
 @ApiBearerAuth('store')
 export class StoreHeartbeatController {
   constructor(private readonly service: StoresService) {}

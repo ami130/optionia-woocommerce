@@ -92,6 +92,17 @@ export const AuditAction = {
   STORE_REVOKED: 'store.revoked',
 
   /**
+   * A request arrived from a site the credential was not issued to (M8.1b).
+   *
+   * Recorded, never acted on automatically. `X-Optionia-Site` is a plain header
+   * and whoever holds the credential controls it, so revoking on a mismatch
+   * would let a stolen token disconnect the merchant's live store — and would
+   * kill a legitimate domain migration on its first request. The clone is
+   * refused; a human decides what it means.
+   */
+  STORE_SITE_MISMATCH: 'store.site_mismatch',
+
+  /**
    * A sync or auth failure, which is **Phase 9's** to record.
    *
    * `[8f]` declared this expecting `[8h]` to produce it. The heartbeat cannot:

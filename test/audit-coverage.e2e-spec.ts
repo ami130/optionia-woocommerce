@@ -293,7 +293,22 @@ describe('audit coverage (e2e)', () => {
          * The expiry check below would have caught the wrong mapping the moment
          * `[8g]` shipped, which is what it is for.
          */
-        [AuditAction.STORE_REVOKED]: '8i',
+        /**
+         * Not `[8i]` either.
+         *
+         * `[8h]` re-pointed this here on the assumption that a site-URL mismatch
+         * revokes. It does not: `X-Optionia-Site` is a plain header, so revoking
+         * on a mismatch would let a stolen credential disconnect the merchant's
+         * live store, and would kill a legitimate domain migration outright.
+         * `[8i]` refuses the request and records `store.site_mismatch`; the
+         * store keeps working.
+         *
+         * That leaves `REVOKED` as an act a human performs — an operator acting
+         * on the evidence — which is Phase 26's surface. Third time this action
+         * has moved, which is the argument for assigning an action when its
+         * *producer* is designed rather than when the action is declared.
+         */
+        [AuditAction.STORE_REVOKED]: 'phase 26',
         /**
          * Phase 9, not `[8h]`.
          *
@@ -307,6 +322,8 @@ describe('audit coverage (e2e)', () => {
          * markers yet.
          */
         [AuditAction.STORE_ERRORED]: 'phase 9',
+        // Produced by the site-URL guard, built in this step.
+        [AuditAction.STORE_SITE_MISMATCH]: '8i',
       };
 
       const unaccounted = Object.values(AuditAction).filter(

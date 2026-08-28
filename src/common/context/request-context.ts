@@ -51,6 +51,15 @@ export interface RequestContext {
   storeId?: string;
 
   /**
+   * The URL that store was connected at, for the site-URL check (M8.1b).
+   *
+   * Carried on the context rather than re-read, because `StoreTokenGuard`
+   * already joins `stores` to resolve the tenant — the column is one more field
+   * on a row it is fetching anyway, and `SiteMatchGuard` runs immediately after.
+   */
+  storeUrl?: string;
+
+  /**
    * When the access token was issued, in seconds.
    *
    * Compared against the user's `sessionsInvalidatedAt` so a token issued before
