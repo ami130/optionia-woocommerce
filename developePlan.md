@@ -3662,14 +3662,37 @@ Merchant-side disconnect (plugin clears token, cloud revokes) and cloud-side rev
 
 ### Phase 8 exit criteria
 
+**Cloud** — proven end to end by `test/phase-8-acceptance.e2e-spec.ts`, which drives
+the real endpoints rather than re-asserting each step's units:
+
 ```text
-[ ] Merchant can connect a store in under 60 seconds
-[ ] No SaaS secret present anywhere in plugin source
-[ ] Codes single-use, short-lived, state-verified
-[ ] Token rotation and revocation working
-[ ] Revocation degrades gracefully — storefront keeps working
-[ ] Heartbeat populating store telemetry
+[x] Codes single-use, short-lived, state-verified
+[x] Token rotation and revocation working
+[x] Heartbeat populating store telemetry
+[x] Revocation preserves configuration — the cloud half of "degrades gracefully"
+[x] A cloned site cannot silently reuse the original's credential
 ```
+
+**Plugin** — these are not the cloud's to satisfy, and were listed here as though
+they were:
+
+```text
+[ ] Merchant can connect a store in under 60 seconds        → M8.3, the connect UI
+[ ] No SaaS secret present anywhere in plugin source        → the plugin's own gates
+[ ] Revocation degrades gracefully — storefront keeps
+    serving its cached config after a 401                   → M8.4 / AC3
+```
+
+**Why the split.** "Revocation degrades gracefully" has two halves and only one is
+testable here: the cloud must **destroy nothing the storefront needs** — verified —
+while *serving cached config after a 401* is behaviour that lives in the plugin.
+"Connect in under 60 seconds" spans the plugin's connect screen and the dashboard's
+approval screen, and no backend test can assert it.
+
+Leaving them on one list made Phase 8 look as though it owed work it structurally
+cannot do. A criterion with no owner is the same defect as an audit action pointed
+at the wrong step, which happened three times in this phase before being caught
+each time by a self-expiring check.
 
 ---
 
