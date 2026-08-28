@@ -2175,6 +2175,43 @@ plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
 difference from earlier steps is that every assertion reads the **persisted row**
 rather than the response, which is entirely derived values.
 
+### Addendum — `[8j]`, and criteria that were not Phase 8's to satisfy
+
+Searching for `8j` found nothing: it was a letter from my own plan, and every
+Phase 8 route was already `[built]`. What the search *did* find was a **Phase 8
+exit criteria** block I had not read — six lines, of which three were not the
+cloud's to satisfy at all.
+
+**"Merchant can connect a store in under 60 seconds"** spans the plugin's connect
+screen and the dashboard's approval screen. **"No SaaS secret in plugin source"**
+is the plugin's own gate. **"Revocation degrades gracefully"** has two halves, and
+only one is testable here: the cloud must destroy nothing the storefront needs,
+while *serving cached config after a `401`* is plugin behaviour.
+
+The list is now split by owner. Leaving them together made Phase 8 look as though
+it owed work it structurally cannot do — the same defect as an audit action
+pointed at the wrong step, which happened three times in this phase.
+
+**The cloud's five criteria are now executable.** `phase-8-acceptance.e2e-spec.ts`
+drives them as scenarios through the real endpoints, in the order a plugin and a
+merchant perform them. It deliberately re-asserts no units: every criterion spans
+steps — connecting touches `[8d]`, `[8e]` and `[8f]`; a clone being refused touches
+`[8c]`, `[8f]` and `[8i]` — and the per-step suites each prove their own step and
+none of them a criterion. The coverage existed and was scattered, so "Phase 8 is
+done" rested on an assertion rather than something that runs.
+
+**One acceptance test proved a constant.** "Destroys no configuration" compared
+`configVersion` before and after a disconnect — and a freshly connected store has
+`configVersion = 0`, so the comparison was `0 === 0` and passed whatever disconnect
+did to the column. Verified by mutation: wiping it broke nothing. The test now sets
+a published version first, and the mutation is caught.
+
+That is the fourth time in this phase a test has asserted a value the handler could
+not vary — after `[8g]`'s `status`, `[8h]`'s `reauthorize`, and `[8e]`'s read-check.
+The pattern is specific enough to name: **a test whose expected value is also the
+system's default proves nothing**, and the fix is always to move the fixture off
+the default before asserting.
+
 #### The same amplification, written twice
 
 An audit of `[8i]` found `store.site_mismatch` writing one audit row per refused
