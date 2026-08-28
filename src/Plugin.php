@@ -19,11 +19,13 @@ use Optionia\Activation\Scheduler;
 use Optionia\Admin\Menu;
 use Optionia\Admin\Notices;
 use Optionia\Admin\ConnectionSection;
+use Optionia\Admin\ReconnectNotice;
 use Optionia\Admin\SettingsPage;
 use Optionia\Admin\SystemStatus;
 use Optionia\Api\Client;
 use Optionia\Connection\Callback;
 use Optionia\Connection\Handshake;
+use Optionia\Connection\StateMachine;
 use Optionia\Api\CircuitBreaker;
 use Optionia\Api\ResponseValidator;
 use Optionia\Config\Repository;
@@ -292,12 +294,18 @@ final class Plugin {
 		// - a plugin *update*, which replaces files without firing activation;
 		// - a schedule cleared while the plugin was inactive but WooCommerce was
 		// being toggled, leaving Optionia active with no scheduled sync.
+		// The connection state machine listens for a revoked credential (M8.6).
+		// Registered outside `is_admin()`: a storefront request that gets a 401
+		// must record it too, or the state depends on who happened to visit.
+		StateMachine::listen();
+
 		add_action( 'init', array( $this, 'ensure_deferred_setup' ) );
 
 		if ( is_admin() ) {
 			$this->container->get( Menu::class )->register();
 			$this->container->get( SettingsPage::class )->register();
 			$this->container->get( ConnectionSection::class )->register();
+			( new ReconnectNotice() )->register();
 		}
 
 		// Declares compatibility with High-Performance Order Storage. Without

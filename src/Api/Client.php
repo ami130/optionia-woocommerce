@@ -264,6 +264,28 @@ final class Client implements PostsToCloud {
 		}
 
 		if ( $status < 200 || $status >= 300 ) {
+			/**
+			 * The credential is no longer accepted (M8.6).
+			 *
+			 * Announced, not acted on. This class is transport: it knows about
+			 * HTTP and must not know what a connection *means*, or the layering
+			 * the architecture gate enforces stops being true — `src/Api/` owns
+			 * requests, `src/Connection/` owns state.
+			 *
+			 * `Connection\StateMachine` listens and moves the store to
+			 * `REVOKED`. Without this the cloud revokes, the next request fails,
+			 * and the settings screen goes on saying "Connected" until a merchant
+			 * wonders why publishing stopped — the ambiguity M8.1b calls the
+			 * largest source of support tickets in this category of product.
+			 *
+			 * A `403` is deliberately not included: `[8i]` answers that when a
+			 * *site* presents a genuine credential from the wrong address, and
+			 * the credential itself is still good.
+			 */
+			if ( 401 === $status ) {
+				do_action( 'optionia_unauthorized', $path );
+			}
+
 			return Response::failure(
 				$status,
 				'http_' . $status,

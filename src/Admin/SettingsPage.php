@@ -159,7 +159,7 @@ final class SettingsPage {
 			$api_url_overridden ? 'disabled' : '',
 			$api_url_overridden
 				? esc_html__( 'Overridden by the OPTIONIA_API_URL constant in wp-config.php.', 'optionia' )
-				: esc_html__( 'Leave blank to use the default Optionia API.', 'optionia' )
+				: esc_html__( 'Must be https. Leave blank to use the default Optionia API.', 'optionia' )
 		);
 
 		// --- Delete on uninstall ---------------------------------------------

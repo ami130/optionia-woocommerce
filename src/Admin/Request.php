@@ -97,14 +97,26 @@ final class Request {
 	}
 
 	/**
-	 * A URL from the POST body, validated.
+	 * A URL from the POST body, validated against the schemes a caller allows.
 	 *
-	 * Returns an empty string when the value is not a usable http(s) URL, so a
-	 * caller cannot store `javascript:` in a setting that is later rendered.
+	 * Returns an empty string when the value is not a usable URL in one of them,
+	 * so a caller cannot store `javascript:` in a setting that is later rendered.
 	 *
-	 * @param string $key Field name.
+	 * **The caller states its schemes.** This accepted `http` and `https` for
+	 * every field, and the API base URL is one of those fields — a merchant who
+	 * pasted a staging address over plain HTTP would have sent the store
+	 * credential across the network in clear text on every request afterwards.
+	 * M8.4 requires HTTPS, and the cloud already refuses an `http://` site at
+	 * `initiate` for the same reason.
+	 *
+	 * Passing the schemes rather than hard-coding `https` keeps the helper honest
+	 * for fields where plain HTTP is legitimate, instead of tightening every
+	 * caller for the sake of one.
+	 *
+	 * @param string   $key     Field name.
+	 * @param string[] $schemes Allowed URL schemes.
 	 */
-	public static function post_url( string $key ): string {
+	public static function post_url( string $key, array $schemes = array( 'https' ) ): string {
 		$raw = self::post_text( $key );
 
 		if ( '' === $raw ) {
@@ -114,6 +126,6 @@ final class Request {
 		$clean  = esc_url_raw( $raw );
 		$scheme = wp_parse_url( $clean, PHP_URL_SCHEME );
 
-		return in_array( $scheme, array( 'http', 'https' ), true ) ? $clean : '';
+		return in_array( $scheme, $schemes, true ) ? $clean : '';
 	}
 }

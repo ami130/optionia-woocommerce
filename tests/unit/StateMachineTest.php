@@ -25,6 +25,7 @@ final class StateMachineTest extends TestCase {
 	 */
 	protected function setUp(): void {
 		$GLOBALS['optionia_test_options'] = array();
+		$GLOBALS['optionia_test_actions'] = array();
 	}
 
 	/**
@@ -106,6 +107,72 @@ final class StateMachineTest extends TestCase {
 	/** The five states M8.1b names, and no others. */
 	public function test_declares_exactly_the_five_states(): void {
 		$this->assertCount( 5, StateMachine::states() );
+	}
+
+	/**
+	 * A revoked credential moves a connected store to `REVOKED` (M8.6).
+	 *
+	 * The whole point of `[8l]`: without it the cloud revokes, the next request
+	 * fails, and the settings screen goes on saying "Connected" until a merchant
+	 * wonders why publishing stopped.
+	 */
+	public function test_an_unauthorized_response_revokes_a_connected_store(): void {
+		StateMachine::transition( StateMachine::CONNECTING );
+		StateMachine::transition( StateMachine::CONNECTED );
+
+		StateMachine::on_unauthorized();
+
+		$this->assertSame( StateMachine::REVOKED, StateMachine::current() );
+	}
+
+	/** An erroring store still holds a credential, so it can be revoked too. */
+	public function test_an_unauthorized_response_revokes_an_erroring_store(): void {
+		StateMachine::transition( StateMachine::CONNECTING );
+		StateMachine::transition( StateMachine::CONNECTED );
+		StateMachine::transition( StateMachine::ERROR );
+
+		StateMachine::on_unauthorized();
+
+		$this->assertSame( StateMachine::REVOKED, StateMachine::current() );
+	}
+
+	/**
+	 * A 401 mid-handshake says nothing new.
+	 *
+	 * `initiate` and `exchange` are unauthenticated, so a 401 there is a refused
+	 * exchange rather than a revoked credential — moving to `REVOKED` would tell
+	 * a merchant their connection was cancelled when it was never made.
+	 */
+	public function test_an_unauthorized_response_during_a_handshake_changes_nothing(): void {
+		StateMachine::transition( StateMachine::CONNECTING );
+
+		StateMachine::on_unauthorized();
+
+		$this->assertSame( StateMachine::CONNECTING, StateMachine::current() );
+	}
+
+	/** Nor does one on a store that was already disconnected. */
+	public function test_an_unauthorized_response_on_a_disconnected_store_changes_nothing(): void {
+		StateMachine::on_unauthorized();
+
+		$this->assertSame( StateMachine::DISCONNECTED, StateMachine::current() );
+	}
+
+	/**
+	 * The wire between transport and connection state.
+	 *
+	 * `Api\Client` fires `optionia_unauthorized` and knows nothing more. If the
+	 * listener is never registered, every test above still passes while a real
+	 * revocation goes unnoticed.
+	 */
+	public function test_the_listener_is_wired_to_the_action(): void {
+		StateMachine::transition( StateMachine::CONNECTING );
+		StateMachine::transition( StateMachine::CONNECTED );
+
+		StateMachine::listen();
+		do_action( 'optionia_unauthorized', '/store/heartbeat' );
+
+		$this->assertSame( StateMachine::REVOKED, StateMachine::current() );
 	}
 
 	/**

@@ -81,7 +81,7 @@ SRC_CLASSES=$(find src -name '*.php' -not -name 'Autoloader.php' | wc -l | tr -d
 TESTED=$(grep -ohE 'use Optionia\\[A-Za-z\\]+' tests/unit/*.php 2>/dev/null | sort -u | wc -l | tr -d ' ')
 
 # Named explicitly so raising it is a decision rather than a drift.
-FLOOR=8
+FLOOR=16
 
 if [ "$TESTED" -lt "$FLOOR" ]; then
   printf '\033[31mFAIL\033[0m  %d of %d classes exercised; the floor is %d\n' \

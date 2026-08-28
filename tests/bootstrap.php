@@ -109,6 +109,144 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	 *
 	 * @return mixed
 	 */
+	/**
+	 * The hooks API, in memory.
+	 *
+	 * `[8l]` routes a 401 from `Api\Client` to `Connection\StateMachine`
+	 * through an action, so the transport layer never learns what a connection
+	 * means. Testing that the wire is connected needs the wire.
+	 */
+	$GLOBALS['optionia_test_actions'] = array();
+
+	function add_action( string $hook, $callback, int $priority = 10, int $args = 1 ): bool {
+		unset( $priority, $args );
+
+		$GLOBALS['optionia_test_actions'][ $hook ][] = $callback;
+
+		return true;
+	}
+
+	function do_action( string $hook, ...$args ): void {
+		foreach ( $GLOBALS['optionia_test_actions'][ $hook ] ?? array() as $callback ) {
+			call_user_func_array( $callback, $args );
+		}
+	}
+
+	/**
+	 * The HTTP layer, scripted.
+	 *
+	 * `Api\Client` announces a `401` so `Connection\StateMachine` can react
+	 * (M8.6). Testing that it *fires* — rather than that the listener works once
+	 * something fires it — needs a response with a status, and nothing more.
+	 * Set `$GLOBALS['optionia_test_http']` to the response the next request
+	 * should receive.
+	 */
+	$GLOBALS['optionia_test_http'] = array(
+		'status' => 200,
+		'body'   => '{"data":{}}',
+	);
+
+	function wp_doing_cron(): bool {
+		return false;
+	}
+
+	function wp_doing_ajax(): bool {
+		return false;
+	}
+
+	// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- signature parity with WordPress.
+	function wp_rand( int $min = 0, int $max = 0 ): int {
+		unset( $max );
+
+		return $min;
+	}
+
+	function wp_cache_delete( string $key, string $group = '' ): bool {
+		unset( $key, $group );
+
+		return true;
+	}
+
+	function get_bloginfo( string $show = '' ): string {
+		unset( $show );
+
+		return '6.5';
+	}
+
+	function untrailingslashit( string $value ): string {
+		return rtrim( $value, '/\\' );
+	}
+
+	function trailingslashit( string $value ): string {
+		return rtrim( $value, '/\\' ) . '/';
+	}
+
+	function add_query_arg( $args, string $url = '' ): string {
+		if ( ! is_array( $args ) ) {
+			return $url;
+		}
+
+		return $url . ( false === strpos( $url, '?' ) ? '?' : '&' ) . http_build_query( $args );
+	}
+
+	function wp_remote_retrieve_header( $response, string $name ): string {
+		return (string) ( $response['headers'][ $name ] ?? '' );
+	}
+
+	function is_admin(): bool {
+		return false;
+	}
+
+	function home_url( string $path = '' ): string {
+		return 'https://shop.example.test' . $path;
+	}
+
+	function apply_filters( string $hook, $value, ...$args ) {
+		unset( $hook, $args );
+
+		return $value;
+	}
+
+	function wp_json_encode( $data, int $flags = 0, int $depth = 512 ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- this stub *is* the alternative.
+		return json_encode( $data, $flags, $depth );
+	}
+
+	function wp_remote_request( string $url, array $args = array() ) {
+		unset( $url, $args );
+
+		return $GLOBALS['optionia_test_http'];
+	}
+
+	function is_wp_error( $thing ): bool {
+		return $thing instanceof \WP_Error;
+	}
+
+	function wp_remote_retrieve_response_code( $response ): int {
+		return (int) ( $response['status'] ?? 0 );
+	}
+
+	function wp_remote_retrieve_body( $response ): string {
+		return (string) ( $response['body'] ?? '' );
+	}
+
+	function wp_remote_retrieve_headers( $response ) {
+		return $response['headers'] ?? array();
+	}
+
+	function esc_url_raw( string $url ): string {
+		return $url;
+	}
+
+	function wp_parse_url( string $url, int $component = -1 ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- this stub *is* the alternative.
+		return parse_url( $url, $component );
+	}
+
+	function sanitize_text_field( string $text ): string {
+		return trim( $text );
+	}
+
 	function wp_unslash( $value ) {
 		return $value;
 	}

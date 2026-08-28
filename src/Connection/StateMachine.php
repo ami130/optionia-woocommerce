@@ -103,6 +103,36 @@ final class StateMachine {
 	}
 
 	/**
+	 * Listen for a credential the cloud no longer accepts (M8.6).
+	 *
+	 * `Api\Client` announces a `401` and knows nothing more; this decides what
+	 * it means. A revoked store keeps serving its cached configuration — AC3 —
+	 * so the transition records that publishing has stopped, not that the shop
+	 * has.
+	 */
+	public static function listen(): void {
+		add_action( 'optionia_unauthorized', array( self::class, 'on_unauthorized' ) );
+	}
+
+	/**
+	 * A request was refused as unauthenticated.
+	 *
+	 * Only a store that believes itself connected can *become* revoked. A `401`
+	 * during a handshake, or on a store already disconnected, says nothing new —
+	 * and the machine refuses those transitions anyway, so this guard is about
+	 * intent rather than safety.
+	 */
+	public static function on_unauthorized(): void {
+		$current = self::current();
+
+		if ( self::CONNECTED !== $current && self::ERROR !== $current ) {
+			return;
+		}
+
+		self::transition( self::REVOKED );
+	}
+
+	/**
 	 * Whether the machine permits `from` → `to`.
 	 *
 	 * @param string $from Current state.
