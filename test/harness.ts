@@ -272,8 +272,24 @@ export async function createHarness(namespace: string): Promise<Harness> {
  */
 export function idOf(response: request.Response, what: string): string {
   if (response.status !== 201) {
+    /**
+     * Name the request, not just the status.
+     *
+     * A long-standing intermittent failure reports `404 {}` and nothing else,
+     * which says a parent was not visible but not *which* parent — and it has
+     * now appeared in five different suites, each time unreproducible alone.
+     * `option-authoring` grew per-fixture diagnostics for exactly this; every
+     * other suite shares this helper and had none.
+     *
+     * `supertest` keeps the outgoing request on the response, so the path costs
+     * nothing to include and turns "a fixture 404'd" into "creating a value
+     * under `/v1/options/<id>/values` 404'd", which names the row to look for.
+     */
+    const req = (response as unknown as { req?: { method?: string; path?: string } }).req;
+    const where = req?.path ? ` [${req.method ?? 'POST'} ${req.path}]` : '';
+
     throw new Error(
-      `Fixture failed to create a ${what}: ${response.status} ` +
+      `Fixture failed to create a ${what}: ${response.status}${where} ` +
         `${JSON.stringify(response.body?.error ?? response.body)}`,
     );
   }

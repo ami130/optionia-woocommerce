@@ -2129,6 +2129,46 @@ exists to transition until `authorize` creates or reuses one.
 `WHERE approvedAt IS NULL` broke no test — two sequential calls never race. Only
 three simultaneous approvals exercise it, and that test now exists.
 
+#### The intermittent e2e failure was self-inflicted
+
+A failure reported across five suites over several phases — `option-authoring`,
+`cascade`, `serialization`, `publish`, `isolation-matrix` — always unreproducible
+in isolation, always described as "roughly one run in five". It was chased through
+several wrong theories: parallel contention (`maxWorkers` is 1), orphaned tenants
+(the table holds one row), namespace collisions (all 20 distinct, no prefix
+overlaps), unscoped `DELETE`s (there are none), suite ordering (identical between
+runs), and the soft-delete sentinel (production uses the SQL literal, never the
+`Date`).
+
+Caught at last by looping the suite until it failed and **keeping the log**. The
+run showed 99 failures, not a handful, and the cause was not the fixture `404` at
+all: `beforeAll` hooks timing out at 120 seconds, with two suites taking over
+**900 seconds** each. No lock waits, no deadlocks, no connection errors — MySQL
+peaked at 8 connections against a limit of 151.
+
+The explanation is what I was doing while the loop ran: a second e2e suite, the
+unit suite, and seven gate scripts — four of which boot a full Nest application —
+all against the same database. Two test runs competing for one MySQL instance and
+eight cores, with `maxWorkers: 1` meaning neither could yield.
+
+Three control runs with nothing else running: **681 passed, ~56 seconds, every
+time.** The earlier "1 in 5" rate matches how often I happened to be running
+something else.
+
+**There is no product defect here**, and recording it matters more than the fix
+would have: five audits reported this as an open unexplained flake, and each
+report made it look more like a real intermittent bug in the code. The lesson is
+narrower than the symptom suggested — *do not run a second suite against the test
+database while one is running* — and the instrument that would have shown it
+sooner is simply keeping the failing log rather than re-running until green.
+
+`idOf` now names the request in its failure message. The five reports all read
+`Fixture failed to create a value: 404 {}`, which says a parent was not visible
+but not which one; `option-authoring` had grown per-fixture diagnostics for
+exactly this, and the shared helper every other suite uses had none. It now
+reports `404 [POST /v1/groups/<id>/options] {"code":"NOT_FOUND", …}` across all 84
+call sites.
+
 #### The capability requirement was declared and never tested
 
 Both `[8g]` routes carried `stores:connect` and `stores:rotate_credential`, and
