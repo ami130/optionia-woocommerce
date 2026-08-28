@@ -57,11 +57,40 @@ else
   printf '\033[33mskip\033[0m  vendor/ not installed — run: composer install\n'
 fi
 
-section "4/4  Unit tests (PHPUnit)"
+section "4/5  Unit tests (PHPUnit)"
 if [ -x vendor/bin/phpunit ]; then
   if "$PHP" vendor/bin/phpunit --testsuite=unit; then :; else FAILED=$((FAILED + 1)); fi
 else
   printf '\033[33mskip\033[0m  vendor/ not installed — run: composer install\n'
+fi
+
+# A passing suite says nothing about what it would catch.
+#
+# When this was written the plugin had 45 green tests covering **4 of 28
+# classes** — 14% — and the gate reported nothing but "OK". A suite that
+# exercises a seventh of the code is not a safety net, and a gate that cannot
+# say so is the failure this project keeps finding: a check that passes while
+# inspecting almost nothing.
+#
+# The floor is deliberately a *ratio of classes touched*, not a line-coverage
+# percentage. Line coverage needs Xdebug, which Studio's PHP does not ship, and
+# would fail the gate for an environment reason rather than a code one. Counting
+# the classes a test file imports is cruder and always available.
+section "5/5  Test coverage floor"
+SRC_CLASSES=$(find src -name '*.php' -not -name 'Autoloader.php' | wc -l | tr -d ' ')
+TESTED=$(grep -ohE 'use Optionia\\[A-Za-z\\]+' tests/unit/*.php 2>/dev/null | sort -u | wc -l | tr -d ' ')
+
+# Named explicitly so raising it is a decision rather than a drift.
+FLOOR=8
+
+if [ "$TESTED" -lt "$FLOOR" ]; then
+  printf '\033[31mFAIL\033[0m  %d of %d classes exercised; the floor is %d\n' \
+    "$TESTED" "$SRC_CLASSES" "$FLOOR"
+  printf '        Raise the floor when you raise the coverage — never the reverse.\n'
+  FAILED=$((FAILED + 1))
+else
+  printf '\033[32mok\033[0m    %d of %d classes exercised (floor %d)\n' \
+    "$TESTED" "$SRC_CLASSES" "$FLOOR"
 fi
 
 echo

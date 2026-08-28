@@ -32,6 +32,49 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	/**
 	 * Currency decimal places.
 	 */
+	/**
+	 * The options API, in memory.
+	 *
+	 * `Connection\StateMachine` and `Connection\Handshake` are the plugin's
+	 * half of M8.1b's state machine, and both are pure logic that happens to
+	 * persist through WordPress. Stubbing three functions keeps them in the unit
+	 * suite — where they run in milliseconds — rather than pushing the state
+	 * machine into an integration suite for the sake of a key-value store.
+	 */
+	$GLOBALS['optionia_test_options'] = array();
+
+	/**
+	 * Capability, in memory.
+	 *
+	 * `Connection\Callback` refuses before reading the handshake when the
+	 * caller lacks the capability, and that ordering is the point: a subscriber
+	 * must not learn whether a handshake is pending.
+	 */
+	$GLOBALS['optionia_test_can'] = true;
+
+	function current_user_can( string $capability ): bool {
+		unset( $capability );
+
+		return (bool) ( $GLOBALS['optionia_test_can'] ?? true );
+	}
+
+	function get_option( string $option, $fallback = false ) {
+		return $GLOBALS['optionia_test_options'][ $option ] ?? $fallback;
+	}
+
+	// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- signature parity with WordPress.
+	function update_option( string $option, $value, $autoload = null ): bool {
+		$GLOBALS['optionia_test_options'][ $option ] = $value;
+
+		return true;
+	}
+
+	function delete_option( string $option ): bool {
+		unset( $GLOBALS['optionia_test_options'][ $option ] );
+
+		return true;
+	}
+
 	function wc_get_price_decimals(): int {
 		return 2;
 	}

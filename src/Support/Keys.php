@@ -56,6 +56,22 @@ final class Keys {
 	/** Connection state machine value. See Connection\StateMachine. */
 	public const OPTION_CONNECTION_STATE = 'optionia_connection_state';
 
+	/**
+	 * The in-flight handshake: `state`, PKCE `verifier`, and when it expires.
+	 *
+	 * Autoloaded **off** and deleted the moment the handshake ends. It holds the
+	 * PKCE verifier, which is the secret that stops an intercepted code being
+	 * redeemed by whoever intercepted it — so it must never reach the browser
+	 * and must not outlive the exchange it exists for.
+	 */
+	public const OPTION_HANDSHAKE = 'optionia_handshake';
+
+	/** The connected store's id, for the settings screen and support. */
+	public const OPTION_CONNECTION_STORE = 'optionia_connection_store';
+
+	/** The workspace this shop is connected to, shown to the merchant. */
+	public const OPTION_CONNECTION_TENANT = 'optionia_connection_tenant';
+
 	/** Circuit breaker state for the API client. */
 	public const OPTION_CIRCUIT_STATE = 'optionia_circuit_state';
 

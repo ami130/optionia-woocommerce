@@ -24,7 +24,7 @@ defined( 'ABSPATH' ) || exit;
 /**
  * HTTP client for the Optionia API.
  */
-final class Client {
+final class Client implements PostsToCloud {
 
 	/**
 	 * Seconds to wait for a single HTTP attempt. Deliberately short: this must
