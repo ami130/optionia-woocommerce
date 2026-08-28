@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
@@ -35,6 +36,18 @@ describe('Phase 8 exit criteria (e2e)', () => {
   let merchant = '';
   let tenantId = '';
 
+  /**
+   * A second merchant, because `authorize` is capped at 30 per hour **per
+   * tenant** and a full handshake spends one.
+   *
+   * This suite already spends twelve on one tenant. That is comfortable today
+   * and is exactly how `connect-handshake` broke — silently, at its
+   * thirty-second call, with every later test failing on a `429` that had
+   * nothing to do with what it asserted. Splitting the load now costs one
+   * registration; discovering the ceiling later costs an afternoon.
+   */
+  let secondMerchant = '';
+
   const digest = (): string => randomBytes(32).toString('base64url');
   const SITE_PREFIX = 'https://ph8-';
 
@@ -53,6 +66,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
 
     merchant = await harness.tenant('a');
     tenantId = await harness.tenantIdOf('a');
+    secondMerchant = await harness.tenant('b');
   }, 120_000);
 
   afterAll(async () => {
@@ -65,12 +79,77 @@ describe('Phase 8 exit criteria (e2e)', () => {
   });
 
   /**
+   * The criteria this suite claims to prove, named here so the claim is checkable.
+   *
+   * `developePlan.md` marks five cloud criteria `[x]` and points at this file.
+   * Nothing enforced that: the suite could be deleted and every gate would still
+   * pass while the plan went on claiming them — verified by moving the file away
+   * and running all seven.
+   *
+   * The plan itself cannot be read from a gate, because it lives in the root
+   * repository and CI checks out only this one. So the claim is asserted here
+   * instead, beside what it verifies and inside a suite CI already runs.
+   */
+  const CLOUD_EXIT_CRITERIA: ReadonlyArray<readonly [string, string]> = [
+    ['Codes single-use, short-lived, state-verified', 'the authorization code'],
+    ['Token rotation and revocation working', 'rotation and revocation'],
+    ['Heartbeat populating store telemetry', 'the heartbeat'],
+    ['Revocation preserves configuration', 'destroys no configuration'],
+    ['A cloned site cannot silently reuse a credential', 'a cloned site'],
+  ];
+
+  /**
+   * Every criterion still has a test, and the file still names it.
+   *
+   * A `describe` renamed or a scenario deleted breaks this before it can break
+   * the plan's honesty. It reads its own source, which is the same instrument
+   * `audit-coverage` uses to verify that an exemption still points at something
+   * real.
+   */
+  it('proves every cloud exit criterion it claims', () => {
+    const source = readFileSync('test/phase-8-acceptance.e2e-spec.ts', 'utf8');
+
+    CLOUD_EXIT_CRITERIA.forEach(([criterion, scenario]) => {
+      /**
+       * Matched as a **block header**, not as a substring.
+       *
+       * A bare `source.includes(scenario)` matches the criteria list above — the
+       * check would be reading its own declaration and would pass with every
+       * scenario deleted. Verified by mutation: renaming a `describe` broke
+       * nothing until this required the block itself.
+       *
+       * Either form counts. Most criteria are a `describe` of several scenarios;
+       * "revocation preserves configuration" is a single `it` inside `rotation
+       * and revocation`, because it is one assertion rather than a group, and
+       * forcing it into a `describe` of one would be structure for the check's
+       * benefit rather than the reader's.
+       */
+      const declared =
+        source.includes(`describe('${scenario}'`) || source.includes(`it('${scenario}`);
+
+      if (!declared) {
+        throw new Error(
+          `"${criterion}" is claimed as proven, but no describe('${scenario}') ` +
+            `or it('${scenario}…') exists in this suite — the criterion has lost ` +
+            `its scenario.`,
+        );
+      }
+    });
+
+    // A floor: the list cannot be emptied to make this pass.
+    expect(CLOUD_EXIT_CRITERIA.length).toBe(5);
+  });
+
+  /**
    * The whole handshake, exactly as a plugin and a merchant perform it.
    *
    * Returns everything a connected store holds afterwards, so a scenario can
    * carry on from a real connection rather than a fabricated row.
    */
-  async function connectAStore(site = nextSite()): Promise<{
+  async function connectAStore(
+    site = nextSite(),
+    approver = merchant,
+  ): Promise<{
     storeId: string;
     token: string;
     site: string;
@@ -94,10 +173,17 @@ describe('Phase 8 exit criteria (e2e)', () => {
 
     const approved = await request(app.getHttpServer())
       .post('/v1/connect/authorize')
-      .set('Authorization', `Bearer ${merchant}`)
+      .set('Authorization', `Bearer ${approver}`)
       .send({ request: requestId, state });
 
-    expect(approved.status).toBe(200);
+    if (approved.status !== 200) {
+      // Naming the cause: a `429` here is the suite outgrowing its own budget,
+      // not the endpoint misbehaving.
+      throw new Error(
+        `authorize failed: ${approved.status} ` +
+          `${JSON.stringify(approved.body?.error ?? approved.body)}`,
+      );
+    }
 
     const code = new URL(approved.body.data.redirect_url).searchParams.get('code') ?? '';
 
@@ -164,6 +250,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
    * fabricated row, so the test proves the binding as the plugin experiences it.
    */
   describe('the authorization code', () => {
+    /** This block runs four handshakes of its own; they go on tenant B. */
     /** A code that has already bought a credential cannot buy a second. */
     it('is spent by the exchange that used it', async () => {
       const site = nextSite();
@@ -182,7 +269,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
       const requestId = new URL(initiated.body.data.authorize_url).searchParams.get('request');
       const approved = await request(app.getHttpServer())
         .post('/v1/connect/authorize')
-        .set('Authorization', `Bearer ${merchant}`)
+        .set('Authorization', `Bearer ${secondMerchant}`)
         .send({ request: requestId, state });
 
       const code = new URL(approved.body.data.redirect_url).searchParams.get('code') ?? '';
@@ -219,7 +306,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
       const requestId = new URL(initiated.body.data.authorize_url).searchParams.get('request');
       const approved = await request(app.getHttpServer())
         .post('/v1/connect/authorize')
-        .set('Authorization', `Bearer ${merchant}`)
+        .set('Authorization', `Bearer ${secondMerchant}`)
         .send({ request: requestId, state });
 
       const code = new URL(approved.body.data.redirect_url).searchParams.get('code') ?? '';
@@ -266,7 +353,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
       const requestId = new URL(initiated.body.data.authorize_url).searchParams.get('request');
       const approved = await request(app.getHttpServer())
         .post('/v1/connect/authorize')
-        .set('Authorization', `Bearer ${merchant}`)
+        .set('Authorization', `Bearer ${secondMerchant}`)
         .send({ request: requestId, state });
 
       const code = new URL(approved.body.data.redirect_url).searchParams.get('code') ?? '';
@@ -295,7 +382,7 @@ describe('Phase 8 exit criteria (e2e)', () => {
       expect(
         (await request(app.getHttpServer())
           .post('/v1/connect/authorize')
-          .set('Authorization', `Bearer ${merchant}`)
+          .set('Authorization', `Bearer ${secondMerchant}`)
           .send({ request: requestId, state: digest() })).status,
       ).toBe(401);
     });

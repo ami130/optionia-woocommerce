@@ -2175,6 +2175,37 @@ plugin's `config_version`, and removing `StoreTokenGuard` each broke tests. The
 difference from earlier steps is that every assertion reads the **persisted row**
 rather than the response, which is entirely derived values.
 
+#### The acceptance suite could be deleted and every gate would pass
+
+Tested by moving the file away and running all seven: every one passed, while
+`developePlan.md` went on claiming five criteria were met and pointing at a file
+that no longer existed. The suite was written so "Phase 8 is done" would rest on
+something executable, and the link between plan and suite was left as prose.
+
+**A gate cannot read the plan.** `developePlan.md` lives in the root repository and
+CI checks out only the backend — a gate reading `../developePlan.md` would pass
+locally and fail in CI, which is worse than no gate. So the claim is asserted
+inside the suite instead, beside what it verifies, following the precedent
+`audit-coverage` set when it reads the contract to check its own exemptions.
+
+**The first version of that check proved nothing.** It matched each scenario name
+as a substring of the file — and the file contains the criteria list, so the check
+was reading its own declaration and passed with every scenario deleted. Verified by
+mutation: renaming a `describe` broke nothing. It now requires a block **header**,
+`describe('…'` or `it('…`, and three mutations are caught — renaming either form,
+and emptying the list.
+
+That is the fifth time in this phase a check has been written that inspected less
+than it appeared to. The tell is consistent: **the assertion's expected value was
+reachable without the behaviour under test** — a constant the handler returns, a
+default the fixture already had, or here, the check's own input.
+
+**The suite's `authorize` load is split across two tenants.** It spent twelve calls
+of a thirty-per-hour budget on one, which is how `connect-handshake` broke —
+silently, at its thirty-second call, with later tests failing on a `429` unrelated
+to what they asserted. Ten and four now, and a failed `authorize` names the cause
+rather than surfacing as an opaque status.
+
 ### Addendum — `[8j]`, and criteria that were not Phase 8's to satisfy
 
 Searching for `8j` found nothing: it was a letter from my own plan, and every
