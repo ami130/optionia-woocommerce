@@ -44,6 +44,32 @@ export class InitiateDto {
   callback: string;
 
   /**
+   * Where the cloud pushes "new configuration is available" (M9.4).
+   *
+   * A **different** URL from `callback`, and the distinction matters: `callback`
+   * is a browser redirect to a WordPress admin screen, so a server posting there
+   * reaches a login page rather than the plugin. This is the plugin's own REST
+   * route, which authenticates by signature instead of by session.
+   *
+   * Optional, so a plugin build predating the route still connects. A store
+   * without one falls back to the fifteen-minute conditional pull (M9.3) —
+   * behind by minutes, not broken.
+   *
+   * Its origin must equal `site_url`'s, checked in the service alongside
+   * `callback`'s, for the same reason: without it an attacker could start a
+   * handshake for someone else's shop and have pushes delivered to a host they
+   * control.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  @Matches(/^https:\/\/[^\s]+$/, {
+    message: 'push_url must be an absolute https:// URL',
+  })
+  @ApiPropertyOptional({ type: String })
+  push_url?: string;
+
+  /**
    * The plugin's CSRF value, opaque to the cloud.
    *
    * Stored only as a SHA-256 hash and echoed through `authorize_url`. The lower
@@ -91,6 +117,38 @@ export class AuthorizeDto {
    * — it holds only the digest — so this is both the CSRF check and the only
    * source for the `state` the final redirect must carry back.
    */
+  @IsString()
+  @Length(43, 128)
+  @Matches(BASE64URL, { message: 'state must be URL-safe' })
+  @ApiProperty({ type: String })
+  state: string;
+}
+
+/**
+ * Read a pending connection request, so the merchant can see what they approve.
+ *
+ * ## Why the same two fields as `AuthorizeDto`, and why a POST
+ *
+ * 🔴 **This cannot be tenant-scoped.** `tenantId` is written at `authorize`, not
+ * at `initiate`, so a pending request belongs to *no tenant yet* — and a read
+ * keyed on the id alone would be a **UUID-guessable oracle returning merchants'
+ * site URLs** to any signed-in user.
+ *
+ * The `state` is the credential that closes it: 43-128 base64url, stored only as
+ * a hash, compared in constant time. Requiring it means holding the id is not
+ * enough — a caller must hold the secret the plugin generated.
+ *
+ * And that is why this is a **POST rather than a GET**: a secret in a query
+ * string lands in browser history, `Referer` headers and server logs. The verb
+ * describes the credential, not the effect; nothing is written.
+ */
+export class DescribeRequestDto {
+  /** The request id carried by `authorize_url`. */
+  @IsUUID()
+  @ApiProperty({ type: String })
+  request: string;
+
+  /** The `state` from `authorize_url`. Verified against the stored hash. */
   @IsString()
   @Length(43, 128)
   @Matches(BASE64URL, { message: 'state must be URL-safe' })

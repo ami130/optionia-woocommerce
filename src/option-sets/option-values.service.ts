@@ -3,8 +3,10 @@ import { Injectable } from '@nestjs/common';
 import { AUTHORING_LIMITS, assertWithinLimit } from './authoring-limits';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { copyableValueFields } from './duplication';
 import { PriceType } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
+import { Option } from './entities/option.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { buildPatch, pick } from './entity-patch';
 import { ParentSetService } from './parent-set';
@@ -21,6 +23,8 @@ export interface ValueChanges {
   priceConfig?: Record<string, unknown> | null;
   imageUrl?: string | null;
   colorHex?: string | null;
+  /** `<optgroup>` heading (M14.3). `null` clears it. */
+  groupLabel?: string | null;
   skuSuffix?: string | null;
   weightDeltaGrams?: number | null;
   isDefault?: boolean;
@@ -67,7 +71,39 @@ export class OptionValuesService {
   }
 
   async create(optionId: string, input: CreateValueInput): Promise<OptionValue> {
-    await this.assertOptionExists(optionId);
+    const option = await this.assertOptionExists(optionId);
+
+    /**
+     * 🔴 **A valueless type must refuse values, not collect them silently.**
+     *
+     * `takesValues` was read in exactly one place — the publish check, which
+     * *skips* an option that declares `false` so a text field is not reported as
+     * "no values". Nothing stopped values being **created** on one.
+     *
+     * The two together are worse than either alone: a merchant could add three
+     * values to a text field, the publish check would deliberately look past
+     * them, and the storefront would render an input that ignores them. Rows
+     * that exist, validate, publish, and mean nothing.
+     *
+     * Refused here rather than at publish because publish is far too late — the
+     * merchant has already done the work, and the error names a decision they
+     * made minutes ago instead of one they made in another session.
+     */
+    if (!this.validator.describe(option.presentation).takesValues) {
+      throw DomainException.validation([
+        {
+          field: 'optionId',
+          code: 'TYPE_TAKES_NO_VALUES',
+          params: {
+            message:
+              `"${option.label}" is a ${option.presentation}, which the customer types ` +
+              `rather than chooses, so it cannot have values.`,
+            presentation: option.presentation,
+          },
+        },
+      ]);
+    }
+
     assertWithinLimit(
       await this.values.count({ where: { optionId } } as never),
       AUTHORING_LIMITS.valuesPerOption,
@@ -90,6 +126,7 @@ export class OptionValuesService {
       priceConfig: input.priceConfig ?? null,
       imageUrl: input.imageUrl ?? null,
       colorHex: input.colorHex ?? null,
+      groupLabel: input.groupLabel ?? null,
       skuSuffix: input.skuSuffix ?? null,
       weightDeltaGrams: input.weightDeltaGrams ?? null,
       isDefault: input.isDefault ?? false,
@@ -221,16 +258,13 @@ export class OptionValuesService {
       valueKey: newKey,
       label: `${source.label} (copy)`,
       sortOrder: await this.values.nextSortOrder(source.optionId),
-      priceType: source.priceType,
-      priceAmountMinor: source.priceAmountMinor,
-      priceConfig: source.priceConfig,
-      imageUrl: source.imageUrl,
-      colorHex: source.colorHex,
-      skuSuffix: source.skuSuffix,
-      weightDeltaGrams: source.weightDeltaGrams,
+      ...copyableValueFields(source),
+      /*
+       * ⚠️ Never a second default. Two defaults in one option is a document the
+       * renderer cannot resolve, so a copy made *beside* its source starts
+       * unselected — unlike a copy made into a different option, which keeps it.
+       */
       isDefault: false,
-      // Disabled work stays disabled, as everywhere else.
-      isEnabled: source.isEnabled,
     } as never);
 
     await this.parents.touchForValue(source.optionId);
@@ -343,10 +377,22 @@ export class OptionValuesService {
     }
   }
 
-  private async assertOptionExists(optionId: string): Promise<void> {
-    if (!(await this.options.findById(optionId))) {
+  /**
+   * The option, or a 404.
+   *
+   * Returns the row rather than a `void` because `create` needs the
+   * presentation to reject values on a type that cannot have them, and the
+   * lookup has already happened — discarding it only to re-query would be a
+   * second round trip for data in hand.
+   */
+  private async assertOptionExists(optionId: string): Promise<Option> {
+    const option = await this.options.findById(optionId);
+
+    if (!option) {
       throw DomainException.notFound('Option');
     }
+
+    return option;
   }
 
 }

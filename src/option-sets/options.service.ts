@@ -10,6 +10,7 @@ import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
 import { buildPatch, pick } from './entity-patch';
+import { copyableValueFields } from './duplication';
 import { ParentSetService } from './parent-set';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
@@ -253,15 +254,10 @@ export class OptionsService {
               valueKey: value.valueKey,
               label: value.label,
               sortOrder: value.sortOrder,
-              priceType: value.priceType,
-              priceAmountMinor: value.priceAmountMinor,
-              priceConfig: value.priceConfig,
-              imageUrl: value.imageUrl,
-              colorHex: value.colorHex,
-              skuSuffix: value.skuSuffix,
-              weightDeltaGrams: value.weightDeltaGrams,
+              // A copy in a *new* option keeps its default; there is no sibling
+              // to collide with.
               isDefault: value.isDefault,
-              isEnabled: value.isEnabled,
+              ...copyableValueFields(value),
             }),
           ),
         );

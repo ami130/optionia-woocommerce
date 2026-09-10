@@ -10,6 +10,7 @@ import type { Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 
 import { getRequestId } from '../context/request-context';
+import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH, WeakPasswordError } from '../crypto/password';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes';
 import { asUniqueViolation, isTransientLockConflict } from '../errors/unique-violation';
 import type { ApiError, ApiErrorResponse, ErrorDetail } from '../http/api-response.types';
@@ -51,6 +52,31 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.warn({ requestId, code: error.code }, `Request failed: ${error.code}`);
     }
 
+    /*
+     * 🔴 **A response may already have been sent.**
+     *
+     * An error thrown *after* the handler replied — a serializer failing on the
+     * way out, an interceptor, a stream that breaks mid-write — still reaches
+     * this filter. Calling `.json()` then throws `ERR_HTTP_HEADERS_SENT`, and
+     * because that throw happens inside the filter itself there is nothing left
+     * to catch it: it escapes as an unhandled exception and **destroys the
+     * connection**.
+     *
+     * The client sees no response and no error. It waits.
+     *
+     * Measured in the e2e suite: eight of these in one run, and the socket
+     * teardown left every subsequent request on that connection hanging until
+     * the test timed out. Ten tests failed in `publish.e2e-spec.ts` with
+     * `Exceeded timeout`, cascading 60s → 120s → 90s as each inherited the
+     * broken connection — a failure that looked like slowness and was a crash.
+     *
+     * The log line above still runs, so nothing is hidden: the error is
+     * recorded, and the response the client already received stands.
+     */
+    if (response.headersSent) {
+      return;
+    }
+
     const body: ApiErrorResponse = {
       error,
       meta: { requestId, timestamp: new Date().toISOString() },
@@ -67,6 +93,46 @@ export class AllExceptionsFilter implements ExceptionFilter {
   } {
     if (exception instanceof HttpException) {
       return this.fromHttpException(exception);
+    }
+
+    /**
+     * A password the caller chose that cannot be stored safely.
+     *
+     * `assertUsablePassword()` throws this, and it is the caller's input rather
+     * than our fault — so a `400` naming the field, not a `500`.
+     *
+     * 🔴 **It was a `500`.** The DTO's `@MaxLength(72)` counted characters while
+     * bcrypt's limit is 72 **bytes**, so a 60-character emoji passphrase reached
+     * this throw and the filter had no case for it. Measured before the fix:
+     * `POST /auth/register` answered `INTERNAL_ERROR` for a password a user had
+     * every reason to think was fine.
+     *
+     * `MaxBytes` on the DTO now catches that case first and names the field.
+     * This mapping stays as the floor: the check lives in `password.ts` for
+     * every caller, including any that never passes through a DTO, and a throw
+     * from there must still be a `400`.
+     */
+    if (exception instanceof WeakPasswordError) {
+      return {
+        status: HttpStatus.BAD_REQUEST,
+        error: {
+          code: ErrorCode.VALIDATION_FAILED,
+          message: 'The request contains invalid fields.',
+          details: [
+            {
+              field: 'password',
+              code: 'INVALID',
+              /*
+               * `params`, not a sentence: `ErrorDetail` carries values for the
+               * client to interpolate so the message can be localised. The
+               * limits are what a form needs to say something useful.
+               */
+              params: { maxBytes: MAX_PASSWORD_BYTES, minLength: MIN_PASSWORD_LENGTH },
+            },
+          ],
+        },
+        logAsError: false,
+      };
     }
 
     /**

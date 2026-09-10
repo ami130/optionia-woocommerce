@@ -16,6 +16,28 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash bin/check-secrets.sh
 
+  # Two repositories hold byte-identical copies of the same fixtures, because CI
+  # checks out one at a time and neither suite can read the other's files. This
+  # gate is what stops them drifting: it hashes each copy, so an edit in either
+  # repository fails **both** builds until both are updated. The plugin runs the
+  # same script against its own copies.
+  shared-fixtures:
+    name: Shared cross-repo fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-shared-fixtures.sh
+
+  # M9.4b: a change a storefront can see must move `config_version`, or every
+  # connected store answers 304 and keeps serving what the merchant deleted.
+  # Reads source only — no database, so it runs beside the other cheap gates.
+  invalidation:
+    name: Published changes advance config_version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-config-invalidation.sh
+
   # A script pointing at a file that does not exist makes a working repository
   # look broken to anyone who clones it.
   scripts:

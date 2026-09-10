@@ -130,6 +130,74 @@ describe('store ownership (e2e)', () => {
     return Number(row.n);
   };
 
+  const get = (path: string, token: string): request.Test =>
+    request(app.getHttpServer()).get(`/v1${path}`).set('Authorization', `Bearer ${token}`);
+
+  describe('listing', () => {
+    /**
+     * 🔴 **The response is an explicit field list, never the entity.**
+     *
+     * `stores` has sixteen columns; this returns eleven. `pushUrl` is a
+     * merchant-supplied callback URL with no screen to appear on, and `tenantId`
+     * is something the caller already knows — neither is a secret, but returning
+     * a row wholesale is how a column added in a later phase becomes part of a
+     * public response nobody decided to publish.
+     *
+     * Found by mutation during the Stage 0 audit: replacing `toSummary()` with
+     * entity passthrough leaked both fields and **53 isolation tests still
+     * passed**. The allow-list existed, was documented, and was enforced by
+     * nothing.
+     */
+    it('returns only the documented fields', async () => {
+      const store = await connectedStore();
+      const response = await get('/stores', owner);
+
+      expect(response.status).toBe(200);
+
+      const row = (response.body.data as Array<{ id: string }>).find((s) => s.id === store.id);
+
+      expect(row).toBeDefined();
+      expect(Object.keys(row as object).sort()).toEqual([
+        'configVersion',
+        'connectedAt',
+        'id',
+        'lastSeenAt',
+        'name',
+        'phpVersion',
+        'pluginVersion',
+        'status',
+        'storeUrl',
+        'wcVersion',
+        'wpVersion',
+      ]);
+    });
+
+    /** The same allow-list on the single-store read. */
+    it('returns only the documented fields for one store', async () => {
+      const store = await connectedStore();
+      const response = await get(`/stores/${store.id}`, owner);
+
+      expect(response.status).toBe(200);
+      expect(Object.keys(response.body.data as object)).not.toContain('pushUrl');
+      expect(Object.keys(response.body.data as object)).not.toContain('tenantId');
+    });
+
+    /**
+     * `lastSeenAt: null` means **never checked in**, which is not the same as
+     * stale.
+     *
+     * A store connected an hour ago whose plugin has not yet run its daily
+     * heartbeat is healthy, and a dashboard that renders "last seen: never" as a
+     * fault would send merchants to support over a working install.
+     */
+    it('reports lastSeenAt as null before the first heartbeat', async () => {
+      const store = await connectedStore();
+      const response = await get(`/stores/${store.id}`, owner);
+
+      expect(response.body.data.lastSeenAt).toBeNull();
+    });
+  });
+
   describe('disconnect', () => {
     it('revokes every live credential and moves the store to DISCONNECTED', async () => {
       const store = await connectedStore();

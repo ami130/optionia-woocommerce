@@ -1,4 +1,23 @@
-import { MAX_AMOUNT_MINOR, pricingConfigSchema } from './pricing.schema';
+import {
+  MAX_AMOUNT_MINOR,
+  perCharPricing,
+  pricingConfigSchema,
+  tieredPricing,
+} from './pricing.schema';
+
+/*
+ * 🔴 **`pricingConfigSchema` is the VALUE-level union, and since M16.3 it holds
+ * only `fixed` and `percentage`.**
+ *
+ * `per_char`, `per_unit` and `tiered` moved to the option level, because each
+ * prices what the customer *supplied* rather than which value they picked — and
+ * the options that supply a quantity or a string have no values to hang a
+ * `price_config` on. `tiered` in particular was configurable **only** on a radio
+ * choice, which has no quantity to bracket.
+ *
+ * These blocks therefore test the option-level shapes directly. Testing them
+ * through the value union would assert a placement the specification forbids.
+ */
 
 /**
  * Pricing configuration.
@@ -81,13 +100,13 @@ describe('pricingConfigSchema', () => {
 
   describe('per_char', () => {
     it('defaults freeCharacters to zero', () => {
-      const result = pricingConfigSchema.parse({ type: 'per_char', amountMinor: 50 });
+      const result = perCharPricing.parse({ type: 'per_char', amountMinor: 50 });
 
       expect(result).toMatchObject({ freeCharacters: 0 });
     });
 
     it('accepts an explicit allowance', () => {
-      const result = pricingConfigSchema.parse({
+      const result = perCharPricing.parse({
         type: 'per_char',
         amountMinor: 50,
         freeCharacters: 10,
@@ -98,7 +117,7 @@ describe('pricingConfigSchema', () => {
 
     it('rejects a negative allowance', () => {
       expect(
-        pricingConfigSchema.safeParse({ type: 'per_char', amountMinor: 50, freeCharacters: -1 })
+        perCharPricing.safeParse({ type: 'per_char', amountMinor: 50, freeCharacters: -1 })
           .success,
       ).toBe(false);
     });
@@ -112,7 +131,7 @@ describe('pricingConfigSchema', () => {
     });
 
     it('accepts contiguous tiers ending open-ended', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
         tiers: [tier(1, 9, 1000), tier(10, 49, 900), tier(50, null, 800)],
       });
@@ -126,7 +145,7 @@ describe('pricingConfigSchema', () => {
      * bracket.
      */
     it('rejects a gap that would leave quantities unpriced', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
         tiers: [tier(1, 9, 1000), tier(20, null, 800)],
       });
@@ -136,7 +155,7 @@ describe('pricingConfigSchema', () => {
     });
 
     it('rejects overlapping tiers', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
         tiers: [tier(1, 20, 1000), tier(10, null, 800)],
       });
@@ -145,36 +164,55 @@ describe('pricingConfigSchema', () => {
       expect(result.error?.issues[0].message).toMatch(/overlaps the previous one/);
     });
 
+    /**
+     * Starts at 1 and ends open-ended, so only the INVERSION is wrong.
+     *
+     * The fixture was `[tier(10, 5)]` until M16.3 added the coverage rules, and
+     * then reported "tiers must start at 1" first — a true message about a
+     * different defect. A test that can pass on the wrong error is not testing
+     * what it names.
+     */
     it('rejects a tier that ends before it starts', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
-        tiers: [tier(10, 5, 1000)],
+        tiers: [tier(1, 9, 1000), tier(20, 15, 900), tier(21, null, 800)],
       });
 
       expect(result.success).toBe(false);
-      expect(result.error?.issues[0].message).toMatch(/ends at 5 but starts at 10/);
+      expect(result.error?.issues.map((issue) => issue.message).join(' ')).toMatch(
+        /ends at 15 but starts at 20/,
+      );
     });
 
-    /** An unbounded tier in the middle swallows every bracket after it. */
+    /**
+     * An unbounded tier in the middle swallows every bracket after it.
+     *
+     * Asserted across every issue rather than the first: this fixture also trips
+     * the M16.3 rule that the LAST tier must be open-ended, which is a second
+     * true statement about the same malformed set. Either message is correct;
+     * requiring this one to be first would test the order Zod reports issues in.
+     */
     it('rejects an open-ended tier that is not last', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
         tiers: [tier(1, null, 1000), tier(10, 20, 800)],
       });
 
       expect(result.success).toBe(false);
-      expect(result.error?.issues[0].message).toMatch(/Only the last tier may be open-ended/);
+      expect(result.error?.issues.map((issue) => issue.message).join(' ')).toMatch(
+        /Only the last tier may be open-ended/,
+      );
     });
 
     it('rejects an empty tier list', () => {
-      const result = pricingConfigSchema.safeParse({ type: 'tiered', tiers: [] });
+      const result = tieredPricing.safeParse({ type: 'tiered', tiers: [] });
 
       expect(result.success).toBe(false);
       expect(result.error?.issues[0].message).toMatch(/at least one tier/);
     });
 
     it('names the offending tier by index', () => {
-      const result = pricingConfigSchema.safeParse({
+      const result = tieredPricing.safeParse({
         type: 'tiered',
         tiers: [tier(1, 9, 1000), tier(20, null, 800)],
       });

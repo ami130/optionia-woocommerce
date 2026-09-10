@@ -51,9 +51,20 @@ describe('OptionTypeValidator', () => {
      * available, because "unsupported" without a list is a dead end.
      */
     it('names the supported types when one is unavailable', () => {
-      const details = detailsFrom(() =>
-        validator.assertValidOption(Presentation.DROPDOWN, {}),
-      );
+      /*
+       * ✏️ **The rotation ended here.** This named whichever presentation was
+       * still unregistered — `DROPDOWN`, then `TEXT_FIELD`, `NUMBER_FIELD`,
+       * `DATE_PICKER`, and finally `FILE_INPUT`, described at the time as "the
+       * last honest choice". Phase 15 registers it, so **every member of
+       * `Presentation` is registered** and no enum value can serve any more.
+       *
+       * A string outside the enum is used instead, and it tests the same thing
+       * better: the route must answer `UNSUPPORTED_OPTION_TYPE` for input it
+       * does not recognise, whether that input is a future presentation or a
+       * typo in a request body. Pointing this at a registered type would make it
+       * pass for the wrong reason; pointing it at a string cannot go stale.
+       */
+      const details = detailsFrom(() => validator.assertValidOption('not-a-presentation', {}));
 
       expect(details[0].field).toBe('presentation');
       expect(details[0].code).toBe('UNSUPPORTED_OPTION_TYPE');
@@ -139,18 +150,28 @@ describe('OptionTypeValidator', () => {
       expect(details[0].field).toBe('values.3.priceConfig.amountMinor');
     });
 
+    /**
+     * A path into an array element, not just a field name.
+     *
+     * Validated through `assertValidOption` since M16.3: `tiered` moved to the
+     * option level, so a value can no longer carry one. The property under test
+     * is unchanged — that a merchant is told *which* tier is wrong, because "a
+     * tier is invalid" leaves them counting brackets by hand.
+     */
     it('reaches into a nested tier', () => {
       const details = detailsFrom(() =>
-        validator.assertValidValuePricing({
-          type: 'tiered',
-          tiers: [
-            { minQuantity: 1, maxQuantity: 9, amountMinor: 100 },
-            { minQuantity: 20, maxQuantity: null, amountMinor: 90 },
-          ],
+        validator.assertValidOption(Presentation.NUMBER_FIELD, {
+          pricing: {
+            type: 'tiered',
+            tiers: [
+              { minQuantity: 1, maxQuantity: 9, amountMinor: 100 },
+              { minQuantity: 20, maxQuantity: null, amountMinor: 90 },
+            ],
+          },
         }),
       );
 
-      expect(details[0].field).toBe('priceConfig.tiers.1.minQuantity');
+      expect(details[0].field).toBe('pricing.tiers.1.minQuantity');
     });
 
     it('prefixes the column being validated', () => {
@@ -211,18 +232,35 @@ describe('OptionTypeValidator', () => {
   });
 
   describe('value pricing', () => {
-    it('accepts every supported price type', () => {
+    it('accepts every price type a VALUE may carry', () => {
       const configs = [
         { type: 'fixed', amountMinor: 1000 },
         { type: 'percentage', basisPoints: 250 },
-        { type: 'per_unit', amountMinor: 50 },
-        { type: 'per_char', amountMinor: 25 },
-        { type: 'tiered', tiers: [{ minQuantity: 1, maxQuantity: null, amountMinor: 100 }] },
       ];
 
       configs.forEach((config) => {
         expect(() => validator.assertValidValuePricing(config)).not.toThrow();
       });
+    });
+
+    /**
+     * 🔴 The option-level types are refused HERE, which is the point.
+     *
+     * `per_char`, `per_unit` and `tiered` price what the customer *supplied*
+     * rather than which value they picked, and the options that supply a string
+     * or a quantity have no values to hang a `price_config` on.
+     *
+     * `tiered` was accepted here until M16.3, which made it configurable **only**
+     * where it cannot work: on a radio choice, which has no quantity to bracket.
+     * A merchant could save a tiered price and have it charge nothing — the
+     * evaluator reported it as unpriced, correctly, and the API had let them.
+     */
+    it.each([
+      ['per_unit', { type: 'per_unit', amountMinor: 50 }],
+      ['per_char', { type: 'per_char', amountMinor: 25 }],
+      ['tiered', { type: 'tiered', tiers: [{ minQuantity: 1, maxQuantity: null, amountMinor: 100 }] }],
+    ])('refuses %s on a value, because it belongs on the option', (_name, config) => {
+      expect(() => validator.assertValidValuePricing(config)).toThrow();
     });
 
     it('rejects an unknown price type', () => {

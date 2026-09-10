@@ -55,4 +55,45 @@ export class StoreHeartbeatController {
 
     return this.service.heartbeat(storeId, dto);
   }
+
+  /**
+   * The plugin telling the cloud it is leaving (U8).
+   *
+   * ## Why this route has to exist
+   *
+   * 🔴 **A merchant pressing Disconnect in WordPress left a live credential
+   * behind.** The plugin's own disconnect is *local* — it clears its token so a
+   * merchant can always recover, even with the cloud unreachable — and nothing
+   * told the backend. The store stayed `connected`, its credential stayed valid,
+   * and the dashboard kept offering a Disconnect for a store already gone.
+   *
+   * Reconciling through the heartbeat cannot work: a disconnected plugin has
+   * **deleted the very credential** the heartbeat authenticates with, so it can
+   * never report in again. The message has to be sent *before* it forgets.
+   *
+   * ## Why it is safe
+   *
+   * It revokes only the credential that authenticated the call, so it can do
+   * nothing a stolen token could not already do — and a thief revoking their own
+   * access is the one abuse nobody minds. `SiteMatchGuard` still requires the
+   * call to come from that store's own address.
+   *
+   * Idempotent, and answers `200` for a store already disconnected: the plugin
+   * calls this on its way out and must not be blocked by the answer.
+   */
+  @Post('disconnect')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
+  @ApiErrors(200, 401, 429)
+  async disconnect(): Promise<{ disconnected: boolean }> {
+    const storeId = getStoreId();
+
+    if (!storeId) {
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    await this.service.disconnect(storeId);
+
+    return { disconnected: true };
+  }
 }

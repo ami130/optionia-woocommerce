@@ -1,4 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+import { OptionalNotNull, Trimmed } from '../../common/validation/trimmed.decorator';
 import {
   IsBoolean,
   IsEnum,
@@ -36,6 +38,7 @@ const KEY_MESSAGE =
 
 export class CreateOptionDto {
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A key is required.' })
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
@@ -43,6 +46,7 @@ export class CreateOptionDto {
   key: string;
 
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A label is required.' })
   @MaxLength(200)
   @ApiProperty({ type: String })
@@ -130,8 +134,9 @@ export class UpdateOptionDto {
    * the reading that cannot corrupt an order is the one shipped.
    */
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A label cannot be empty.' })
   @MaxLength(200)
   @ApiPropertyOptional({ type: String })
@@ -194,8 +199,9 @@ export class DuplicateOptionDto {
    * Unlike a duplicated group, the copy lands in the **same** group as its
    * source, where `uq_options_group_key` forbids repeating the key.
    */
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1)
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })

@@ -20,6 +20,20 @@ export const ErrorCode = {
   // 403 — authenticated, but not permitted.
   FORBIDDEN: 'FORBIDDEN',
   INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
+  /**
+   * Credentials are correct; the address has not been verified.
+   *
+   * Distinct from `FORBIDDEN` because the remedies are opposite: a permissions
+   * failure means *ask someone else*, and this means *open your email*. Sharing
+   * one code left a client unable to tell them apart — an unverified merchant
+   * was shown "You do not have permission to do that", which is both wrong and
+   * a dead end, since the resend screen needs a session sign-in had just
+   * refused.
+   *
+   * Added 2026-09-02 by Phase 13 Stage 2's audit, found by signing in with an
+   * unverified account rather than by reading the handler.
+   */
+  EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
 
   // 404 — no such resource, or none visible to this caller.
   NOT_FOUND: 'NOT_FOUND',
@@ -56,6 +70,7 @@ export const ERROR_STATUS: Record<ErrorCodeValue, HttpStatus> = {
   [ErrorCode.TOKEN_INVALID]: HttpStatus.UNAUTHORIZED,
 
   [ErrorCode.FORBIDDEN]: HttpStatus.FORBIDDEN,
+  [ErrorCode.EMAIL_NOT_VERIFIED]: HttpStatus.FORBIDDEN,
   [ErrorCode.INSUFFICIENT_ROLE]: HttpStatus.FORBIDDEN,
 
   [ErrorCode.NOT_FOUND]: HttpStatus.NOT_FOUND,

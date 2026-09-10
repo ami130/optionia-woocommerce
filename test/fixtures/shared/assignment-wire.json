@@ -1,0 +1,10 @@
+{
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Captured from the real GET /v1/store/config response, not written by hand. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/, both gated on this file's SHA-256. Before this file existed the same bytes were a PHP constant nothing compared back to the cloud: changing priority 5 to 99 left the plugin suite reporting OK. See M11.0c Finding 1.",
+  "version": 1,
+  "endpoint": "GET /v1/store/config",
+  "path": "data.option_sets[0].assignments",
+  "assignments": [
+    { "mode": "all", "target_type": null, "target_ref": null, "priority": 0 },
+    { "mode": "manual", "target_type": "product", "target_ref": "20", "priority": 5 }
+  ]
+}

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { createHarness, idOf, type Harness } from './harness';
+import { createHarness, idOf, tokenFrom, type Harness } from './harness';
 import { AuditAction } from '../src/audit/audit.service';
 
 /**
@@ -136,6 +136,23 @@ describe('audit coverage (e2e)', () => {
     );
     await patch(`/values/${value}`, { label: 'V2' });
 
+    /*
+     * Presentational items, which have their own four audit actions.
+     *
+     * Added when this gate caught them declared-but-unreachable: the routes and
+     * the service shipped, `AuditAction` gained four names, and nothing in this
+     * suite drove them -- so four actions could be written by production code
+     * and never once observed being written. That is exactly the state the
+     * `unaccounted` assertion exists to refuse, and it refused it.
+     */
+    const item = idOf(
+      await post(`/groups/${group}/items`, { kind: 'heading', content: 'Audited heading' }),
+      'presentational item',
+    );
+    await patch(`/items/${item}`, { content: 'Audited heading II' });
+    await post(`/groups/${group}/items/reorder`, { items: [{ id: item, sortOrder: 20 }] });
+    await del(`/items/${item}`);
+
     const groupCopy = idOf(await post(`/groups/${group}/duplicate`), 'group copy');
     const optionCopy = idOf(await post(`/options/${option}/duplicate`), 'option copy');
     const setCopy = idOf(await post(`/option-sets/${set}/duplicate`), 'set copy');
@@ -263,6 +280,27 @@ describe('audit coverage (e2e)', () => {
         [AuditAction.STORE_CREDENTIAL_ROTATED]: 'store-ownership.e2e-spec',
         // Needs a store credential and a plugin reporting a state we disagree with.
         [AuditAction.STORE_STATE_MISMATCH]: 'store-heartbeat.e2e-spec',
+        // Needs a plugin reporting that it refused a document it could not read.
+        [AuditAction.STORE_SCHEMA_UNSUPPORTED]: 'store-heartbeat.e2e-spec',
+
+        /*
+         * Authentication, added 2026-09-03. Driven from `auth-audit.e2e-spec`
+         * rather than here: this suite signs in **once** in `beforeAll` and
+         * spends the rest of its life holding a token, so it cannot exercise a
+         * failed sign-in, a sign-out, or a password reset without destroying the
+         * session every other test depends on.
+         *
+         * That suite asserts the absences too — a duplicate registration, a
+         * failed login's missing reason, an unknown logout token — which is half
+         * of what these actions are for.
+         */
+        [AuditAction.USER_REGISTERED]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_EMAIL_VERIFIED]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_LOGGED_IN]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_LOGIN_FAILED]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_LOGGED_OUT]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_PASSWORD_RESET_REQUESTED]: 'auth-audit.e2e-spec',
+        [AuditAction.USER_PASSWORD_RESET]: 'auth-audit.e2e-spec',
       };
 
       /**
@@ -368,6 +406,7 @@ describe('audit coverage (e2e)', () => {
         AuditAction.MEMBER_JOINED,
         AuditAction.MEMBER_ROLE_CHANGED,
         AuditAction.MEMBER_REMOVED,
+        AuditAction.STORE_SCHEMA_UNSUPPORTED,
         AuditAction.STORE_CONNECT_AUTHORIZED,
         AuditAction.STORE_RECONNECT_AUTHORIZED,
         AuditAction.STORE_CONNECTED,
@@ -497,11 +536,12 @@ describe('audit coverage (e2e)', () => {
           [tenantId, role, email],
         );
 
-        const theirToken = (
+        const theirToken = tokenFrom(
           await request(app.getHttpServer())
             .post('/v1/auth/login')
-            .send({ email, password: PASSWORD })
-        ).body.data.accessToken as string;
+            .send({ email, password: PASSWORD }),
+          email,
+        );
 
         const response = await get('/audit-logs', theirToken);
 

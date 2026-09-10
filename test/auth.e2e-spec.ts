@@ -3,6 +3,8 @@ import { DataSource } from 'typeorm';
 
 import { deleteTenantsFor } from './cleanup-tenants';
 
+import { AuditService } from '../src/audit/audit.service';
+import { AuditLog } from '../src/audit/entities/audit-log.entity';
 import { AuthService } from '../src/auth/auth.service';
 import { AuthTokensService } from '../src/auth/auth-tokens.service';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
@@ -72,6 +74,7 @@ describe('AuthService (integration)', () => {
       new SessionsService(dataSource.getRepository(RefreshToken), 30 * 86_400_000),
       new TenantProvisioningService(),
       'https://app.example.com',
+      new AuditService(dataSource.getRepository(AuditLog)),
     );
   }, 30_000);
 
@@ -279,6 +282,7 @@ describe('AuthService (integration)', () => {
           provision: () => Promise.reject(new Error('provisioning failed')),
         } as unknown as TenantProvisioningService,
         'https://app.example.com',
+        new AuditService(dataSource.getRepository(AuditLog)),
       );
 
       await expect(broken.register(EMAIL, PASSWORD, 'Sam')).rejects.toThrow(
@@ -321,7 +325,21 @@ describe('AuthService (integration)', () => {
     it('writes no row and sends no mail for an unknown address', async () => {
       await service.requestPasswordReset(`${NS}-nobody@example.com`, '1.2.3.4', 'agent');
 
-      const [row] = await dataSource.query(`SELECT COUNT(*) AS n FROM password_reset_tokens`);
+      /*
+       * Scoped to this namespace's own users.
+       *
+       * The count was unscoped -- `COUNT(*)` over the whole table -- so **any**
+       * reset row from any source failed it, including one left by a developer
+       * exercising the flow by hand. Found exactly that way during Phase 13
+       * Stage 2, and the failure named this behaviour rather than the leftover
+       * row, which is the expensive kind of red.
+       */
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM password_reset_tokens prt
+           JOIN users u ON u.id = prt.userId
+          WHERE u.email LIKE ?`,
+        [`${NS}-%`],
+      );
 
       expect(Number(row.n)).toBe(0);
       expect(sentTemplates).toEqual([]);

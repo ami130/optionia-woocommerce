@@ -18,7 +18,7 @@ import { JwtAuthGuard } from '../src/auth/guards/jwt-auth.guard';
 import { TenantGuard } from '../src/auth/guards/tenant.guard';
 import { TenantScopedRepository } from '../src/common/tenancy/tenant-scoped.repository';
 import { OptionSet } from '../src/option-sets/entities/option-set.entity';
-import { bootstrapTestApp } from './harness';
+import { bootstrapTestApp, tokenFrom } from './harness';
 
 /**
  * Tenant isolation, permanently (M6.6).
@@ -193,11 +193,12 @@ describe('tenant isolation (M6.6)', () => {
   }
 
   async function login(which: string): Promise<string> {
+    const email = `${NS}-${which}@example.com`;
     const response = await request(app.getHttpServer())
       .post('/v1/auth/login')
-      .send({ email: `${NS}-${which}@example.com`, password: PASSWORD });
+      .send({ email, password: PASSWORD });
 
-    return response.body.data.accessToken as string;
+    return tokenFrom(response, email);
   }
 
   async function seedSets(tenantId: string, which: string): Promise<void> {

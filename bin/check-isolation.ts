@@ -40,6 +40,27 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'GET /v1/audit-logs',
   'POST /v1/option-sets',
   /**
+   * A tenant's store list, added for M13.3.
+   *
+   * A collection has no foreign id to refuse, so the property asserted instead
+   * is that tenant B's list never contains tenant A's store — proven in
+   * `isolation-matrix.e2e-spec` and mutation-proven by unscoping the repository.
+   */
+  'GET /v1/stores',
+  /**
+   * A store's catalogue, added for M13.6.
+   *
+   * It *does* take an id — `?storeId=` — but it is a **filtered collection**,
+   * not a resource lookup: a foreign store id answers `200` with an empty list,
+   * because the tenant join eliminates every row rather than the store being
+   * "not found". Asserting `404` here would be asserting the wrong contract.
+   *
+   * The property that matters is the collection one: tenant B, asking for tenant
+   * A's store id, sees nothing. Proven in `isolation-matrix.e2e-spec`, and
+   * mutation-proven by dropping the tenant join.
+   */
+  'GET /v1/products',
+  /**
    * `authorize` names a connection request, not a tenant's resource.
    *
    * There is no foreign id to refuse: a request id belongs to a pending
@@ -51,6 +72,23 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
    * `tenantId` from the reuse lookup.
    */
   'POST /v1/connect/authorize',
+  /**
+   * `describe` reads that same tenantless request, and is protected differently.
+   *
+   * Same reason as `authorize`: a pending handshake belongs to no tenant, so
+   * there is no foreign id for the cross-tenant probe to ask for.
+   *
+   * The property that matters here is **stronger** than tenant scoping and is
+   * asserted directly in `connect-handshake.e2e-spec`: holding the request id is
+   * not enough, because the `state` is required — and unknown, expired,
+   * already-approved and wrong-state all answer one indistinguishable `404` whose
+   * body never names a site. Mutation-proven by removing each check in turn.
+   *
+   * Without that, this would be a UUID-guessable oracle returning merchants'
+   * site URLs, which is a worse failure than the cross-tenant read this matrix
+   * usually hunts.
+   */
+  'POST /v1/connect/requests/describe',
 ]);
 
 let failed = false;

@@ -11,6 +11,8 @@ import { GroupDisplayType } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionValue } from './entities/option-value.entity';
+import { PresentationalItem } from './entities/presentational-item.entity';
+import { copyableItemFields, copyableValueFields } from './duplication';
 import { Option } from './entities/option.entity';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
@@ -264,10 +266,16 @@ export class OptionGroupsService {
 }
 
 /**
- * Copy a group's options and values into another group.
+ * Copy a group's children — options, their values, and presentational items.
  *
- * Shared by group duplication and, later, set duplication — the traversal is the
- * same and having it in one place is what keeps the two from drifting.
+ * 🔴 **"Later" arrived and the drift had already happened.** This said it was
+ * shared by group *and* set duplication; the set path had re-implemented the same
+ * traversal beside it, and the two diverged exactly as predicted — `groupLabel`
+ * reached neither, and presentational items reached no copy path at all. A
+ * merchant duplicating a set lost every heading and every `<optgroup>`, silently.
+ *
+ * `OptionSetsService.duplicate` now calls this rather than repeating it, so there
+ * is one traversal again, and the per-row field lists live in `duplication.ts`.
  */
 export async function copyOptionsInto(
   manager: EntityManager,
@@ -345,18 +353,36 @@ export async function copyOptionsInto(
             valueKey: value.valueKey,
             label: value.label,
             sortOrder: value.sortOrder,
-            priceType: value.priceType,
-            priceAmountMinor: value.priceAmountMinor,
-            priceConfig: value.priceConfig,
-            imageUrl: value.imageUrl,
-            colorHex: value.colorHex,
-            skuSuffix: value.skuSuffix,
-            weightDeltaGrams: value.weightDeltaGrams,
+            // A copy in a new option keeps its default; there is no sibling to
+            // collide with.
             isDefault: value.isDefault,
-            isEnabled: value.isEnabled,
+            ...copyableValueFields(value),
           }),
         ),
       );
     }
+  }
+
+  /*
+   * Presentational items, which no copy path carried before.
+   *
+   * ⚠️ `sortOrder` is inherited, never reassigned: items share the scale with
+   * options, and renumbering one list alone would break the interleaving the
+   * storefront renders.
+   */
+  const items = await manager.find(PresentationalItem, {
+    where: { optionGroupId: fromGroupId, deletedAt: LIVE_SENTINEL_SQL as never },
+    order: { sortOrder: 'ASC' },
+  });
+
+  if (items.length > 0) {
+    await manager.save(
+      items.map((item) =>
+        manager.create(PresentationalItem, {
+          optionGroupId: toGroupId,
+          ...copyableItemFields(item),
+        }),
+      ),
+    );
   }
 }

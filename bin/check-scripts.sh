@@ -64,12 +64,13 @@ echo
 # Phase 3 that way, and @nestjs/config survived two audits with a note saying
 # "decide next phase" until the phase closed without deciding (ADR-022).
 #
-# The four allowed below are genuinely indirect and were each verified:
+# The five allowed below are genuinely indirect and were each verified:
 #   mysql2                   TypeORM loads the driver by name at runtime
 #   @nestjs/platform-express Nest's HTTP adapter, implicit in NestFactory.create
 #   @types/bcrypt            types only, never imported
+#   @types/compression       types only; `compression` itself IS imported in main.ts
 #   class-transformer        required by class-validator's ValidationPipe
-INDIRECT="mysql2 @nestjs/platform-express @types/bcrypt class-transformer"
+INDIRECT="mysql2 @nestjs/platform-express @types/bcrypt @types/compression class-transformer"
 
 UNUSED=""
 for dep in $(node -e "console.log(Object.keys(require('./package.json').dependencies).join(' '))"); do

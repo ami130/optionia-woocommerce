@@ -124,6 +124,8 @@ export const Presentation = {
   TEXTAREA: 'textarea',
   NUMBER_FIELD: 'number_field',
   DATE_PICKER: 'date_picker',
+  TIME_PICKER: 'time_picker',
+  DATETIME_PICKER: 'datetime_picker',
   FILE_INPUT: 'file_input',
   RADIO: 'radio',
   DROPDOWN: 'dropdown',
@@ -131,6 +133,8 @@ export const Presentation = {
   COLOR_SWATCH: 'color_swatch',
   IMAGE_SWATCH: 'image_swatch',
   RANGE: 'range',
+  QUANTITY: 'quantity',
+  HIDDEN: 'hidden',
 } as const;
 export type Presentation = (typeof Presentation)[keyof typeof Presentation];
 

@@ -39,6 +39,7 @@ describe('tenant isolation matrix (e2e)', () => {
     group: '',
     option: '',
     value: '',
+    item: '',
   };
 
   beforeAll(async () => {
@@ -62,6 +63,14 @@ describe('tenant isolation matrix (e2e)', () => {
       }),
       'option',
     );
+    owned.item = idOf(
+      await post(tokenA, `/groups/${owned.group}/items`, {
+        kind: 'heading',
+        content: 'A heading',
+      }),
+      'item',
+    );
+
     owned.value = idOf(
       await post(tokenA, `/options/${owned.option}/values`, { valueKey: 'a', label: 'A' }),
       'value',
@@ -112,12 +121,19 @@ describe('tenant isolation matrix (e2e)', () => {
       del(tokenB, `/option-sets/${owned.set}/permanent`)],
     ['POST /v1/option-sets/:id/duplicate', () => post(tokenB, `/option-sets/${owned.set}/duplicate`)],
     ['GET /v1/option-sets/:id/detail', () => get(tokenB, `/option-sets/${owned.set}/detail`)],
+    ['GET /v1/option-sets/:id/assignments', () =>
+      get(tokenB, `/option-sets/${owned.set}/assignments`)],
+    ['POST /v1/option-sets/:id/assignments', () =>
+      post(tokenB, `/option-sets/${owned.set}/assignments`, { externalProductIds: ['wc-1'] })],
+    ['DELETE /v1/option-sets/:id/assignments/:externalProductId', () =>
+      del(tokenB, `/option-sets/${owned.set}/assignments/wc-1`)],
     ['GET /v1/option-sets/:id/preview', () => get(tokenB, `/option-sets/${owned.set}/preview`)],
 
     /**
      * Stores (M8.6). Both are destructive ownership acts, so a 403 here would
      * confirm another tenant's store exists before refusing to touch it.
      */
+    ['GET /v1/stores/:id', () => get(tokenB, `/stores/${storeA}`)],
     ['POST /v1/stores/:id/disconnect', () => post(tokenB, `/stores/${storeA}/disconnect`)],
     ['POST /v1/stores/:id/rotate-credential', () =>
       post(tokenB, `/stores/${storeA}/rotate-credential`)],
@@ -160,6 +176,30 @@ describe('tenant isolation matrix (e2e)', () => {
     ['POST /v1/groups/:id/reorder', () =>
       post(tokenB, `/groups/${owned.group}/reorder`, {
         options: [{ id: owned.option, sortOrder: 10 }],
+      })],
+
+    /*
+     * Presentational items.
+     *
+     * 🔴 **These six shipped in Phase 14 with no negative test at all.** The
+     * routes were registered, the contract never listed them, and
+     * `check-isolation` had been failing on them ever since — a gate that is
+     * always red is a gate everyone learns to ignore. An item is authored content
+     * nested under a group exactly as an option is, so it leaks exactly the same
+     * way if the scoping is wrong.
+     */
+    ['GET /v1/groups/:id/items', () => get(tokenB, `/groups/${owned.group}/items`)],
+    ['POST /v1/groups/:id/items', () =>
+      post(tokenB, `/groups/${owned.group}/items`, {
+        kind: 'heading',
+        content: 'X',
+      })],
+    ['GET /v1/items/:id', () => get(tokenB, `/items/${owned.item}`)],
+    ['PATCH /v1/items/:id', () => patch(tokenB, `/items/${owned.item}`, { content: 'x' })],
+    ['DELETE /v1/items/:id', () => del(tokenB, `/items/${owned.item}`)],
+    ['POST /v1/groups/:id/items/reorder', () =>
+      post(tokenB, `/groups/${owned.group}/items/reorder`, {
+        items: [{ id: owned.item, sortOrder: 10 }],
       })],
 
     // Values
@@ -225,6 +265,51 @@ describe('tenant isolation matrix (e2e)', () => {
       expect(
         response.body.data.some((row: { id: string }) => row.id === owned.set),
       ).toBe(false);
+    }, 60_000);
+
+    /**
+     * The store list is the dashboard's landing screen (M13.3), so a leak here
+     * would be the first thing a merchant saw — another tenant's shop URL,
+     * plugin version and connection health.
+     */
+    it('GET /v1/stores shows tenant B only their own', async () => {
+      const response = await get(tokenB, '/stores');
+
+      expect(response.status).toBe(200);
+      expect(
+        response.body.data.some((row: { id: string }) => row.id === storeA),
+      ).toBe(false);
+    }, 60_000);
+
+    /**
+     * The catalogue picker (M13.6) takes a store id, so tenant B can *ask* for
+     * tenant A's store directly. It must see an empty catalogue, not tenant A's.
+     *
+     * A `200` with nothing in it rather than a `404`: the tenant join eliminates
+     * the rows, which is not the same as the store being absent, and pretending
+     * otherwise would state a contract the code does not implement.
+     */
+    it('GET /v1/products shows tenant B nothing from tenant A’s store', async () => {
+      /*
+       * Tenant A's store must actually hold a product, or this passes against an
+       * empty table and proves nothing -- the shape of "green test, no coverage"
+       * this suite exists to prevent.
+       */
+      await harness.dataSource.query(
+        `INSERT INTO store_products
+           (id, createdAt, updatedAt, storeId, externalId, name, type, status, syncedAt)
+         VALUES (UUID(), NOW(3), NOW(3), ?, 'wc-1', 'Tenant A Hoodie', 'simple', 'publish', NOW(3))`,
+        [storeA],
+      );
+
+      const mine = await get(tokenA, `/products?storeId=${storeA}`);
+      expect(mine.status).toBe(200);
+      expect(mine.body.data).toHaveLength(1);
+
+      const theirs = await get(tokenB, `/products?storeId=${storeA}`);
+
+      expect(theirs.status).toBe(200);
+      expect(theirs.body.data).toEqual([]);
     }, 60_000);
 
     it('GET /v1/audit-logs shows tenant B only their own', async () => {

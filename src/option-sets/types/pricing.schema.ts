@@ -45,22 +45,42 @@ const percentageBasisPoints = z
 const fixedPricing = z.object({
   type: z.literal('fixed'),
   amountMinor,
-});
+}).strict();
 
 /** A percentage of the base product price. */
 const percentagePricing = z.object({
   type: z.literal('percentage'),
   basisPoints: percentageBasisPoints,
-});
+}).strict();
 
-/** An amount per unit of quantity. */
-const perUnitPricing = z.object({
+/**
+ * An amount per unit of quantity.
+ *
+ * Exported since M16.2, for the reason `perCharPricing` is: the **type
+ * registry** needs this exact shape, because `per_unit` is an option-level type
+ * and a number option's `pricingSchema` must accept it and nothing else.
+ *
+ * ⚠️ **No `freeUnits`, deliberately.** `per_char` has `freeCharacters` because a
+ * merchant absorbing a short engraving is a real intent. A free-unit allowance
+ * is a **volume discount**, which is what `tiered` expresses — with brackets a
+ * merchant can see and reason about. Two mechanisms for one intent is two places
+ * for them to disagree.
+ */
+export const perUnitPricing = z.object({
   type: z.literal('per_unit'),
   amountMinor,
-});
+}).strict();
 
-/** An amount per character, for engraving and similar. */
-const perCharPricing = z.object({
+/**
+ * An amount per character, for engraving and similar.
+ *
+ * Exported since M16.2, because the **type registry** needs this exact shape:
+ * `per_char` is the one type `PRICING-SPEC.md` defines at the option level, and
+ * a text option's `pricingSchema` must accept it and nothing else. Restating the
+ * shape there would be two definitions of one wire contract — which is the
+ * defect `toPublishedPriceConfig` exists to prevent, one layer up.
+ */
+export const perCharPricing = z.object({
   type: z.literal('per_char'),
   amountMinor,
   /**
@@ -71,17 +91,21 @@ const perCharPricing = z.object({
    * simple case harder than the complex one.
    */
   freeCharacters: z.number().int().min(0).max(10_000).default(0),
-});
+}).strict();
 
 /**
  * Tiered pricing: brackets by quantity.
+ *
+ * Exported since M16.3, for the reason `perCharPricing` and `perUnitPricing`
+ * are: the **type registry** needs this exact shape, because `tiered` is an
+ * option-level type and a number option's `pricingSchema` must accept it.
  *
  * The brackets are validated as a set rather than individually, because the
  * failures that matter are relationships — a gap between tiers, an overlap, a
  * tier that starts above where it ends. Each is a wrong charge rather than a
  * malformed document, and none is visible from a single bracket.
  */
-const tieredPricing = z
+export const tieredPricing = z
   .object({
     type: z.literal('tiered'),
     tiers: z
@@ -90,13 +114,52 @@ const tieredPricing = z
           minQuantity: z.number().int().min(1),
           maxQuantity: z.number().int().min(1).nullable(),
           amountMinor,
-        }),
+        })
+  .strict(),
       )
       .min(1, 'Tiered pricing needs at least one tier.')
       .max(50, 'More than 50 tiers is almost certainly a mistake.'),
   })
   .superRefine((value, ctx) => {
     const sorted = [...value.tiers].sort((a, b) => a.minQuantity - b.minQuantity);
+
+    /*
+     * 🔴 **Every quantity from 1 upward must be covered.**
+     *
+     * Gaps *between* tiers were refused from the start; gaps at the **ends**
+     * were not. Measured before M16.3: `[{min: 5, max: null}]` was accepted with
+     * quantities 1-4 unpriced, and `[{1-9}, {10-20}]` with 21 upward unpriced —
+     * `[{100-200}]` left both ends open at once.
+     *
+     * A bracket set that does not cover a quantity the customer can enter is a
+     * configuration whose behaviour nobody decided: the evaluator must either
+     * charge nothing, which is a silent free option, or report it, which reads
+     * to a merchant as a bug in a price they successfully saved.
+     *
+     * A merchant wanting a minimum order sets `min` on the option — a validation
+     * rule, which produces a message the customer can act on.
+     */
+    if (sorted.length > 0 && sorted[0].minQuantity !== 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tiers', 0, 'minQuantity'],
+        message:
+          `Tiers must start at 1; quantities 1 to ${sorted[0].minQuantity - 1} would be ` +
+          `unpriced. Use the option's own minimum to require a larger order.`,
+      });
+    }
+
+    const last = sorted[sorted.length - 1];
+
+    if (last && last.maxQuantity !== null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tiers', sorted.length - 1, 'maxQuantity'],
+        message:
+          `The last tier must be open-ended; quantities above ${last.maxQuantity} would be ` +
+          `unpriced. Use the option's own maximum to cap the order.`,
+      });
+    }
 
     sorted.forEach((tier, index) => {
       if (tier.maxQuantity !== null && tier.maxQuantity < tier.minQuantity) {
@@ -141,6 +204,21 @@ const tieredPricing = z
     });
   });
 
+/*
+ * 🔴 **Every price shape above is `.strict()`.**
+ *
+ * Zod's default strips an unknown key silently, so a merchant who set
+ * `freeUnits: 5` on a `per_unit` price -- a real thing to reach for, since
+ * `per_char` has `freeCharacters` -- saved successfully and was charged as
+ * though they had set nothing. Nothing wrong is stored and nothing wrong is
+ * charged; the setting simply evaporates, which is the hardest kind of bug for a
+ * merchant to diagnose because the UI accepted it.
+ *
+ * `.strict()` turns that into a validation error naming the field, which is what
+ * the authoring API is for. It also makes a typo in a field a merchant DOES have
+ * -- `freeCharacter` for `freeCharacters` -- fail loudly rather than quietly
+ * charging from the first character.
+ */
 /**
  * Any pricing configuration.
  *
@@ -148,12 +226,25 @@ const tieredPricing = z
  * than a list of every failed branch. The error a merchant sees is the difference
  * between a usable message and a wall of noise.
  */
+/*
+ * 🔴 **The VALUE-level union. `per_char`, `per_unit` and `tiered` are not in it.**
+ *
+ * `PRICING-SPEC.md` §2 places all three at the **option** level, because each
+ * prices what the customer *supplied* rather than which value they picked — and
+ * the options that supply a quantity or a string have no values to hang a
+ * `price_config` on.
+ *
+ * `tiered` was in this union until M16.3, which made it configurable **only**
+ * where it cannot work: on a radio choice, which has no quantity to bracket. The
+ * evaluator reported it as unpriced, correctly, so a merchant could save a
+ * tiered price and have it charge nothing.
+ *
+ * The three option-level shapes live in the type registry instead, each attached
+ * to the presentations whose answer they can price.
+ */
 export const pricingConfigSchema = z.discriminatedUnion('type', [
   fixedPricing,
   percentagePricing,
-  perUnitPricing,
-  perCharPricing,
-  tieredPricing,
 ]);
 
 export type PricingConfig = z.infer<typeof pricingConfigSchema>;

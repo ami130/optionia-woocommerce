@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH } from '../../common/crypto/password';
+import { MaxBytes } from '../../common/validation/max-bytes.validator';
 
 /**
  * Request shapes for the auth endpoints.
@@ -30,7 +31,12 @@ export class RegisterDto {
   @MinLength(MIN_PASSWORD_LENGTH, {
     message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
   })
-  @MaxLength(MAX_PASSWORD_BYTES)
+  /*
+   * Bytes, not characters. `MAX_PASSWORD_BYTES` is bcrypt's limit and bcrypt
+   * counts bytes: `@MaxLength` alone let a 60-character emoji passphrase (120
+   * bytes) past the DTO and into a 500. See `MaxBytes`.
+   */
+  @MaxBytes(MAX_PASSWORD_BYTES)
   @ApiProperty({ type: String })
   password: string;
 
@@ -63,7 +69,12 @@ export class LoginDto {
    * answer to a wrong password is the same either way.
    */
   @IsString()
-  @MaxLength(MAX_PASSWORD_BYTES)
+  /*
+   * Bytes, not characters. `MAX_PASSWORD_BYTES` is bcrypt's limit and bcrypt
+   * counts bytes: `@MaxLength` alone let a 60-character emoji passphrase (120
+   * bytes) past the DTO and into a 500. See `MaxBytes`.
+   */
+  @MaxBytes(MAX_PASSWORD_BYTES)
   @ApiProperty({ type: String })
   password: string;
 }
@@ -101,7 +112,12 @@ export class ResetPasswordDto {
   @MinLength(MIN_PASSWORD_LENGTH, {
     message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
   })
-  @MaxLength(MAX_PASSWORD_BYTES)
+  /*
+   * Bytes, not characters. `MAX_PASSWORD_BYTES` is bcrypt's limit and bcrypt
+   * counts bytes: `@MaxLength` alone let a 60-character emoji passphrase (120
+   * bytes) past the DTO and into a 500. See `MaxBytes`.
+   */
+  @MaxBytes(MAX_PASSWORD_BYTES)
   @ApiProperty({ type: String })
   password: string;
 }

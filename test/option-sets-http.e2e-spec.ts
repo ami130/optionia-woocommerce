@@ -91,6 +91,16 @@ describe('option sets (e2e)', () => {
       .post('/v1/auth/login')
       .send({ email, password: PASSWORD });
 
+    if (login.status !== 200) {
+      // See the note in `guards.e2e-spec.ts`: an unchecked login turns a
+      // throttled request into `Bearer undefined`, and a permission test that
+      // sends no credential can pass for the wrong reason.
+      throw new Error(
+        `Failed to sign in ${email}: ${login.status} ` +
+          `${JSON.stringify(login.body?.error ?? login.body)}`,
+      );
+    }
+
     return login.body.data.accessToken as string;
   }
 

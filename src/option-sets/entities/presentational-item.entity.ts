@@ -13,8 +13,10 @@ import { OptionGroup } from './option-group.entity';
  * validator, pricing engine, cart integration and order persistence — five
  * subsystems paying for one convenience.
  *
- * They participate in exactly two systems: ordering, and conditional visibility.
- * The pricing engine never sees one.
+ * M5.4c gives them exactly two systems: ordering, and conditional visibility.
+ * ⚠️ **Only ordering exists.** `RuleTargetType` has no `item` member, so a rule
+ * cannot point at one until Phase 17 adds it — the column and this entity are
+ * ready, the targeting is not. The pricing engine never sees one either way.
  */
 @Entity('presentational_items')
 @Index('ix_presentational_group_order', ['optionGroupId', 'sortOrder'])

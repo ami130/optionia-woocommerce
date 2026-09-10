@@ -19,7 +19,27 @@ export const Capability = {
   /** Changes a live storefront and what customers are charged. */
   OPTION_SETS_PUBLISH: 'option_sets:publish',
   OPTION_SETS_ROLLBACK: 'option_sets:rollback',
+  /**
+   * Read a tenant's catalogue, and assign an option set to a product.
+   *
+   * Two capabilities rather than one, added 2026-09-02 for
+   * [Phase 13 Stage 0](../../../developePlan.md). `PRODUCTS_ASSIGN` predates
+   * them and grants a **write**; until now nothing granted the matching read, so
+   * `editor` could assign an option set to a catalogue it had no permission to
+   * list. Splitting them keeps the mutation gated where it already was while
+   * letting a `viewer` see what exists.
+   */
+  PRODUCTS_VIEW: 'products:view',
   PRODUCTS_ASSIGN: 'products:assign',
+  /**
+   * List the tenant's connected stores and their health.
+   *
+   * Separate from `STORES_CONNECT`, which changes what a merchant's storefront
+   * serves. Seeing that a store last checked in three days ago is the question
+   * support asks first, and it should not require the capability to connect or
+   * disconnect one.
+   */
+  STORES_VIEW: 'stores:view',
   STORES_CONNECT: 'stores:connect',
   STORES_ROTATE_CREDENTIAL: 'stores:rotate_credential',
   ANALYTICS_VIEW: 'analytics:view',
@@ -92,7 +112,9 @@ export const TENANT_CAPABILITIES: Readonly<Record<string, readonly Capability[]>
     Capability.OPTION_SETS_DELETE,
     Capability.OPTION_SETS_PUBLISH,
     Capability.OPTION_SETS_ROLLBACK,
+    Capability.PRODUCTS_VIEW,
     Capability.PRODUCTS_ASSIGN,
+    Capability.STORES_VIEW,
     Capability.STORES_CONNECT,
     Capability.STORES_ROTATE_CREDENTIAL,
     Capability.ANALYTICS_VIEW,
@@ -111,7 +133,9 @@ export const TENANT_CAPABILITIES: Readonly<Record<string, readonly Capability[]>
     Capability.OPTION_SETS_DELETE,
     Capability.OPTION_SETS_PUBLISH,
     Capability.OPTION_SETS_ROLLBACK,
+    Capability.PRODUCTS_VIEW,
     Capability.PRODUCTS_ASSIGN,
+    Capability.STORES_VIEW,
     Capability.STORES_CONNECT,
     Capability.STORES_ROTATE_CREDENTIAL,
     Capability.ANALYTICS_VIEW,
@@ -122,10 +146,25 @@ export const TENANT_CAPABILITIES: Readonly<Record<string, readonly Capability[]>
   editor: [
     Capability.OPTION_SETS_VIEW,
     Capability.OPTION_SETS_EDIT,
+    Capability.PRODUCTS_VIEW,
     Capability.PRODUCTS_ASSIGN,
+    Capability.STORES_VIEW,
     Capability.ANALYTICS_VIEW,
   ],
-  viewer: [Capability.OPTION_SETS_VIEW, Capability.ANALYTICS_VIEW],
+  /**
+   * A viewer reads, and reading now includes the catalogue and the store list.
+   *
+   * A role that can see option sets but not the products they attach to, or the
+   * store they serve, cannot answer the question it exists to answer. Neither
+   * capability changes anything: `viewer can change nothing` still holds, and
+   * that test enumerates the mutations explicitly.
+   */
+  viewer: [
+    Capability.OPTION_SETS_VIEW,
+    Capability.PRODUCTS_VIEW,
+    Capability.STORES_VIEW,
+    Capability.ANALYTICS_VIEW,
+  ],
   billing: [Capability.ANALYTICS_VIEW, Capability.BILLING_VIEW, Capability.BILLING_MANAGE],
 } as const;
 

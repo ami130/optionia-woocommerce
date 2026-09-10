@@ -9,6 +9,7 @@ import {
   PublishSeverity,
   runPublishChecks,
   type PublishContext,
+  patternsAreSafe,
 } from './publish-check';
 
 const LIVE = new Date(1970, 0, 1);
@@ -200,6 +201,72 @@ describe('pre-publish checks', () => {
       expect(findings.some((f) => f.code === 'SET_HAS_NO_OPTIONS')).toBe(true);
       expect(hasBlockers(findings)).toBe(true);
     });
+
+    /**
+     * ✏️ **Presentational items count as content (M5.4c).**
+     *
+     * This check once counted enabled options alone, which was right while
+     * nothing could create an item. A set of pure explanatory copy — care
+     * instructions, a sizing note — is legitimate, and the plugin's renderer
+     * already draws a group holding only items. Blocking the publish left the
+     * two disagreeing about the same set.
+     */
+    it('allows a set whose only content is presentational', () => {
+      const findings = runPublishChecks(
+        context({
+          tree: {
+            set: set(),
+            groups: [
+              {
+                group: group(),
+                items: [{ id: 'item-1', kind: 'heading', content: 'Care' } as never],
+                options: [],
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(findings.some((f) => f.code === 'SET_HAS_NO_OPTIONS')).toBe(false);
+    });
+
+    /**
+     * ⚠️ A disabled group hides its items too.
+     *
+     * `presentational_items` has no `isEnabled` of its own — it is the one
+     * authorable table without one — so the group's flag is the only thing that
+     * can hide an item, and a set whose every group is disabled still has
+     * nothing to show.
+     */
+    it('still blocks when the only items sit in a disabled group', () => {
+      const findings = runPublishChecks(
+        context({
+          tree: {
+            set: set(),
+            groups: [
+              {
+                group: group({ isEnabled: false }),
+                items: [{ id: 'item-1', kind: 'heading', content: 'Care' } as never],
+                options: [],
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(findings.some((f) => f.code === 'SET_HAS_NO_OPTIONS')).toBe(true);
+    });
+
+    /** An empty `items` array is not content. */
+    it('blocks a group with neither options nor items', () => {
+      const findings = runPublishChecks(
+        context({
+          tree: { set: set(), groups: [{ group: group(), items: [], options: [] }] },
+        }),
+      );
+
+      expect(findings.some((f) => f.code === 'SET_HAS_NO_OPTIONS')).toBe(true);
+    });
   });
 
   describe('rules pointing at deleted targets', () => {
@@ -257,6 +324,95 @@ describe('pre-publish checks', () => {
    * The property M7.4's deferred validators depend on: Phase 14 and Phase 17 add
    * a validator to a list rather than reopening the publish transaction.
    */
+  /**
+   * A context whose single option carries the given validation.
+   *
+   * Built on `context()` rather than a parallel fixture, so a change to the
+   * shared tree reaches these tests too.
+   */
+  function withValidation(
+    validation: Record<string, unknown> | null,
+    optionOverrides: Partial<Option> = {},
+  ): PublishContext {
+    return context({
+      tree: {
+        set: set(),
+        groups: [
+          {
+            group: group(),
+            items: [],
+            options: [
+              {
+                option: option({ validation, ...optionOverrides } as Partial<Option>),
+                values: [value()],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  }
+
+  describe('patterns are safe', () => {
+    /**
+     * 🔴 **M14.4 requires this at publish, not at customer request time.**
+     *
+     * A catastrophically backtracking pattern runs on every add-to-cart. The
+     * plugin defends itself — it caps length and treats a backtrack bailout as
+     * "rule could not be applied" — but that leaves the merchant's intended
+     * validation silently not happening. This is what stops one being published.
+     */
+    it.each([
+      ['(a+)+', 'a repetition inside a repetition'],
+      ['(a*)*', 'star inside star'],
+      ['([a-z]+)+', 'a character class repeated twice'],
+      ['(ab+)*', 'plus inside star'],
+    ])('blocks %s — %s', (pattern) => {
+      const findings = patternsAreSafe.validate(withValidation({ pattern }));
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0].code).toBe('PATTERN_UNSAFE');
+      expect(findings[0].severity).toBe(PublishSeverity.BLOCKER);
+    });
+
+    /**
+     * ⚠️ **A blocker, not a warning.** A warning would let it publish, and the
+     * cost would land on the merchant's customers rather than on the merchant.
+     */
+    it('blocks an invalid pattern rather than letting it silently do nothing', () => {
+      const findings = patternsAreSafe.validate(withValidation({ pattern: '[unclosed' }));
+
+      expect(findings[0].code).toBe('PATTERN_INVALID');
+      expect(findings[0].severity).toBe(PublishSeverity.BLOCKER);
+    });
+
+    it('blocks a pattern past the length cap', () => {
+      const findings = patternsAreSafe.validate(withValidation({ pattern: 'a'.repeat(300) }));
+
+      expect(findings[0].code).toBe('PATTERN_TOO_LONG');
+    });
+
+    /** Patterns a merchant would actually write must publish. */
+    it.each(['^[A-Z]{2}[0-9]{2}$', '^[0-9]{5}$', '^[A-Za-z ]+$', '^\\d{3}-\\d{4}$'])(
+      'allows %s',
+      (pattern) => {
+        expect(patternsAreSafe.validate(withValidation({ pattern }))).toEqual([]);
+      },
+    );
+
+    it('says nothing about an option with no pattern', () => {
+      expect(patternsAreSafe.validate(withValidation(null))).toEqual([]);
+      expect(patternsAreSafe.validate(withValidation({ maxLength: 20 }))).toEqual([]);
+    });
+
+    /** A disabled option cannot reach a customer, so its pattern is not checked. */
+    it('ignores a disabled option', () => {
+      expect(
+        patternsAreSafe.validate(withValidation({ pattern: '(a+)+' }, { isEnabled: false })),
+      ).toEqual([]);
+    });
+  });
+
   describe('the validator list', () => {
     it('runs every registered validator', () => {
       const names = PUBLISH_VALIDATORS.map((validator) => validator.name);
@@ -266,6 +422,7 @@ describe('pre-publish checks', () => {
         'options-have-values',
         'rules-have-targets',
         'set-has-assignments',
+        'patterns-are-safe',
       ]);
     });
 

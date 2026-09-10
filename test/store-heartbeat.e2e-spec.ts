@@ -321,6 +321,173 @@ describe('store heartbeat (e2e)', () => {
       expect(await mismatches(store.id)).toBe(2);
     });
 
+    /**
+     * A rotated credential is not drift.
+     *
+     * `stores.status` never reaches `REVOKED` in Phase 8 — that is an operator
+     * act on Phase 26's surface, and `audit-coverage.e2e-spec` enforces the
+     * deferral. The plugin reaches `REVOKED` on its own the moment a request
+     * is refused, which is precisely what rotating a credential causes.
+     *
+     * Both sides are then right: the cloud holds a live replacement, and the
+     * plugin correctly knows the credential it has is dead. Reporting that
+     * would raise a Phase 26 operations item on a routine merchant action —
+     * and one nothing could ever clear, because the cloud cannot enter
+     * `REVOKED` to agree with it.
+     */
+    it('records nothing when a plugin reports revoked against a live store', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      await ping(store.token, { connection_state: StoreStatus.REVOKED });
+
+      expect(await mismatches(store.id)).toBe(0);
+    });
+
+    /** The same holds from `ERROR`, which also carries a live credential. */
+    it('records nothing when a plugin reports revoked against an erroring store', async () => {
+      const store = await connected(StoreStatus.ERROR);
+
+      await ping(store.token, { connection_state: StoreStatus.REVOKED });
+
+      expect(await mismatches(store.id)).toBe(0);
+    });
+
+    /**
+     * The exemption is one-directional, and narrow.
+     *
+     * A plugin claiming `REVOKED` against a store the cloud has already
+     * disconnected *is* a disagreement worth an operator's attention: the two
+     * sides reached different conclusions about a finished connection.
+     */
+    it('still records revoked against a disconnected store', async () => {
+      const store = await connected(StoreStatus.DISCONNECTED);
+
+      await ping(store.token, { connection_state: StoreStatus.REVOKED });
+
+      expect(await mismatches(store.id)).toBe(1);
+    });
+
+    /**
+     * A plugin too old to read what this cloud is sending (M9.5).
+     *
+     * The refusal happens in the plugin and is correct — it keeps the previous
+     * copy rather than losing the merchant's options — which is exactly what
+     * makes it invisible here: the heartbeat arrives on time, the state says
+     * connected, the credential works. This entry is the only thing that says
+     * "this merchant needs to update their plugin".
+     */
+    it('records a store that refused a document it could not read', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      await ping(store.token, {
+        connection_state: StoreStatus.CONNECTED,
+        supported_schema_version: 1,
+        schema_refused: true,
+        plugin_version: '0.9.0',
+      });
+
+      const [row] = await dataSource.query(
+        `SELECT changes FROM audit_logs
+          WHERE resourceId = ? AND action = 'store.schema_unsupported' LIMIT 1`,
+        [store.id],
+      );
+
+      expect(row).toBeDefined();
+
+      const changes = typeof row.changes === 'string' ? JSON.parse(row.changes) : row.changes;
+
+      expect(changes.supportedSchemaVersion).toBe(1);
+      expect(changes.pluginVersion).toBe('0.9.0');
+    });
+
+    /**
+     * A healthy store records nothing.
+     *
+     * `supported_schema_version` on its own is a capability, true of every
+     * store on that build. Recording it would make every heartbeat an
+     * operations item.
+     */
+    it('records nothing when the plugin refused nothing', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      await ping(store.token, {
+        connection_state: StoreStatus.CONNECTED,
+        supported_schema_version: 1,
+        schema_refused: false,
+      });
+
+      const rows = await dataSource.query(
+        `SELECT id FROM audit_logs WHERE resourceId = ? AND action = 'store.schema_unsupported'`,
+        [store.id],
+      );
+
+      expect(rows).toHaveLength(0);
+    });
+
+    /**
+     * Reported on every heartbeat, recorded once.
+     *
+     * A store in this state says so daily until the merchant updates, and a
+     * trail repeating it is one support reads and misbelieves.
+     */
+    it('records a persisting refusal only once', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      const body = {
+        connection_state: StoreStatus.CONNECTED,
+        supported_schema_version: 1,
+        schema_refused: true,
+        plugin_version: '0.9.0',
+      };
+
+      await ping(store.token, body);
+      await ping(store.token, body);
+      await ping(store.token, body);
+
+      const rows = await dataSource.query(
+        `SELECT id FROM audit_logs WHERE resourceId = ? AND action = 'store.schema_unsupported'`,
+        [store.id],
+      );
+
+      expect(rows).toHaveLength(1);
+    });
+
+    /**
+     * A partial upgrade is a new fact, and gets a new entry.
+     *
+     * A merchant on 0.9.0 who updates to 0.9.5 and is *still* too old has
+     * changed something support needs to see — they acted, and it was not
+     * enough. Deduplicating on the store or its URL would swallow that:
+     * the entry would stay pinned to the version they were running months ago.
+     */
+    it('records again when the plugin moves but is still too old', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      const refusing = (pluginVersion: string): object => ({
+        connection_state: StoreStatus.CONNECTED,
+        supported_schema_version: 1,
+        schema_refused: true,
+        plugin_version: pluginVersion,
+      });
+
+      await ping(store.token, refusing('0.9.0'));
+      await ping(store.token, refusing('0.9.0'));
+      await ping(store.token, refusing('0.9.5'));
+
+      const rows = await dataSource.query(
+        `SELECT changes FROM audit_logs
+          WHERE resourceId = ? AND action = 'store.schema_unsupported' ORDER BY id`,
+        [store.id],
+      );
+
+      expect(rows).toHaveLength(2);
+
+      const latest =
+        typeof rows[1].changes === 'string' ? JSON.parse(rows[1].changes) : rows[1].changes;
+
+      expect(latest.pluginVersion).toBe('0.9.5');
+    });
+
     it('records nothing when the views agree', async () => {
       const store = await connected(StoreStatus.CONNECTED);
 
@@ -574,11 +741,115 @@ describe('store heartbeat (e2e)', () => {
       }
 
       /**
-       * Four of the five disagree with `CONNECTED`, and each is a *different*
-       * claim from the one before — so deduplication does not collapse them.
-       * A repeated identical claim is covered separately above.
+       * Five states, minus the one that agrees with `CONNECTED`, minus
+       * `REVOKED` — which is the expected result of a credential rotation and
+       * is deliberately not reported. Each remaining claim differs from the one
+       * before, so deduplication does not collapse them; a repeated identical
+       * claim is covered separately above.
+       *
+       * Counted from the enum rather than hardcoded, so adding a sixth state
+       * fails here and forces a decision about how it reconciles.
        */
-      expect(await mismatches(store.id)).toBe(Object.values(StoreStatus).length - 1);
+      const reported = Object.values(StoreStatus).filter(
+        (state) => state !== StoreStatus.CONNECTED && state !== StoreStatus.REVOKED,
+      );
+
+      expect(await mismatches(store.id)).toBe(reported.length);
     });
+  });
+
+  /**
+   * The wire shape the plugin parses.
+   *
+   * The plugin reads `data.config_version`; this asserts the API actually
+   * sends that. It did not always: every plugin caller read the envelope's
+   * outer level, so against the real API the handshake returned null, the
+   * callback stored no token and the heartbeat recorded no version — while
+   * both suites passed, because this side asserted `body.data.*` and every
+   * plugin fixture was flat.
+   *
+   * Two internally-consistent halves that disagree is not something either
+   * suite can catch alone. This is the cloud's half of the contract; the
+   * plugin's is `bin/check-envelope.sh` and `ResponseEnvelopeTest`.
+   */
+  describe('the wire contract', () => {
+    it('wraps the heartbeat response in the envelope the plugin parses', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      const response = await ping(store.token, { connection_state: StoreStatus.CONNECTED });
+
+      expect(response.status).toBe(200);
+
+      // The envelope itself.
+      expect(response.body).toHaveProperty('data');
+      expect(response.body).toHaveProperty('meta.requestId');
+
+      // The payload the plugin reads, one level in — never at the top.
+      expect(response.body.data).toHaveProperty('config_version');
+      expect(response.body).not.toHaveProperty('config_version');
+    });
+
+    it('keeps store routes inside the envelope', async () => {
+      const store = await connected(StoreStatus.CONNECTED);
+
+      const response = await ping(store.token, {});
+
+      /**
+       * `UNWRAPPED_ROUTES` is matched on path and holds only `/health`. A store
+       * route added to it would silently change the shape every plugin build in
+       * the field expects — and a shipped plugin cannot be updated in step.
+       */
+      expect(Object.keys(response.body).sort()).toEqual(['data', 'meta']);
+    });
+  });
+
+  /**
+   * The plugin telling the cloud it is leaving (U8).
+   *
+   * 🔴 **Found by a merchant, not by a test.** Pressing Disconnect in WordPress
+   * cleared the plugin's token and left the cloud believing the store was still
+   * connected — **with a live credential**. Every automated suite passed, because
+   * the canonical E2E disconnects through the *dashboard*, the path that already
+   * worked.
+   */
+  describe('store-initiated disconnect', () => {
+    it('revokes the credential that made the call', async () => {
+      const { id, token } = await connected();
+
+      const response = await request(app.getHttpServer())
+        .post('/v1/store/disconnect')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.disconnected).toBe(true);
+
+      const [store] = await dataSource.query(`SELECT status FROM stores WHERE id = ?`, [id]);
+      const [live] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM store_credentials WHERE storeId = ? AND revokedAt IS NULL`,
+        [id],
+      );
+
+      expect(store.status).toBe('disconnected');
+      expect(Number(live.n)).toBe(0);
+    }, 30_000);
+
+    /** The credential is dead the moment it is used to disconnect. */
+    it('leaves the used credential unusable', async () => {
+      const { token } = await connected();
+
+      await request(app.getHttpServer())
+        .post('/v1/store/disconnect')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(200);
+
+      await ping(token, {}).expect(401);
+    }, 30_000);
+
+    /** No credential, no disconnect — it must not be a way to close someone else's store. */
+    it('refuses an unauthenticated call', async () => {
+      await request(app.getHttpServer()).post('/v1/store/disconnect').send({}).expect(401);
+    }, 30_000);
   });
 });

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { createHarness, idOf, type Harness } from './harness';
+import { createHarness, idOf, tokenFrom, type Harness } from './harness';
 import { runWithContext } from '../src/common/context/request-context';
 import { OptionsRepository } from '../src/option-sets/options.repository';
 
@@ -44,9 +44,10 @@ describe('cascade and hard delete (e2e)', () => {
       [`${NS}-a`, email],
     );
 
-    token = (
-      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD })
-    ).body.data.accessToken as string;
+    token = tokenFrom(
+      await request(app.getHttpServer()).post('/v1/auth/login').send({ email, password: PASSWORD }),
+      email,
+    );
 
     const [row] = await dataSource.query(
       `SELECT tm.tenantId AS id FROM tenant_members tm JOIN users u ON u.id = tm.userId

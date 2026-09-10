@@ -1,4 +1,4 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
 
 import { SoftDeletableEntity } from '../../common/database/base.entity';
 import { AssignmentMode, AssignmentTargetType } from '../../common/database/enums';
@@ -19,6 +19,19 @@ import { OptionSet } from './option-set.entity';
 @Entity('option_set_assignments')
 @Index('ix_assignments_set_mode', ['optionSetId', 'mode'])
 @Index('ix_assignments_target', ['targetType', 'targetRef'])
+/**
+ * One assignment per set, per target (finding **A1**).
+ *
+ * `deletedAt` is in the key because these rows are soft-deleted: without it,
+ * re-assigning a product a merchant had previously unassigned would collide with
+ * its own tombstone. Live rows share the sentinel, so uniqueness among them is
+ * what this enforces.
+ *
+ * **`ALL` assignments are not covered**: their target columns are NULL, and MySQL
+ * treats NULLs as distinct in a unique index. M13.6 authors only `MANUAL`, so
+ * the gap is known rather than accidental.
+ */
+@Unique('uq_assignments_set_target', ['optionSetId', 'targetType', 'targetRef', 'deletedAt'])
 export class OptionSetAssignment extends SoftDeletableEntity {
   @Column({ type: 'char', length: 36 })
   optionSetId: string;

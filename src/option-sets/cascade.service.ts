@@ -1,3 +1,4 @@
+import { ConfigVersionService } from '../common/config-version.service';
 import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
 
@@ -57,7 +58,10 @@ const NOTHING: CascadeResult = {
  */
 @Injectable()
 export class CascadeService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly configVersion: ConfigVersionService,
+  ) {}
 
   /**
    * Everything a set owns, in one transaction.
@@ -65,7 +69,24 @@ export class CascadeService {
    * A partial cascade leaves rules pointing at options that are gone from every
    * list but still enabled — the exact state M7.2 forbids.
    */
-  async onOptionSetDeleted(optionSetId: string, deletedAt: Date): Promise<CascadeResult> {
+  async onOptionSetDeleted(
+    optionSetId: string,
+    deletedAt: Date,
+    /**
+     * The store and visibility of the set being deleted (M9.4b).
+     *
+     * Deleting a **published** set removes it from the config document, so a
+     * storefront must be told to refetch — and the version has to move inside
+     * this transaction, not after it. A bump that commits while the cascade
+     * rolls back would hand every storefront a new version carrying the old
+     * document, and they would hold it as current until the next publish.
+     *
+     * Passed in rather than read here because the caller already loaded the set
+     * to check its row version; re-reading it would be a second query and a
+     * second chance to disagree about what was deleted.
+     */
+    visibility?: { readonly storeId: string; readonly wasPublished: boolean },
+  ): Promise<CascadeResult> {
     return this.dataSource.transaction(async (manager) => {
       /**
        * The parent goes first and **inside this transaction**.
@@ -102,6 +123,18 @@ export class CascadeService {
       const valueIds = optionIds.length
         ? await liveIds(manager, OptionValue, { optionId: In(optionIds) })
         : [];
+
+      /**
+       * No `?? ''` fallback for the store id.
+       *
+       * An empty id would reach `bump()` as a `WHERE id = ''` matching nothing.
+       * That now throws rather than passing silently, but the honest fix is not
+       * to construct the impossible argument: a caller with no store to name has
+       * nothing visible to invalidate, so the guard is `visibility` itself.
+       */
+      if (visibility?.wasPublished) {
+        await this.configVersion.bump(manager, visibility.storeId);
+      }
 
       return {
         values: await softDelete(manager, OptionValue, valueIds, deletedAt),

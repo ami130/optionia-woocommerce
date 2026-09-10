@@ -7,8 +7,55 @@ import { generateStoreToken } from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { HeartbeatDto } from './dto/heartbeat.dto';
+import { UsageService } from '../usage/usage.service';
 import { StoresRepository } from './stores.repository';
 import { StoreStateService } from './store-state.service';
+import type { Store } from './entities/store.entity';
+
+/**
+ * A store as the dashboard sees it (M13.3).
+ *
+ * **Every field is named, and that is the point.** See `StoresService.list()`
+ * for why the entity is not returned directly.
+ */
+export interface StoreSummary {
+  id: string;
+  name: string;
+  storeUrl: string;
+  status: string;
+  connectedAt: Date | null;
+  /** Null until the plugin's first heartbeat: never connected, not "stale". */
+  lastSeenAt: Date | null;
+  configVersion: number;
+  pluginVersion: string | null;
+  wpVersion: string | null;
+  wcVersion: string | null;
+  phpVersion: string | null;
+}
+
+/**
+ * Project a store row onto the fields the dashboard reads.
+ *
+ * A function rather than a class-transformer decorator: the exclusion has to be
+ * visible at the call site. A decorator on the entity puts the decision in a
+ * file nobody opens when adding a column, which is exactly how `pushUrl` would
+ * have leaked.
+ */
+function toSummary(store: Store): StoreSummary {
+  return {
+    id: store.id,
+    name: store.name,
+    storeUrl: store.storeUrl,
+    status: store.status,
+    connectedAt: store.connectedAt ?? null,
+    lastSeenAt: store.lastSeenAt ?? null,
+    configVersion: store.configVersion,
+    pluginVersion: store.pluginVersion ?? null,
+    wpVersion: store.wpVersion ?? null,
+    wcVersion: store.wcVersion ?? null,
+    phpVersion: store.phpVersion ?? null,
+  };
+}
 
 export interface DisconnectResult {
   readonly status: StoreStatus;
@@ -22,6 +69,35 @@ export interface HeartbeatResult {
   readonly status: StoreStatus;
   /** Whether a fresh handshake is required. Structurally false until `[8i]`. */
   readonly reauthorize: boolean;
+}
+
+/**
+ * Disagreements that are the system working, not drifting.
+ *
+ * `stores.status` never reaches `REVOKED` in Phase 8. That is deliberate and
+ * enforced by `audit-coverage.e2e-spec`: revocation as a *cloud* act is an
+ * operator decision on Phase 26's surface, not something a store connection
+ * flow performs to itself.
+ *
+ * The plugin, however, reaches `REVOKED` on its own the moment any request
+ * comes back 401 — which is exactly what a **credential rotation** produces.
+ * The merchant rotates, the old credential dies immediately (M8.6's whole
+ * point), the plugin's next call is refused and it records what it observed.
+ *
+ * Both sides are then correct and neither has drifted: the cloud holds a live
+ * replacement credential, and the plugin correctly knows it cannot use the one
+ * it has. Recording that as a mismatch would raise a Phase 26 operations item
+ * on a routine, documented merchant action — and one nothing could ever clear,
+ * since the cloud cannot enter `REVOKED` to agree.
+ *
+ * The pairing is one-directional on purpose. A plugin claiming `CONNECTED`
+ * while the cloud says `DISCONNECTED` is genuine drift and still reported.
+ */
+function isExpectedDisagreement(pluginState: string, cloudState: StoreStatus): boolean {
+  return (
+    pluginState === StoreStatus.REVOKED &&
+    (cloudState === StoreStatus.CONNECTED || cloudState === StoreStatus.ERROR)
+  );
 }
 
 export interface RotateResult {
@@ -47,6 +123,7 @@ export class StoresService {
     private readonly state: StoreStateService,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
+    private readonly usage: UsageService,
   ) {}
 
   /**
@@ -58,6 +135,51 @@ export class StoresService {
    * Records what the install is running, answers what the cloud has, and
    * reconciles the two views of the connection without resolving them.
    */
+  /**
+   * Every store this tenant has, for the dashboard's store screen (M13.3).
+   *
+   * ## An explicit column list, never the entity
+   *
+   * `stores` also carries `pushUrl` — a merchant-supplied callback URL with no
+   * screen to appear on — and `tenantId`, which the caller already knows. Neither
+   * is a secret (credentials live in their own table, so no token can leak this
+   * way), but returning the row wholesale is how a column added in a later phase
+   * becomes part of a public response nobody decided to publish.
+   *
+   * Recorded as finding **A2** of Phase 13 Stage 0.
+   *
+   * ## Ordering
+   *
+   * Newest connection first, `id` breaking the tie. A merchant who has just
+   * connected a store expects to see it at the top, and an unstable order makes
+   * a list flicker between renders.
+   */
+  async list(): Promise<StoreSummary[]> {
+    const stores = await this.stores.find({
+      order: { connectedAt: 'DESC', id: 'ASC' },
+    });
+
+    return stores.map(toSummary);
+  }
+
+  /**
+   * One store, within this tenant.
+   *
+   * Another tenant's id is a **404, not a 403** — the same answer as an id that
+   * does not exist. `TenantScopedRepository` decides that, and distinguishing the
+   * two would let a caller walk ids to learn which belong to someone else
+   * (ADR-010).
+   */
+  async get(id: string): Promise<StoreSummary> {
+    const store = await this.stores.findById(id);
+
+    if (!store) {
+      throw new DomainException(ErrorCode.NOT_FOUND, 'Store not found.');
+    }
+
+    return toSummary(store);
+  }
+
   async heartbeat(storeId: string, dto: HeartbeatDto): Promise<HeartbeatResult> {
     const [store] = await this.dataSource.query(
       `SELECT id, tenantId, status, configVersion, storeUrl FROM stores WHERE id = ? LIMIT 1`,
@@ -101,6 +223,36 @@ export class StoresService {
     );
 
     /**
+     * Storage, recorded only when the plugin actually sent a figure (M15.6).
+     *
+     * ⚠️ **A missing field is not zero.** A plugin older than M15.6 sends none at
+     * all, and writing zero for it would shrink the tenant's measured usage the
+     * moment one store lagged behind on updates — under-reporting, which is the
+     * direction that lets a tenant exceed a limit it was sold.
+     *
+     * The store's own figure is stored first, then `UsageService` re-sums the
+     * tenant across its stores: `file_storage_mb` is a tenant limit, and a
+     * business-plan tenant may hold ten stores each reporting only itself.
+     */
+    if (typeof dto.storage_bytes === 'number') {
+      /*
+       * ⚠️ **One transaction, because the second write reads the first.** The
+       * tenant total is re-summed from `stores.storageBytes`, so a failure
+       * between the two would leave this store's figure recorded and the tenant
+       * row still describing the previous one — data that looks legitimate, so
+       * nothing reports an error and nothing looks broken.
+       */
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query(
+          `UPDATE stores SET storageBytes = ?, updatedAt = NOW(3) WHERE id = ?`,
+          [dto.storage_bytes, storeId],
+        );
+
+        await this.usage.recordStorage(store.tenantId, manager);
+      });
+    }
+
+    /**
      * Reconciliation: record the disagreement, resolve nothing.
      *
      * **`stores.status` is never written from `connection_state`.** The plugin's
@@ -112,7 +264,11 @@ export class StoresService {
      * Reported only when the plugin actually sent a view. A silent heartbeat is
      * not a disagreement.
      */
-    if (dto.connection_state !== undefined && dto.connection_state !== store.status) {
+    if (
+      dto.connection_state !== undefined &&
+      dto.connection_state !== store.status &&
+      !isExpectedDisagreement(dto.connection_state, store.status)
+    ) {
       /**
        * Record the disagreement **once**, not once per ping.
        *
@@ -138,6 +294,45 @@ export class StoresService {
         // `siteUrl` is carried but not compared: it identifies the store, not
         // the disagreement, and comparing it would change nothing.
         ['pluginState', 'cloudState'],
+      );
+    }
+
+    /**
+     * A store that cannot read what this cloud is sending (M9.5).
+     *
+     * The plugin refuses a document whose `schema_version` exceeds its build and
+     * keeps the previous copy — the right behaviour, and completely silent. That
+     * shop serves stale configuration while its heartbeat arrives on time, its
+     * connection state says `connected` and its credential works. Without this
+     * record, "merchant needs to update their plugin" is knowable only by
+     * asking them.
+     *
+     * Recorded on the refusal rather than on the version alone. A plugin
+     * reporting `supported_schema_version: 1` against a cloud sending 1 is
+     * simply current; what matters is whether the limit has actually bitten.
+     */
+    if (dto.schema_refused === true) {
+      await this.audit.recordChange(
+        {
+          action: AuditAction.STORE_SCHEMA_UNSUPPORTED,
+          resourceType: 'store',
+          resourceId: storeId,
+          tenantId: store.tenantId,
+          changes: {
+            supportedSchemaVersion: dto.supported_schema_version ?? null,
+            pluginVersion: dto.plugin_version ?? null,
+            siteUrl: store.storeUrl,
+          },
+        },
+        /**
+         * Deduplicated on what a merchant would have to change.
+         *
+         * A store in this state reports it on every heartbeat, and a trail
+         * saying so daily for a month is one support reads and misbelieves. The
+         * entry moves when the plugin does — which is exactly when the
+         * situation has changed.
+         */
+        ['supportedSchemaVersion', 'pluginVersion'],
       );
     }
 
@@ -221,6 +416,21 @@ export class StoresService {
           WHERE storeId = ? AND redeemedAt IS NULL`,
         [storeId],
       );
+
+      /**
+       * 🔴 **Re-sum the tenant's storage, because this store will never report
+       * again.**
+       *
+       * `UsageService.recordStorage` normally runs on a heartbeat, and a
+       * disconnected store sends no more of them — so its bytes would stay in the
+       * tenant's total with nothing left to reduce them. A tenant holding one
+       * store would sit permanently against a limit for storage it can no longer
+       * see, which is a merchant blocked by a number they cannot change.
+       *
+       * Inside the transaction, so the total can never describe a store that is
+       * still connected in the same breath as one that is not.
+       */
+      await this.usage.recordStorage(store.tenantId, manager);
 
       return Number(result.affectedRows ?? 0);
     });

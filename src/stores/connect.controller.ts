@@ -13,10 +13,16 @@ import { ApiErrors } from '../common/openapi/api-errors.decorator';
 import {
   ConnectService,
   type AuthorizeResult,
+  type DescribeRequestResult,
   type ExchangeResult,
   type InitiateResult,
 } from './connect.service';
-import { AuthorizeDto, ExchangeDto, InitiateDto } from './dto/connect.dto';
+import {
+  AuthorizeDto,
+  DescribeRequestDto,
+  ExchangeDto,
+  InitiateDto,
+} from './dto/connect.dto';
 
 /**
  * The connection handshake (M8.2).
@@ -73,6 +79,38 @@ export class ConnectController {
   @ApiErrors(200, 400, 401, 429)
   async exchange(@Body() dto: ExchangeDto): Promise<ExchangeResult> {
     return this.service.exchange(dto);
+  }
+
+  /**
+   * What a pending request is asking for (M13.3).
+   *
+   * The approval screen calls this before showing anything: it is what lets the
+   * prompt name the **site** being connected rather than asking a merchant to
+   * consent to an unnamed one.
+   *
+   * ## Guarded like `authorize`, and holding `state` besides
+   *
+   * Same guards and the same capability — reading which site is asking to
+   * connect is part of connecting one. But the guards are not what protects it:
+   * a pending request has **no tenant yet** (`tenantId` is written at
+   * `authorize`), so tenant scoping cannot apply, and the `state` is the
+   * credential that stops any signed-in user walking request ids.
+   *
+   * ## Rate limit
+   *
+   * 60 an hour, twice `authorize`'s: a merchant may reload the approval screen,
+   * and each render is one call. Still far below anything useful for guessing,
+   * where the search space is a UUID **and** a 43-character secret.
+   */
+  @Post('requests/describe')
+  @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
+  @ApiBearerAuth('tenant')
+  @RequireCapability(Capability.STORES_CONNECT)
+  @HttpCode(200)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @ApiErrors(200, 400, 401, 403, 404, 429)
+  async describe(@Body() dto: DescribeRequestDto): Promise<DescribeRequestResult> {
+    return this.service.describe(dto);
   }
 
   @Post('authorize')

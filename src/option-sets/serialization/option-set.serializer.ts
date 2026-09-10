@@ -6,6 +6,11 @@ import { OptionValue } from '../entities/option-value.entity';
 import { Option } from '../entities/option.entity';
 import { PresentationalItem } from '../entities/presentational-item.entity';
 import { toPublishedPriceConfig } from './price-config';
+import {
+  toPublishedDisplay,
+  toPublishedOptionPricing,
+  toPublishedValidation,
+} from './option-config';
 import type {
   AuthoringGroup,
   AuthoringOption,
@@ -144,6 +149,7 @@ export class OptionSetSerializer {
       priceConfig: value.priceConfig,
       imageUrl: value.imageUrl,
       colorHex: value.colorHex,
+      groupLabel: value.groupLabel,
       skuSuffix: value.skuSuffix,
       weightDeltaGrams: value.weightDeltaGrams,
       isDefault: value.isDefault,
@@ -183,7 +189,18 @@ export class OptionSetSerializer {
       id: tree.set.id,
       version: tree.set.version,
       /**
-       * Empty until Phase 13 (assignments) and Phase 17 (rules) build them.
+       * `assignments` stays empty here **by design**, not because it is unbuilt.
+       *
+       * Phase 10 Stage 1 made assignments reach a storefront, and deliberately
+       * did not do it from here. A snapshot records what was *published*, and an
+       * assignment is not part of that: the same published set is assigned and
+       * unassigned with no republish. Writing them into a snapshot would make
+       * every assignment change require a new version, and would leave every set
+       * published before that stage carrying `[]` for ever, since snapshots are
+       * immutable. So `ConfigDocumentBuilder` joins them **live** and overwrites
+       * whatever stands here.
+       *
+       * `rules` is still genuinely unbuilt, and waits on Phase 17.
        *
        * Present rather than omitted: 7k freezes this document for v1, and a
        * plugin written against a shape lacking these keys would need a
@@ -231,9 +248,9 @@ export class OptionSetSerializer {
       is_required: option.isRequired,
       sort_order: option.sortOrder,
       ...optional('default_value', option.defaultValue),
-      ...optional('validation', option.validation),
-      ...optional('pricing', option.pricing),
-      ...optional('display', option.display),
+      ...optional('validation', toPublishedValidation(option.validation)),
+      ...optional('pricing', toPublishedOptionPricing(option.pricing)),
+      ...optional('display', toPublishedDisplay(option.display)),
       values: values
         .filter((value) => value.isEnabled)
         .map((value) => this.valueToPublished(value)),
@@ -268,6 +285,10 @@ export class OptionSetSerializer {
       }),
       ...optional('image_url', value.imageUrl),
       ...optional('color_hex', value.colorHex),
+      // `<optgroup>` heading (M14.3). Absent when ungrouped, so an ordinary
+      // dropdown's document is byte-identical to what it was before grouping
+      // existed.
+      ...optional('group_label', value.groupLabel),
       ...optional('sku_suffix', value.skuSuffix),
       ...optional('weight_delta_grams', value.weightDeltaGrams),
       // Only ever present when true: a renderer asks "which is default?", and

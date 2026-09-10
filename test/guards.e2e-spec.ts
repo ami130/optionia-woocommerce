@@ -121,6 +121,27 @@ describe('guards (e2e)', () => {
       .post('/v1/auth/login')
       .send({ email, password: PASSWORD });
 
+    /*
+     * A failed sign-in is raised here, not carried into the assertion.
+     *
+     * Without this, a rate-limited login (429) leaves `login.body.data`
+     * undefined, the helper returns `undefined`, and every subsequent request
+     * goes out as `Bearer undefined`. Measured in a full-suite run: four logins
+     * were throttled, and a capability test failed with `expected 403, received
+     * 301` -- a message about routing, from a test that never had a token.
+     *
+     * The danger is not the flake. A permission test that silently sends no
+     * credential can PASS for the wrong reason, so a real hole in the matrix
+     * would look like a green suite. `test/harness.ts` already guards this;
+     * these copies had drifted from it.
+     */
+    if (login.status !== 200) {
+      throw new Error(
+        `Failed to sign in ${email}: ${login.status} ` +
+          `${JSON.stringify(login.body?.error ?? login.body)}`,
+      );
+    }
+
     return login.body.data.accessToken as string;
   }
 

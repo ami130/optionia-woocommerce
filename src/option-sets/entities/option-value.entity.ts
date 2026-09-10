@@ -55,6 +55,20 @@ export class OptionValue extends SoftDeletableEntity {
   @Column({ type: 'char', length: 7, nullable: true })
   colorHex: string | null;
 
+  /**
+   * The `<optgroup>` this value belongs to, by label (M14.3).
+   *
+   * ⚠️ **A label, not a foreign key.** Groups here are a presentation device with
+   * no identity of their own — they have no ordering, no rules and no pricing, so
+   * a `value_groups` table would add a join and a lifecycle to carry one string.
+   * Values sharing a label render under one heading; that is the whole model.
+   *
+   * `null` means "not grouped" and renders as a plain `<option>`. It is not the
+   * same as `''`, which would put the value in a nameless group.
+   */
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  groupLabel: string | null;
+
   /** Appended to the line SKU. Fulfilment systems match on SKU. */
   @Column({ type: 'varchar', length: 40, nullable: true })
   skuSuffix: string | null;

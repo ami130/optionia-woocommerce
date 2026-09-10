@@ -17,6 +17,7 @@ import { StoresRepository } from './stores.repository';
 import { StoresService } from './stores.service';
 import { StoreCredential } from './entities/store-credential.entity';
 import { Store } from './entities/store.entity';
+import { UsageModule } from '../usage/usage.module';
 
 /**
  * Store connection (M8.1, M8.2).
@@ -35,6 +36,8 @@ import { Store } from './entities/store.entity';
     TypeOrmModule.forFeature([Store, StoreCredential, StoreConnectionCode]),
     AuthModule,
     AuditModule,
+    // The heartbeat records a store's storage figure as it arrives (M15.6).
+    UsageModule,
   ],
   controllers: [ConnectController, StoresController, StoreHeartbeatController],
   providers: [

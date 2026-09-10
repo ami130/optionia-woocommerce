@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 
 import { getTenantId } from '../../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../../common/database/base.entity';
 import { OptionSetStatus } from '../../common/database/enums';
 import { DomainException } from '../../common/errors/domain.exception';
+import { OptionSetAssignment } from '../entities/option-set-assignment.entity';
 import { OptionSetVersion } from '../entities/option-set-version.entity';
 import { OptionSet } from '../entities/option-set.entity';
 import { Store } from '../../stores/entities/store.entity';
-import type { ConfigDocument, PublishedOptionSet } from './projections';
+import type { ConfigDocument, PublishedAssignment, PublishedOptionSet } from './projections';
 
 /**
  * The shape version of the document, not its content (M7.5).
@@ -89,12 +90,97 @@ export class ConfigDocumentBuilder {
       order: { createdAt: 'ASC', id: 'ASC' },
     });
 
+    /**
+     * Every snapshot in one query, not one query per set.
+     *
+     * This loop used to `findOne` inside it, so a store cost `N + 2` queries —
+     * a merchant with forty published sets paid forty-two round trips, on a
+     * document fetched by every store every fifteen minutes and again on every
+     * push. The composite key is indexed, so each was fast; the cost was the
+     * count, and it multiplied by tenant.
+     *
+     * The `IN` list is bounded by the number of published sets on one store,
+     * which the plan caps well below any statement limit.
+     */
+    const snapshots = sets.length
+      ? await this.dataSource
+          .getRepository(OptionSetVersion)
+          .createQueryBuilder('v')
+          .where('v.optionSetId IN (:...ids)', { ids: sets.map((set) => set.id) })
+          .getMany()
+      : [];
+
+    /** Keyed by `optionSetId:version` — a set's *current* version, not its latest. */
+    const bySetAndVersion = new Map(
+      snapshots.map((snapshot) => [`${snapshot.optionSetId}:${snapshot.version}`, snapshot]),
+    );
+
+    /**
+     * Assignments are read **live**, not taken from the snapshot.
+     *
+     * A snapshot is the record of what was *published*, and an assignment is not
+     * part of that: the same published set is assigned and unassigned without
+     * republishing, so storing assignments in the snapshot would make every
+     * assignment change require a new version. The snapshot is also immutable,
+     * which would leave every set published before this code shipped carrying
+     * `assignments: []` for ever — a serializer change could never reach them.
+     *
+     * So they are joined here, beside the snapshot rather than inside it, the
+     * same way `normaliseSnapshot` fills contract-mandatory keys on read without
+     * altering what was stored.
+     *
+     * **Tenant scope is inherited, and that is deliberate.**
+     * `option_set_assignments` has no `storeId` — it keys on `optionSetId`
+     * alone. The ids below come from `sets`, which is already narrowed by store
+     * and, for a dashboard user, by tenant. Reaching this table by any other
+     * route would bypass that check, and `check-isolation` inspects routes
+     * rather than queries, so it would not notice. The scope has to be correct
+     * by construction.
+     *
+     * One statement for the whole store, not one per set: the `IN` list is the
+     * same bounded set of ids the snapshot query already uses.
+     */
+    const assignments = sets.length
+      ? await this.dataSource.getRepository(OptionSetAssignment).find({
+          where: {
+            optionSetId: In(sets.map((set) => set.id)),
+            deletedAt: LIVE_SENTINEL_SQL as never,
+          },
+          // Deterministic for the same reason the set query is ordered: two
+          // builds of unchanged data must produce the same bytes.
+          order: { priority: 'ASC', id: 'ASC' },
+        })
+      : [];
+
+    /** Assignments grouped by the set they belong to. */
+    const bySet = new Map<string, PublishedAssignment[]>();
+
+    for (const assignment of assignments) {
+      const forSet = bySet.get(assignment.optionSetId) ?? [];
+
+      /**
+       * Mapped field by field, never spread.
+       *
+       * The entity is `camelCase` and carries columns the contract does not:
+       * `id`, `optionSetId`, and `matchRules` — the conditional condition tree,
+       * which is internal and has no business on a storefront. A spread would
+       * put all three on the wire in the wrong case, and no gate would catch it:
+       * `check-api-contract` verifies routes, not payload shapes.
+       */
+      forSet.push({
+        mode: assignment.mode,
+        target_type: assignment.targetType,
+        target_ref: assignment.targetRef,
+        priority: assignment.priority,
+      });
+
+      bySet.set(assignment.optionSetId, forSet);
+    }
+
     const optionSets: PublishedOptionSet[] = [];
 
     for (const set of sets) {
-      const snapshot = await this.dataSource.getRepository(OptionSetVersion).findOne({
-        where: { optionSetId: set.id, version: set.version },
-      });
+      const snapshot = bySetAndVersion.get(`${set.id}:${set.version}`);
 
       /**
        * A published set with no snapshot at its current version cannot happen —
@@ -104,7 +190,11 @@ export class ConfigDocumentBuilder {
        * it, and every other set on the store still renders.
        */
       if (snapshot) {
-        optionSets.push(normaliseSnapshot(snapshot.snapshot));
+        optionSets.push({
+          ...normaliseSnapshot(snapshot.snapshot),
+          // Live, overriding whatever the snapshot happened to carry.
+          assignments: bySet.get(set.id) ?? [],
+        });
       }
     }
 
@@ -144,9 +234,24 @@ function normaliseSnapshot(snapshot: Record<string, unknown>): PublishedOptionSe
 
   return {
     ...set,
-    // Mandatory in the contract, absent from snapshots written before 7h.
-    assignments: set.assignments ?? [],
+    /**
+     * Filled only so the shape is complete before the caller replaces it.
+     *
+     * Until Phase 10 Stage 1 a snapshot's own assignments were what a storefront
+     * received, so they were mapped through a `normaliseAssignment` helper that
+     * filled `mode` on documents written before that key existed. Stage 1 made
+     * assignments a **live** read, so whatever stands here is discarded a few
+     * lines later — and mapping a value nobody reads is the kind of dead work
+     * that later reads as a guarantee.
+     *
+     * Nothing is lost with the helper. Across the whole history of
+     * `option-set.serializer.ts`, `assignments: []` is the only value publish has
+     * ever written into a snapshot, so no stored document has assignments that
+     * needed filling.
+     */
+    assignments: [],
     rules: set.rules ?? [],
     groups: set.groups ?? [],
   };
 }
+

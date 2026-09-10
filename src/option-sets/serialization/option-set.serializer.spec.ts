@@ -387,6 +387,117 @@ describe('OptionSetSerializer', () => {
       expect(result.groups[0].options[0].values[0].image_url).toBe('https://x.test/a.png');
     });
 
+    /**
+     * 🔴 The serializer must CONVERT option-level pricing, not pass it through.
+     *
+     * `option-config.spec.ts` proves the converter is right. It cannot prove the
+     * serializer calls it — measured: reverting this line to
+     * `optional('pricing', option.pricing)` left all 33 serialization tests
+     * green, because every one of them tested the converter in isolation.
+     *
+     * That is the same "correct by inheritance rather than by test" gap that let
+     * `pricing` drift from `price_config` in the first place, so the assertion
+     * runs through `toPublished()` on a real tree.
+     */
+    it('converts option-level pricing rather than publishing it verbatim', () => {
+      const published = serializer.toPublished(
+        tree({
+          groups: [
+            {
+              group: group(),
+              items: [],
+              options: [
+                {
+                  option: option({
+                    pricing: { type: 'per_char', amountMinor: 25, freeCharacters: 10 },
+                  }),
+                  values: [value()],
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      expect(published.groups[0].options[0].pricing).toEqual({
+        type: 'per_char',
+        amount_minor: 25,
+        free_characters: 10,
+      });
+    });
+
+    /**
+     * 🔴 Every optional value field reaches the document when it is set.
+     *
+     * Measured: deleting `sku_suffix`, `weight_delta_grams`, `color_hex` or
+     * `group_label` from the serializer left **all 60 serialization tests
+     * green**. Only `image_url` was protected, by a test that happened to assert
+     * it for another reason.
+     *
+     * The plugin reads all of them — `weight_delta_grams` sets the shipping
+     * weight and `sku_suffix` reaches the order line — both M16.8 — so a
+     * field silently dropped here is a merchant's configuration doing nothing,
+     * with no error anywhere because nothing failed. That is the exact shape of
+     * gap both of those milestones existed to close, reopened one repository
+     * over.
+     *
+     * Asserted as a set rather than one test each, so a **new** optional field
+     * added to `valueToPublished` without a line here shows up as a missing key
+     * rather than as a silently unprotected one.
+     */
+    it('publishes every optional value field that is set', () => {
+      const published = serializer.toPublished(
+        tree({
+          groups: [
+            {
+              group: group(),
+              items: [],
+              options: [
+                {
+                  option: option(),
+                  values: [
+                    value({
+                      imageUrl: 'https://x.test/a.png',
+                      colorHex: '#ff0000',
+                      groupLabel: 'Woods',
+                      skuSuffix: '-OAK',
+                      weightDeltaGrams: 8000,
+                    }),
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      expect(published.groups[0].options[0].values[0]).toMatchObject({
+        image_url: 'https://x.test/a.png',
+        color_hex: '#ff0000',
+        group_label: 'Woods',
+        sku_suffix: '-OAK',
+        weight_delta_grams: 8000,
+      });
+    });
+
+    /**
+     * And omitted when unset, which is what `optional()` is for.
+     *
+     * A document carrying `"sku_suffix": null` on every value would be larger
+     * for no reason and would make "no suffix" indistinguishable from "the
+     * merchant cleared it" for a reader that checks key presence.
+     */
+    it('omits every optional value field that is unset', () => {
+      const published = serializer.toPublished(tree());
+      const first = published.groups[0].options[0].values[0];
+
+      ['image_url', 'color_hex', 'group_label', 'sku_suffix', 'weight_delta_grams'].forEach(
+        (key) => {
+          expect(first).not.toHaveProperty(key);
+        },
+      );
+    });
+
     /** A renderer asks which value is default; the rest is noise on every fetch. */
     it('marks the default value only when it is one', () => {
       const plain = serializer.toPublished(tree());

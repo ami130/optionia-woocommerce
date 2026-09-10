@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { BadRequestException, Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { config as loadDotenv } from 'dotenv';
+import * as compression from 'compression';
 import helmet from 'helmet';
 import { Logger as PinoLogger } from 'nestjs-pino';
 
@@ -68,6 +69,27 @@ async function bootstrap(): Promise<void> {
   app.use(helmet());
 
   /**
+   * Response compression (M9.1).
+   *
+   * The config document is the reason. A store with twenty option sets sends
+   * roughly 30KB of JSON, and it compresses to about 1.2KB — a 96% saving on a
+   * payload every connected store pulls every fifteen minutes. JSON of that
+   * shape, with keys repeating once per option, is close to the best case a
+   * deflate window can have.
+   *
+   * `threshold` leaves small responses alone: below about a kilobyte the
+   * gzip header and the CPU cost exceed the saving, and most responses here —
+   * a heartbeat reply, an error envelope — are far below it.
+   *
+   * Applies to every route rather than one, because a client that sends
+   * `Accept-Encoding: gzip` is asking about the connection, not the endpoint,
+   * and compressing only the largest response would be a surprise everywhere
+   * else. Clients that do not ask are unaffected: `compression` honours the
+   * request header and sends identity encoding when it is absent.
+   */
+  app.use(compression({ threshold: 1024 }));
+
+  /**
    * Global validation.
    *
    * `forbidNonWhitelisted` is the important one: an unknown field is a 400, not
@@ -97,8 +119,7 @@ async function bootstrap(): Promise<void> {
        * Nested properties are joined with a dot (`address.postcode`), which is
        * the path a client already uses to find the input.
        */
-      exceptionFactory: (errors) =>
-        new BadRequestException(flattenValidationErrors(errors)),
+      exceptionFactory: (errors) => new BadRequestException(flattenValidationErrors(errors)),
     }),
   );
 

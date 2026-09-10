@@ -3056,3 +3056,1214 @@ first symptom would be a resolution failure at runtime in `[8d]` itself. Creatin
 the module now, with no controller or service to put in it, would be scaffolding
 built ahead of its purpose; recording the requirement here is the cheaper half of
 the trade.
+
+---
+
+## ADR-040 — File storage: the merchant's server first, the cloud second
+
+**Status:** accepted
+**Date:** Phase 15, M15.1 (analysis 2026-09-08)
+
+### Context
+
+M15.1 asks where a customer's uploaded file physically lives, and recommends
+Optionia cloud storage with presigned direct uploads. Phase 15's analysis found
+that recommendation collides with a promise already made, and the collision is
+not mentioned anywhere in the phase.
+
+**AC3 states:** *"If Optionia Cloud is entirely offline, merchant storefronts keep
+working."* It is not a performance note — the plan names it as the answer to the
+merchant's central objection in D5, the reason a merchant trusts a SaaS plugin
+with their storefront at all.
+
+With cloud-first uploads, a cloud outage means the customer cannot upload, so they
+cannot buy — on the one option type where **the file is the order**. AC3's literal
+words say "page load", and an upload is a customer action rather than a page load,
+so the letter survives. The promise does not.
+
+That is the decision this ADR exists to make, and M15.1's four sentences do not
+make it.
+
+### Decision
+
+**Files are written to the merchant's own WordPress server first, and mirrored to
+Optionia-managed object storage afterwards.** MySQL stores a pointer and metadata
+— never bytes.
+
+| Layer | Holds |
+|---|---|
+| Merchant's filesystem (`wp-content/uploads/`) | the file, written first |
+| Object storage (S3-compatible) | the mirror, written after |
+| MySQL | token, filename, size, MIME, order link, expiry |
+| Config document | what a file option *accepts* — types, size cap, count |
+
+**Why this ordering, and not the reverse**
+
+*It keeps AC3 honest.* WP-first is the only arrangement where an upload still
+succeeds with the cloud down. Cloud-first would quietly break the promise on the
+one product type where it matters most.
+
+*It matches who owns the risk.* The merchant's customer uploads to the merchant's
+own server. No third party sits in the purchase path. The cloud copy is a service
+added on top — retention, retrieval after a site rebuild — not a dependency
+imposed underneath.
+
+*It degrades in the right direction.* Cloud down means uploads still work and
+mirroring catches up. The reverse failure — the merchant's site healthy, their
+sales blocked by an outage in someone else's cloud — is the one that loses
+customers permanently.
+
+**The cost is real and is accepted:** this builds two paths rather than one, and
+the plan's own table calls hybrid *"most complex"*. It is chosen anyway because
+the alternative retracts a stated promise.
+
+### What the cloud mirror is for
+
+Not redundancy for its own sake. Two concrete jobs:
+
+- **Retention beyond the merchant's site.** M15.5 requires print-ready artwork to
+  stay retrievable; a merchant who rebuilds their site loses `wp-content` and
+  would otherwise lose every customer's artwork with it.
+- **Storage accounting (M15.6).** Per-tenant usage against `file_storage_mb`,
+  already seeded per plan: **free 100 MB, pro 5 000 MB, business 25 000 MB**. The
+  limit model exists; only the meter is missing.
+
+### Single file before multi-file
+
+`Engine\SelectionResolver` refuses any non-scalar selection with
+`ERROR_NOT_SCALAR` — a guard at **line 290**, before every type branch, written
+deliberately to repel array-injection probes.
+
+A single file token is a scalar and passes it untouched. **Multi-file requires
+changing that guard**, which is a security-relevant edit to the code path every
+option type shares.
+
+So: single file first. Multi-file arrives as its own stage, with the guard change
+argued on its own terms rather than smuggled in beside a storage decision. This is
+the same discipline that kept `many` cardinality out of Phase 14 until the array
+path through resolver, cart, labels and order could be built as one piece.
+
+### Where verification may happen
+
+Two gates already constrain this, and neither is negotiable:
+
+- `bin/check-architecture.sh` forbids WordPress functions — including
+  `wp_remote_*` — anywhere in `src/Engine/`.
+- Principle 2 confines **all** outbound HTTP to `src/Api/`.
+
+`SelectionResolver` is therefore **structurally incapable** of asking whether a
+file token corresponds to a real file. It can validate a token's *shape* and
+nothing more.
+
+⚠️ **This matters more than it first appears.** The resolver runs at five points —
+`AddToCartValidator`, `CartDisplay`, `CartTotals`, `CheckoutValidator` and
+`OrderAgain`. If existence-checking lived inside it, a single cart page would make
+five network calls, which is precisely what AC3 forbids.
+
+**So the file is verified once, at add-to-cart, in `Api/`, and the outcome is
+passed to the resolver as data.** The resolver stays pure and stays fast.
+
+### The token, and what the browser may send
+
+AC4 already settles the shape: the browser sends **identifiers only** — never
+paths, never prices, never labels. A file token is an identifier and obeys the
+same rule.
+
+It must be **opaque and unguessable**, never a filename or a path. A token derived
+from a filename would let a customer guess another customer's token, and
+`no filename-derived paths` is already M15.3's own requirement.
+
+Precedent exists rather than needing invention, and the two existing signers use
+**different** mechanisms for good reasons:
+
+- `Integration\CartItemPayload` uses **`wp_hash()`** — WordPress's own keyed hash
+  over `wp_salt()`, always present, and site-specific, so a signature from one
+  store means nothing on another. Compared with `hash_equals()`.
+- `Connection\PushSignature` uses **`hash_hmac`** with the store credential,
+  because the cloud is the other party and it does not know the site's salts.
+
+A file token is signed by the plugin and verified by the plugin, so it follows
+`CartItemPayload`: `wp_hash()`, site-specific, no shared secret required.
+
+### Two consequences that must be decided, not discovered
+
+**A file token changes cart-line identity.** `CartItemPayload` documents that
+`selections` are *identity* and enter the cart item key, while `deltas`,
+`signature` and `config_version` are audit and do not. Two customers uploading the
+*same* artwork produce two *different* tokens, so they become **two cart lines
+rather than quantity 2**.
+
+That is accepted as correct: two uploads are two pieces of artwork, and merging
+them would silently print one design twice. Recorded here because it is surprising
+in a cart and invisible until a merchant asks.
+
+**Order-again may replay a file that no longer exists.** `Integration\OrderAgain`
+replays past selections into a new cart, and M15.4 sets retention TTLs. A customer
+reordering last year's artwork will eventually replay a purged token.
+
+**The line must fail loudly**, not silently drop the file or proceed without it: a
+reprint that arrives blank is worse than a reorder that says "please upload your
+artwork again."
+
+**The live-token case was the one that bit.** The paragraph above anticipated a
+*purged* token. Measured on the running site, the *unpurged* one was worse: with
+`claim()` matching on the token alone, ordering twice with the same token left
+`order_id` at the **second** order. The last claim silently won, and the first
+order — already paid for, possibly already in production — lost its artwork with
+nothing logged. No malice required: `OrderAgain` replays the token, so an ordinary
+re-order was enough.
+
+`UploadRepository::claim()` now refuses any row another order owns
+(`WHERE token = ? AND order_id IS NULL`), and returns **three** outcomes rather
+than a boolean — `claimed`, `already_ours`, `taken`. The third state exists
+because `$wpdb->update()` reports zero affected rows both for "no such row" *and*
+for "the values already match", so a boolean cannot tell a replayed line-item hook
+(WooCommerce fires it more than once for one order) from a genuine conflict.
+Mistaking the first for the second would log lost artwork on every healthy order
+and train a merchant to ignore the message that matters.
+
+The re-ordering customer's line now genuinely has no artwork, which is the honest
+answer, and `UploadPromoter` logs it at **error** level. That is this ADR's "fail
+loudly" applied to the live case.
+
+**`claim()` is bound to the token, not the session** — unlike
+`find_for_session()`, which puts the session in the `WHERE` clause. This is an
+accepted asymmetry, not an oversight: promotion runs server-side during checkout,
+where the session that uploaded the file is not necessarily the session placing the
+order (a guest who logs in mid-checkout changes session key). The token never
+leaves the uploader's browser, and the `order_id IS NULL` guard now bounds the
+damage of a leaked one to a single claim rather than an unlimited series. Recorded
+so a future reader does not "fix" the asymmetry by adding a session check that
+would break guest checkout.
+
+**A deleted order leaks its files, and nothing can reap them.** Nothing ever
+resets `order_id` once a claim lands. `expired()` returns only rows with
+`order_id IS NULL`, and `UploadSweeper` protects every name the table knows
+regardless of order state — so a promoted file whose order is later deleted or
+trashed is unreachable by both cleanup paths. Cancelled and failed orders leak the
+same way, for the same reason.
+
+This is M15.4's retention work (Stage 4e), and it is a prerequisite for the
+mechanism below: Phase 26b cannot delete on request through a path that does not
+exist. Recorded here rather than left to be rediscovered, because a storage leak
+is invisible until a merchant's disk fills.
+
+### GDPR scope, split explicitly
+
+M15.4 lists *"GDPR deletion on request"*. **Phase 26b** — which depends on Phase 15
+— states that GDPR needs *"working mechanisms, not documentation"* and owns that
+build.
+
+The split: **Phase 15 makes deletion possible** (a file has an owner, an order, and
+a delete path that removes both copies). **Phase 26b makes it a mechanism** (the
+request flow, the audit trail, the proof). Phase 15 does not build a half-mechanism
+that Phase 26b would have to replace.
+
+### Adding `file_input` is not a breaking change
+
+Verified against `docs/CONFIG-CONTRACT.md`: *"Adding a key a reader can ignore →
+No"* bump of `schema_version`. `Frontend\Renderer` already skips any type it has no
+template for, by design, so a plugin one release behind renders nothing for a file
+option rather than breaking.
+
+**No `schema_version` bump, and no storefront breaks.** Worth stating because the
+contract's own rule is that bumping *"is a release, not an edit"*.
+
+### Open — decided before M15.3, not here
+
+**Malware scanning** (M15.3) is a service, not storage, and its options differ in
+kind: ClamAV self-hosted (free, needs a host and a signature feed) versus a
+scanning API (per-scan cost, no infrastructure). Deciding it inside a storage ADR
+would bundle two unrelated commitments.
+
+It is named here so it is not discovered late: **no file reaches the mirror
+unscanned**, whichever way it is answered.
+
+### Rejected alternatives
+
+**Cloud-only with presigned uploads** — M15.1's own recommendation. Rejected: it
+breaks AC3's promise at the moment of purchase, and D5 makes that promise the
+reason merchants accept a cloud dependency at all.
+
+**WordPress-only** — no cloud cost, no cloud dependency. Rejected: it makes
+Optionia strictly worse than a one-time-purchase competitor on the segment Phase 15
+exists for, and print-ready artwork dies with the merchant's server.
+
+**Storing bytes in MySQL** — never seriously considered, recorded because it is the
+intuitive answer when a project already has a database. A 20 MB PDF in a row makes
+every backup and every replica carry it, and reads pull it through the DB server.
+Databases store pointers to files; filesystems and object stores hold files.
+
+---
+
+## ADR-041 — File validation: what is checked, where, and what is refused outright
+
+**Status:** accepted
+**Date:** Phase 15, M15.3 (analysis 2026-09-08)
+
+### Context
+
+M15.3 is one sentence carrying **eight** requirements: content-verified MIME
+allowlist, per-plan size limits, image dimension limits, count limits, magic-byte
+checks, malware scanning, SVG rejection, EXIF stripping.
+
+Measured against a real WordPress host rather than reasoned about, three of those
+are already satisfied, two are unbuildable as written, and one contains a conflict
+the sentence cannot see. Each is decided below.
+
+⚠️ **Every measurement here comes from one host.** `fileinfo` is loaded, `imagick`
+is absent, `exec()` is enabled, `memory_limit` is 128 MB. A merchant's shared
+host differs on all four, which is why the decisions below are about *ranges* of
+hosts rather than this one. Stage 1 taught that lesson expensively: the
+`.htaccess` guards written there did nothing on this server, and the RCE they were
+meant to prevent appeared only when a file was actually fetched.
+
+### What WordPress already does, verified
+
+`wp_check_filetype_and_ext()` **genuinely verifies by content**. A PNG named
+`photo.jpg` came back as `png`/`image/png` with `proper_filename: photo.png`; a
+PHP script named `shell.jpg` came back empty — rejected.
+
+**SVG is rejected by default**, which is M15.3's headline security requirement
+satisfied by the platform. Nothing needs building for it; something needs building
+to keep it that way, which is the parity check in Decision 5.
+
+### Decision 1 — `.ai` and `.eps` are accepted, through a **scoped** allowlist
+
+`.ai` and `.eps` are both refused by WordPress. They are also the two formats
+print-on-demand and signage actually use — the segment Phase 15 was promoted from
+the roadmap's "later" list *for*.
+
+⚠️ **The cause is a naming gap, not a content problem.** An `.ai` file *is* a PDF:
+`finfo` reports `application/pdf` correctly. WordPress has no `ai` entry, so the
+detected type has no extension to agree with and the check fails closed.
+
+**Accepted by passing a scoped `$mimes` map to `wp_check_filetype_and_ext()`**,
+never by filtering `upload_mimes`. Verified: the third argument extends the
+allowlist for *that call only*, so `.ai` stays unuploadable everywhere else on the
+merchant's site — their media library, their other plugins, their admin. A global
+filter would widen the attack surface of a site to serve one option type on one
+product page.
+
+#### ✏️ `.eps` cannot be accepted this way, and is dropped (2026-09-08)
+
+🔴 **Measured while building 3d: the scoped map cannot introduce a new MIME
+type.** `wp_check_filetype_and_ext()` ends with
+
+```php
+if ( $type ) {
+    $allowed = get_allowed_mime_types();          // wp-includes/functions.php:3324
+    if ( ! in_array( $type, $allowed, true ) ) {
+        $type = false;
+        $ext  = false;
+    }
+}
+```
+
+— reading the **global** list directly and ignoring the `$mimes` argument it was
+handed. So a scoped map can add a new *extension* for a type WordPress already
+allows, and nothing more:
+
+| | detected type | already allowed? | scoped map works? |
+|---|---|---|---|
+| `.ai` | `application/pdf` | **yes** | ✅ |
+| `.eps` | `application/postscript` | no | ❌ impossible |
+
+Verified over HTTP: `.ai` with a merged map returns `ext=ai`; `.eps` returns
+`false` for *every* MIME spelling tried — `application/postscript`,
+`application/eps`, `image/eps`, `text/plain` — and works only once a global
+`upload_mimes` filter is active.
+
+**Decision: ship `.ai`, and document `.eps` as unsupported.**
+
+The alternative is the `upload_mimes` filter this decision already rejected, and
+the argument against it has not changed: it widens the *whole site's* upload
+surface — media library, every other plugin, the admin — permanently, to serve one
+option type on one product page. Adding and removing it around a single request
+was considered and rejected too: `upload_mimes` is read by code far outside this
+request's control, and a filter that exists for part of a request is a race, not a
+scope.
+
+⚠️ **This is a real loss, stated rather than smoothed over.** `.eps` is a genuine
+print format and Phase 15 exists for print-on-demand. It is accepted because `.ai`
+covers most Illustrator artwork, `.eps` is increasingly legacy in that workflow,
+and trading a site-wide security property for one declining format is the wrong
+way round. A merchant who needs `.eps` can ask a customer for PDF, which every
+tool that writes `.eps` also writes.
+
+Revisit if merchants actually ask. The honest form of that revisit is a
+merchant-opt-in setting that widens *their* site knowingly — not a default that
+widens it silently.
+
+### Decision 2 — no `fileinfo`, no uploads
+
+`wp_check_filetype_and_ext()` runs on the `fileinfo` extension. Where it is
+missing, WordPress **falls back to trusting the extension** — so "verified by
+content, not extension" silently becomes exactly the thing M15.3 was written to
+prevent, with no error anywhere.
+
+**A file option refuses to accept uploads on such a host**, and says so to the
+merchant in the admin rather than failing at a customer.
+
+✏️ **Where, specifically** — added during this ADR's own audit, because "says so
+in the admin" is not an instruction anyone can build against.
+
+`Support\Environment` already refuses to run without `intl` and `mbstring`, and
+surfaces each as a `missing_extension` problem through `Admin\Notices`. **`fileinfo`
+joins that list**, with one difference that matters: `intl` is required for the
+plugin to work *at all*, while `fileinfo` is required only for *file options*. So
+it is reported as a problem — not a fatal — and the refusal happens where the
+option is used.
+
+⚠️ **The merchant must learn this at authoring time, not the customer at upload
+time.** A merchant who publishes a file option on a host without `fileinfo` and
+discovers it from a customer's failed order has been failed twice.
+
+⚠️ **This means the plugin will not work for some merchants**, and that is the
+decision rather than an accident of it. The alternative is claiming a check that
+is not performed — and the failure mode of a silent fallback is a PHP shell named
+`artwork.jpg`, which Stage 1 already proved executes on a host that ignores
+`.htaccess`.
+
+Recorded as a **product** consequence, not a technical one: support will meet it.
+
+### Decision 3 — EXIF is consumed, not stripped
+
+✏️ **The recommendation that produced this ADR was "strip everything except
+Orientation", and measurement showed that is impossible.** Re-encoding through GD
+drops **all** EXIF including Orientation — verified: a GD-written JPEG contains no
+`Exif\0\0` marker at all.
+
+So Orientation cannot be *preserved*. It must be **consumed**: read the tag, apply
+the rotation to the pixels, then re-encode. The photo arrives the right way up and
+carries no metadata at all.
+
+That is the right outcome for both parties:
+
+- **GPS is the reason this matters.** A customer photographing artwork at home
+  embeds their home coordinates, and sending them to a merchant is a data-
+  protection problem nobody consented to.
+- **Orientation is the reason it cannot be skipped.** Dropping it unread prints
+  the customer's photo sideways, which is a refund.
+
+### Decision 4 — dimensions are read from the header, before anything decodes
+
+🔴 **On a modest host, an ordinary camera photo cannot be decoded.**
+
+| Image | Decoded (RGBA) | 128 MB host | 512 MB host |
+|---|---|---|---|
+| 4000×3000 (12 MP, phone) | 45.8 MB | fine | fine |
+| 6000×4000 (24 MP, DSLR) | 91.6 MB | fine | fine |
+| 8000×6000 (48 MP) | **183.1 MB** | **fatal** | fine |
+| 50000×50000 (crafted) | 9.5 GB | fatal | fatal |
+
+✏️ **Corrected 2026-09-08: the "128 MB" was measured in the wrong process.**
+
+This table originally presented 128 MB as *this development host's* limit, from
+`ini_get('memory_limit')` read through the **CLI binary**. Measured over HTTP —
+the only context a customer's upload runs in — the same site reports
+`memory_limit=512M`, `upload_max_filesize=2G` and `wp_max_upload_size()` of
+**2 GB**. Same WordPress, same functions, a different SAPI and a different answer.
+
+The consequence was a request to the merchant to raise a limit that was never
+low, and a worked example roughly four times stricter than this host needs.
+
+**The decision is unchanged, and the correction is why it was right anyway:** the
+ceiling was already specified as *configurable* precisely because the safe value
+follows the host, and a merchant's shared hosting genuinely does run at 128 MB.
+An arithmetic table pinned to one machine is the thing that would have broken.
+
+⚠️ **Read limits from the SAPI that will serve the request.** A CLI probe of a
+web application's environment answers a question nobody asked.
+
+This is not only a decompression-bomb defence. On a 128 MB host a real customer
+with a high-megapixel camera exceeds the limit, and a fatal error mid-upload is
+indistinguishable to them from the site being broken.
+
+`getimagesize()` reads width and height from the **header** without decoding —
+verified against a crafted 8000×6000 PNG header. So the order is fixed and cannot
+be rearranged:
+
+1. read dimensions from the header
+2. refuse anything over the pixel ceiling
+3. **only then** decode, rotate, re-encode
+
+⚠️ **The ceiling is configurable, because the safe value depends on the host.**
+~24 MP is the practical limit at 128 MB; a host with 512 MB — this development
+site, measured over HTTP — carries four times that. A fixed constant would either
+refuse legitimate DSLR artwork on generous hosts or crash on modest ones, and no
+single number is right for both.
+
+⚠️ **`WP_MEMORY_LIMIT` is a third figure, and it is the lowest.** Measured here:
+PHP allows 512 MB while `WP_MEMORY_LIMIT` is **40 MB**. WordPress raises its own
+limit to that value on admin requests, so image work in `wp-admin` has *less*
+headroom than the storefront — which matters when M15.5 builds thumbnails, not
+here, but it is the same class of mistake to assume one number covers every
+context.
+
+⚠️ **PDF, AI and EPS never enter this path at all.** They are not decoded, have no
+dimensions to check and no EXIF to consume — they pass through untouched. Image
+handling and document handling are separate paths, and conflating them is how a
+PDF ends up through an image editor.
+
+### Decision 5 — malware scanning moves to the cloud, and gates the mirror
+
+**ClamAV on the merchant's host is theatre.** Measured: `clamscan` and `clamdscan`
+are absent on this machine, will be absent on a merchant's shared hosting, and
+`exec()` is commonly disabled there. A scanner the plugin shells out to is a
+scanner that **silently does nothing on most installs** — which is worse than
+none, because it looks like protection and stops anyone asking.
+
+**Scanning happens cloud-side, where the environment is ours**, and it **gates the
+mirror**: no file reaches Optionia-managed storage unscanned (ADR-040's rule,
+restated here as a mechanism rather than an aspiration).
+
+⚠️ **This leaves a real, stated gap.** A file on the merchant's own server is
+unscanned until it mirrors. That is honest rather than comfortable: the file is on
+*their* infrastructure, subject to *their* security posture, exactly as any other
+WordPress upload is — and Optionia does not claim otherwise. The claim it does
+make, that files in Optionia storage are scanned, is one it can keep.
+
+### Decision 6 — a PDF is verified, not trusted
+
+M15.3 does not mention this and it is the sharpest gap in the milestone.
+
+A PDF can carry JavaScript (`/JS`, `/OpenAction`) and embedded files. It is the
+format this phase most needs to accept, and the one whose valid magic bytes prove
+the least: content verification says *"this is a PDF"*, never *"this PDF is
+safe"*.
+
+**Phase 15 does not attempt PDF sanitisation.** Rewriting a PDF to strip active
+content needs a real PDF library, would risk corrupting the print-ready artwork
+that is the whole point, and belongs with the cloud-side scanner in Decision 5
+where a proper toolchain exists.
+
+What Phase 15 *does* guarantee: the file is never executed by the merchant's web
+server (Stage 1's extension strip, proven), never served from a guessable path,
+and reaches the merchant as a download rather than something a browser renders
+inline. A PDF's active content is a risk to whoever **opens** it, and the merchant
+opening their own customer's artwork in their own reader is the same risk they
+take with an emailed attachment.
+
+Stated so nobody later reads "content-verified" as "sanitised".
+
+### What is deliberately not decided here
+
+**Per-plan size limits and count limits** (M15.3's remaining two) are
+configuration, not safety: they belong with the option's own validation schema and
+arrive with the registry entry rather than needing an argument here.
+
+✏️ **Corrected 2026-09-08, during this ADR's own audit.** The paragraph above
+originally said they belong with `Plan.limits`, *"which already seeds
+`file_storage_mb`"* — conflating two different limits that happen to share a word.
+
+`file_storage_mb` (free 100 / pro 5 000 / business 25 000) is a **tenant storage
+total**, and it belongs to **M15.6**'s metering. M15.3's *"per-plan size
+limits"* means a **per-file** ceiling, and no such key exists in `Plan.limits` at
+all — verified: `file_storage_mb` is the only file-related entry.
+
+So there are three distinct ceilings, and confusing any two of them silently
+enforces the wrong one:
+
+| Ceiling | Whose | Where it lives |
+|---|---|---|
+| Host maximum | the server's | `UploadLimits::host_max_bytes()` — built |
+| Per-file maximum | the option's | option `validation.max_size_mb` — **3b builds it** |
+| Tenant storage total | the plan's | `Plan.limits.file_storage_mb` — seeded, **M15.6 meters it** |
+
+A per-file key may still be added to `Plan.limits` later, so a plan can cap what a
+merchant is allowed to configure. That is Phase 24's enforcement question, not
+this milestone's.
+
+### Rejected alternatives
+
+**Filtering `upload_mimes` globally to accept `.ai`/`.eps`** — simpler, one line.
+Rejected: it widens the whole site's upload surface permanently to serve one
+option type, and a merchant would find `.ai` newly uploadable in their media
+library with no idea why.
+
+**Degrading gracefully when `fileinfo` is missing** — accept the upload, verify by
+extension, log a warning. Rejected: the warning is in a log nobody reads and the
+outcome is a shell named `artwork.jpg`. A check that cannot run must refuse, not
+pretend.
+
+**Stripping all EXIF including Orientation** — simplest, and it is what "strip
+EXIF" literally says. Rejected: it prints customers' photographs sideways, and the
+support cost lands on the merchant.
+
+**Scanning on the merchant's host with a bundled scanner** — no cloud dependency.
+Rejected as unbuildable: shipping virus definitions inside a WordPress plugin is
+not viable, and the definitions are the entire product.
+
+### Decision 7 — a raster image is decoded, not trusted — added 2026-09-09
+
+**Amended after Phase 15's audit.** Decision 6 verifies a PDF by its magic bytes
+because `finfo` alone accepts a ZIP named `.pdf`. The audit found the same class
+of defect one format over, and wider: a file of nothing but a signature and a
+script tag was **accepted** for five extensions.
+
+```text
+"GIF89a<script>alert(1)</script>"        accepted as .gif
+"\x89PNG\r\n\x1a\n<script>…</script>"      accepted as .png
+"\xFF\xD8\xFF\xE0<script>…</script>"        accepted as .jpg
+"II\x2A\x00<script>…</script>"             accepted as .tif
+```
+
+`finfo` reads the signature and stops. Decision 4 reads dimensions *"from the
+header, before anything decodes"* — correct as a bomb defence, and it means
+`getimagesize()` never notices there is no image behind the header: it answered
+**1634493810x1948791081** for that PNG rather than refusing it.
+
+**So an extension claiming a raster format must decode.** `webp` and `bmp` are
+excluded because they were already refused by
+`wp_check_filetype_and_ext()` — verified, not assumed — and `.pdf` because a
+document is never decoded; Decision 6 is its guarantee.
+
+⚠️ **This does not weaken Decision 4.** The decode runs *after* the header
+dimensions are checked against a ceiling, never before: `imagecreatefromstring()`
+allocates for the dimensions the header claims, so decoding first to establish
+validity would **be** the decompression bomb Decision 4 prevents.
+
+**Nothing was exploitable, which is why it survived a phase.** Both consumption
+paths were measured before anything changed: the download sends
+`application/octet-stream` with `nosniff` and `attachment`, and the preview
+re-encodes to fresh pixels — a polyglot produced an **empty** preview rather than
+passing bytes through. The hazard was a stored file waiting for a future reader
+to be less careful than the two that exist.
+
+⚠️ **Two test fixtures were themselves polyglots**: `UploadContentTest`'s `PNG`
+and `JPEG` constants were the signature and nothing else, so every test naming
+"a real PNG" uploaded exactly the shape being attacked. They failed when the
+check landed, and the failure was the check working.
+
+## ADR-042 — File retention: when a customer's upload is deleted, and when it is not
+
+**Status:** accepted (Stage 4e)
+**Context:** M15.4 requires a retention policy *"documented, not implicit"*, and
+names subscription cancellation as *"a real customer-trust question"*.
+
+Uploads are the first thing Optionia stores that is a **file on the merchant's
+disk** rather than a database row. Every other artefact disappears when its row
+does; a file does not, and a file nobody can account for is both a disk problem
+and a data-protection one. This ADR states the whole lifecycle in one place so
+that no mechanism has to be inferred from the code that implements it.
+
+### The rule
+
+**A file lives exactly as long as the thing that refers to it.**
+
+| Event | What happens to the file | Mechanism |
+| --- | --- | --- |
+| Uploaded, never added to a cart | Deleted after 72 hours | `UploadExpirer` |
+| In a cart, cart abandoned | Deleted after 72 hours | `UploadExpirer` |
+| In a cart, cart still live at 72h | **Blocked at checkout**, customer re-uploads | `CheckoutValidator` |
+| Promoted to an order | Kept indefinitely | `UploadPromoter` clears `expires_at` |
+| Order trashed | **Kept** — trashing is reversible | no listener, deliberately |
+| Order deleted permanently | Deleted with the order | `UploadRetention` |
+| Written to disk, row never recorded | Deleted on the next sweep | `UploadSweeper` |
+| Plugin uninstalled with data removal on | Deleted, files and tables | `uninstall.php` |
+| Store disconnected from Optionia | **Kept** | no listener, deliberately |
+| Optionia subscription cancelled | **Kept** | see below |
+
+### Why 72 hours, and why it is not the only guard
+
+`ORPHAN_TTL` is 72 hours because WooCommerce keeps a guest cart for 48, and
+expiring sooner would empty a cart the customer can still see. The margin is
+deliberate — but it is **only a margin**, not a guarantee: a logged-in customer's
+cart lives in `_woocommerce_persistent_cart_*` user meta and does not expire on
+that schedule at all, so it can outlive the file by weeks.
+
+That is why `Integration\CheckoutValidator` re-verifies every file token at
+checkout. The TTL keeps the common case comfortable; the checkout guard is what
+makes the uncommon case safe. Neither alone is sufficient, and a future change
+that shortens the TTL must keep the second.
+
+### Subscription cancellation: the files stay
+
+🔴 **Cancelling an Optionia subscription deletes nothing.** The files are on the
+merchant's own server, under their own `uploads/` directory, and they are their
+customers' print artwork — often the only copy, and often attached to orders not
+yet fulfilled.
+
+Deleting on cancellation would mean a billing event destroying a merchant's
+ability to fulfil orders they have already been paid for. Optionia will not do
+that. A merchant who cancels keeps every file; what they lose is the dashboard
+that configures new options, not the artwork for orders already placed.
+
+The same reasoning covers a **disconnected** store: a connection can drop for a
+bad token or an expired certificate, and artwork must not be collateral damage.
+
+⚠️ **The corollary is that cancellation does not reclaim disk.** A merchant who
+wants the space back uninstalls with data removal enabled, which is an explicit,
+merchant-initiated action with a clear warning — not something a lapsed card
+does on their behalf.
+
+### Deletion on request
+
+Phase 26b owns the GDPR *mechanism* — the request flow, the audit trail, the
+proof. What Phase 15 owes it is that deletion be **possible**, and until Stage 4e
+it was not: nothing ever reset `order_id`, so a promoted file was skipped by
+`UploadExpirer` (`WHERE order_id IS NULL`) and protected by `UploadSweeper` (the
+table knew its name). It was unreachable by every path. `UploadRetention` is that
+missing path, and `UploadRepository::find()` — deliberately not session-bound,
+because the uploading session is long gone — is how a merchant-side caller
+reaches a row at all.
+
+### Rejected: deleting a trashed order's files
+
+Symmetrical with deletion and much simpler to implement. Rejected because
+trashing is *reversible* by design and deleting is not: a merchant who trashes an
+order by mistake restores it and expects the artwork to still be there. Turning a
+recoverable action into an unrecoverable one to save a scheduled sweep is a bad
+trade.
+
+### Rejected: a merchant-configurable retention period
+
+Attractive, and probably right eventually. Rejected for Phase 15 because every
+value a merchant could choose interacts with the checkout guard, the cart
+lifetime and the plan's storage limits, and shipping a setting whose safe range
+is not yet understood is how a merchant ends up deleting artwork they needed.
+Revisit with M15.6's metering, when there is data on what stores actually hold.
+
+## ADR-043 — Storage metering: per store, summed per tenant, backend first
+
+**Status:** accepted (M15.6)
+**Context:** `file_storage_mb` is a plan limit — 100 / 5 000 / 25 000 MB — and
+Phase 24 cannot enforce what nothing measures. `usage_records` existed as an
+entity with **no writer at all**.
+
+### The shape the data forces
+
+🔴 **A per-tenant row cannot be written from a per-store report.** A tenant may
+hold up to ten stores, each with its own uploads table on its own disk, and each
+reports only itself. `usage_records` holds one row per tenant per metric per
+period, so neither obvious write is correct:
+
+```text
+SET value = <store's figure>   -> the last store to heartbeat wins
+SET value = value + <figure>   -> grows on every heartbeat, forever
+```
+
+So each store's **current** figure lives on `stores.storageBytes` — a level,
+overwritten, never accumulated — and `UsageService` re-sums the tenant from those.
+The tenant row becomes a derived number no single store can distort, and a store
+that stops reporting stops contributing rather than freezing its last value in.
+
+⚠️ **Null is "never reported", not "holding nothing".** A plugin older than M15.6
+sends no field, and counting that as zero would shrink a tenant's measured usage
+the moment one store lagged on updates — under-reporting, the direction that lets
+a tenant exceed a limit it was sold. Rounding is up, and any bytes at all report
+at least 1 MB, for the same reason.
+
+### The index had to become unique
+
+⚠️ `ix_usage_tenant_metric` was **not** unique, so an upsert had to be a `SELECT`
+then an `INSERT` — and two stores of one tenant heartbeating together would both
+find nothing and both insert. A business-plan tenant has ten stores checking in
+daily; that race is routine. Made unique so the write is one atomic
+`INSERT ... ON DUPLICATE KEY UPDATE`.
+
+🔴 **The new index is created before the old one is dropped**, and the order is
+not cosmetic: `tenantId` leads the index, so MySQL uses it to satisfy the foreign
+key to `tenants`, and dropping it first fails with `ER_DROP_INDEX_FK` (1553).
+Measured against the running database rather than reasoned about — the first
+attempt failed exactly this way, after already adding the column.
+
+### Backend first, always
+
+🔴 **`forbidNonWhitelisted: true` makes an unknown field a 400, not a discard.**
+That is deliberate — it closes mass assignment — but it means a plugin newer than
+the cloud gets **400 on every heartbeat**, losing the connection state, the
+version report and the schema signal, not merely the new field.
+
+**So the backend ships first, without exception**, for this field and every future
+one. The plugin's half is safe in the other direction: an older cloud simply never
+receives `storage_bytes`, and an older plugin never sends it.
+
+### Why the heartbeat and not an endpoint
+
+Usage is a **level, not an event**. `POST /store/orders` has a queue and retry
+semantics because a missed order is lost; a missed storage figure is superseded by
+tomorrow's heartbeat. A new endpoint would cost a controller, a route, a client
+method and its own retry story to carry one number.
+
+### Measured from the table, never the disk
+
+The upload table is the authority every other mechanism in Phase 15 uses — the
+sweeper, the expirer and retention all decide from it. A directory walk would
+meter bytes the merchant cannot see or delete (a leaked archive, an orphan
+mid-sweep) and would put `O(files)` of disk I/O on a scheduled request.
+
+⚠️ **Claimed and unclaimed alike.** A file promoted to an order occupies the disk
+exactly as much as one waiting in a cart.
+
+### Rejected: rounding to megabytes in the plugin
+
+The limit is written `file_storage_mb`, so reporting megabytes looks natural. It
+would make every store under half a megabyte report **zero**, and the conversion
+belongs where the limit is compared — not in a number thirty thousand stores send
+daily. `bigint` holds bytes comfortably.
+
+---
+
+## ADR-044 — Percentage pricing: of the base, and evaluated in both languages
+
+**Status:** accepted · **Date:** 2026-09-09 · **Milestone:** M16.1
+
+### Context
+
+The published schema has carried `percentage` since Phase 7. Neither
+implementation charged it: the plugin recorded it as unpriced, and the cloud had
+`percentageOf()` — which rounds a percentage — but nothing that turned a
+**price config** into a delta.
+
+That gap was invisible because the shared fixture tested around it.
+`pricing-fixtures.json` gave the summer deltas that were already computed, and
+tested `percentageOf(10, 500) == 1` directly. Nothing tested that a
+`{type: percentage, basis_points: 500}` config on a base of 10 *yields* 1 — the
+one step where two evaluators can disagree while both suites stay green.
+
+### Decision
+
+**1. A percentage is taken of the product's base price, never of a running
+total.** Two 50% options on an 80.00 product add 40.00 each — 160.00, not
+180.00.
+
+Compounding would make the line total depend on the order options are summed in.
+That order is not defined by the schema, is not visible to the customer, and
+would differ between an evaluator iterating the published document and one
+iterating the submitted selection. Of-the-base keeps the sum commutative, which
+is the property the clamp rule in `PRICING-SPEC.md` §3 already relies on.
+
+**2. `basis_points`, integer, never a float percentage.** 12.5% has no integer
+form and `12.5` as a float reintroduces the imprecision minor units exist to
+avoid. 12.5% is `1250`.
+
+**3. A malformed rate contributes nothing AND is reported.** `{type:
+percentage}` with `basis_points` missing or non-integer returns 0 and records
+`percentage` as unpriced. Defaulting to 0 silently would make a broken publish
+indistinguishable from a merchant who meant free — the exact ambiguity that cost
+a merchant 40.00 per unit before the unpriced-types notice existed. Coercing is
+worse: `Number("500") || 0` charges an amount nobody configured.
+
+**4. One authority for "what this build charges."** Three places stated it —
+the evaluator, the cache scanner's warning, and the cart logger — and two were
+bare string literals. `Engine\SelectionResolver::PRICED_TYPES` is now the source;
+the others read it. A warning derived from anything but the code that charges is
+a second opinion about what the first one does. The TypeScript side declares its
+own `PRICED_TYPES` and a spec **reads the PHP constant out of the source** to
+hold them equal, because a hand-copied list agrees with itself.
+
+**5. Storefront preview stays server-only.** `wp_localize_script` sends
+`currency` and `upload` and no base price, so the browser cannot compute a
+percentage. AC3 (never block on the API) and AC4 (identifiers only) both point
+the same way, and the price a customer is charged is the server's.
+
+### Consequences
+
+The shared fixture gained a `config_cases` category — price config plus base to
+expected delta — executed by `PriceConfigDeltaTest` in the plugin and
+`price-config-delta.spec.ts` in the cloud, with both gates requiring **local**
+execution so a case run in one language only fails the other's build.
+
+Verified by mutation rather than assumed: with PHP's rounding alone changed to
+JavaScript's `Math.round` semantics, the PHP suite fails on the named case
+*"a NEGATIVE percentage rounds away from zero, not toward it"* while the
+TypeScript suite stays green. Before this stage that same mutation was invisible
+to both.
+
+Option-**level** `percentage` is still reported as unpriced. `PRICING-SPEC.md`
+prices percentages per value; option-level pricing has no defined meaning there,
+and inventing one independently is how two implementations begin to disagree.
+
+---
+
+## ADR-045 — Option-level pricing: where `per_char` lives, and what a suffix may touch
+
+**Status:** accepted · **Date:** 2026-09-09 · **Milestone:** M16.2, M16.8
+
+### Context
+
+Every price type before `per_char` hangs on a chosen **value**. A text field has
+no values — there is no value row to carry `price_config` — so its price has to
+hang on the **option**. The schema has had an option-level `pricing` column since
+Phase 7 and nothing had ever read it.
+
+Analysing where that price would attach found two defects that had nothing to do
+with `per_char`:
+
+1. **The price freeze was already broken for any line containing a text, date,
+   number or file option.** `$deltas` was appended only in the value branch while
+   `resolved` included those answers too, so `deltas_by_option()` — which pairs
+   them positionally — refused to pair at all. Measured: quoted 85.00, merchant
+   republished, customer charged **130.00**.
+2. **Option-level `pricing` was published unconverted.** Values went through
+   `toPublishedPriceConfig`; options passed through raw, so a `per_char` price
+   would have arrived `camelCase` while the contract documented `snake_case`.
+
+### Decision
+
+**1. `price_config` prices a value; `pricing` prices an option.** `per_char` is
+the only type defined at the option level. A type found in the wrong place
+contributes nothing and is reported, exactly as an unimplemented type is —
+deciding independently what an option-level `fixed` means is how two
+implementations begin to disagree.
+
+That question is asked **per position**, not per type. The plugin carries
+`VALUE_PRICED_TYPES` and `OPTION_PRICED_TYPES` rather than one flat list, because
+*"does this build charge the type"* and *"does it charge it **here**"* are
+different questions — and answering only the first left the cache scanner
+treating a misplaced `per_char` as priced (no notice) while the evaluator
+reported it as unpriced at runtime.
+
+**1b. `per_char` is accepted only on an option the customer types into.** The
+evaluator dispatches on `type` and cannot see what kind of answer an option
+produces, so without this rule it charges for the length of whatever string
+arrives — measured at **32.00** for a 64-character upload token on a file
+option, 5.00 for a date, 2.50 for a number. `hidden` is excluded despite being
+text-valued, because its value is the merchant's own `default_value`.
+
+Enforced in the **type registry**, where the presentation is known and a clear
+error at authoring time beats a silent zero at checkout; and again in the plugin,
+because AC4 makes a published document input rather than authority and one can
+arrive from a stale cache or an older build.
+
+**2. The floor is on the character COUNT, not the delta.**
+
+```text
+delta = max(0, measure(text) - free_characters) * amount_minor
+```
+
+Without it a string shorter than the allowance yields a negative delta — a
+discount for typing less, farmable by leaving the field nearly empty. The floor
+cannot move to the delta instead: `amount_minor` may legitimately be negative
+(that is how a discount is expressed), and `max(0, delta)` would silently discard
+it. §3's line-total clamp stops a negative delta paying out.
+
+**3. One delta per accepted selection, by construction.** `option_delta()`
+returns a delta for every branch that accepts an answer, rather than five
+branches each remembering to append one. It replaced `record_option_pricing()`,
+which returned nothing and left the invariant to chance.
+
+**4. `sku_suffix` is recorded on the order line, never applied to the product.**
+`WC_Product::set_sku()` calls `wc_product_has_unique_sku()` and throws
+`WC_Data_Exception` on a duplicate — and two cart lines of one product with the
+same option produce identical SKUs, so the duplicate is the *normal* case. An
+uncaught throw on `woocommerce_before_calculate_totals` takes cart and checkout
+down, and the call runs a database query per cart line on a hook that fires nine
+times per request. Fulfilment reads the order, so that is where the code lands.
+
+Kept **keyed by option id rather than pre-joined**, because a separator is a
+merchant's convention; **sorted by option id**, so one configuration produces one
+SKU whatever order the form submitted; and written **whether or not the price
+freeze verified**, because a suffix records what was ordered rather than what was
+charged.
+
+### Consequences
+
+`toPublishedOptionPricing()` converts option-level pricing per type, for the same
+reason `toPublishedPriceConfig` does: adding a type should mean deciding its
+document shape, not inheriting one by accident. `CONFIG-CONTRACT.md` states that
+shape, which it never did.
+
+Nine `text_price_cases` in the shared fixture bridge `measure()` and pricing —
+the step neither language had tested. Seven mutants are killed by name across the
+two, and flooring the delta in PHP alone fails the PHP suite while TypeScript
+stays green.
+
+The storefront estimate still shows nothing for a `per_char` option: text
+templates carry no price attributes, because the price is on the option rather
+than on a value the customer clicks. The estimate stays correct — an option with
+no price type is skipped — so this is a missing preview, not a wrong number.
+
+⚠️ **The evaluator alone is not the feature.** M16.2 shipped the arithmetic, the
+shared fixture, the document converter and this ADR while every option type still
+carried `pricingSchema: noTypeLevelPricing` — so a merchant could not save a
+`per_char` price at all, and every test passed because every test exercised code
+behind that gate. Adding a type to `PRICED_TYPES` is not done until the registry
+accepts it, and the registry entry is where its *position* rule lives.
+
+---
+
+## ADR-046 — `per_unit`: a quantity is not money, and the floor is on the quantity
+
+**Status:** accepted · **Date:** 2026-09-09 · **Milestone:** M16.2
+
+### Context
+
+`per_unit` had been deferred since Phase 11 on the grounds that *"nothing
+provides a per-option quantity"*. That was true when written and had stopped
+being true two phases earlier: Phase 14 built `number_field`, `range` and
+`quantity`, and M16.2 built the option-level pricing path. The number already
+reached the evaluator; only the arithmetic was missing.
+
+Re-reading the blocker was the whole of the analysis. **A deferral is a claim
+about the world, and claims go stale.**
+
+### Decision
+
+**1. `per_unit` is an option-level type, beside `per_char`.** M16.2's own
+specification listed it under `price_config` — the value level — and that was
+wrong: a `per_unit` price multiplies a quantity, and the only options producing a
+quantity are the number types, which have no values. On a chosen value it would
+have had nothing to multiply.
+
+The two option-level types are exactly the two whose amount depends on **what the
+customer supplied** rather than on which value they picked.
+
+**2. The floor is on the QUANTITY, not the delta.**
+
+```text
+delta = round(max(0, quantity) * amount_minor)
+```
+
+A customer submitting `-5` would otherwise produce a negative delta — a discount
+for asking for less than nothing, farmable by anyone who can type a minus sign
+into a number field the merchant left unbounded. It cannot move to the delta:
+`amount_minor` may legitimately be negative, which is how a discount option is
+expressed, and `max(0, delta)` would discard every one.
+
+**3. Fractional quantities are allowed.** "£2.50 per metre × 1.5m" is a real
+measurement, and refusing it would make the number types unpriceable for anything
+measured. The product is rounded **half up away from zero** by the shared §4
+rule, immediately — so nothing fractional reaches a total and `sum_deltas()`
+still sees only integers. A merchant wanting whole units sets `integer_only`,
+which the validation rules already enforce; the pricing rule does not
+second-guess that.
+
+This is the one place in the codebase where a float touches a money calculation,
+and the architecture gate now carries a second marker — `quantity-not-money`,
+distinct from `overflow-guard` — because the reasons differ: an overflow guard
+discards its float after comparing, and this one uses it for exactly one
+multiplication.
+
+**4. The quantity is the option's own, never the cart's.** `WC_Cart_Totals`
+computes `price × cart_quantity`, so a delta with the cart quantity folded in is
+multiplied twice. "£2 per centimetre" prices one item of 30cm at £60 whether the
+customer buys one or ten.
+
+**5. No `free_units`.** `per_char` has `free_characters` because a merchant
+absorbing a short engraving is a real intent. A free-unit allowance is a **volume
+discount**, which `tiered` expresses with brackets a merchant can see. Two
+mechanisms for one intent is two places for them to disagree.
+
+**6. Every price shape is `.strict()`.** Found while asserting decision 5: Zod
+strips an unknown key silently, so a merchant setting `freeUnits: 5` saved
+successfully and was charged as though they had set nothing. Nothing wrong is
+stored or charged — the setting evaporates, which is the hardest kind of bug to
+diagnose because the UI accepted it. It also makes a typo in a field a merchant
+*does* have fail loudly rather than quietly charging from the first character.
+
+### Consequences
+
+Ten `unit_price_cases` in the shared fixture hold both evaluators to the same
+answers. Eight mutants are killed by name, and rounding toward positive infinity
+in PHP alone fails the PHP suite while TypeScript stays green.
+
+⚠️ **Two of those cases had to be rewritten before they proved anything.** The
+rounding case used `0.005 × 250 = 1.25` — a fraction of `0.25`, which truncation
+also gets right — and nothing exercised the overflow guard at all. A case named
+after a property does not test that property until its numbers are chosen to make
+the wrong implementation fail.
+
+The quantity is bounded before the multiplication because a number option's
+answer has **no length ceiling** the way text does: a customer can submit
+`1e20`-scale digits wherever the merchant set no `max`, and at the schema's
+maximum amount a quantity near nine million already leaves the safe range. An
+over-range quantity is reported, never raised — an uncaught throw in
+`woocommerce_before_calculate_totals` takes cart and checkout down.
+
+### Amended after audit — the error path, which the first pass got wrong
+
+**7. An uncomputable quantity is REPORTED, not silently zero.** The first
+implementation's catch returned a bare 0 while its docblock claimed otherwise,
+and two things followed. The option became **free** at the boundary — 9,007,199
+charged, 9,007,200 did not, so a customer who asks for more pays less with no
+notice — and the TypeScript twin *did* report it, so the two languages disagreed
+about the same input.
+
+The shared fixture could not see the disagreement: the case is named *"a product
+beyond the safe range **is reported**, not thrown"* and asserted only the delta.
+Both option-level fixture categories now carry `expect_unpriced`, and both
+languages honour it. *"Contributes nothing and says so"* is two claims, and a
+suite that checks one proves half a specification.
+
+**8. A quantity is capped at 1,000,000 whatever the merchant configured.** Text
+has had an absolute ceiling since M11 — 5,000 graphemes a merchant cannot raise —
+because the schema bounds `maxLength`. It leaves a number's `min`/`max`
+unbounded, so `per_unit` had no equivalent: at 2.00 per unit with no `max`, a
+customer typing `9999999999999` produced a line worth **20,000,000,000,078.00**.
+
+A backstop for the *absence* of configuration, not a limit competing with the
+merchant's: a configured `max` is checked first and believed. Mirrored in both
+languages rather than derived, because a ceiling in one is the same class of
+divergence as decision 7. Over it the option is reported — not clamped, which
+would invent a number nobody chose, and not zeroed, which is decision 7's defect
+again.
+
+---
+
+## ADR-047 — `tiered`: brackets on the option's own quantity, chosen by minimum
+
+**Status:** accepted · **Date:** 2026-09-09 · **Milestone:** M16.3
+
+### Context
+
+`tiered` was the last unimplemented price type, and the plan recorded its blocker
+as *"needs an inclusive/exclusive bracket decision"*. The schema had made that
+decision in Phase 7: `next.min > previous.max + 1` is a **gap** error, so tiers
+are contiguous and both bounds inclusive. The second stale blocker in two stages.
+
+The real problem was placement. `tiered` appeared in no type-registry entry, so
+the only place a merchant could save one was a **value** — a radio choice, which
+has no quantity to bracket. It resolved, contributed nothing and reported itself
+unpriced. A merchant could save a tiered price and have it charge nothing.
+
+### Decision
+
+**1. Tiers bracket the OPTION's own number, never the cart quantity.** So
+`tiered` lives where `per_unit` does: on `number_field`, `range` and `quantity`.
+
+The cart-quantity reading is blocked four ways — the architecture gate forbids
+quantity arithmetic in `src/`, `resolve()` takes no quantity, quantity is not in
+the cart key (WooCommerce merges identical lines by incrementing it), and the
+price freeze discards `$quantity` at add-to-cart. Working around four deliberate
+constraints for one price type would be the wrong trade, and ADR-046 had already
+settled the rule for `per_unit`.
+
+⚠️ **"Buy ten of this product, get a discount" is therefore not expressible, and
+will not be.** That is cart-level pricing — WooCommerce's own domain and its
+coupon extensions' — not option pricing. It is also what makes ADR-046's
+deliberate omission of `free_units` coherent: a volume discount is a `tiered`
+price with brackets a merchant can see.
+
+**2. The bracket is chosen by `min_quantity` alone** — the last tier whose
+minimum does not exceed the quantity.
+
+Because the set is contiguous from 1 and ends open-ended, that is the same tier
+`max_quantity` would select for every **whole** number. It differs for a
+fractional one, and that is the reason for the rule: with tiers `1-9` and `10+`,
+a quantity of `9.5` satisfies neither `<= 9` nor `>= 10`, so matching on both
+bounds leaves it unpriced — a customer paying nothing for 9.5 metres of rope.
+`max_quantity` is a cross-check the authoring schema enforces, not a second rule
+the evaluator applies.
+
+Found by verifying the fixture's own arithmetic before writing any evaluator.
+
+**3. Every quantity from 1 upward must be covered.** Gaps *between* tiers were
+refused from the start; gaps at the **ends** were not — `[{min: 5, max: null}]`
+left 1–4 unpriced and `[{1-9}, {10-20}]` left 21 upward. The first tier must now
+start at 1 and the last must be open-ended, with errors naming the quantities
+that would fall through and pointing at the option's own `min`/`max`: a
+validation rule produces a message a customer can act on, where a missing bracket
+produces a price that silently disappears.
+
+**4. `tiered` delegates to `per_unit`'s arithmetic.** It is `per_unit` with the
+amount looked up rather than fixed, so the strict parse, the zero floor,
+`ABSOLUTE_MAX_QUANTITY`, the overflow catch and the `unpriced` reporting all
+apply from one place. Five duplicated guards would be five chances for two types
+to disagree about the same customer input.
+
+**5. A malformed bracket is skipped, not fatal.** The remaining tiers may still
+price the quantity, and refusing the whole set would take a storefront down over
+one bad bracket. A quantity no bracket covers is reported — never charged at a
+nearby rate, which would apply an amount the merchant did not configure for it.
+
+### Consequences
+
+All five published price types are implemented. `UnpricedTypesTest`'s provider,
+which derives its rows from what the evaluator does *not* implement, derived zero
+and tripped its own guard — *"delete this suite rather than let it pass
+vacuously."*
+
+Deleting it would have removed a real guarantee. A published document can carry a
+type this build has never heard of, and **a cloud deployed ahead of a plugin
+update is the ordinary case**. The provider now carries a synthetic
+`from_a_newer_cloud`, which exercises the mechanism the empty derived list no
+longer could.
+
+Six mutants are killed by name across the two languages, and matching on both
+bounds in PHP alone fails the PHP suite on *"a fractional quantity is bracketed
+by its own value"* while TypeScript stays green.
+
+---
+
+## ADR-048 — One store, one currency; and Optionia does not manage stock
+
+**Status:** accepted · **Date:** 2026-09-09 · **Milestone:** M16.7, M16.9
+
+### Context
+
+M16.7 and M16.9 were the only Phase 16 milestones that built nothing. Both state
+a **position** — how option prices behave under a currency switcher, and what
+Optionia does about stock — and stating them found two things nothing asserted.
+
+### Decision
+
+**1. A published amount is in the currency the store used when it was published,
+and is never converted.** The config document carries no currency field by
+design (ADR-013): a number meaning different things in two places is a rounding
+error waiting to reach a merchant's revenue.
+
+Complete for a single-currency store. Under a switcher — WOOCS, Aelia, WPML
+Multicurrency — the price types split two ways, measured against a base
+converted 8000 → 10000:
+
+| Type | Under a switcher |
+|---|---|
+| `percentage` | **converts** — relative to a base the switcher already converted |
+| `fixed`, `per_unit`, `per_char`, `tiered` | do **not** — absolute amounts |
+
+So "gift wrap +£5.00" charges **$5.00** in USD: arithmetically correct,
+materially different.
+
+**Stated rather than fixed, deliberately.** The exchange rate lives inside the
+switcher plugin, each with its own API. Reading one means depending on software
+this project does not control; guessing one means charging a number nobody
+configured. Per-currency amounts would be a schema, dashboard and publishing
+change together — a phase, not a stage.
+
+**A merchant needing currency-relative option pricing has `percentage`**, which
+converts correctly *because* it is relative. Naming that workaround is why the
+limitation is worth stating loudly rather than leaving to discovery.
+
+**2. Optionia does not manage stock.** An option is not a SKU, and modelling
+stock per option combination reintroduces the combinatorial explosion that makes
+variants unusable — the problem this product exists to solve. A free-text
+engraving has no stock; an uploaded file has no stock.
+
+What holds instead: the add-to-cart filter returns any refusal it was handed
+**before** resolving anything, so product-level stock, variation stock, and
+backorder messaging all stay WooCommerce's, untouched. A merchant who needs
+per-option stock is asking for variants and should use variants.
+
+### Consequences
+
+🔴 **The stock guarantee was resting on one line that no test reached.** The
+plugin contains zero stock references — correct — so the whole of M16.9's first
+acceptance criterion is `if ( true !== $passed ) { return (bool) $passed; }`.
+Every existing test passed `true`, and no test anywhere mentioned stock.
+
+The falsy verdicts are now enumerated rather than just `false`, because the
+filter is public and another plugin may return `0`, `null` or `''`. Substituting
+`=== false` fails on exactly the three it would let through.
+
+⚠️ **The first version of that test passed while the guard was deleted** — it
+called `apply_filters` without `register()`, so the filter had no listener and
+returned its input unchanged. Two mutations survived before that was noticed. A
+test that never reaches the code it names proves nothing about it.
+
+🔴 **`wc_get_price_decimals()` was hardcoded to 2 in the harness**, so JPY (0
+decimals) and KWD (3) were untestable while `PRICING-SPEC.md` §6 discussed both.
+The third such stub gap in this phase, after `wc_get_weight()` and
+`wc_get_product()` — both of which concealed real defects.
+
+With it controllable, the consequence is asserted: the same stored integer
+renders as `500`, `5.00` and `0.500` at 0, 2 and 3 decimals. An order's own
+record is immune, because the amount is written as a **string** when the order is
+placed; only live pricing re-derives from minor units, and a cart is priced now
+by definition.
+
+Two `currency_cases` execute the conversion split in both languages, each
+carrying a **pair** of bases — a single base cannot express "does not convert"
+at all.

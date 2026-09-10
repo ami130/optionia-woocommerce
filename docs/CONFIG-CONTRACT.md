@@ -159,8 +159,63 @@ publish, because storefronts must re-fetch after one.
 | `is_required` | bool | |
 | `sort_order` | int | |
 | `default_value` | string | **Omitted when unset.** For non-choice types. |
-| `validation`, `pricing`, `display` | object | Type-specific. **Omitted when unset.** Shapes are per type; `radio` uses none of them. |
+| `validation`, `display` | object | Type-specific. **Omitted when unset.** Shapes are per type; `radio` uses none of them. |
+| `pricing` | object | **Option-level** price. `snake_case`, like `price_config`. **Omitted when unset.** See below. |
 | `values` | array | |
+
+### Option-level `pricing` vs. value-level `price_config`
+
+Two different fields carrying two different things, and a reader must not accept
+one where the other belongs:
+
+| Field | Lives on | Types |
+|---|---|---|
+| `price_config` | a **value** | `fixed`, `percentage` |
+| `pricing` | an **option** | `per_char`, `per_unit`, `tiered` |
+
+An option with no values — text, date, number, file — has no value row to carry
+`price_config`, so its price hangs on the option. `per_char` and `per_unit` are
+the two types `PRICING-SPEC.md` defines there, and they are the two whose amount
+depends on **what the customer supplied** rather than on which value they picked.
+
+```jsonc
+{ "type": "per_char", "amount_minor": 25, "free_characters": 10 }
+{ "type": "per_unit", "amount_minor": 200 }
+{ "type": "tiered",   "tiers": [
+    { "min_quantity": 1,  "max_quantity": 9,    "amount_minor": 100 },
+    { "min_quantity": 10, "max_quantity": null, "amount_minor": 80 }
+]}
+```
+
+Each is accepted only where it means something: `per_char` on `text_field` and
+`textarea`, `per_unit` and `tiered` on `number_field`, `range` and `quantity`.
+The type registry refuses the rest, because an evaluator dispatching on `type`
+alone would otherwise charge for the length of an upload token or bracket a date.
+
+**Tiers cover every quantity from 1 upward.** The first starts at `1`, the last
+is open-ended, and they are contiguous with both bounds inclusive — the schema
+refuses a set with a gap at either end or in the middle, because a quantity no
+bracket covers is a configuration whose behaviour nobody decided. A merchant
+wanting a minimum order sets `min` on the option, which produces a message a
+customer can act on.
+
+⚠️ **`tiered` was a `price_config` type until M16.3**, which made it configurable
+only on a chosen value — a radio, which has no quantity to bracket. A merchant
+could save a tiered price and have it charge nothing.
+
+⚠️ **`per_unit` has no `free_units`**, unlike `per_char`'s `free_characters`. A
+free allowance on a quantity is a volume discount, which `tiered` expresses with
+brackets a merchant can see.
+
+`free_characters` is **always present** for `per_char`, `0` when the merchant set
+none: a reader must tell "charge from the first character" from "never
+configured", even though the two behave identically.
+
+⚠️ **This field was published verbatim until M16.2** — `camelCase`, while the
+document and this contract are `snake_case`. Latent only because the plugin read
+`type` and nothing else, which spells the same either way. The first evaluator to
+read the amount would have found it absent and charged nothing for every
+engraving.
 
 ## Value
 

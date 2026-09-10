@@ -22,6 +22,39 @@ import { AuditLog } from './entities/audit-log.entity';
 
 /** Stable action names. Queried by support, so they do not get renamed casually. */
 export const AuditAction = {
+  /**
+   * Authentication (M6.x).
+   *
+   * 🔴 **These were missing while `AuditService` was already injected into
+   * `auth.module.ts`** — wired and unused, which is the easiest kind of gap to
+   * mistake for coverage. A system that logs who renamed an option value but not
+   * who signed in has its priorities inverted: the sign-in is what an incident
+   * response starts from.
+   *
+   * ## What is recorded, and what is deliberately not
+   *
+   * **`LOGIN_FAILED` carries no password and no reason.** The route answers a
+   * wrong password and an unregistered address identically, on purpose — and an
+   * audit row distinguishing them would rebuild the membership oracle the route
+   * refuses to be, for anyone who can read the log.
+   *
+   * **`refresh` is absent.** It fires on a timer, not on an intent: recording it
+   * would add a row every few minutes per active session and bury the events a
+   * reader is actually looking for. Refresh-token *reuse* is a real signal and is
+   * already logged as a warning by the sessions service, which is where it
+   * belongs — it is an attack indicator, not a user action.
+   *
+   * **`me` is absent** for the same reason: reading your own profile is not an
+   * event.
+   */
+  USER_REGISTERED: 'user.registered',
+  USER_EMAIL_VERIFIED: 'user.email_verified',
+  USER_LOGGED_IN: 'user.logged_in',
+  USER_LOGIN_FAILED: 'user.login_failed',
+  USER_LOGGED_OUT: 'user.logged_out',
+  USER_PASSWORD_RESET_REQUESTED: 'user.password_reset_requested',
+  USER_PASSWORD_RESET: 'user.password_reset',
+
   MEMBER_ROLE_CHANGED: 'member.role_changed',
   MEMBER_REMOVED: 'member.removed',
   MEMBER_INVITED: 'member.invited',
@@ -53,6 +86,19 @@ export const AuditAction = {
   OPTION_VALUE_DELETED: 'option_value.deleted',
   OPTION_VALUE_DUPLICATED: 'option_value.duplicated',
   OPTION_VALUE_DELETE_REFUSED: 'option_value.delete_refused',
+
+  /**
+   * Presentational items (M5.4c).
+   *
+   * Recorded like any other authoring mutation, even though an item asks the
+   * customer nothing and never reaches the pricing engine. It still changes what
+   * a storefront shows, and "who deleted the allergy warning above the flavour
+   * picker" is a support question with real consequences behind it.
+   */
+  PRESENTATIONAL_ITEM_CREATED: 'presentational_item.created',
+  PRESENTATIONAL_ITEM_UPDATED: 'presentational_item.updated',
+  PRESENTATIONAL_ITEM_DELETED: 'presentational_item.deleted',
+  PRESENTATIONAL_ITEM_REORDERED: 'presentational_item.reordered',
 
   /**
    * Store connection transitions (M8.1b).
@@ -122,6 +168,21 @@ export const AuditAction = {
    * this category of product.
    */
   STORE_STATE_MISMATCH: 'store.state_mismatch',
+
+  /**
+   * A store cannot read the documents this cloud is sending (M9.5).
+   *
+   * The plugin refuses a `schema_version` above what its build understands and
+   * keeps its previous copy — correct, and silent: that shop goes on serving
+   * old configuration while its heartbeat, its connection state and its
+   * credential all look healthy. Nothing else in the system says "this merchant
+   * needs to update their plugin".
+   *
+   * Recorded rather than acted on, for the same reason as a state mismatch: the
+   * answer is a merchant updating software the cloud does not control, so this
+   * is an operations item for Phase 26 rather than something to resolve here.
+   */
+  STORE_SCHEMA_UNSUPPORTED: 'store.schema_unsupported',
 
   /**
    * A credential replaced without the store changing state.

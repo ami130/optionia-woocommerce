@@ -67,6 +67,12 @@ describe('connect handshake (e2e)', () => {
       });
   };
 
+  const describeRequest = (body: Record<string, unknown>, bearer = token): request.Test =>
+    request(app.getHttpServer())
+      .post('/v1/connect/requests/describe')
+      .set('Authorization', `Bearer ${bearer}`)
+      .send(body);
+
   const authorize = (body: Record<string, unknown>, bearer = token): request.Test =>
     request(app.getHttpServer())
       .post('/v1/connect/authorize')
@@ -271,6 +277,120 @@ describe('connect handshake (e2e)', () => {
         expect((await initiate({ extra: 'x' })).status).toBe(400);
       });
     });
+  });
+
+  /**
+   * What the approval screen shows before a merchant consents (M13.3).
+   *
+   * 🔴 Nothing exposed the pending request's `siteUrl`, so the screen could only
+   * ask *"approve this?"* without saying **what** — on a screen whose entire
+   * purpose is consent.
+   */
+  describe('describe', () => {
+    it('names the site and plugin asking to connect', async () => {
+      const handshake = await begin();
+
+      const response = await describeRequest({
+        request: handshake.request,
+        state: handshake.state,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.site_url).toBe(handshake.site);
+      expect(response.body.data.plugin_version).toBe('1.0.0');
+      expect(typeof response.body.data.expires_at).toBe('string');
+    }, 30_000);
+
+    /**
+     * **A read, not a claim.** A merchant may reload the approval screen; only
+     * `authorize` consumes the request.
+     */
+    it('does not consume the request', async () => {
+      const handshake = await begin();
+
+      await describeRequest({ request: handshake.request, state: handshake.state }).expect(200);
+      await describeRequest({ request: handshake.request, state: handshake.state }).expect(200);
+
+      const approved = await authorize({
+        request: handshake.request,
+        state: handshake.state,
+      });
+
+      expect(approved.status).toBe(200);
+    }, 30_000);
+
+    /**
+     * 🔴 **The `state` is what stops this being an oracle.**
+     *
+     * A pending request has **no tenant** — `tenantId` is written at `authorize`
+     * — so tenant scoping cannot protect it, and a read keyed on the id alone
+     * would let any signed-in user walk UUIDs and collect merchants' site URLs.
+     * Holding the id must not be enough.
+     */
+    it('refuses a correct id with the wrong state', async () => {
+      const handshake = await begin();
+
+      const response = await describeRequest({ request: handshake.request, state: digest() });
+
+      expect(response.status).toBe(404);
+      expect(JSON.stringify(response.body)).not.toContain(handshake.site);
+    }, 30_000);
+
+    /**
+     * **Every refusal is the same 404**, and the body never names a site.
+     *
+     * Distinguishing unknown from expired from already-approved would restore
+     * the enumeration this endpoint is shaped to prevent — and unlike
+     * `authorize`, this one *returns data*, so the prize for guessing is a
+     * merchant's URL.
+     */
+    it('answers unknown, approved and wrong-state identically', async () => {
+      const handshake = await begin();
+
+      const unknown = await describeRequest({
+        request: '00000000-0000-4000-8000-000000000000',
+        state: handshake.state,
+      });
+
+      const wrongState = await describeRequest({ request: handshake.request, state: digest() });
+
+      await authorize({ request: handshake.request, state: handshake.state }).expect(200);
+      const alreadyApproved = await describeRequest({
+        request: handshake.request,
+        state: handshake.state,
+      });
+
+      for (const response of [unknown, wrongState, alreadyApproved]) {
+        expect(response.status).toBe(404);
+        expect(response.body.error.code).toBe(unknown.body.error.code);
+        expect(response.body.error.message).toBe(unknown.body.error.message);
+      }
+    }, 60_000);
+
+    it('refuses an expired request', async () => {
+      const handshake = await begin();
+
+      await harness.dataSource.query(
+        `UPDATE store_connection_codes SET requestExpiresAt = DATE_SUB(NOW(3), INTERVAL 1 MINUTE)
+          WHERE id = ?`,
+        [handshake.request],
+      );
+
+      await describeRequest({ request: handshake.request, state: handshake.state }).expect(404);
+    }, 30_000);
+
+    it('refuses an unauthenticated caller', async () => {
+      const handshake = await begin();
+
+      await request(app.getHttpServer())
+        .post('/v1/connect/requests/describe')
+        .send({ request: handshake.request, state: handshake.state })
+        .expect(401);
+    }, 30_000);
+
+    it('refuses a malformed request id', async () => {
+      await describeRequest({ request: 'not-a-uuid', state: digest() }).expect(400);
+    }, 30_000);
   });
 
   describe('authorize', () => {
@@ -932,6 +1052,79 @@ describe('connect handshake (e2e)', () => {
 
       expect(reconnect).toBeDefined();
       expect(reconnect.action).toBe('store.reconnect_authorized');
+    });
+  });
+
+  /**
+   * Where the cloud pushes "new configuration is available" (M9.4).
+   *
+   * Validated here because `initiate` is where it arrives. That it reaches the
+   * *store* is asserted in `phase-8-acceptance`, which runs a full handshake.
+   */
+  describe('the push URL', () => {
+    /**
+     * It must share the site's origin, for longer-lived reasons than `callback`.
+     *
+     * `callback` receives one code and expires with the handshake. This is
+     * stored on the store and receives every push from then on — an attacker
+     * who slipped in their own host would be told whenever that merchant
+     * publishes, indefinitely.
+     */
+    it('is refused when it points at another origin', async () => {
+      const response = await initiate({
+        push_url: 'https://attacker.example.com/wp-json/optionia/v1/push',
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    /**
+     * A prefix check would accept `https://shop.example.com.evil.test`, which is
+     * a different host — the same trap the callback check documents.
+     */
+    it('is refused when the origin merely starts with the site URL', async () => {
+      const site = nextSite();
+
+      const response = await initiate({
+        site_url: site,
+        push_url: `${site}.evil.test/wp-json/optionia/v1/push`,
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    /** Must be absolute https, like every other URL this endpoint accepts. */
+    it('is refused when it is not https', async () => {
+      const site = nextSite();
+
+      const response = await initiate({
+        site_url: site,
+        push_url: site.replace('https://', 'http://') + '/wp-json/optionia/v1/push',
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    /**
+     * A plugin build predating the route still connects.
+     *
+     * The push is a latency improvement over the fifteen-minute pull, so a store
+     * without one is behind by minutes rather than broken. Refusing the
+     * handshake would turn an optional optimisation into a hard dependency.
+     */
+    it('is optional', async () => {
+      expect((await initiate()).status).toBe(200);
+    });
+
+    it('is accepted when it shares the site origin', async () => {
+      const site = nextSite();
+
+      const response = await initiate({
+        site_url: site,
+        push_url: `${site}/wp-json/optionia/v1/push`,
+      });
+
+      expect(response.status).toBe(200);
     });
   });
 });

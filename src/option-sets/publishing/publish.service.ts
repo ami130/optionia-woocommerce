@@ -7,12 +7,12 @@ import { getUserId } from '../../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../../common/database/base.entity';
 import { OptionSetStatus } from '../../common/database/enums';
 import { DomainException } from '../../common/errors/domain.exception';
+import { ConfigVersionService } from '../../common/config-version.service';
 import { assertVersionMatches } from '../optimistic-lock';
 import { OptionRule } from '../entities/option-rule.entity';
 import { OptionSetAssignment } from '../entities/option-set-assignment.entity';
 import { OptionSetVersion } from '../entities/option-set-version.entity';
 import { OptionSet } from '../entities/option-set.entity';
-import { Store } from '../../stores/entities/store.entity';
 import { OptionSetTreeLoader } from '../serialization/option-set-tree.loader';
 import { OptionSetSerializer } from '../serialization/option-set.serializer';
 import {
@@ -66,6 +66,7 @@ export class PublishService {
     private readonly trees: OptionSetTreeLoader,
     private readonly serializer: OptionSetSerializer,
     private readonly audit: AuditService,
+    private readonly configVersion: ConfigVersionService,
   ) {}
 
   /**
@@ -142,7 +143,7 @@ export class PublishService {
         }),
       );
 
-      const configVersion = await this.bumpStoreConfigVersion(manager, set.storeId);
+      const configVersion = await this.configVersion.bump(manager, set.storeId);
 
       await manager.update(
         OptionSet,
@@ -275,7 +276,7 @@ export class PublishService {
         }),
       );
 
-      const configVersion = await this.bumpStoreConfigVersion(manager, set.storeId);
+      const configVersion = await this.configVersion.bump(manager, set.storeId);
 
       await manager.update(
         OptionSet,
@@ -346,21 +347,7 @@ export class PublishService {
    * rather than read-then-written, so two sets publishing to one store cannot
    * land on the same number and leave one document unreachable.
    */
-  private async bumpStoreConfigVersion(
-    manager: EntityManager,
-    storeId: string,
-  ): Promise<number> {
-    await manager
-      .createQueryBuilder()
-      .update(Store)
-      .set({ configVersion: () => 'configVersion + 1' } as never)
-      .where('id = :id', { id: storeId })
-      .execute();
 
-    const store = await manager.findOne(Store, { where: { id: storeId } });
-
-    return Number(store?.configVersion ?? 0);
-  }
 
   /** Everything the checks need, loaded once. */
   private async context(optionSetId: string): Promise<PublishContext> {

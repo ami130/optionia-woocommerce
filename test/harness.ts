@@ -1,3 +1,4 @@
+import * as compression from 'compression';
 import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { config as loadDotenv } from 'dotenv';
@@ -84,6 +85,16 @@ export async function bootstrapTestApp(
   const context = new RequestContextMiddleware();
 
   app.use(context.use.bind(context));
+
+  /**
+   * The same compression `main.ts` installs, with the same threshold.
+   *
+   * A harness that skipped it would leave every assertion about response
+   * encoding untestable — and M9.1 requires the config document to be gzipped,
+   * so "untestable" would mean "unverified" for a stated requirement.
+   */
+  app.use(compression({ threshold: 1024 }));
+
   app.setGlobalPrefix('v1', { exclude: ['health'] });
   app.useGlobalPipes(
     new ValidationPipe({
@@ -139,9 +150,21 @@ export async function createHarness(namespace: string): Promise<Harness> {
       .send({ email, password: PASSWORD, name: which, tenantName: `${namespace}-${which}` });
 
     if (registered.status !== 202 && registered.status !== 201) {
+      /*
+       * ⚠️ **The body alone is not enough when this fails.**
+       *
+       * An empty body here means the response was *truncated*, not refused —
+       * every error this API produces carries `{error, meta}`. Content type and
+       * raw text distinguish the two, and without them a truncated response
+       * reads as a routing answer. That cost several audits: `404 {}` was read
+       * as "route not found" when the real fault was a double write further up
+       * the stack (see `ApiResponseInterceptor`).
+       */
       throw new Error(
         `Harness failed to register ${email}: ${registered.status} ` +
-          `${JSON.stringify(registered.body?.error ?? registered.body)}`,
+          `${JSON.stringify(registered.body?.error ?? registered.body)} ` +
+          `ctype=${JSON.stringify(registered.headers?.['content-type'])} ` +
+          `raw=${JSON.stringify(String(registered.text ?? '').slice(0, 200))}`,
       );
     }
 
@@ -243,9 +266,7 @@ export async function createHarness(namespace: string): Promise<Harness> {
     // a suite passing a tenant name of its own.
     await deleteTenantsFor(dataSource, namespace);
 
-    await dataSource.query(
-      `DELETE FROM email_deliveries WHERE recipient LIKE '${namespace}-%'`,
-    );
+    await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${namespace}-%'`);
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${namespace}-%'`);
     await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${namespace}-%'`);
   }
@@ -259,6 +280,38 @@ export async function createHarness(namespace: string): Promise<Harness> {
     cleanup,
     close: () => app.close(),
   };
+}
+
+/**
+ * The access token from a login response, or a failure naming the status.
+ *
+ * 🔴 **An unchecked login is how a permission test passes for the wrong
+ * reason.** A throttled login returns 429, `body.data` is undefined, the token
+ * becomes `undefined`, and every request after it goes out as
+ * `Bearer undefined` — so a test asserting "a viewer may read" fails with a
+ * routing error, and one asserting "a viewer may not write" **passes without
+ * sending a credential at all**.
+ *
+ * `createHarness` has guarded this since it was written. Six inline logins
+ * across four suites had not, and between them they account for several
+ * failures previously filed as environmental: 4 of 78 logins in one gate run
+ * came back 429.
+ *
+ * Exported so the next inline login has somewhere to go that is shorter than
+ * writing the check again.
+ *
+ * @param response The login response.
+ * @param email Whose login it was, for the failure message.
+ */
+export function tokenFrom(response: request.Response, email: string): string {
+  if (response.status !== 200) {
+    throw new Error(
+      `Failed to sign in ${email}: ${response.status} ` +
+        `${JSON.stringify(response.body?.error ?? response.body)}`,
+    );
+  }
+
+  return response.body.data.accessToken as string;
 }
 
 /**
@@ -299,8 +352,7 @@ export function idOf(response: request.Response, what: string): string {
 
 /** Authenticated request builders, so a suite does not repeat the header. */
 export function client(app: INestApplication, token: string) {
-  const auth = (test: request.Test): request.Test =>
-    test.set('Authorization', `Bearer ${token}`);
+  const auth = (test: request.Test): request.Test => test.set('Authorization', `Bearer ${token}`);
 
   return {
     get: (path: string) => auth(request(app.getHttpServer()).get(`/v1${path}`)),

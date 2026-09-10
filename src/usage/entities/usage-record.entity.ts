@@ -11,7 +11,13 @@ import { Tenant } from '../../tenants/entities/tenant.entity';
  * counter here — a limit that cannot be measured cannot be sold.
  */
 @Entity('usage_records')
-@Index('ix_usage_tenant_metric', ['tenantId', 'metric', 'periodStart'])
+/*
+ * ⚠️ **Unique, so the write can be atomic.** Without it an upsert is a `SELECT`
+ * then an `INSERT`, and two stores of one tenant heartbeating together both find
+ * nothing and both insert. A business-plan tenant has ten stores checking in
+ * daily, so that race is routine rather than theoretical.
+ */
+@Index('uq_usage_tenant_metric', ['tenantId', 'metric', 'periodStart'], { unique: true })
 export class UsageRecord extends BaseEntity {
   @Column({ type: 'char', length: 36 })
   tenantId: string;

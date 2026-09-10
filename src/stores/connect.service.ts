@@ -13,7 +13,12 @@ import {
 } from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
-import { AuthorizeDto, ExchangeDto, InitiateDto } from './dto/connect.dto';
+import {
+  AuthorizeDto,
+  DescribeRequestDto,
+  ExchangeDto,
+  InitiateDto,
+} from './dto/connect.dto';
 import { StoreStateService } from './store-state.service';
 
 /** A pending request lives 30 minutes — a human signs up and reads a screen. */
@@ -28,6 +33,19 @@ export interface InitiateResult {
 
 export interface AuthorizeResult {
   readonly redirect_url: string;
+}
+
+/**
+ * What the approval screen shows before the merchant consents.
+ *
+ * `plugin_version` is nullable because a plugin build predating that field sends
+ * none, and a store connecting from one is legitimate rather than suspect.
+ */
+export interface DescribeRequestResult {
+  readonly site_url: string;
+  readonly plugin_version: string | null;
+  /** So the screen can say how long is left rather than failing silently. */
+  readonly expires_at: string;
 }
 
 export interface ExchangeResult {
@@ -81,17 +99,35 @@ export class ConnectService {
       );
     }
 
+    const pushUrl = dto.push_url?.trim() || null;
+
+    /**
+     * The push URL is held to the same rule, for a longer-lived reason.
+     *
+     * `callback` receives one code and expires with the handshake. This is
+     * stored on the store and receives every configuration push from then on —
+     * so an attacker who slipped in their own host would not intercept a single
+     * code, they would be told whenever that merchant publishes, indefinitely.
+     */
+    if (pushUrl !== null && originOf(pushUrl) !== originOf(siteUrl)) {
+      throw new DomainException(
+        ErrorCode.VALIDATION_FAILED,
+        'push_url must share an origin with site_url.',
+      );
+    }
+
     const id = uuidv7();
 
     await this.dataSource.query(
       `INSERT INTO store_connection_codes
-         (id, createdAt, updatedAt, siteUrl, callback, stateHash, challenge,
+         (id, createdAt, updatedAt, siteUrl, callback, pushUrl, stateHash, challenge,
           pluginVersion, requestExpiresAt)
-       VALUES (?, NOW(3), NOW(3), ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, NOW(3), NOW(3), ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         siteUrl,
         callback,
+        pushUrl,
         hashToken(dto.state),
         dto.challenge,
         dto.plugin_version ?? null,
@@ -121,6 +157,61 @@ export class ConnectService {
    * The only step with a human in it, and the only one that decides *which*
    * workspace a site joins.
    */
+  /**
+   * What a pending request is asking for, so the merchant can see it.
+   *
+   * ## The gap this closes
+   *
+   * `authorize` took `{request, state}` and returned `{redirect_url}`, and
+   * nothing exposed the `siteUrl` the row has held all along. The approval
+   * screen could therefore only ask *"approve this?"* without saying **what** —
+   * on a screen whose entire purpose is consent. A merchant handed a link would
+   * approve a connection to a site they could not see named.
+   *
+   * ## The refusal is deliberately indistinguishable
+   *
+   * Unknown, expired, already approved, and wrong `state` all answer the same
+   * `404`. Anything more specific turns this into an oracle: a caller could walk
+   * request ids and learn which exist, and — worse than on `authorize` — this
+   * endpoint *returns data*, so the answer would be a merchant's site URL.
+   *
+   * `state` is compared with `tokensMatch()` for the same reason `authorize`
+   * does: the correct comparison costs nothing, and leaving one site on `!==` is
+   * what makes a helper look decorative.
+   *
+   * ## Nothing is written
+   *
+   * A read, expressed as a `POST` because its input is a credential and a secret
+   * in a query string lands in browser history, `Referer` headers and logs.
+   * Calling it does not consume the request — the merchant may reload the
+   * approval screen, and only `authorize` claims it.
+   */
+  async describe(dto: DescribeRequestDto): Promise<DescribeRequestResult> {
+    const [request] = await this.dataSource.query(
+      `SELECT siteUrl, pluginVersion, stateHash, requestExpiresAt, approvedAt
+         FROM store_connection_codes WHERE id = ? LIMIT 1`,
+      [dto.request],
+    );
+
+    if (
+      !request ||
+      request.approvedAt !== null ||
+      new Date(request.requestExpiresAt).getTime() <= Date.now() ||
+      !tokensMatch(hashToken(dto.state), request.stateHash)
+    ) {
+      throw new DomainException(
+        ErrorCode.NOT_FOUND,
+        'That connection request is no longer valid. Start again from WordPress.',
+      );
+    }
+
+    return {
+      site_url: request.siteUrl,
+      plugin_version: request.pluginVersion ?? null,
+      expires_at: new Date(request.requestExpiresAt).toISOString(),
+    };
+  }
+
   async authorize(dto: AuthorizeDto, tenantId: string): Promise<AuthorizeResult> {
     const [request] = await this.dataSource.query(
       `SELECT id, siteUrl, callback, stateHash, requestExpiresAt, approvedAt
@@ -187,6 +278,7 @@ export class ConnectService {
         manager,
         tenantId,
         request.siteUrl,
+        request.pushUrl ?? null,
       );
 
       await manager.query(`UPDATE store_connection_codes SET storeId = ? WHERE id = ?`, [
@@ -364,6 +456,7 @@ export class ConnectService {
     manager: EntityManager,
     tenantId: string,
     siteUrl: string,
+    pushUrl: string | null,
   ): Promise<{ storeId: string; reconnected: boolean }> {
     const existing: Array<{ id: string }> = await manager.query(
       `SELECT id FROM stores WHERE tenantId = ? AND storeUrl = ? LIMIT 1`,
@@ -392,6 +485,20 @@ export class ConnectService {
         throw ConnectService.invalidRequest();
       }
 
+      /**
+       * Refresh the push URL on every reconnect.
+       *
+       * A store connected before the push route existed has none, and would
+       * never gain one — reconnecting is exactly when a merchant has upgraded
+       * the plugin. Written unconditionally rather than only when null, because
+       * a site that moved to a new address sends a different URL and the stale
+       * one would go on being pushed to.
+       */
+      await manager.query(`UPDATE stores SET pushUrl = ?, updatedAt = NOW(3) WHERE id = ?`, [
+        pushUrl,
+        existing[0].id,
+      ]);
+
       return { storeId: existing[0].id, reconnected: true };
     }
 
@@ -399,9 +506,9 @@ export class ConnectService {
 
     await manager.query(
       `INSERT INTO stores
-         (id, createdAt, updatedAt, tenantId, platform, name, storeUrl, status, configVersion)
-       VALUES (?, NOW(3), NOW(3), ?, ?, ?, ?, ?, 0)`,
-      [storeId, tenantId, StorePlatform.WOOCOMMERCE, hostOf(siteUrl), siteUrl, StoreStatus.CONNECTING],
+         (id, createdAt, updatedAt, tenantId, platform, name, storeUrl, status, configVersion, pushUrl)
+       VALUES (?, NOW(3), NOW(3), ?, ?, ?, ?, ?, 0, ?)`,
+      [storeId, tenantId, StorePlatform.WOOCOMMERCE, hostOf(siteUrl), siteUrl, StoreStatus.CONNECTING, pushUrl],
     );
 
     return { storeId, reconnected: false };

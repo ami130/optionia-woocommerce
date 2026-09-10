@@ -1,4 +1,13 @@
-import { Body, Controller, HttpCode, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
@@ -9,7 +18,12 @@ import { CapabilityGuard } from '../auth/permissions/capability.guard';
 import { RequireCapability } from '../auth/permissions/require-capability.decorator';
 import { ApiErrors } from '../common/openapi/api-errors.decorator';
 import { RotateCredentialDto } from './dto/connect.dto';
-import { StoresService, type DisconnectResult, type RotateResult } from './stores.service';
+import {
+  StoresService,
+  type DisconnectResult,
+  type RotateResult,
+  type StoreSummary,
+} from './stores.service';
 
 /**
  * Store ownership acts (M8.6).
@@ -23,6 +37,39 @@ import { StoresService, type DisconnectResult, type RotateResult } from './store
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class StoresController {
   constructor(private readonly service: StoresService) {}
+
+  /**
+   * Every store this tenant has connected, with its health (M13.3).
+   *
+   * The dashboard's store screen reads this: last seen, config version, and the
+   * plugin/WP/WC/PHP versions support asks for first. `STORES_VIEW` rather than
+   * `STORES_CONNECT` — seeing that a store went quiet three days ago should not
+   * require the capability to disconnect it.
+   *
+   * Unpaginated, deliberately. A tenant has a handful of stores, and the plan
+   * caps them per plan tier; adding a cursor here would be paging over a list
+   * that fits on one screen.
+   */
+  @Get()
+  @RequireCapability(Capability.STORES_VIEW)
+  @ApiErrors(200, 401, 403, 429)
+  async list(): Promise<StoreSummary[]> {
+    return this.service.list();
+  }
+
+  /**
+   * One store.
+   *
+   * Another tenant's id answers **404, not 403** — the same answer as an id that
+   * does not exist, so a caller cannot walk ids to discover what belongs to
+   * someone else (ADR-010).
+   */
+  @Get(':id')
+  @RequireCapability(Capability.STORES_VIEW)
+  @ApiErrors(200, 401, 403, 404, 429)
+  async get(@Param('id', ParseUUIDPipe) id: string): Promise<StoreSummary> {
+    return this.service.get(id);
+  }
 
   /**
    * Disconnect a store, revoking every live credential.

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
-import { bootstrapTestApp, idOf } from './harness';
+import { bootstrapTestApp, idOf, tokenFrom } from './harness';
 
 
 /**
@@ -83,6 +83,16 @@ describe('option authoring (e2e)', () => {
     const login = await request(app.getHttpServer())
       .post('/v1/auth/login')
       .send({ email, password: PASSWORD });
+
+    if (login.status !== 200) {
+      // See the note in `guards.e2e-spec.ts`: an unchecked login turns a
+      // throttled request into `Bearer undefined`, and a permission test that
+      // sends no credential can pass for the wrong reason.
+      throw new Error(
+        `Failed to sign in ${email}: ${login.status} ` +
+          `${JSON.stringify(login.body?.error ?? login.body)}`,
+      );
+    }
 
     return login.body.data.accessToken as string;
   }
@@ -255,8 +265,7 @@ describe('option authoring (e2e)', () => {
 
     it('soft-deletes a group and hides it from the list', async () => {
       const set = await seedSetForA();
-      const id = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'Doomed' })).body.data
-        .id as string;
+      const id = idOf(await post(tokenA, `/option-sets/${set}/groups`, { label: 'Doomed' }), 'group');
 
       expect((await del(tokenA, `/groups/${id}`)).status).toBe(204);
       expect((await get(tokenA, `/groups/${id}`)).status).toBe(404);
@@ -314,6 +323,56 @@ describe('option authoring (e2e)', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error.code).toBe('VALIDATION_FAILED');
+    }, 30_000);
+
+    /**
+     * 🔴 **A text field is created with the axes the registry declares.**
+     *
+     * `text`/`none`, not `choice`/`one` — the first registered type where those
+     * differ, so this is what proves the defaulting reads the entry rather than
+     * assuming every option is a choice.
+     */
+    it('creates a text field with text axes and no values', async () => {
+      const group = await newGroup();
+      const created = await post(tokenA, `/groups/${group}/options`, {
+        key: 'engraving',
+        label: 'Engraving',
+        presentation: 'text_field',
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body.data.valueKind).toBe('text');
+      expect(created.body.data.cardinality).toBe('none');
+    }, 30_000);
+
+    /**
+     * 🔴 **Values on a valueless type are refused at creation, not at publish.**
+     *
+     * `takesValues` had exactly one reader — the publish check, which *skips* an
+     * option declaring `false` so a text field is not reported as "no values".
+     * Nothing stopped values being created on one, and the two together were
+     * worse than either alone: a merchant could add three values, publish would
+     * deliberately look past them, and the storefront would render an input that
+     * ignores them. Rows that exist, validate, publish, and mean nothing.
+     */
+    it('refuses values on a type that takes none', async () => {
+      const group = await newGroup();
+      const option = idOf(
+        await post(tokenA, `/groups/${group}/options`, {
+          key: 'engraving_novalues',
+          label: 'Engraving',
+          presentation: 'text_field',
+        }),
+        'option',
+      );
+
+      const response = await post(tokenA, `/options/${option}/values`, {
+        valueKey: 'nope',
+        label: 'Nope',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.details[0].code).toBe('TYPE_TAKES_NO_VALUES');
     }, 30_000);
 
     it('refuses a duplicate key in one group', async () => {
@@ -493,6 +552,48 @@ describe('option authoring (e2e)', () => {
 
       expect(created.status).toBe(201);
       expect(created.body.data.priceAmountMinor).toBe(-500);
+    }, 30_000);
+
+    /**
+     * 🔴 **The rejection case was covered and the acceptance case was not.**
+     *
+     * `colorHex` and `imageUrl` have been in the DTO since Phase 7, and a
+     * malformed hex was asserted to fail — but nothing proved a **valid** one is
+     * stored and returned. Measured 2026-09-03:
+     * `SELECT COUNT(*) FROM option_values WHERE colorHex IS NOT NULL` was **0**
+     * across every test run this project has ever made.
+     *
+     * A field that has never held a value is a field nobody has used, however
+     * carefully it is validated.
+     */
+    it('stores a valid colour and an image, and returns them', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'swatched');
+
+      const created = await post(tokenA, `/options/${option}/values`, {
+        valueKey: 'lux',
+        label: 'Luxury',
+        colorHex: '#1a2b3c',
+        imageUrl: 'https://example.test/lux.png',
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body.data.colorHex).toBe('#1a2b3c');
+      expect(created.body.data.imageUrl).toBe('https://example.test/lux.png');
+    }, 30_000);
+
+    /** Absent, not blank: a choice type that is not a swatch has no colour. */
+    it('accepts a value with neither', async () => {
+      const group = await newGroup();
+      const option = await newOption(group, 'plain');
+
+      const created = await post(tokenA, `/options/${option}/values`, {
+        valueKey: 'std',
+        label: 'Standard',
+      });
+
+      expect(created.status).toBe(201);
+      expect(created.body.data.colorHex ?? null).toBeNull();
     }, 30_000);
 
     it('rejects a malformed colour', async () => {
@@ -697,10 +798,8 @@ describe('option authoring (e2e)', () => {
   describe('reorder', () => {
     it('applies new sort orders in one request', async () => {
       const set = await seedSetForA();
-      const one = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'One' })).body.data
-        .id as string;
-      const two = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'Two' })).body.data
-        .id as string;
+      const one = idOf(await post(tokenA, `/option-sets/${set}/groups`, { label: 'One' }), 'group');
+      const two = idOf(await post(tokenA, `/option-sets/${set}/groups`, { label: 'Two' }), 'group');
 
       const response = await post(tokenA, `/option-sets/${set}/reorder`, {
         groups: [
@@ -725,8 +824,7 @@ describe('option authoring (e2e)', () => {
         await post(tokenB, `/option-sets/${foreignSet}/groups`, { label: 'Theirs' }),
         'foreign group',
       );
-      const mine = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'Mine' })).body.data
-        .id as string;
+      const mine = idOf(await post(tokenA, `/option-sets/${set}/groups`, { label: 'Mine' }), 'group');
       const before = (await get(tokenA, `/option-sets/${set}/groups`)).body.data[0].sortOrder;
 
       const response = await post(tokenA, `/option-sets/${set}/reorder`, {
@@ -1093,8 +1191,7 @@ describe('option authoring (e2e)', () => {
       const set = await seedSetForA();
       const start = await rowVersionOf(set);
 
-      const group = (await post(tokenA, `/option-sets/${set}/groups`, { label: 'Child' })).body.data
-        .id as string;
+      const group = idOf(await post(tokenA, `/option-sets/${set}/groups`, { label: 'Child' }), 'group');
       const afterGroup = await rowVersionOf(set);
 
       const option = await newOption(group, 'child_option');
@@ -1165,15 +1262,39 @@ describe('option authoring (e2e)', () => {
           [`${NS}-viewer`, email],
         );
 
-        const owner = (
+        const owner = tokenFrom(
           await request(app.getHttpServer())
             .post('/v1/auth/login')
-            .send({ email, password: PASSWORD })
-        ).body.data.accessToken as string;
+            .send({ email, password: PASSWORD }),
+          email,
+        );
 
         viewerSet = await seedSet('viewer');
-        group = (await post(owner, `/option-sets/${viewerSet}/groups`, { label: 'V' })).body.data
-          .id as string;
+
+        /**
+         * `idOf` on **every** fixture, not just the option.
+         *
+         * 🔴 Fixed 2026-09-02. `group` and `value` read `.body.data.id`
+         * directly, so a create answered anything but `201` yielded `undefined`
+         * rather than failing. The request then went to `/values/undefined`,
+         * which matches no route, and the assertion below blamed *authorization*
+         * for a fixture that was never built:
+         *
+         * ```text
+         * ● a viewer › is refused DELETE /values/:id
+         *     Expected: 403
+         *     Received: 404
+         * ```
+         *
+         * Unreproducible alone, and it named the wrong subsystem — exactly the
+         * failure `idOf`'s own docblock describes as having appeared in five
+         * suites. `option` was already guarded, which is why the same
+         * `beforeAll` failed at the value and not the option.
+         */
+        group = idOf(
+          await post(owner, `/option-sets/${viewerSet}/groups`, { label: 'V' }),
+          'group',
+        );
         option = idOf(
           await post(owner, `/groups/${group}/options`, {
             key: 'vk',
@@ -1182,8 +1303,10 @@ describe('option authoring (e2e)', () => {
           }),
           'option',
         );
-        value = (await post(owner, `/options/${option}/values`, { valueKey: 'vv', label: 'V' })).body
-          .data.id as string;
+        value = idOf(
+          await post(owner, `/options/${option}/values`, { valueKey: 'vv', label: 'V' }),
+          'value',
+        );
 
         await dataSource.query(
           `UPDATE tenant_members tm JOIN users u ON u.id = tm.userId
@@ -1191,11 +1314,12 @@ describe('option authoring (e2e)', () => {
           [email],
         );
 
-        viewerToken = (
+        viewerToken = tokenFrom(
           await request(app.getHttpServer())
             .post('/v1/auth/login')
-            .send({ email, password: PASSWORD })
-        ).body.data.accessToken as string;
+            .send({ email, password: PASSWORD }),
+          email,
+        );
       }, 120_000);
 
       it.each<[string, () => request.Test]>([

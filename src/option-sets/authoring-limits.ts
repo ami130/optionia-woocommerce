@@ -22,6 +22,15 @@ export const AUTHORING_LIMITS = {
   groupsPerSet: 100,
   /** Options in one group. */
   optionsPerGroup: 200,
+
+  /**
+   * Headings, paragraphs and dividers in one group.
+   *
+   * Lower than `optionsPerGroup` deliberately: presentational items exist to
+   * make a long form readable, and a group needing fifty headings is a group
+   * that should have been several groups.
+   */
+  itemsPerGroup: 50,
   /** Values on one option. */
   valuesPerOption: 500,
 } as const;

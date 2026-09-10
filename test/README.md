@@ -76,3 +76,56 @@ Two habits follow:
 
 `npm run check` exits non-zero in this case, so CI is not fooled — but a human
 reading the summary line is.
+
+## Mutation testing: use `bin/mutate.sh`, not a hand-rolled probe
+
+The section above is not theoretical. A hand-rolled probe grepping
+`Tests: N failed` reported a mutant as **surviving** when it had died: the
+mutation broke *compilation*, so the run reported `611 passed` with zero
+failures and two suites that never executed.
+
+That is the worst possible failure for a coverage measurement — it says a code
+path is untested when it is tested, and the natural response is to write a test
+for something already covered.
+
+```bash
+bin/mutate.sh <baseline-total> <file> <search> <replace> -- <command...>
+
+bin/mutate.sh 645 src/option-sets/serialization/option-config.ts \
+  "maxLength: 'max_length'," '' -- npx jest --silent
+```
+
+It reports `KILLED` on any of three signals — non-zero exit, failing tests, or
+**a total below the baseline** — and `INVALID` when the search text is absent,
+because a mutation that never applied is not a survivor. The file is restored on
+every exit path, including Ctrl-C.
+
+## `forceExit` and `testTimeout`, and why they are in `jest-e2e.json`
+
+Both were added after a run **hung indefinitely**. Diagnosed rather than guessed:
+`sample` showed the process parked in `uv__io_poll` / `kevent` at **0% CPU** with
+its CPU time frozen — an idle event loop with nothing left to do, holding no
+MySQL connection at all. Not slow, not deadlocked on the database: waiting on a
+handle that would never resolve.
+
+- **`forceExit`** stops a stray handle from turning a finished run into an
+  infinite one. It is a blunt instrument and is deliberately not a fix: if
+  `--detectOpenHandles` ever names the leak, close it and this can go.
+- **`testTimeout: 120000`** bounds a single test rather than the whole run. The
+  default 5s is too short for suites that provision a tenant and publish a
+  config; two minutes is far above the slowest legitimate test (~90s) and far
+  below "forever".
+
+⚠️ **Neither explains the intermittent single-test failures.** Those are tracked
+separately — see the Phase 14 notes in `developePlan.md`. What these two settings
+guarantee is that a bad run *ends*, so the next diagnosis starts from output
+rather than from a wedged process.
+
+### What was ruled out, with evidence
+
+- **Database residue.** The prime suspect, because `teardown-e2e.ts` documents an
+  identical past symptom — *"intermittent 404s … moved between tests, and never
+  reproduced in isolation"* — caused by 6,900 leaked tenant rows. Measured during
+  and after a hung run: **19 tenants, 0 orphans.** The teardown is working.
+- **Connection exhaustion.** `Threads_connected: 1` while the run was wedged.
+- **Parallelism.** `maxWorkers: 1` was already set; `--runInBand` is redundant.

@@ -52,6 +52,23 @@ export class Store extends BaseEntity {
   connectedAt: Date | null;
 
   /**
+   * Where to push "new configuration is available" (M9.4).
+   *
+   * A REST route the plugin registers — **not** the handshake's `callback`,
+   * which is a browser redirect to an admin screen. A server posting there
+   * reaches a login page, not the plugin, and the two are easy to confuse
+   * because both are called a callback.
+   *
+   * Nullable, and stays null for a store connected by a plugin build that
+   * predates the route: the push is a latency improvement over M9.3's
+   * fifteen-minute pull, so a store without one is behind by minutes rather
+   * than broken. 500 characters to match `store_connection_codes.callback`,
+   * since both hold a URL a merchant's site chose.
+   */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  pushUrl: string | null;
+
+  /**
    * Updated by the plugin heartbeat.
    *
    * Indexed because stale-install detection scans on it: a store that has not
@@ -77,4 +94,20 @@ export class Store extends BaseEntity {
   /** Incremented on publish. Drives plugin cache invalidation. */
   @Column({ type: 'bigint', default: 0, transformer: bigintTransformer })
   configVersion: number;
+
+  /**
+   * Bytes this store reported holding in customer uploads (M15.6).
+   *
+   * 🔴 **A level, not an accumulator.** `file_storage_mb` is a *tenant* limit,
+   * but a tenant may hold ten stores, each with its own uploads table on its own
+   * disk. Keeping each store's current figure here is what lets the tenant row in
+   * `usage_records` be re-summed rather than overwritten by whichever store
+   * happened to check in last.
+   *
+   * ⚠️ **Null is "never reported", not "holding nothing".** A plugin older than
+   * M15.6 sends no field at all, and counting that as zero would quietly shrink a
+   * tenant's measured usage the moment one store lagged behind on updates.
+   */
+  @Column({ type: 'bigint', nullable: true, transformer: bigintTransformer })
+  storageBytes: number | null;
 }

@@ -1,5 +1,5 @@
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { firstValueFrom, of } from 'rxjs';
+import { firstValueFrom, of, toArray } from 'rxjs';
 
 import { ApiResponseInterceptor } from './api-response.interceptor';
 import { PaginatedResult, type ApiSuccessResponse } from '../http/api-response.types';
@@ -15,10 +15,14 @@ describe('ApiResponseInterceptor', () => {
   const interceptor = new ApiResponseInterceptor();
 
   /** A context for the given request path. */
-  function contextFor(path: string, type: 'http' | 'rpc' = 'http'): ExecutionContext {
+  function contextFor(
+    path: string,
+    type: 'http' | 'rpc' = 'http',
+    headersSent = false,
+  ): ExecutionContext {
     return {
       getType: () => type,
-      switchToHttp: () => ({ getRequest: () => ({ path }) }),
+      switchToHttp: () => ({ getRequest: () => ({ path }), getResponse: () => ({ headersSent }) }),
     } as unknown as ExecutionContext;
   }
 
@@ -84,9 +88,7 @@ describe('ApiResponseInterceptor', () => {
         limit: 50,
       });
 
-      const result = (await run('/v1/products', paginated)) as ApiSuccessResponse<
-        { id: string }[]
-      >;
+      const result = (await run('/v1/products', paginated)) as ApiSuccessResponse<{ id: string }[]>;
 
       expect(result.data).toEqual([{ id: 'a' }, { id: 'b' }]);
       expect(result.meta.pagination).toEqual({
@@ -145,14 +147,51 @@ describe('ApiResponseInterceptor', () => {
       // and the payload must still be enveloped rather than silently passed
       // through.
       const result = (await firstValueFrom(
-        interceptor.intercept(
-          contextFor('', 'rpc'),
-          handlerReturning({ id: 'x' }),
-        ) as never,
+        interceptor.intercept(contextFor('', 'rpc'), handlerReturning({ id: 'x' })) as never,
       )) as ApiSuccessResponse<{ id: string }>;
 
       expect(result).toHaveProperty('meta');
       expect(result.data).toEqual({ id: 'x' });
+    });
+  });
+
+  describe('a handler that answered the request itself', () => {
+    /**
+     * 🔴 **Emitting here writes to a finished response.**
+     *
+     * `config-delivery` sends its own `304` and returns `undefined`, because a
+     * 304 must carry no body (RFC 9110 §15.4.5) and the envelope would wrap that
+     * into `{data: null, meta}` — a body the status forbids.
+     *
+     * If this interceptor still emits, Nest writes it
+     * (`RouterResponseController.apply`) to a response that is already finished
+     * and throws `ERR_HTTP_HEADERS_SENT` inside the router. That throw used to
+     * reach `AllExceptionsFilter`, which wrote *again* and **destroyed the
+     * connection** — leaving clients waiting forever and whole e2e suites
+     * failing with `Exceeded timeout`.
+     *
+     * Measured: exactly one per 304. Four 304s in the config-delivery suite
+     * produced four errors, every run, until this guard existed.
+     */
+    it('emits nothing once the response has been sent', async () => {
+      const emitted = await firstValueFrom(
+        interceptor
+          .intercept(contextFor('/store/config', 'http', true), handlerReturning(undefined))
+          .pipe(toArray()) as never,
+      );
+
+      expect(emitted).toEqual([]);
+    });
+
+    /** The normal path is untouched: nothing sent yet means the envelope applies. */
+    it('still wraps when the response is open', async () => {
+      const emitted = await firstValueFrom(
+        interceptor
+          .intercept(contextFor('/option-sets', 'http', false), handlerReturning({ id: 'a' }))
+          .pipe(toArray()) as never,
+      );
+
+      expect(emitted).toHaveLength(1);
     });
   });
 });

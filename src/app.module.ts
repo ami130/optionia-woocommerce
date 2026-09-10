@@ -9,7 +9,10 @@ import { AuthModule } from './auth/auth.module';
 import { AuthThrottlerGuard } from './auth/auth-throttler.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MailModule } from './mail/mail.module';
+import { ConfigDeliveryModule } from './config-delivery/config-delivery.module';
 import { OptionSetsModule } from './option-sets/option-sets.module';
+import { OrdersModule } from './orders/orders.module';
+import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
@@ -72,6 +75,9 @@ import { HealthModule } from './health/health.module';
     MailModule,
     StoresModule,
     OptionSetsModule,
+    ConfigDeliveryModule,
+    OrdersModule,
+    ProductsModule,
     HealthModule,
   ],
 

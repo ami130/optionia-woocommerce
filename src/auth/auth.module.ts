@@ -93,7 +93,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
     },
     {
       provide: AuthService,
-      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource, SessionsService, TenantProvisioningService],
+      inject: [getRepositoryToken(User), AuthTokensService, MailService, DataSource, SessionsService, TenantProvisioningService, AuditService],
       useFactory: (
         users: Repository<User>,
         tokens: AuthTokensService,
@@ -101,10 +101,11 @@ import { RefreshToken } from './entities/refresh-token.entity';
         dataSource: DataSource,
         sessions: SessionsService,
         tenants: TenantProvisioningService,
+        audit: AuditService,
       ): AuthService =>
         // The app URL is read once, here, so no flow builds a link from a value
         // it guessed. Links in mail must point at the dashboard, not the API.
-        new AuthService(users, tokens, mail, dataSource, sessions, tenants, loadConfig().appUrl),
+        new AuthService(users, tokens, mail, dataSource, sessions, tenants, loadConfig().appUrl, audit),
     },
   ],
   exports: [

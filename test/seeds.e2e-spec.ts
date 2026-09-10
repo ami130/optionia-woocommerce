@@ -36,6 +36,53 @@ describe('seeds (integration)', () => {
     return Number(row.n);
   }
 
+  /**
+   * The demo tenant's own rows.
+   *
+   * ⚠️ **A global `COUNT(*)` was correct only while the seed was the sole writer.**
+   * Phase 13's canonical E2E now registers tenants and imports a real WooCommerce
+   * catalogue, so a global count folds in rows these assertions were never about —
+   * and the idempotency check, which compares a count before and after re-seeding,
+   * fails whenever another suite writes between the two reads.
+   *
+   * Scoping to the seeded tenant makes these tests measure the seed rather than
+   * the database.
+   */
+  async function countForDemo(table: string): Promise<number> {
+    const scoped: Record<string, string> = {
+      tenants: `SELECT COUNT(*) AS n FROM tenants WHERE slug LIKE 'demo%'`,
+      stores: `SELECT COUNT(*) AS n FROM stores WHERE storeUrl = 'https://demo.optionia.test'`,
+      store_products: `SELECT COUNT(*) AS n FROM store_products p
+                         JOIN stores s ON s.id = p.storeId
+                        WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      option_sets: `SELECT COUNT(*) AS n FROM option_sets os
+                      JOIN stores s ON s.id = os.storeId
+                     WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      options: `SELECT COUNT(*) AS n FROM options o
+                  JOIN option_groups g ON g.id = o.optionGroupId
+                  JOIN option_sets os ON os.id = g.optionSetId
+                  JOIN stores s ON s.id = os.storeId
+                 WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      option_values: `SELECT COUNT(*) AS n FROM option_values v
+                        JOIN options o ON o.id = v.optionId
+                        JOIN option_groups g ON g.id = o.optionGroupId
+                        JOIN option_sets os ON os.id = g.optionSetId
+                        JOIN stores s ON s.id = os.storeId
+                       WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      order_events: `SELECT COUNT(*) AS n FROM order_events e
+                       JOIN stores s ON s.id = e.storeId
+                      WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      order_selections: `SELECT COUNT(*) AS n FROM order_selections sel
+                           JOIN order_events e ON e.id = sel.orderEventId
+                           JOIN stores s ON s.id = e.storeId
+                          WHERE s.storeUrl = 'https://demo.optionia.test'`,
+    };
+
+    const [row] = await dataSource.query(scoped[table] ?? `SELECT COUNT(*) AS n FROM ${table}`);
+
+    return Number(row.n);
+  }
+
   describe('db:seed', () => {
     /**
      * Re-running must update rather than duplicate. Plans are matched on `code`,
@@ -102,11 +149,11 @@ describe('seeds (integration)', () => {
         'order_selections',
       ];
 
-      const before = await Promise.all(tables.map(count));
+      const before = await Promise.all(tables.map(countForDemo));
 
       await seedDemo(dataSource);
 
-      const after = await Promise.all(tables.map(count));
+      const after = await Promise.all(tables.map(countForDemo));
 
       expect(after).toEqual(before);
     }, 60_000);
@@ -116,9 +163,10 @@ describe('seeds (integration)', () => {
      * makes Phase 25's analytics meaningful rather than returning a single row.
      */
     it('produces enough order data for analytics to be meaningful', async () => {
-      expect(await count('order_events')).toBe(50);
+      /* Scoped like every other seed count — see `countForDemo`. */
+      expect(await countForDemo('order_events')).toBe(50);
 
-      const selections = await count('order_selections');
+      const selections = await countForDemo('order_selections');
       expect(selections).toBeGreaterThanOrEqual(100);
       expect(selections).toBeLessThanOrEqual(200);
     });
@@ -203,7 +251,22 @@ describe('seeds (integration)', () => {
     });
 
     it('creates the catalogue the product picker needs', async () => {
-      expect(await count('store_products')).toBe(30);
+      /*
+       * ⚠️ Scoped to the **seeded** store. `count('store_products')` is a global
+       * count, and it was correct only while the demo seed was the sole writer of
+       * that table. Phase 13's canonical E2E now imports a real WooCommerce
+       * catalogue into a store of its own, so the global figure counts rows this
+       * assertion was never about — measured: 32 against an expected 30, with the
+       * seed itself perfectly correct.
+       */
+      const [row] = (await dataSource.query(
+        `SELECT COUNT(*) AS n
+           FROM store_products p
+           JOIN stores s ON s.id = p.storeId
+          WHERE s.storeUrl = 'https://demo.optionia.test'`,
+      )) as Array<{ n: number }>;
+
+      expect(Number(row.n)).toBe(30);
     });
 
     /**

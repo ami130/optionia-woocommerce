@@ -1,4 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+import { OptionalNotNull, Trimmed } from '../../common/validation/trimmed.decorator';
 import {
   IsEnum,
   IsInt,
@@ -26,6 +28,7 @@ import { OptionSetStatus } from '../../common/database/enums';
 
 export class CreateOptionSetDto {
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A name is required.' })
   @MaxLength(255)
   @ApiProperty({ type: String })
@@ -44,8 +47,9 @@ export class CreateOptionSetDto {
 }
 
 export class UpdateOptionSetDto {
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A name cannot be empty.' })
   @MaxLength(255)
   @ApiPropertyOptional({ type: String })
@@ -118,8 +122,9 @@ export class DuplicateOptionSetDto {
    * Optional because the common case is "give me another one like this", and
    * requiring a name up front interrupts that.
    */
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1)
   @MaxLength(255)
   @ApiPropertyOptional({ type: String })

@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager, In } from 'typeorm';
 
+import { OptionSetStatus } from '../common/database/enums';
+import { ConfigVersionService } from '../common/config-version.service';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionRule } from './entities/option-rule.entity';
@@ -49,7 +51,10 @@ export interface PurgeResult {
  */
 @Injectable()
 export class HardDeleteService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly configVersion: ConfigVersionService,
+  ) {}
 
   /**
    * Erase a set and everything under it.
@@ -103,6 +108,26 @@ export class HardDeleteService {
       );
 
       await manager.delete(OptionSet, { id: set.id });
+
+      /**
+       * A storefront can only notice the loss of something it was served.
+       *
+       * Purging is usually the second half of delete-then-erase, and the soft
+       * delete already bumped — but this route accepts a set that was never
+       * soft-deleted at all, and purging a **live published** set removes it
+       * from the config document with nothing to tell a storefront. Measured
+       * before this existed: one set became zero and the version did not move,
+       * so every plugin kept serving it until the next publish.
+       *
+       * `deletedAt` is the discriminator rather than status alone: a set already
+       * soft-deleted is gone from the document and its bump has happened, so
+       * bumping again would invalidate every cache for a row nobody was reading.
+       */
+      await this.configVersion.bumpIfVisible(
+        manager,
+        set.storeId,
+        set.status === OptionSetStatus.PUBLISHED && set.isLive,
+      );
 
       return { groups, options, values, items, rules, assignments, versions };
     });

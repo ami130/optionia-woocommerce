@@ -1,4 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+import { OptionalNotNull, Trimmed } from '../../common/validation/trimmed.decorator';
 import {
   IsBoolean,
   IsEnum,
@@ -37,6 +39,7 @@ const MAX_AMOUNT_MINOR = 1_000_000_000;
 
 export class CreateOptionValueDto {
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A value key is required.' })
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })
@@ -44,6 +47,7 @@ export class CreateOptionValueDto {
   valueKey: string;
 
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A label is required.' })
   @MaxLength(200)
   @ApiProperty({ type: String })
@@ -81,6 +85,22 @@ export class CreateOptionValueDto {
   @ApiPropertyOptional({ type: String })
   colorHex?: string;
 
+  /**
+   * The `<optgroup>` heading this value sits under (M14.3).
+   *
+   * ⚠️ **Grouping is a rendering detail of `dropdown`, not a type.** Values
+   * sharing a label render under one heading; a value with none renders as a
+   * plain `<option>`. Only the dropdown template reads it — a radio or swatch
+   * with a group label is not an error, it simply has no grouped rendering.
+   *
+   * Trimmed and length-capped like `label`, which it sits beside visually.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
+  groupLabel?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -110,8 +130,9 @@ export class UpdateOptionValueDto {
    * order meta stores it, so a change makes historic orders unreadable.
    */
 
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1, { message: 'A label cannot be empty.' })
   @MaxLength(200)
   @ApiPropertyOptional({ type: String })
@@ -145,6 +166,22 @@ export class UpdateOptionValueDto {
   @ApiPropertyOptional({ type: String })
   colorHex?: string;
 
+  /**
+   * The `<optgroup>` heading this value sits under (M14.3).
+   *
+   * ⚠️ **Grouping is a rendering detail of `dropdown`, not a type.** Values
+   * sharing a label render under one heading; a value with none renders as a
+   * plain `<option>`. Only the dropdown template reads it — a radio or swatch
+   * with a group label is not an error, it simply has no grouped rendering.
+   *
+   * Trimmed and length-capped like `label`, which it sits beside visually.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  @ApiPropertyOptional({ type: String })
+  groupLabel?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -175,8 +212,9 @@ export class DuplicateOptionValueDto {
    * `uq_option_values_option_key` forbids repeating the key.
    */
   @ApiPropertyOptional({ type: String })
-  @IsOptional()
+  @OptionalNotNull()
   @IsString()
+  @Trimmed()
   @MinLength(1)
   @MaxLength(64)
   @Matches(KEY_PATTERN, { message: KEY_MESSAGE })

@@ -9,8 +9,7 @@ import { OptionSetStatus } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
-import { OptionValue } from './entities/option-value.entity';
-import { Option } from './entities/option.entity';
+import { copyOptionsInto } from './option-groups.service';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { assertVersionMatches } from './optimistic-lock';
 import { HardDeleteService, type PurgeResult } from './hard-delete.service';
@@ -211,7 +210,14 @@ export class OptionSetsService {
       // The cascade marks the set itself too, in the same transaction — so
       // there is no second write that could leave the children deleted and the
       // parent live.
-      cascaded = await this.cascade.onOptionSetDeleted(id, deletedAt);
+      cascaded = await this.cascade.onOptionSetDeleted(id, deletedAt, {
+        storeId: before.storeId,
+        // Only a published set is in the config document, so only its removal
+        // is something a storefront can see. Deleting a draft changes nothing a
+        // plugin would fetch, and bumping for it would invalidate every
+        // storefront cache for an edit no customer can observe.
+        wasPublished: before.status === OptionSetStatus.PUBLISHED,
+      });
     } catch (error) {
       if (error instanceof AlreadyDeletedError) {
         // Another request deleted it first. The caller's intent is satisfied,
@@ -316,64 +322,19 @@ export class OptionSetsService {
           }),
         );
 
-        const options = await manager.find(Option, {
-          where: { optionGroupId: group.id, deletedAt: LIVE_SENTINEL_SQL as never },
-          order: { sortOrder: 'ASC' },
-        });
-
-        for (const option of options) {
-          const optionCopy = await manager.save(
-            manager.create(Option, {
-              optionGroupId: groupCopy.id,
-              // The key is copied, not regenerated: it is unique per *group*,
-              // and this is a new group. A merchant expects the copy to look
-              // like the original, and a mangled key would show in the config
-              // document the plugin reads.
-              key: option.key,
-              valueKind: option.valueKind,
-              cardinality: option.cardinality,
-              presentation: option.presentation,
-              label: option.label,
-              description: option.description,
-              placeholder: option.placeholder,
-              helpText: option.helpText,
-              isRequired: option.isRequired,
-              sortOrder: option.sortOrder,
-              defaultValue: option.defaultValue,
-              validation: option.validation,
-              pricing: option.pricing,
-              display: option.display,
-              isEnabled: option.isEnabled,
-            }),
-          );
-
-          const values = await manager.find(OptionValue, {
-            where: { optionId: option.id, deletedAt: LIVE_SENTINEL_SQL as never },
-            order: { sortOrder: 'ASC' },
-          });
-
-          if (values.length > 0) {
-            await manager.save(
-              values.map((value) =>
-                manager.create(OptionValue, {
-                  optionId: optionCopy.id,
-                  valueKey: value.valueKey,
-                  label: value.label,
-                  sortOrder: value.sortOrder,
-                  priceType: value.priceType,
-                  priceAmountMinor: value.priceAmountMinor,
-                  priceConfig: value.priceConfig,
-                  imageUrl: value.imageUrl,
-                  colorHex: value.colorHex,
-                  skuSuffix: value.skuSuffix,
-                  weightDeltaGrams: value.weightDeltaGrams,
-                  isDefault: value.isDefault,
-                  isEnabled: value.isEnabled,
-                }),
-              ),
-            );
-          }
-        }
+        /*
+         * 🔴 **This block used to re-implement `copyOptionsInto`.**
+         *
+         * Two traversals of the same tree, and they drifted exactly as that
+         * risk predicts: `groupLabel` was added to one value-copy list and not
+         * this one, and presentational items were never copied by either — so
+         * duplicating a set silently dropped every heading and every
+         * `<optgroup>`. Measured before the fix: 1 item in the source, 0 in the
+         * copy; `groupLabel` `'Sizes'` became `null`.
+         *
+         * One call, one traversal, one set of field lists in `duplication.ts`.
+         */
+        await copyOptionsInto(manager, group.id, groupCopy.id);
       }
 
       return created;

@@ -37,6 +37,8 @@ export interface AuthoringOptionValue {
   readonly priceConfig: Record<string, unknown> | null;
   readonly imageUrl: string | null;
   readonly colorHex: string | null;
+  /** `<optgroup>` heading. `null` means the value is not grouped. */
+  readonly groupLabel: string | null;
   readonly skuSuffix: string | null;
   readonly weightDeltaGrams: number | null;
   readonly isDefault: boolean;
@@ -132,6 +134,8 @@ export interface PublishedValue {
   readonly price_config: Record<string, unknown>;
   readonly image_url?: string;
   readonly color_hex?: string;
+  /** `<optgroup>` heading. Absent when the value is not grouped. */
+  readonly group_label?: string;
   readonly sku_suffix?: string;
   readonly weight_delta_grams?: number;
   readonly is_default?: true;
@@ -184,8 +188,37 @@ export interface PublishedGroup {
  * release; a missing key is one it has to learn.
  */
 export interface PublishedAssignment {
-  readonly target_type: string;
-  readonly target_ref: string;
+  /**
+   * How the set is assigned: `all`, `manual` or `conditional`.
+   *
+   * **Without this the shape cannot express its own data.** An `ALL` assignment
+   * has no target — it applies to every product in the store — so `target_type`
+   * and `target_ref` are meaningless for it, and a reader given only those two
+   * fields cannot tell "applies to everything" from "applies to nothing". A
+   * storefront index built on that distinction would be wrong in the most
+   * common case a merchant configures.
+   *
+   * Added in Phase 9 rather than Phase 13, deliberately. Assignment CRUD lands
+   * in Phase 13 and the index that consumes this in Phase 10, so the gap would
+   * not have surfaced until something was already being built against the wrong
+   * shape. Additive keys do not bump `schema_version` — a reader that ignores
+   * one it does not know is unaffected — which is the same reasoning that put
+   * `assignments` in the envelope before anything filled it.
+   */
+  readonly mode: string;
+
+  /**
+   * What the set is assigned to, when it is assigned to something.
+   *
+   * Null for `all`, which has no target. One of `product`, `category`, `tag`,
+   * `attribute` or `price_range` otherwise.
+   */
+  readonly target_type: string | null;
+
+  /** The id, slug or range expression `target_type` names. Null for `all`. */
+  readonly target_ref: string | null;
+
+  /** Resolution order when a product matches several sets. */
   readonly priority: number;
 }
 

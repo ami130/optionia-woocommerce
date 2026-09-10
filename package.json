@@ -1,7 +1,7 @@
 {
   "name": "optionia-woocommerce-backend",
   "version": "0.1.0",
-  "description": "Optionia for WooCommerce — SaaS API. Authoring, tenancy, billing.",
+  "description": "Optionia for WooCommerce \u2014 SaaS API. Authoring, tenancy, billing.",
   "license": "UNLICENSED",
   "private": true,
   "engines": {
@@ -28,7 +28,7 @@
     "migration:show": "npm run typeorm -- migration:show -d ./src/config/data-source.ts",
     "typeorm": "npx ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
     "check:secrets": "bash bin/check-secrets.sh",
-    "check": "npm run check:secrets && npm run check:scripts && npm run check:docs && npm run check:api && npm run check:openapi && npm run check:isolation && npm run check:store-state && npm run lint && npm run typecheck && npm run test && npm run test:e2e",
+    "check": "npm run check:secrets && npm run check:scripts && npm run check:docs && npm run check:api && npm run check:openapi && npm run check:isolation && npm run check:store-state && npm run check:invalidation && npm run lint && npm run typecheck && npm run test && npm run test:e2e",
     "check:scripts": "bash bin/check-scripts.sh",
     "db:seed": "ts-node -r tsconfig-paths/register src/seeds/run-seeds.ts",
     "db:seed:demo": "ts-node -r tsconfig-paths/register src/seeds/run-demo.ts",
@@ -37,7 +37,8 @@
     "check:api": "bash bin/check-api-contract.sh",
     "check:openapi": "bash bin/check-openapi.sh",
     "check:isolation": "bash bin/check-isolation.sh",
-    "check:store-state": "bash bin/check-store-state.sh"
+    "check:store-state": "bash bin/check-store-state.sh",
+    "check:invalidation": "bash bin/check-config-invalidation.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -49,9 +50,11 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
     "@types/bcrypt": "^6.0.0",
+    "@types/compression": "^1.8.1",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "compression": "^1.8.1",
     "dotenv": "^17.4.2",
     "helmet": "^8.0.0",
     "mysql2": "^3.15.3",

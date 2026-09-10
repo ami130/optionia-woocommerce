@@ -76,6 +76,7 @@ freely. **Clients must not parse `message`.** The full set and its statuses:
 | `TOKEN_EXPIRED` | 401 | Credential was valid and has expired |
 | `TOKEN_INVALID` | 401 | Single-use token is spent, revoked, or unknown |
 | `FORBIDDEN` | 403 | Authenticated, and not permitted |
+| `EMAIL_NOT_VERIFIED` | 403 | Credentials correct; the address is unverified |
 | `INSUFFICIENT_ROLE` | 403 | Authenticated in this tenant; role lacks the capability |
 | `NOT_FOUND` | 404 | Does not exist, **or belongs to another tenant** |
 | `CONFLICT` | 409 | Request conflicts with current state |
@@ -280,6 +281,44 @@ the caller names, which is the email-bombing vector M6.1 warns about.
 **Response:** `202 Accepted`, identically whether the address exists, is already
 verified, or is unknown.
 
+### `GET /v1/auth/me` **[built]**
+
+Who the caller is — the dashboard's shell reads it on boot
+([M13.1](../../developePlan.md)). **Rate limit:** 300 per hour.
+
+```jsonc
+// → 200
+{ "data": { "id": "0f3c…", "email": "sam@acme.example", "name": "Sam",
+            "emailVerified": true, "locale": null,
+            "tenant": { "id": "8a1b…", "name": "Acme", "slug": "acme",
+                        "status": "active" },
+            "role": "owner" } }
+```
+
+**Why an endpoint rather than persisting the login response.** After a page
+reload a client holds only its tokens, whose claims are `sub`, `tid` and `role` —
+enough to route, and nothing a header can display. A cached login response goes
+stale the moment a name changes, and a second device never sees the update. It
+also doubles as the boot-time "is this token still good" probe: a client that
+starts by asking who it is learns immediately whether to refresh.
+
+⚠️ **Authenticated, on a `@Public()` controller.** Every other `/auth` route is
+public by necessity; this one is the opposite. It carries `@Authenticated()`
+alongside its guards, because `JwtAuthGuard` reads `IS_PUBLIC` with
+`getAllAndOverride([handler, class])` — **a route-level guard alone is not
+enough**. Without the marker the guard stands aside, nothing populates the
+request context, and the handler answers `401` to a caller holding a perfectly
+valid token. Measured while building it.
+
+**An explicit column list**, and `passwordHash` is the reason: `users` carries a
+bcrypt hash and `sessionsInvalidatedAt`, neither of which belongs in a response.
+The test asserts an exact key set rather than a "does not contain" check, so a
+column added in a later phase cannot join the payload unnoticed.
+
+**The membership is read live**, not taken from the token's claims — a role
+changed since the token was minted shows the new one, and the shell is where a
+merchant would notice.
+
 ### `POST /v1/auth/login` **[built]**
 
 **Rate limit:** 10 per 15 minutes, per account. Enough for someone who cannot
@@ -301,14 +340,47 @@ remember which password they used; nowhere near enough to work through a list.
 - `UNAUTHENTICATED` (401) — **one message for a wrong password and an unregistered
   address**, and the same work is done for both: an unknown address still pays a
   bcrypt comparison, so it is not measurably faster to probe.
-- `FORBIDDEN` (403) — email not verified. Safe to distinguish, because the caller
-  has already proven they hold the password.
+- `EMAIL_NOT_VERIFIED` (403) — safe to distinguish, because the caller has
+  already proven they hold the password.
+
+  ⚠️ **This was `FORBIDDEN` until 2026-09-02**, and sharing a code with
+  "your role lacks that capability" left a client unable to tell them apart. The
+  dashboard rendered *"You do not have permission to do that"* to a merchant
+  whose only problem was an unopened email — and it was a dead end, because the
+  resend screen needs a session sign-in had just refused. Found by Phase 13
+  Stage 2's audit, by signing in with an unverified account.
+
+  The remedies are opposite: a permissions failure means *ask someone else*, and
+  this means *open your email*. The sign-in screen now offers to resend the link,
+  which is why `POST /auth/resend-verification` is public and takes an address
+  rather than a session.
 - `RATE_LIMITED` (429).
 
 ### `POST /v1/auth/refresh` **[built]**
 
-Exchanges a refresh token for a new one. **Rate limit:** 60 per hour.
-**Response:** `200 OK` → `{ "data": { "refreshToken": "…" } }`
+Exchanges a refresh token for a new one, **and mints a fresh access token**.
+**Rate limit:** 60 per hour.
+
+```jsonc
+// → 200
+{ "data": { "accessToken": "eyJ…", "refreshToken": "…",
+            "tenantId": "0f3c…", "role": "owner" } }
+```
+
+🔴 **The access token was added 2026-09-02.** This endpoint returned
+`{ refreshToken }` alone, and access tokens live fifteen minutes
+(`JWT_ACCESS_TTL`) — so a client refreshed its session and still held an expired
+credential, signed out every quarter of an hour with no way to continue. Nothing
+caught it because **no client existed**: the plugin authenticates with a store
+credential rather than a JWT, and the route's own test asserted only that the
+refresh token had changed. Found by Phase 13 Stage 1's analysis, before the
+dashboard was written against it.
+
+**The membership is re-read, not replayed.** A role can change mid-session — an
+owner who demotes a member must not have the old role re-minted for another
+fifteen minutes — so the refresh is the moment that takes effect. A user whose
+memberships were all revoked gets `TOKEN_INVALID` rather than a token naming a
+workspace they no longer belong to.
 
 **Rotation and reuse detection.** Each refresh mints a new token and marks the old
 one spent. A token presented twice means a copy was stolen — the legitimate holder
@@ -519,6 +591,42 @@ present and always empty until Phase 13 and Phase 17 build them. A plugin
 written against a shape that lacks a key would need a `schema_version` bump to
 gain it later; an empty array is a shape its first release can already handle.
 
+**An assignment carries `mode`, and the target fields are nullable.**
+
+```jsonc
+{ "mode": "manual",        // "all" | "manual" | "conditional"
+  "target_type": "product", // null when mode is "all"
+  "target_ref": "sku-1",    // null when mode is "all"
+  "priority": 10 }
+```
+
+`mode` is not decoration. An `all` assignment applies to **every product in the
+store** and therefore has no target — so a reader given only `target_type` and
+`target_ref` cannot tell "applies to everything" from "applies to nothing",
+which is the most common thing a merchant configures. The shape could not
+express its own data without it.
+
+Added in Phase 9 rather than later, deliberately: the index that consumes this is
+[M10.1](../../developePlan.md), so the gap would not have surfaced until
+something was already being built against the wrong shape. Additive keys do not
+bump `schema_version`.
+
+**Populated since Phase 10 Stage 1**, and read **live** rather than from the
+snapshot. An assignment is not part of a published version — the same published
+set is assigned and unassigned without republishing — so the document joins them
+at read time. Two consequences worth stating for any reader of this endpoint: a
+set published before that stage shipped still shows its current assignments, and
+an assignment change is visible without a new version.
+
+The authoring UI that creates these rows is M13.6, and the `conditional` mode
+together with the `category` / `tag` / `attribute` / `price_range` targets are
+resolved by M19.4 — until then a storefront renderer reads `all` and `manual`
+and skips the rest.
+
+Snapshots written before `mode` existed are normalised on read and default to
+**`manual`**, never `all` — guessing `all` would silently widen an assignment
+from one product to a whole catalogue.
+
 **`price_config` is `snake_case`, always.** The stored JSON is `camelCase`
 because its schema is TypeScript (M7.3); the document is converted per pricing
 type — `amount_minor`, `basis_points`, `free_characters`, and tiers as
@@ -539,7 +647,27 @@ absent.
 `DELETE /option-sets/:id` is always permitted and reverses; it soft-deletes the
 set and cascades to its groups, options, values, rules and assignments.
 
-`DELETE /option-sets/:id/permanent` erases the set and everything under it, and
+**Deleting a published set advances `config_version`** (M9.4b). The config
+document is assembled from published snapshots, so removing one changes what
+every storefront is served — and `config_version` is the only thing that tells a
+plugin to refetch. Without the bump, `GET /store/config` keeps answering `304`
+and shops go on rendering options the merchant deleted. Measured before it was
+fixed: the document lost its only set while the version stayed at 1.
+
+Deleting a **draft** does not bump, and must not: a draft was never in the
+document, so invalidating every storefront cache for it would cost a full
+refetch for a change no customer can observe.
+
+Both delete routes bump, and the pair does not double-bump: the usual
+delete-then-erase sequence advances the version once, on the soft delete. The
+rule lives in `ConfigVersionService` and is enforced by
+`bin/check-config-invalidation.sh`, which fails when a new writer of published
+configuration does not call it.
+
+`DELETE /option-sets/:id/permanent` accepts a set that was never soft-deleted, so
+it can erase live published configuration on its own — which is why it bumps
+independently rather than relying on a preceding soft delete. It erases the set
+and everything under it, and
 is **refused with `409 CONFLICT` when any order ever referenced one of its option
 keys.** `order_selections` stores `option_key` denormalized with no foreign key
 ([ADR-016](DECISIONS.md#adr-016--option_key-outlives-its-option-by-design)) so an
@@ -568,6 +696,9 @@ usually succeed.
 | `GET /option-sets/:id/versions` · `GET /option-sets/:id/versions/:version` | `option_sets:view` | `[built]` |
 | `POST /option-sets/:id/rollback` | `option_sets:rollback` | `[built]` |
 | `POST /option-sets/:id/reorder` | `option_sets:edit` | `[built]` |
+| `GET /option-sets/:id/assignments` | `option_sets:view` | `[built]` |
+| `POST /option-sets/:id/assignments` | `products:assign` | `[built]` |
+| `DELETE /option-sets/:id/assignments/:externalProductId` | `products:assign` | `[built]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
 line in the permission matrix. Editing is safe; publishing changes a live
@@ -596,6 +727,96 @@ form of the same one.
 
 **Errors:** `CONFLICT` (409) when an order references it — the message names the
 count, because "you cannot delete this" without a reason is not actionable.
+
+### `POST /v1/option-sets/:id/assignments` **[built]**
+
+Which products an option set applies to
+([M13.6](../../developePlan.md)) — the write half of the picker; `GET /products`
+is the read half.
+
+**The first place in the product that creates a `MANUAL` assignment.** Until
+Phase 13 the only source was `demo.seed.ts`, which is why Phase 10's renderer had
+nothing real to resolve.
+
+```jsonc
+// Request body
+{ "externalProductIds": ["1042", "1043"] }   // WooCommerce ids, not ours
+
+// → 200
+{ "data": {
+    "assignments": [ { "id": "0f3c…", "mode": "manual",
+                       "targetType": "product", "targetRef": "1042",
+                       "priority": 0,
+                       "productName": "Custom Hoodie",   // null if not in the catalogue
+                       "productStatus": "publish" } ],
+    "configVersion": 8 } }
+```
+
+**`productName` and `productStatus` are joined from `store_products`**, added
+2026-09-02 for [M13.6](../../developePlan.md). Without them a picker renders
+`1042` where a merchant expects a product name, and it cannot be resolved
+client-side: `GET /products` takes only `storeId`, `search`, `limit` and `cursor`
+— **no id filter** — so naming N assignments would mean paging the whole
+catalogue or making N searches.
+
+Both are `null` when the product is not in `store_products`: either the catalogue
+has not synced yet ([M19.1](../../developePlan.md)) or it was deleted upstream
+after being assigned. A **`LEFT JOIN`**, deliberately — an inner one would hide
+exactly the rows that need attention, and a merchant reading "assigned to 4
+products" should know when one no longer exists.
+
+⚠️ **The join is scoped by `storeId`, not by `targetRef` alone.** WooCommerce
+numbers products from 1 on every install, so two shops routinely share ids; an
+unscoped join returns the assignment **twice**, named from whichever store MySQL
+orders first. Mutation-proven — and the first version of that test asserted only
+the name and let the mutant through.
+
+**`200`, not `201`.** The call is idempotent, so a repeat creates nothing and
+claiming a resource was created would be false. `DELETE` takes the **WooCommerce**
+product id in the path — not a UUID, so it is deliberately not parsed as one.
+
+⚠️ **`mode` is not a field the caller supplies.** This endpoint writes `manual`
+and `product` itself. Accepting the mode from a client would mean trusting it to
+send the value the storefront requires, and a wrong one **does not fail loudly**:
+`Config\ProductIndex` treats an unrecognised mode as neither `all` nor `manual`,
+skips the assignment and counts it as deferred — so the option never renders,
+with a skip counter as the only trace. `ALL` is a property of the set rather than
+a product choice, and `CONDITIONAL` needs the rule tree Phase 17 will build.
+
+**Every write advances `config_version`.** Assignments are a **live** read in the
+storefront document rather than part of a published snapshot, so a write that did
+not bump would leave every connected plugin serving a document it believes is
+current — the option appearing only after some later, unrelated publish. Enforced
+by `bin/check-config-invalidation.sh`, and mutation-proven.
+
+**Idempotent, and the constraint is real.** `uq_assignments_set_target
+(optionSetId, targetType, targetRef, deletedAt)` was added in Phase 13 Stage 0
+(finding **A1**): the table previously had nothing unique, so the same set could
+be assigned to the same product any number of times. The storefront survived it —
+`ProductIndex` keys by product then set, so duplicates collapse — but the picker
+would list the set twice and unassigning would remove one row while the option
+kept rendering. The service skips products already assigned so that a double
+submit, which is ordinary in a UI, never surfaces as a constraint violation the
+merchant did not cause.
+
+`deletedAt` is in the key because these rows are soft-deleted: without it,
+re-assigning a product a merchant had previously unassigned would collide with
+its own tombstone. **`ALL` assignments are not covered** — their target columns
+are NULL and MySQL treats NULLs as distinct — which is acceptable because this
+endpoint authors only `MANUAL`.
+
+⚠️ **A product must exist in the set's own store** (finding **A3**). `targetRef`
+holds a WooCommerce id and has **no foreign key**: the product lives on the
+merchant's site, not in this database, so nothing in the schema stops a set being
+assigned to a product belonging to another store — accepted, stored, and silently
+never rendering, because the plugin indexes by an id that does not exist there.
+The service checks `store_products` for that set's store before writing, and one
+unknown id refuses the **whole** request rather than assigning part of it.
+
+**Unassigning is a soft delete**, and only ever touches a live row. Unassigning
+twice answers `404` and does not advance `config_version` — mutation-proven:
+relaxing that filter let the second call match the tombstone and report success
+for work it did not do.
 
 ### `POST /v1/option-sets/:id/publish` **[built]**
 
@@ -701,6 +922,20 @@ built before any of these endpoints.
 | `POST /groups/:id/reorder` · `POST /options/:id/reorder` | `option_sets:edit` | `[built]` |
 | `GET /option-sets/:id/groups` · `GET /groups/:id/options` · `GET /options/:id/values` | `option_sets:view` | `[built]` |
 | `GET /groups/:id` · `GET /options/:id` · `GET /values/:id` | `option_sets:view` | `[built]` |
+| `POST /groups/:id/items` · `PATCH /items/:id` · `DELETE /items/:id` | `option_sets:edit` | `[built]` |
+| `POST /groups/:id/items/reorder` | `option_sets:edit` | `[built]` |
+| `GET /groups/:id/items` · `GET /items/:id` | `option_sets:view` | `[built]` |
+
+> **Presentational items carry `option_sets:edit` for deletion too**, unlike
+> their siblings above, which split `:edit` from `:delete`. That is deliberate and
+> recorded on the controller: an item is part of an option set's authored content,
+> and someone trusted to add a price-bearing option is not separately untrusted
+> with a heading above it.
+>
+> They were absent from this table for the whole of Phase 14 — the routes shipped
+> and the contract was never updated, so `check-openapi` failed on every run.
+> A gate that is always red is a gate everyone learns to ignore, which is worse
+> than not having it.
 
 > **Reads were missing from this table** until the routes were built and
 > `check-api-contract.sh` refused them. The sketch listed only mutations, but a
@@ -799,6 +1034,7 @@ plugin. Every installation is treated as potentially hostile.
 | Route | Realm | Capability | State |
 |---|---|---|---|
 | `POST /connect/initiate` | none — `@Public()` | — | `[built]` |
+| `POST /connect/requests/describe` | tenant | `stores:connect` | `[built]` |
 | `POST /connect/authorize` | tenant | `stores:connect` | `[built]` |
 | `POST /connect/exchange` | none — `@Public()` | — | `[built]` |
 
@@ -893,6 +1129,7 @@ a handful of times; a script does not.
 // Request
 { "site_url": "https://shop.example.com",
   "callback": "https://shop.example.com/wp-admin/admin.php?page=optionia-connect",
+  "push_url": "https://shop.example.com/wp-json/optionia/v1/push",  // optional
   "state": "…",              // opaque, plugin-generated
   "challenge": "…",          // base64url(SHA-256(verifier))
   "plugin_version": "1.0.0" }
@@ -905,6 +1142,7 @@ a handful of times; a script does not.
 |---|---|
 | `site_url` | absolute `https://` URL, ≤ 255 chars. **`http://` is refused** — a credential must never cross a plaintext connection |
 | `callback` | absolute URL whose origin **equals** `site_url`'s; ≤ 500 chars |
+| `push_url` | optional; same rules as `callback`. The plugin's REST route, stored on the store |
 | `state` | 43–128 chars, URL-safe. Stored as a SHA-256 hash; the plaintext is echoed, never persisted |
 | `challenge` | 43 chars, base64url — exactly one SHA-256 digest |
 | `plugin_version` | semver, ≤ 20 chars |
@@ -912,6 +1150,21 @@ a handful of times; a script does not.
 **The callback must share the site's origin.** Accepting an arbitrary callback
 would let an attacker start a connection for someone else's shop and have the
 code delivered to a host they control.
+
+**`push_url` is a different URL from `callback`, and held to the same rule for a
+longer-lived reason.** `callback` is a *browser* redirect to a WordPress admin
+screen — a server posting there reaches a login page, not the plugin. `push_url`
+is the plugin's own REST route, which authenticates by signature rather than by
+session, and it is stored on the store rather than expiring with the handshake.
+So an attacker who slipped in their own host would not intercept a single code:
+they would be told whenever that merchant publishes, indefinitely.
+
+It is **optional**. A plugin build predating the route still connects, and a
+store without one falls back to the fifteen-minute conditional pull
+([M9.3](../../developePlan.md)) — behind by minutes rather than broken. It is
+refreshed on every reconnect, because reconnecting is exactly when a merchant
+has upgraded the plugin, and because a site that moved address sends a different
+URL that must replace the stale one.
 
 **`authorize_url` carries `state` back, and that is deliberate.** The cloud stores
 only `SHA-256(state)`, so it cannot reconstruct the plaintext to put in the final
@@ -932,6 +1185,46 @@ yields no usable CSRF token.
 **Errors:** `VALIDATION_FAILED`, `RATE_LIMITED`.
 
 ---
+
+### `POST /v1/connect/requests/describe` **[built]**
+
+What a pending connection request is asking for, so the approval screen can name
+the site ([M13.3](../../developePlan.md)). **Rate limit:** 60 per hour.
+
+```jsonc
+// Request — the same two fields `authorize` takes
+{ "request": "0f3c…", "state": "…" }
+
+// → 200
+{ "data": { "site_url": "https://acme.example",
+            "plugin_version": "1.0.0",
+            "expires_at": "2026-09-02T07:30:00.000Z" } }
+```
+
+🔴 **Added 2026-09-02.** `authorize` took `{request, state}` and returned
+`{redirect_url}`, and nothing exposed the `siteUrl` the row had held all along —
+so the approval screen could only ask *"approve this?"* without saying **what**,
+on a screen whose entire purpose is consent. A merchant handed a link would
+approve a connection to a site they could not see named.
+
+⚠️ **`state` is required, and it is what makes this safe.** A pending request has
+**no tenant** — `tenantId` is written at `authorize`, not at `initiate` — so the
+tenant scoping every other read relies on cannot apply here. Keyed on the id
+alone, this would be a **UUID-guessable oracle returning merchants' site URLs**
+to any signed-in user. The `state` (43–128 base64url, stored only as a hash,
+compared with `tokensMatch()`) is the credential that closes it.
+
+⚠️ **A `POST` that writes nothing.** The verb describes the *input*, not the
+effect: a secret in a query string lands in browser history, `Referer` headers
+and server logs. Calling this does not consume the request — a merchant may
+reload the approval screen, and only `authorize` claims it.
+
+**Every refusal is the same `404`**, with a body that never names a site: unknown,
+expired, already approved and wrong `state` are indistinguishable. Distinguishing
+them would restore the enumeration this shape prevents — and unlike `authorize`,
+this endpoint *returns data*, so the prize for a correct guess is a merchant's
+URL. Mutation-proven: removing the state, expiry or approved checks each fails
+the suite.
 
 ### `POST /v1/connect/authorize` **[built]**
 
@@ -1097,13 +1390,58 @@ unaudited because at that point no tenant exists to name.
 
 | Route | Capability | State |
 |---|---|---|
+| `GET /stores` | `stores:view` | `[built]` |
+| `GET /stores/:id` | `stores:view` | `[built]` |
 | `POST /stores/:id/disconnect` | `stores:connect` | `[built]` |
 | `POST /stores/:id/rotate-credential` | `stores:rotate_credential` | `[built]` |
 
-> The store **list** and **detail** reads belong to Phase 13
-> ([M13.3](../../developePlan.md)), and product listing to Phase 19. They are in
-> the deferred table, not here, because a contract row is a commitment to a shape
-> and Phase 8 does not know theirs.
+> Product listing still belongs to Phase 19 and stays in the deferred table: a
+> contract row is a commitment to a shape, and that one is not known yet.
+
+### `GET /v1/stores` and `GET /v1/stores/:id` **[built]**
+
+The dashboard's store screen ([M13.3](../../developePlan.md)): which stores a
+tenant has connected, and whether each is healthy.
+
+**`stores:view`, not `stores:connect`.** Added in Phase 13 Stage 0 alongside
+`products:view`. Seeing that a store went quiet three days ago is the question
+support asks first, and it should not require the capability to disconnect one.
+Granted to `owner`, `admin`, `editor` and `viewer`; **not** to `billing`.
+
+```jsonc
+// GET /v1/stores → 200
+{ "data": [ {
+    "id": "0f3c…", "name": "Acme Hoodies",
+    "storeUrl": "https://acme.example",
+    "status": "connected",
+    "connectedAt": "2026-08-30T10:00:00.000Z",
+    "lastSeenAt":  "2026-09-02T08:14:00.000Z",   // null = never checked in
+    "configVersion": 7,
+    "pluginVersion": "1.0.0", "wpVersion": "6.5",
+    "wcVersion": "11.0.1",    "phpVersion": "8.4"
+} ] }
+```
+
+⚠️ **Every field is named in code, and the entity is never returned.** `stores`
+also carries `pushUrl` — a merchant-supplied callback URL with no screen to
+appear on — and `tenantId`, which the caller already knows. Neither is a secret
+(credentials live in `store_credentials`, so no token can leak this way), but
+returning a row wholesale is how a column added in a later phase becomes part of
+a public response nobody decided to publish. `StoresService.toSummary()` is the
+allow-list, written as a function rather than an entity decorator so the decision
+is visible where the query is.
+
+**`lastSeenAt: null` means never**, which is not the same as stale. A store
+connected an hour ago whose plugin has not yet run its daily heartbeat is
+healthy; the dashboard must not render "last seen: never" as a fault.
+
+**Unpaginated, deliberately.** A tenant has a handful of stores and plan tiers cap
+them; a cursor here would be paging a list that fits on one screen.
+
+**Another tenant's id answers `404`, not `403`** — the same answer as an id that
+does not exist, so a caller cannot walk ids to learn what belongs to someone else
+(ADR-010). Proven in `isolation-matrix.e2e-spec`, and the collection's leakage
+test is mutation-proven: unscoping the repository fails it.
 
 ### `POST /v1/stores/:id/disconnect` **[built]**
 
@@ -1195,6 +1533,85 @@ credential to rotate).
 
 ---
 
+## PRODUCTS — `/v1/products`
+
+**Realm:** tenant.
+
+| Route | Capability | State |
+|---|---|---|
+| `GET /products` | `products:view` | `[built]` |
+
+### `GET /v1/products` **[built]**
+
+The merchant's catalogue, for the assignment picker
+([M13.6](../../developePlan.md)).
+
+**Read-only, and permanently so.** `store_products` mirrors the merchant's
+WooCommerce store: it is filled by [M19.1](../../developePlan.md)'s import and
+refreshed by its sync. A dashboard that could edit it would be editing a copy —
+the change would survive until the next sync and then vanish, which is worse than
+not offering it.
+
+**`products:view`, not `products:assign`.** Added in Phase 13 Stage 0 alongside
+`stores:view`. Browsing a catalogue is not assigning to it, and `editor` already
+held `products:assign` — permission to assign an option set to a catalogue it had
+no permission to list. Granted to `owner`, `admin`, `editor` and `viewer`; **not**
+to `billing`.
+
+```jsonc
+// GET /v1/products?storeId=<uuid>&search=Custom&limit=25&cursor=…
+{ "data": [ {
+    "id": "0f3c…",              // ours, stable across a sync
+    "externalId": "1042",       // WooCommerce's — what an assignment stores
+    "name": "Custom Hoodie", "sku": "HOOD-1",
+    "type": "simple", "priceMinor": 8000, "status": "publish",
+    "permalink": "https://acme.example/?p=1042", "imageUrl": null
+  } ],
+  "meta": { "pagination": { "cursor": "NDE6…", "hasMore": true, "limit": 25 } } }
+```
+
+| Field | Rules |
+|---|---|
+| `storeId` | **required**, uuid |
+| `search` | ≤ 255 chars, matched as a **prefix** |
+| `limit` | 1–100, default 25 |
+| `cursor` | opaque, ≤ 512 chars. Clients must not construct one |
+
+**`storeId` is required, deliberately.** A tenant may own several stores, and
+merging their catalogues would present two products with the same name on two
+storefronts as though they were interchangeable.
+
+**Paged by `(name, id)`, not `(createdAt, id)`.** `ix_store_products_search
+(storeId, name)` is the only useful index here: paging on `createdAt` would
+filesort the whole catalogue for every page and present products in import order,
+which is not an order a merchant can navigate. `id` breaks ties because two
+products may share a name, and a keyset needs a total order — a name-only cursor
+asks for `name > 'Custom Hoodie'` and **skips the second copy** when a page
+boundary falls between them. Mutation-proven.
+
+The cursor is a sibling of the timestamp one in `common/pagination`, keyed on
+text. Its value is **length-prefixed** rather than delimited: a product named
+`Shirt | Large` would break a `value|id` split, and the resulting cursor would
+silently page from the wrong row.
+
+⚠️ **The search is a prefix match**, because `LIKE 'term%'` uses the index and
+`LIKE '%term%'` cannot. At the 30 products the seed creates the difference is
+invisible, and nothing larger exists until M19.1 imports a real catalogue.
+Recorded as finding **A4** of Phase 13 Stage 0: the day this needs substring
+search is the day it needs a `FULLTEXT` index, which is a migration rather than a
+different `LIKE` pattern.
+
+**Wildcards in merchant input are escaped.** A search for `100%` means the
+characters `100%`, not "everything" — `%`, `_` and `\` are neutralised before the
+pattern is built.
+
+**Scoped by a join, not a column.** `store_products` carries no `tenantId`; it
+reaches one only through `stores`. A foreign `storeId` therefore answers `200`
+with an **empty list** rather than `404` — the join eliminates every row, which is
+not the same as the store being absent, and claiming `404` would state a contract
+the code does not implement. Proven in `isolation-matrix.e2e-spec` and
+mutation-proven by dropping the join.
+
 ## STORE — `/v1/store/*`
 
 **Realm:** store. **Guard:** `StoreTokenGuard`.
@@ -1202,6 +1619,9 @@ credential to rotate).
 | Route | State |
 |---|---|
 | `POST /store/heartbeat` | `[built]` |
+| `POST /store/disconnect` | `[built]` |
+| `GET /store/config` | `[built]` |
+| `POST /store/orders` | `[built]` |
 
 > **A store credential is an opaque token, not a JWT.** `store_credentials` stores
 > a SHA-256 hash and an 8-character prefix; the plaintext exists only in the
@@ -1267,6 +1687,187 @@ stand aside for another realm: a route that carries it and forgets
 it is unusable rather than unprotected. A permanent probe in
 `test/store-realm.e2e-spec.ts` asserts exactly that.
 
+### `GET /v1/store/config` **[built]**
+
+The document a storefront renders from ([M9.1](../../developePlan.md)). Returns
+the M7.5 config document for the store named by the presented credential.
+
+**Rate limit:** 120 per hour, per store. A fifteen-minute cron is 4; the rest is
+headroom for push-triggered pulls, a merchant pressing "Sync now", and retries.
+
+**Response:** `200 OK` with the document, or `304 Not Modified` with no body.
+
+```jsonc
+// Request
+GET /v1/store/config
+If-None-Match: W/"01a0-store-uuid-42"
+
+// Response — 200
+ETag: W/"01a0-store-uuid-43"
+Cache-Control: private, no-cache, must-revalidate
+
+{ "data": { "schema_version": 1,
+            "config_version": 43,
+            "store_id": "01a0-store-uuid",
+            "generated_at": "2026-08-28T10:00:00.000Z",
+            "option_sets": [ /* … */ ] } }
+
+// Response — 304, no body
+ETag: W/"01a0-store-uuid-42"
+```
+
+**The ETag is `config_version`, scoped to the store, and weak.**
+
+`W/"<store_id>-<config_version>"`. Each part earns its place:
+
+- **`config_version`, not a body hash.** Hashing means building the document —
+  the expensive thing a conditional request exists to avoid — and the body is
+  not byte-stable anyway, since `generated_at` and `meta.timestamp` are stamped
+  per request. `config_version` advances on publish and rollback and on nothing
+  else, which is exactly the question being asked.
+- **Scoped to the store.** A bare `"42"` is a claim about a number, not a store,
+  and two stores at version 42 hold entirely different documents. Any shared
+  cache keyed on the validator alone would serve one merchant's options to
+  another.
+- **Weak (`W/`).** Two responses at the same version differ byte-for-byte, so a
+  strong validator would claim something this endpoint cannot honour.
+  `If-None-Match` accepts a list and `*`; both are handled, because a false miss
+  costs a full document build and a full download.
+
+**A `304` does not build the document.** It costs one indexed read of
+`stores.configVersion`. An implementation that built the document and then
+discarded it would return a correct `304` having paid the full price — invisible
+to a test that only checks the status code, so
+`test/config-delivery.e2e-spec.ts` counts queries rather than trusting it.
+
+**The envelope applies here as everywhere.** The document sits under `data`. It
+was tempting to exempt this route so responses would be byte-stable for a CDN,
+but freshness here is decided by version rather than by bytes, `UNWRAPPED_ROUTES`
+is matched on path, and a shipped plugin cannot be updated in step with a shape
+change — the reason the envelope mismatch found in Phase 9 was expensive.
+
+### `POST /v1/store/orders` **[built]**
+
+One completed order, reported for analytics
+([M12.7](../../developePlan.md), feeding [Phase 25](../../developePlan.md)).
+Written by the plugin *after* checkout completes and drained by cron — never
+during the checkout request, because a slow cloud must not cost a customer
+latency on their most valuable click.
+
+**Rate limit:** 300 per hour, per credential. One request per order with no
+batching, so this is a real order rate plus retries; a busy shop at five orders a
+minute still fits. Keyed on the credential hash for the same reason the
+heartbeat is. A store that legitimately exceeds it is not lost — the plugin's
+queue holds unreported orders and drains them next run, so a `429` delays a
+report rather than dropping it.
+
+**Response:** `200 OK` — **not `201`**. The call is idempotent, so a retry after a
+lost response returns the same `200` as the first delivery. A `201` would claim a
+row was created on a request that created nothing, and the plugin cannot tell the
+two apart anyway: both mean "stop retrying", which is the only thing it acts on.
+
+```jsonc
+// Request
+{ "external_order_id": "1042",            // WooCommerce's id — the idempotency key
+  "order_total_minor": 17900,             // integer minor units
+  "currency": "GBP",
+  "option_revenue_minor": 9900,           // the portion attributable to options
+  "occurred_at": "2026-08-30T10:00:00Z",  // the STORE's clock, not arrival time
+  "selections": [
+    { "option_key": "finish", "option_label": "Finish",
+      "value_key": "lux", "value_label": "Luxury",
+      "price_delta_minor": 9900, "config_version": 7 }
+  ] }
+
+// Response
+{ "data": { "id": "0f3c…", "duplicate": false } }
+```
+
+| Field | Rules |
+|---|---|
+| `external_order_id` | 1–64 chars. A **string**, not a number: it is WooCommerce's identifier, and HPOS and order-numbering plugins both produce ids that are not plain integers |
+| `order_total_minor` | integer ≥ 0, minor units |
+| `currency` | exactly 3 chars; stored upper-cased |
+| `option_revenue_minor` | integer, optional (default `0`) |
+| `occurred_at` | ISO-8601 |
+| `selections` | ≤ 200 entries |
+| `selections[].option_key` | 1–64 chars |
+| `selections[].option_label` | ≤ 200 chars — **the plugin truncates to this before sending** |
+| `selections[].value_key` | 1–64 chars, nullable — null for a free-text option |
+| `selections[].value_label` | ≤ 500 chars, nullable |
+| `selections[].price_delta_minor` | integer, **signed** — a discount option is legitimate |
+| `selections[].config_version` | integer ≥ 0, optional |
+
+**Idempotent on `(store_id, external_order_id)`.** The plugin retries whenever a
+response is sent but never received, so the same order arrives twice. The
+guarantee is the unique index `uq_order_events_external`, and the service upserts
+against it with `INSERT … ON DUPLICATE KEY UPDATE` rather than checking first: a
+`SELECT`-then-`INSERT` looks like it handles this and does not, because WordPress
+cron is not single-threaded and two overlapping drains can both find no row. One
+would win and the other would surface a constraint violation as a `500` — telling
+a correctly-behaving plugin to retry forever.
+
+⚠️ **No `LAST_INSERT_ID(id)` in the upsert**, the usual idiom for reading back an
+upserted key. It takes an *integer* and `order_events.id` is `char(36)`, so MySQL
+answers `Truncated incorrect INTEGER value` and the whole report `500`s —
+measured, on the first run of the idempotency tests. A following `SELECT` reads
+the id on both paths.
+
+**Selections are replaced, not appended**, and the whole thing is one
+transaction. Appending would double-count every option on a second delivery — the
+analytics corruption idempotency exists to prevent, and invisible in the event
+row alone because the parent *is* correctly deduplicated. The transaction matters
+for the opposite failure: a crash between the delete and the insert would leave
+an order with no selections, which reads as a plain product sale rather than as a
+missing write.
+
+⚠️ **Free text never leaves the merchant's server.** `order_selections.valueLabel`
+can hold personal data — an engraving message, a gift note, a name — so the
+plugin sends the chosen value's label (`"Luxury"`) and `null` for free-text option
+types. Phase 25 asks how many customers bought engraving and what it earned, not
+what they wrote. The field is validated at 500 rather than forbidden, because a
+fixed-choice label is legitimate; **the restraint is the plugin's**, and is
+asserted on that side. This keeps [ADR-014](../DECISIONS.md)'s hard-erase path a
+safeguard rather than a routine obligation.
+
+**The store id comes from the credential and is never read from the body.**
+`forbidNonWhitelisted` already rejects a body carrying `store_id`, but that
+proves the validation pipe rather than the service — a service trusting its input
+passed every request-level test until a direct-call test was added. Cross-tenant
+revenue attribution is the worst defect this route could carry, so it is tested
+where it would actually happen.
+
+**Order ids are scoped to the store.** WooCommerce ids restart at 1 on every
+install, so two stores reporting order `1` are two different orders.
+
+### `POST /v1/store/disconnect` **[built]**
+
+The plugin telling the cloud it is leaving.
+
+🔴 **Why this exists.** A merchant pressing **Disconnect** in WordPress left a
+**live credential** behind. The plugin's own disconnect is deliberately *local* —
+it clears its token so a merchant can recover even with the cloud unreachable —
+and nothing told the backend. The store stayed `connected`, its credential stayed
+valid, and the dashboard offered a Disconnect for a store already gone.
+
+⚠️ **Reconciling through the heartbeat cannot work.** A disconnected plugin has
+**deleted the credential** the heartbeat authenticates with, so it can never
+report in again. The message has to be sent *before* the plugin forgets.
+
+**Safety.** It revokes only the credential that authenticated the call, so it can
+do nothing a stolen token could not already do — and a thief revoking their own
+access is the one abuse nobody minds. `SiteMatchGuard` still requires the call to
+originate from that store's own address.
+
+**Idempotent**, answering `200` for a store already disconnected: the plugin calls
+this on its way out and must not be blocked by the answer.
+
+**Rate limit:** 20 per hour, per store.
+
+```json
+{ "disconnected": true }
+```
+
 ### `POST /v1/store/heartbeat` **[built]**
 
 A daily authenticated ping. The support and analytics backbone
@@ -1288,7 +1889,9 @@ gives all of them a single shared budget.
   "php_version": "8.2.15",
   "connection_state": "connected",        // the plugin's own view
   "config_version": 42,                   // what it currently serves
-  "cache_age_seconds": 3600 }
+  "cache_age_seconds": 3600,
+  "supported_schema_version": 1,          // the shape this build can read
+  "schema_refused": false }               // whether that limit has bitten
 
 // Response
 { "data": { "config_version": 43,          // what the cloud has
@@ -1302,6 +1905,24 @@ gives all of them a single shared budget.
 | `connection_state` | one of the five states — **all five accepted**, including the ones a healthy plugin would never report |
 | `config_version` | integer ≥ 0 |
 | `cache_age_seconds` | integer ≥ 0 |
+| `supported_schema_version` | integer ≥ 0 — the highest document shape this plugin build understands |
+| `schema_refused` | boolean — whether this store last turned a document away |
+
+**`schema_refused` is how the cloud learns a plugin is too old** (M9.5). The
+plugin refuses a `schema_version` above its build and keeps the previous copy —
+correct, and silent: that shop serves stale configuration while every other
+signal says it is healthy. Without this field, "merchant needs to update their
+plugin" is knowable only by asking them.
+
+The two schema fields answer different questions and are deliberately separate.
+`supported_schema_version` is a **capability** — true of every store on that
+build, and current when it equals what the cloud sends.  `schema_refused` is an
+**operations signal** — this shop is stale right now. Conflating them would make
+every store look like it needed attention.
+
+A refusal is recorded as `store.schema_unsupported`, deduplicated on the plugin
+version: a store in this state reports it on every heartbeat, and a trail saying
+so daily for a month is one support reads and misbelieves.
 
 **The response is how a plugin learns it is behind.** `config_version` higher than
 the one sent means new configuration is waiting; `reauthorize: true` means the
@@ -1536,12 +2157,11 @@ opposite of what a contract is for.
 
 | Surface | Phase |
 |---|---|
-| `GET /stores`, `GET /stores/:id` | `[phase 13]` — [M13.3](../../developePlan.md), the dashboard's store screen |
 | `GET /stores/:id/products` | `[phase 19]` — [M19](../../developePlan.md), product sync |
 | `/store/config` | **9** — [M9.1](../../developePlan.md), config delivery |
 | `/store/events`, `/store/orders` | 9 |
 | `/option-sets/:id/rules/*` | **17** — the table exists, the engine does not |
-| `/option-sets/:id/assignments`, `/effective-options` | 13 |
+| `/option-sets/:id/effective-options` | 13 — the resolver preview; assignments themselves are `[built]` above |
 | `/plans`, `/subscription/*`, `/usage` | 22 |
 | `/analytics/*` | 25 |
 | `/admin/*` | 26 |

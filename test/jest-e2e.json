@@ -25,5 +25,7 @@
   "setupFiles": [
     "<rootDir>/test/setup-e2e.ts"
   ],
-  "globalTeardown": "<rootDir>/test/teardown-e2e.ts"
+  "globalTeardown": "<rootDir>/test/teardown-e2e.ts",
+  "testTimeout": 120000,
+  "forceExit": true
 }

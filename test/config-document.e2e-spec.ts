@@ -136,6 +136,69 @@ describe('config document (e2e)', () => {
     );
   }
 
+  describe('swatch fields on the wire', () => {
+    /**
+     * 🔴 **The link nothing asserted.**
+     *
+     * `colorHex` and `imageUrl` are validated by the DTO and painted by the
+     * plugin's swatch templates — both ends covered. What no test checked is the
+     * middle: that the serializer publishes them as `color_hex` and `image_url`,
+     * which is the only reason the template has anything to read.
+     *
+     * `optional()` omits a null field rather than emitting `null`, so a value
+     * with no colour must carry **no key at all** — a template testing
+     * `isset($value['color_hex'])` would treat an explicit null as present.
+     */
+    it('publishes a colour and an image, and omits them when unset', async () => {
+      const set = idOf(await post('/option-sets', { name: 'Swatches', storeId }), 'set');
+      const group = idOf(await post(`/option-sets/${set}/groups`, { label: 'Colour' }), 'group');
+      const option = idOf(
+        await post(`/groups/${group}/options`, {
+          key: `k${randomUUID().slice(0, 8)}`,
+          label: 'Finish',
+          presentation: 'color_swatch',
+        }),
+        'option',
+      );
+
+      await post(`/options/${option}/values`, {
+        valueKey: 'lux',
+        label: 'Luxury',
+        colorHex: '#1a2b3c',
+        imageUrl: 'https://example.test/lux.png',
+      });
+
+      await post(`/options/${option}/values`, { valueKey: 'std', label: 'Standard' });
+      await post(`/option-sets/${set}/publish`, {});
+
+      const document = await build();
+
+      /* Serialised and re-parsed, so the assertions see the *wire* shape — a
+       * key that `optional()` omitted must be genuinely absent, not undefined
+       * on a typed object. */
+      const wire = JSON.parse(JSON.stringify(document)) as {
+        option_sets: Array<{
+          groups: Array<{ options: Array<{ values: Array<Record<string, unknown>> }> }>;
+        }>;
+      };
+
+      const published = wire.option_sets.find((candidate) =>
+        JSON.stringify(candidate).includes('lux'),
+      );
+
+      expect(published).toBeDefined();
+
+      const [lux, std] = published!.groups[0].options[0].values;
+
+      expect(lux.color_hex).toBe('#1a2b3c');
+      expect(lux.image_url).toBe('https://example.test/lux.png');
+
+      /* Absent, not null — see `optional()`. */
+      expect('color_hex' in std).toBe(false);
+      expect('image_url' in std).toBe(false);
+    }, 60_000);
+  });
+
   describe('the envelope', () => {
     it('carries exactly the five documented fields', async () => {
       await publishedSet('Enveloped');
@@ -423,6 +486,56 @@ describe('config document (e2e)', () => {
       expect(legacy?.assignments).toEqual([]);
       expect(legacy?.rules).toEqual([]);
       expect(legacy?.groups).toEqual([]);
+    }, 120_000);
+
+    /**
+     * A snapshot's own assignments no longer reach the document.
+     *
+     * **Rewritten in Phase 10 Stage 1.** These two tests used to drive
+     * `normaliseAssignment` through a doctored snapshot, asserting it filled
+     * `mode` and never guessed `all`. Stage 1 made assignments a **live** read,
+     * joined beside the snapshot rather than taken from inside it, so a
+     * snapshot's assignments are no longer what a storefront receives and both
+     * assertions began failing for a reason that was not a regression.
+     *
+     * The state they described never existed in stored data: across the whole
+     * history of `option-set.serializer.ts`, `assignments: []` is the only value
+     * publish has ever written into a snapshot. They guarded a shape no snapshot
+     * ever held.
+     *
+     * `normaliseAssignment` is kept — it still defends a document assembled from
+     * an older shape — but what this endpoint must guarantee is the opposite of
+     * what these tests asserted: whatever a snapshot carries, the live rows win.
+     */
+    it('ignores assignments baked into an old snapshot', async () => {
+      const set = await publishedSet('LegacyAssignment');
+
+      // A snapshot as `[7h]` would have written it, had publish ever put
+      // assignments inside one: present, and before `mode` existed.
+      await dataSource.query(
+        `UPDATE option_set_versions SET snapshot = ? WHERE optionSetId = ? AND version = 1`,
+        [
+          JSON.stringify({
+            id: set,
+            version: 1,
+            groups: [],
+            rules: [],
+            assignments: [{ target_type: 'product', target_ref: 'stale-sku', priority: 10 }],
+          }),
+          set,
+        ],
+      );
+
+      const document = await build();
+      const legacy = document.option_sets.find((candidate) => candidate.id === set);
+
+      /**
+       * Empty, not `stale-sku`. The set has no live assignment rows, so it has
+       * no assignments — which is also the right answer for the merchant: a
+       * snapshot records what was *published*, and an assignment since removed
+       * must not keep reaching their storefront.
+       */
+      expect(legacy?.assignments).toEqual([]);
     }, 120_000);
 
     /** Filling a gap must not rewrite what was actually published. */

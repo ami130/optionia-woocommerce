@@ -196,6 +196,38 @@ describe('auth endpoints (e2e)', () => {
     }, 20_000);
 
     /**
+     * 🔴 **An unverified account is refused with its own code.**
+     *
+     * It was `FORBIDDEN` — the same code as "your role lacks that capability" —
+     * so a client could not tell them apart, and the dashboard told a merchant
+     * with an unopened email that they lacked *permission*. A dead end, too:
+     * the resend screen needed a session sign-in had just refused.
+     *
+     * Nothing covered unverified sign-in at all, which is how the wrong code
+     * survived. Found by Phase 13 Stage 2's audit, by signing in with one.
+     *
+     * The remedies are opposite — *ask someone else* versus *open your email* —
+     * so the code has to be.
+     */
+    it('refuses an unverified account with EMAIL_NOT_VERIFIED', async () => {
+      const response = await post('login', { email: EMAIL, password: PASSWORD });
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+      expect(response.body.error.message).toContain('Verify your email');
+    }, 30_000);
+
+    /**
+     * The recovery path the sign-in screen offers: resend takes an **address**,
+     * not a session, or the one person who needs it could never reach it.
+     */
+    it('lets an unverified account request a new link without signing in', async () => {
+      const response = await post('resend-verification', { email: EMAIL });
+
+      expect(response.status).toBe(202);
+    }, 30_000);
+
+    /**
      * A wrong password and an unregistered address must produce the same status
      * and the same message. Any difference is a membership oracle.
      */
@@ -267,6 +299,59 @@ describe('auth endpoints (e2e)', () => {
     }, 30_000);
 
     /**
+     * 🔴 **Refresh returns an access token, and it works.**
+     *
+     * It did not. The endpoint answered `{ refreshToken }` alone, and access
+     * tokens live fifteen minutes — so a client refreshed its session and still
+     * held an expired credential, signed out every quarter of an hour with no
+     * way to continue.
+     *
+     * The test above passed throughout: it asserted only that the refresh token
+     * had changed. **Nothing exercised the route as a client would**, because no
+     * client existed — the plugin authenticates with a store credential, not a
+     * JWT. Found by Phase 13 Stage 1's analysis, before the dashboard was
+     * written against it.
+     *
+     * Asserted by *using* the token rather than by checking it is a string: a
+     * well-formed token that authenticates nothing would pass the weaker test.
+     */
+    it('returns an access token that authenticates a request', async () => {
+      const first = await verifiedLogin();
+
+      const refreshed = await post('refresh', { refreshToken: first });
+
+      expect(refreshed.status).toBe(200);
+      expect(typeof refreshed.body.data.accessToken).toBe('string');
+
+      const stores = await request(app.getHttpServer())
+        .get('/v1/stores')
+        .set('Authorization', `Bearer ${refreshed.body.data.accessToken}`);
+
+      expect(stores.status).toBe(200);
+    }, 30_000);
+
+    /**
+     * The membership is re-read on every refresh rather than carried forward.
+     *
+     * A role can change mid-session: an owner who demotes a member must not have
+     * the old role re-minted for another fifteen minutes. The refresh is the
+     * moment that takes effect.
+     */
+    it('re-reads the tenant and role rather than replaying them', async () => {
+      const first = await verifiedLogin();
+      const refreshed = await post('refresh', { refreshToken: first });
+
+      const claims = JSON.parse(
+        Buffer.from((refreshed.body.data.accessToken as string).split('.')[1], 'base64url').toString(),
+      );
+
+      expect(claims.aud).toBe('tenant');
+      expect(claims.tid).toBe(refreshed.body.data.tenantId);
+      expect(claims.role).toBe(refreshed.body.data.role);
+      expect(Object.keys(claims).sort()).toEqual(['aud', 'exp', 'iat', 'role', 'sub', 'tid']);
+    }, 30_000);
+
+    /**
      * The reuse response must be indistinguishable from any other failure.
      * Telling an attacker their replay was noticed is telling them the token was
      * real — the detection is for operations, not for the caller.
@@ -329,6 +414,87 @@ describe('auth endpoints (e2e)', () => {
       const payload = await loginPayload();
 
       expect(payload.accessToken).not.toBe(payload.refreshToken);
+    }, 30_000);
+  });
+
+  describe('me', () => {
+    /**
+     * The shell reads this on boot: a name and email for the account menu, a
+     * tenant name for the header, and `emailVerified` to decide whether a user
+     * belongs in the app or at the verification prompt.
+     */
+    it('returns the caller’s profile and tenant', async () => {
+      const payload = await loginPayload();
+
+      const response = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${payload.accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.email).toBe(EMAIL);
+      expect(response.body.data.emailVerified).toBe(true);
+      expect(response.body.data.tenant.id).toBe(payload.tenantId);
+      expect(response.body.data.role).toBe('owner');
+    }, 30_000);
+
+    /**
+     * 🔴 **An explicit column list, and `passwordHash` is the reason.**
+     *
+     * `users` carries a bcrypt hash and `sessionsInvalidatedAt`; neither belongs
+     * in a response and the first must never leave the process. Asserted as an
+     * exact key set rather than a "does not contain" check, so a column added in
+     * a later phase cannot join the payload unnoticed — the failure Phase 13
+     * Stage 0's audit found in `GET /stores`, where the allow-list was
+     * documented and enforced by nothing.
+     */
+    it('returns only the documented fields', async () => {
+      const payload = await loginPayload();
+
+      const response = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${payload.accessToken}`);
+
+      expect(Object.keys(response.body.data).sort()).toEqual([
+        'email',
+        'emailVerified',
+        'id',
+        'locale',
+        'name',
+        'role',
+        'tenant',
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain('passwordHash');
+      expect(JSON.stringify(response.body)).not.toContain('$2b$');
+    }, 30_000);
+
+    it('refuses an unauthenticated caller', async () => {
+      await request(app.getHttpServer()).get('/v1/auth/me').expect(401);
+    }, 30_000);
+
+    it('refuses a garbage token', async () => {
+      await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', 'Bearer not-a-token')
+        .expect(401);
+    }, 30_000);
+
+    /**
+     * The token minted by a refresh must work here too.
+     *
+     * This is the client's boot sequence in miniature — refresh, then ask who
+     * you are — and it is the path that was impossible before the access token
+     * was added to `POST /auth/refresh`.
+     */
+    it('accepts a token obtained from a refresh', async () => {
+      const payload = await loginPayload();
+      const refreshed = await post('refresh', { refreshToken: payload.refreshToken });
+
+      const response = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${refreshed.body.data.accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.email).toBe(EMAIL);
     }, 30_000);
   });
 

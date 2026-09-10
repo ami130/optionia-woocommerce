@@ -43,6 +43,59 @@ describe('AllExceptionsFilter', () => {
     return json.mock.calls[0][0] as ApiErrorResponse;
   }
 
+  describe('a response that has already been sent', () => {
+    /**
+     * 🔴 **Writing twice destroys the connection, and the client just waits.**
+     *
+     * An error thrown *after* the handler replied still reaches this filter.
+     * Calling `.json()` then throws `ERR_HTTP_HEADERS_SENT` — and because that
+     * throw happens inside the filter, nothing is left to catch it: it escapes
+     * as an unhandled exception and tears down the socket.
+     *
+     * Measured in the e2e suite: eight of these in one run, and every request
+     * after them on the same connection hung until the test timed out. Ten
+     * tests in `publish.e2e-spec.ts` failed with `Exceeded timeout`, cascading
+     * 60s → 120s → 90s — a crash that presented as slowness.
+     */
+    it('writes nothing when headers are already sent', () => {
+      const sentHost = {
+        switchToHttp: () => ({ getResponse: () => ({ status, headersSent: true }) }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(new Error('after the response'), sentHost);
+
+      expect(status).not.toHaveBeenCalled();
+      expect(json).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠️ **The error is still logged.** Suppressing the write must not suppress
+     * the record — an error that reached this filter is one somebody needs to
+     * see, and the client already has a response that stands.
+     */
+    it('still logs the error it cannot send', () => {
+      const logged = jest.spyOn(filter['logger'], 'error');
+      const sentHost = {
+        switchToHttp: () => ({ getResponse: () => ({ status, headersSent: true }) }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(new Error('after the response'), sentHost);
+
+      expect(logged).toHaveBeenCalledTimes(1);
+    });
+
+    /** The normal path is unaffected: nothing sent yet means a response is sent. */
+    it('still responds when headers are not sent', () => {
+      const openHost = {
+        switchToHttp: () => ({ getResponse: () => ({ status, headersSent: false }) }),
+      } as unknown as ArgumentsHost;
+
+      filter.catch(new Error('before the response'), openHost);
+
+      expect(json).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('never leaks internal detail', () => {
     /**
      * The reason this filter exists. TypeORM puts the failing SQL and the

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
+import { AuditAction, AuditService } from '../audit/audit.service';
 import { hashPassword, verifyPassword } from '../common/crypto/password';
 import { MailService } from '../mail/mail.service';
 import { normaliseAddress } from '../mail/mail.service';
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly sessions: SessionsService,
     private readonly tenants: TenantProvisioningService,
     private readonly appUrl: string,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -96,6 +98,23 @@ export class AuthService {
     if (plaintext !== null) {
       await this.sendVerification(address, name, plaintext);
     }
+
+    /*
+     * Recorded **here, not in the controller**. The route answers `202` whether or
+     * not an account was created — that is exactly what it must not disclose — so
+     * the controller cannot tell a real registration from a duplicate. Inside the
+     * transaction's aftermath the answer is known: reaching this line means a user
+     * row exists and a verification token was issued.
+     *
+     * The duplicate path returns above and records nothing, which is correct: no
+     * account was created, and a row saying "someone tried to register an address
+     * that already exists" is a membership oracle written to the log.
+     */
+    await this.audit.record({
+      action: AuditAction.USER_REGISTERED,
+      resourceType: 'user',
+      changes: { email: address },
+    });
   }
 
   /**
@@ -113,6 +132,19 @@ export class AuthService {
     }
 
     await this.users.update({ id: token.userId }, { emailVerifiedAt: new Date() });
+
+    /*
+     * The moment the account becomes usable. Only the success path records:
+     * a failed redemption returns `false` above without distinguishing expired
+     * from never-existed, and a row that separated them would confirm a token was
+     * once valid — the same oracle the return value refuses to be.
+     */
+    await this.audit.record({
+      action: AuditAction.USER_EMAIL_VERIFIED,
+      resourceType: 'user',
+      resourceId: token.userId,
+      userId: token.userId,
+    });
 
     return true;
   }
@@ -172,6 +204,19 @@ export class AuthService {
       template: 'password-reset',
       userId: user.id,
     });
+
+    /*
+     * Recorded only where a real account was found — the branch above returns
+     * silently for an unknown address, and must, since the route answers
+     * identically either way. A row for every attempted address would put the
+     * membership oracle in the log instead of the response.
+     */
+    await this.audit.record({
+      action: AuditAction.USER_PASSWORD_RESET_REQUESTED,
+      resourceType: 'user',
+      resourceId: user.id,
+      userId: user.id,
+    });
   }
 
   /**
@@ -218,6 +263,19 @@ export class AuthService {
         userId: user.id,
       });
     }
+
+    /*
+     * A completed reset revokes every session and invalidates every access token
+     * — the most disruptive thing that can happen to an account without an
+     * administrator. If a merchant reports being signed out everywhere, this row
+     * is the answer, and its IP is where the answer starts.
+     */
+    await this.audit.record({
+      action: AuditAction.USER_PASSWORD_RESET,
+      resourceType: 'user',
+      resourceId: token.userId,
+      userId: token.userId,
+    });
 
     return true;
   }
@@ -283,6 +341,94 @@ export class AuthService {
     );
 
     return rows[0] ?? null;
+  }
+
+  /**
+   * Who the caller is, for the dashboard's shell (M13.1).
+   *
+   * ## Why an endpoint rather than persisting the login response
+   *
+   * After a page reload a client holds only its tokens, whose claims are `sub`,
+   * `tid` and `role` — enough to route, and nothing a header can display.
+   * Caching the login response instead would go stale the moment a name changed,
+   * and a second device would never see the update.
+   *
+   * It also doubles as the boot-time "is this token still good" probe: a client
+   * that starts by asking who it is learns immediately whether to refresh, which
+   * is one fewer special case than discovering it on the first real request.
+   *
+   * ## An explicit column list
+   *
+   * `users` carries `passwordHash` and `sessionsInvalidatedAt`; neither belongs
+   * in a response, and the first must never leave this process. Named columns
+   * rather than `SELECT *` so a column added later cannot join the payload by
+   * accident — the discipline Phase 13 Stage 0's audit had to add to
+   * `GET /stores` after the fact.
+   */
+  async me(userId: string): Promise<{
+    id: string;
+    email: string;
+    name: string;
+    emailVerified: boolean;
+    locale: string | null;
+    tenant: { id: string; name: string; slug: string; status: string } | null;
+    role: string | null;
+  } | null> {
+    const users: Array<{
+      id: string;
+      email: string;
+      name: string;
+      emailVerifiedAt: Date | null;
+      locale: string | null;
+    }> = await this.dataSource.query(
+      `SELECT id, email, name, emailVerifiedAt, locale FROM users WHERE id = ? LIMIT 1`,
+      [userId],
+    );
+
+    const user = users[0];
+
+    if (!user) {
+      return null;
+    }
+
+    /*
+     * The membership is read live rather than taken from the token's claims: a
+     * role changed since the token was minted should show the new one, and the
+     * shell is where a merchant would notice.
+     */
+    const memberships: Array<{
+      tenantId: string;
+      role: string;
+      tenantName: string;
+      slug: string;
+      status: string;
+    }> = await this.dataSource.query(
+      `SELECT tm.tenantId, tm.role, t.name AS tenantName, t.slug, t.status
+         FROM tenant_members tm
+         JOIN tenants t ON t.id = tm.tenantId
+        WHERE tm.userId = ? AND tm.revokedAt IS NULL
+        ORDER BY tm.createdAt ASC LIMIT 1`,
+      [userId],
+    );
+
+    const membership = memberships[0];
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      emailVerified: user.emailVerifiedAt !== null,
+      locale: user.locale ?? null,
+      tenant: membership
+        ? {
+            id: membership.tenantId,
+            name: membership.tenantName,
+            slug: membership.slug,
+            status: membership.status,
+          }
+        : null,
+      role: membership?.role ?? null,
+    };
   }
 
   private async sendVerification(address: string, name: string, plaintext: string): Promise<void> {
