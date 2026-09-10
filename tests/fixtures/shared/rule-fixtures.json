@@ -1,0 +1,473 @@
+{
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. See M17.2, ADR-050 and ADR-052.",
+  "version": 1,
+  "rule_case_count": 16,
+  "rule_cases": [
+    {
+      "name": "a rule that does not fire changes nothing",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_not_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "a rule that fires hides its target",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "hide beats show when both fire \u2014 rules given hide first",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        },
+        {
+          "id": "r2",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "show",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "hide beats show when both fire \u2014 rules given show first",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "show",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        },
+        {
+          "id": "r2",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "require beats unrequire, either order",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "unrequire",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        },
+        {
+          "id": "r2",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "require",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "a hide in one pass satisfies a condition in the next",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000b",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000c",
+              "operator": "is_not_empty"
+            }
+          ]
+        },
+        {
+          "id": "r2",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "answered",
+        "0199b8c2-0000-7000-8000-00000000000c": "yes"
+      },
+      "expect_passes": 2,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        },
+        "0199b8c2-0000-7000-8000-00000000000b": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "set_price carries the amount it acts with",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "set_price",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ],
+          "action_value": {
+            "amount_minor": 500
+          }
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "price_minor": 500
+        }
+      }
+    },
+    {
+      "name": "set_default carries the value key it acts with",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "set_default",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ],
+          "action_value": {
+            "value_key": "large"
+          }
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "default_value_key": "large"
+        }
+      }
+    },
+    {
+      "name": "a set_price rule with no amount is ignored, not charged as zero",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "set_price",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "a string answer matches a numeric operand across the form boundary",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": 2
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "2"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "0e0 is not zero \u2014 loose comparison differs between the two languages",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": "0"
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "0e0"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "not_equals does not fire on an unanswered option",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_equals",
+              "value": "red"
+            }
+          ]
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "greater_than answers false for text rather than guessing an ordering",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": "apple"
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "blue"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "any fires on one condition; all would not",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "any",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_not_empty"
+            },
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000c",
+              "operator": "is_not_empty"
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "x"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "an unknown operator answers false rather than refusing the document",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "starts_with",
+              "value": "x"
+            }
+          ]
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "xyz"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "a rule with no conditions never fires, rather than always firing",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": []
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    }
+  ]
+}
