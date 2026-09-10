@@ -280,8 +280,10 @@ export interface PublishedAssignment {
 /**
  * Conditional rules, in the document's shape (M7.5).
  *
- * The evaluation engine is Phase 17 and rule CRUD with it, so this is always
- * empty today — and present for the same reason as `assignments`.
+ * ✏️ **No longer always empty.** Written when this shape was declared ahead of
+ * the engine; M17.5 filled it from published snapshots, and M17.8 gave the
+ * storefront a reader — `Engine\SelectionResolver` evaluates these before it
+ * validates a single selection.
  */
 export interface PublishedRule {
   readonly id: string;

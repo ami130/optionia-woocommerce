@@ -95,6 +95,15 @@ export interface TargetState {
   readonly required: boolean | null;
   readonly priceMinor: number | null;
   readonly defaultValueKey: string | null;
+  /**
+   * Set when two rules set **different** prices on this target.
+   *
+   * `priceMinor` is cleared with it: there is no principled winner between
+   * `5.00` and `7.00`, and picking one would make the amount depend on the
+   * order the rules happen to arrive in. ADR-052 refuses the pair at publish;
+   * this is what happens when one reaches a storefront anyway (AC4).
+   */
+  readonly priceConflict: boolean;
 }
 
 export interface RuleOutcome {
@@ -293,6 +302,7 @@ function resolve(
       required: null,
       priceMinor: null,
       defaultValueKey: null,
+      priceConflict: false,
     };
 
   rules.forEach((rule) => {
@@ -324,6 +334,35 @@ function resolve(
         const amount = rule.actionValue?.amountMinor;
 
         if (typeof amount === 'number' && Number.isSafeInteger(amount)) {
+          /*
+           * 🔴 **Two rules setting DIFFERENT amounts cancel, rather than the
+           * later one winning.**
+           *
+           * ADR-052 refuses conflicting payloads at publish, on the grounds
+           * that `5.00` versus `7.00` has no principled winner. But AC4 makes
+           * the document input rather than authority, so a stale cache, a
+           * partial publish, or a build older than the publish rule can still
+           * deliver the pair — and `last writer wins` then makes the price a
+           * function of **array order**.
+           *
+           * That is M17.4a's defect one layer down: it was `sortOrder` deciding
+           * a price, and this is document order deciding the same price. Found
+           * in 17-8 by resolving one pair in both orders and getting 1500 and
+           * 1700.
+           *
+           * Cancelling is the only resolution that is order-independent AND
+           * never invents a number no merchant chose. `priceConflict` carries
+           * the fact so the caller can report it rather than silently charge
+           * the authored price — the same shape as `unpriced` in the plugin.
+           *
+           * Two rules setting the SAME amount agree and are not a conflict,
+           * which is the case ADR-052 explicitly declines to refuse.
+           */
+          if (state.priceConflict || (state.priceMinor !== null && state.priceMinor !== amount)) {
+            states.set(rule.targetId, { ...state, priceMinor: null, priceConflict: true });
+            break;
+          }
+
           states.set(rule.targetId, { ...state, priceMinor: amount });
         }
 
@@ -371,6 +410,7 @@ function resolve(
         required: null,
         priceMinor: null,
         defaultValueKey: null,
+        priceConflict: false,
       }),
       hidden: true,
     });

@@ -175,6 +175,19 @@ publish, because storefronts must re-fetch after one.
 > `show`, and `require` beats `unrequire`. Two rules setting *different*
 > `action_value` payloads on one target have no principled winner and are refused
 > at publish.
+>
+> 🔴 **A storefront that receives such a pair anyway cancels it** (M17.8). The
+> publish refusal is not the only defence, because a stale cache or a plugin
+> build older than that rule can still deliver the pair — and the plugin then
+> charges **nothing** for the target and reports `rule_price_conflict`, rather
+> than picking whichever rule the array happened to list last. Consumers must not
+> rely on document order to break a tie; there is no tie to break.
+>
+> ⚠️ **A rule may target a `value`, so `target_id` is matched against value ids
+> too.** Hiding one value removes that choice and leaves the option answerable;
+> hiding an option or a group removes the question. A value-targeted rule is why
+> every published value carries an `id` — `value_key` is unique only within its
+> own option.
 
 ## Group
 

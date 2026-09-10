@@ -139,6 +139,15 @@ describe('shared rule fixture', () => {
         stated.default_value_key = state.defaultValueKey;
       }
 
+      /*
+       * Projected only when true, like `hidden`: a fixture case that says
+       * nothing about a conflict is asserting there is none, and spelling
+       * `false` into every case would bury the two that matter.
+       */
+      if (state.priceConflict) {
+        stated.price_conflict = true;
+      }
+
       if (Object.keys(stated).length > 0) {
         actual[targetId] = stated;
       }

@@ -4556,6 +4556,21 @@ order-independence forbids.
 **2. `set_price` and `set_default` conflicts are refused at publish, not
 resolved.**
 
+✏️ **Amended 2026-09-10 by M17.8: refused at publish AND cancelled at runtime.**
+Publish refusal alone leaves the evaluators free to do *last writer wins*, and
+17-8 measured what that means when a document carrying the pair reaches a
+storefront anyway — a stale cache, a partial publish, or a plugin build older
+than the publish rule. The same two rules produced **1700** in document order
+`[500, 700]` and **1500** in `[700, 500]`: M17.4a's `sortOrder` defect wearing
+different clothes, with array order as the tiebreak instead.
+
+Both evaluators now **cancel** a disagreeing pair — `priceMinor` cleared,
+`priceConflict` set — and the plugin reports `rule_price_conflict` in `unpriced`
+rather than charging anything. Cancelling is the only resolution that is
+order-independent *and* never invents a number no merchant chose, which is the
+same argument this ADR already made for refusing at publish. Two rules setting
+the **same** amount still agree, and are still not a conflict.
+
 Both carry a **payload** (M17.4), so two rules can disagree about a *number*
 rather than a direction — and there is no restrictive side to prefer. `5.00`
 versus `7.00` has no principled winner, and picking one silently charges a
