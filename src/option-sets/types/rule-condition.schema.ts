@@ -154,6 +154,20 @@ export const ruleConditionSchema = z.discriminatedUnion('operator', [
  * Recorded here rather than assumed, because a later phase adding nesting must
  * do it deliberately — and `matchType` living beside the list is what makes the
  * flat reading unambiguous.
+ *
+ * ## What this schema deliberately does not decide
+ *
+ * Three questions belong to ADRs rather than to a shape, and each is settled
+ * where the whole picture is visible:
+ *
+ * - **What a `set_price` rule does to an option that already prices itself** —
+ *   ADR-049. Refused at publish against `per_char`, `per_unit` and `tiered`,
+ *   because those hold a function of customer input rather than an amount.
+ * - **What happens when rules do not converge** — ADR-050. An evaluator cap in
+ *   both languages, independent of the publish-time cycle check, because the
+ *   plugin evaluates a cached document no check has seen.
+ * - **Whether a rule-hidden option is still charged or stored** — ADR-051.
+ *   Neither, and not restored if the field re-shows.
  */
 export const ruleConditionsSchema = z
   .object({
