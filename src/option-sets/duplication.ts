@@ -142,6 +142,19 @@ export function copyableRuleFields(source: OptionRule): Omit<
   return {
     targetType: source.targetType,
     action: source.action,
+    /*
+     * 🔴 **The payload travels with the action, and the copy-completeness guard
+     * caught its absence the moment M17.4 added the column.**
+     *
+     * A duplicated `set_price` rule without its `actionValue` is a rule with no
+     * amount to set — it would evaluate, find nothing, and leave the price the
+     * merchant authored, silently. The fourth thing this file has caught, after
+     * `groupLabel`, presentational items and rules themselves.
+     *
+     * Unlike `targetId` and `conditions`, it carries **no ids**, so it is safe
+     * verbatim: an amount and a value key mean the same thing in any set.
+     */
+    actionValue: source.actionValue,
     matchType: source.matchType,
     sortOrder: source.sortOrder,
     /*

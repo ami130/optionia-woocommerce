@@ -16,7 +16,11 @@ import { OptionsRepository } from './options.repository';
 import { ParentSetService } from './parent-set';
 import { pick } from './entity-patch';
 import { codeFor } from './types/option-type.validator';
-import { ruleConditionsSchema } from './types/rule-condition.schema';
+import {
+  ACTIONS_REQUIRING_A_VALUE,
+  ruleActionValueSchema,
+  ruleConditionsSchema,
+} from './types/rule-condition.schema';
 
 export interface CreateRuleInput {
   readonly targetType: RuleTargetType;
@@ -24,6 +28,7 @@ export interface CreateRuleInput {
   readonly action: RuleAction;
   readonly matchType: RuleMatchType;
   readonly conditions: unknown[];
+  readonly actionValue?: Record<string, unknown>;
   readonly sortOrder?: number;
 }
 
@@ -33,6 +38,7 @@ export interface RuleChanges {
   readonly action?: RuleAction;
   readonly matchType?: RuleMatchType;
   readonly conditions?: unknown[];
+  readonly actionValue?: Record<string, unknown>;
   readonly sortOrder?: number;
 }
 
@@ -116,6 +122,7 @@ export class OptionRulesService {
     );
 
     const conditions = this.conditionsFor(input.conditions);
+    const actionValue = this.actionValueFor(input.action, input.actionValue);
 
     await this.assertTargetIsWhatItClaims(input.targetType, input.targetId);
 
@@ -126,6 +133,7 @@ export class OptionRulesService {
       action: input.action,
       matchType: input.matchType,
       conditions,
+      actionValue,
       sortOrder: input.sortOrder ?? (await this.rules.nextSortOrder(optionSetId)),
       /*
        * A rule is created enabled, and `disabledReason` is null because nothing
@@ -196,6 +204,19 @@ export class OptionRulesService {
 
     if (changes.sortOrder !== undefined) {
       patch.sortOrder = changes.sortOrder;
+    }
+
+    /*
+     * 🔴 **Re-checked whenever EITHER half moves.** Changing `action` alone from
+     * `set_price` to `hide` leaves an amount behind that nothing will read, and
+     * changing it the other way leaves a rule with no amount to set. Validating
+     * only the field that arrived would miss both.
+     */
+    if (changes.action !== undefined || changes.actionValue !== undefined) {
+      patch.actionValue = this.actionValueFor(
+        changes.action ?? before.action,
+        changes.actionValue ?? before.actionValue ?? undefined,
+      );
     }
 
     if (Object.keys(patch).length === 0) {
@@ -370,6 +391,50 @@ export class OptionRulesService {
        * presentational items conditional visibility.
        */
     }
+  }
+
+  /**
+   * Validate the action's payload against the action that will use it.
+   *
+   * 🔴 **Three of six actions were unimplementable before this column existed.**
+   * `set_price` had no amount to set and `set_default` no value to write, while
+   * ADR-049 reasoned in detail about what `set_price` means. The reasoning was
+   * sound; the schema could not carry it.
+   *
+   * ⚠️ **Refusing a payload the action cannot use is half the point.** An
+   * `amountMinor` on a `hide` rule stores a number nothing will ever read — the
+   * `freeUnits: 5` shape Phase 16 measured, where a setting saved successfully,
+   * was charged as absent, and the merchant had no way to tell.
+   */
+  private actionValueFor(
+    action: RuleAction,
+    raw: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | null {
+    if (ACTIONS_REQUIRING_A_VALUE.includes(action) && raw === undefined) {
+      throw DomainException.validation([
+        {
+          field: 'actionValue',
+          code: 'REQUIRED',
+          params: { message: `A ${action} rule needs a value to act with.` },
+        },
+      ]);
+    }
+
+    const result = ruleActionValueSchema(action).safeParse(raw);
+
+    if (!result.success) {
+      throw DomainException.validation(
+        result.error.issues.map(
+          (issue): ErrorDetail => ({
+            field: ['actionValue', ...issue.path.map(String)].join('.'),
+            code: codeFor(issue),
+            params: { message: issue.message },
+          }),
+        ),
+      );
+    }
+
+    return (result.data as Record<string, unknown> | undefined) ?? null;
   }
 
   /**

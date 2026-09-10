@@ -10,6 +10,7 @@ import {
   runPublishChecks,
   ruleTargetsAreInThisSet,
   rulesHaveNoCycles,
+  setPriceDoesNotFightOptionPricing,
   type PublishContext,
   patternsAreSafe,
 } from './publish-check';
@@ -977,6 +978,88 @@ describe('pre-publish checks', () => {
     });
   });
 
+  /**
+   * 🔴 ADR-049 said this in 17-0 and nothing implemented it until 17-4. The
+   * decision fell between stages — too pricing-specific for 17-3's cycle work,
+   * assumed already done by the time 17-4 planned to consume it.
+   */
+  describe('set_price against an option that prices itself', () => {
+    function pricedTree(type: string): OptionSetTree {
+      const tree = twoGroupTree();
+      tree.groups[0]!.options[0]!.option.pricing = { type, amountMinor: 50 };
+
+      return tree;
+    }
+
+    it.each(['per_char', 'per_unit', 'tiered'])(
+      'blocks a flat price on an option priced by %s',
+      (type) => {
+        const findings = setPriceDoesNotFightOptionPricing.validate(
+          context({ tree: pricedTree(type), rules: [rule({ action: 'set_price' })] }),
+        );
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.code).toBe('SET_PRICE_OVERRIDES_OPTION_PRICING');
+        expect(findings[0]?.severity).toBe(PublishSeverity.BLOCKER);
+      },
+    );
+
+    /** `fixed` and `percentage` price a VALUE; there is nothing to fight. */
+    it('allows a flat price on an option with no option-level pricing', () => {
+      expect(
+        setPriceDoesNotFightOptionPricing.validate(
+          context({ tree: twoGroupTree(), rules: [rule({ action: 'set_price' })] }),
+        ),
+      ).toEqual([]);
+    });
+
+    /**
+     * ⚠️ The two never collide at the value level: an option-level type prices
+     * what the customer *supplied*, and an option supplying a quantity or a
+     * string has no values to target.
+     */
+    /**
+     * ✏️ **The first version of this test proved nothing.** It targeted
+     * `value-1` while `pricedTree` prices `option-1` — two different ids, so the
+     * lookup missed whatever the guard did, and a mutation removing the
+     * `targetType !== 'option'` check survived it.
+     *
+     * The id must be one the pricing map actually holds. Targeting the priced
+     * OPTION's id under `targetType: 'value'` is the case that separates "is
+     * this id priced" from "is this rule aimed at an option" — the two questions
+     * the guard exists to keep apart.
+     */
+    it('allows a value-targeted rule even when that id names a priced option', () => {
+      expect(
+        setPriceDoesNotFightOptionPricing.validate(
+          context({
+            tree: pricedTree('per_unit'),
+            rules: [rule({ action: 'set_price', targetType: 'value', targetId: 'option-1' })],
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('says nothing about actions other than set_price', () => {
+      expect(
+        setPriceDoesNotFightOptionPricing.validate(
+          context({ tree: pricedTree('tiered'), rules: [rule({ action: 'hide' })] }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('says nothing about a disabled rule', () => {
+      expect(
+        setPriceDoesNotFightOptionPricing.validate(
+          context({
+            tree: pricedTree('per_char'),
+            rules: [rule({ action: 'set_price', isEnabled: false })],
+          }),
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe('the validator list', () => {
     it('runs every registered validator', () => {
       const names = PUBLISH_VALIDATORS.map((validator) => validator.name);
@@ -987,6 +1070,7 @@ describe('pre-publish checks', () => {
         'rules-have-targets',
         'rule-targets-are-in-this-set',
         'rules-have-no-cycles',
+        'set-price-does-not-fight-option-pricing',
         'set-has-assignments',
         'patterns-are-safe',
       ]);

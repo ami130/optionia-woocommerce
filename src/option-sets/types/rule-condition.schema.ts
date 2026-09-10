@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { MAX_AMOUNT_MINOR } from './pricing.schema';
+
 import {
   EQUALITY_RULE_OPERATORS,
   LIST_RULE_OPERATORS,
@@ -273,3 +275,89 @@ export const ruleConditionsSchema = z
 
 export type RuleCondition = z.infer<typeof ruleConditionSchema>;
 export type RuleConditions = z.infer<typeof ruleConditionsSchema>;
+
+/**
+ * What an action acts **with**, validated per action (M17.4).
+ *
+ * 🔴 **Three of the six actions could not be expressed at all until this.**
+ * `OptionRule` carried no payload column, so a `set_price` rule had no amount to
+ * set and `set_default` no value to write — while ADR-049 reasoned in detail
+ * about what `set_price` *means*. The reasoning was sound and the schema could
+ * not carry it.
+ *
+ * ⚠️ **Keyed on `action`, not a free-form bag.** `set_price` needs an integer of
+ * minor units; `set_default` needs a value key; the other four need nothing.
+ * Accepting `{ amountMinor }` on a `hide` rule would store a number nothing ever
+ * reads — the `freeUnits: 5` shape Phase 16 measured, where a setting saved
+ * successfully and evaporated.
+ */
+
+/** The amount a `set_price` rule sets, in minor units. */
+const setPriceValue = z
+  .object({
+    /*
+     * 🔴 **A replacement, never an addition** (ADR-049). "Set price to 5.00"
+     * means the price *is* 5.00 — the only reading that is idempotent, and
+     * therefore the only one compatible with M17.2's order-independence: two
+     * rules both setting 5.00 leave 5.00, where adding would leave 10.00 and
+     * make the result depend on which ran first.
+     *
+     * Negative is allowed, as it is for `price_config`: a rule may discount.
+     * `Pricing` already floors a line at zero, so the floor is not this
+     * schema's job and duplicating it here would be a second answer.
+     */
+    amountMinor: z
+      .number()
+      .int('An amount must be a whole number of minor units (1000 = £10.00).')
+      .min(-MAX_AMOUNT_MINOR, 'Amount is implausibly large.')
+      .max(MAX_AMOUNT_MINOR, 'Amount is implausibly large.'),
+  })
+  .strict();
+
+/** The value a `set_default` rule preselects. */
+const setDefaultValue = z
+  .object({
+    /*
+     * A **value key**, not a value id. The published document identifies a
+     * choice by its key within an option, and a rule that named an id would be
+     * the only thing in the document that does — a second identifier for one
+     * thing, and a second way for the two evaluators to disagree.
+     */
+    valueKey: z
+      .string()
+      .trim()
+      .min(1, 'A default must name the value it selects.')
+      .max(100, 'A value key is at most 100 characters.'),
+  })
+  .strict();
+
+/**
+ * Validate a rule's payload against the action that will use it.
+ *
+ * Returns the parsed payload, or `null` for the four actions that take none.
+ * Throws nothing: the caller decides how a failure is reported, because a
+ * service raising a domain error and a validator collecting findings need the
+ * same answer in different shapes.
+ */
+export function ruleActionValueSchema(action: string): z.ZodType {
+  switch (action) {
+    case 'set_price':
+      return setPriceValue;
+    case 'set_default':
+      return setDefaultValue;
+    default:
+      /*
+       * ⚠️ **`null` and `undefined` both accepted, nothing else.** An action
+       * that acts on its own must not carry a payload — one that does is a
+       * merchant believing they configured something.
+       */
+      return z
+        .union([z.null(), z.undefined()])
+        .refine((value) => value === null || value === undefined, {
+          message: `A ${action} rule takes no value.`,
+        });
+  }
+}
+
+/** The actions that require a payload, and cannot be authored without one. */
+export const ACTIONS_REQUIRING_A_VALUE: readonly string[] = ['set_price', 'set_default'];

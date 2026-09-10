@@ -64,6 +64,33 @@ export class OptionRule extends SoftDeletableEntity {
   @Column({ type: 'varchar', length: 10, default: RuleMatchType.ALL })
   matchType: RuleMatchType;
 
+  /**
+   * What the action acts **with**, for the actions that need one.
+   *
+   * 🔴 **Absent until M17.4, and three of six actions were unimplementable
+   * without it.** `set_price` had no amount to set and `set_default` no value to
+   * write — the entity, the DTOs and `PublishedRule` all omitted it and all
+   * agreed with each other, so nothing noticed until an evaluator was designed
+   * against the shape rather than the prose.
+   *
+   * | Action | Payload |
+   * |---|---|
+   * | `set_price` | `{ amountMinor }` — an integer, as money is everywhere (ADR-013) |
+   * | `set_default` | `{ valueKey }` — the value to preselect |
+   * | `show` · `hide` · `require` · `unrequire` | **none** — the action says everything |
+   *
+   * Null for the four that need nothing, rather than `{}`: absence is the normal
+   * case, and an empty object is a second thing a reader must tell apart from a
+   * missing one.
+   *
+   * ⚠️ **`amountMinor` is a REPLACEMENT, not an addition** (ADR-049). A merchant
+   * writing "set price to 5.00" means the price *is* 5.00 — which is also the
+   * only reading that is idempotent, and therefore the only one compatible with
+   * M17.2's order-independence.
+   */
+  @Column({ type: 'json', nullable: true })
+  actionValue: Record<string, unknown> | null;
+
   @Column({ type: 'int', default: 0 })
   sortOrder: number;
 

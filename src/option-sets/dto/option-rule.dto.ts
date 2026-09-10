@@ -7,6 +7,8 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsObject,
+  IsOptional,
   IsUUID,
   Min,
   ValidateNested,
@@ -114,6 +116,24 @@ export class CreateOptionRuleDto {
   @ApiProperty({ type: Object, isArray: true })
   conditions!: unknown[];
 
+  /**
+   * What the action acts **with** — required by `set_price` and `set_default`,
+   * refused by the other four.
+   *
+   * ⚠️ **`@Type(() => Object)` for the reason `conditions` needs it.**
+   * `enableImplicitConversion` rewrites a value whose design-time type it cannot
+   * see; naming the type explicitly is what stops it. Measured on `conditions`:
+   * every element became `[]` before a validator ran.
+   *
+   * Shape validated in the service against the action, because only there is the
+   * action known — a DTO field cannot ask what another field says.
+   */
+  @IsOptional()
+  @IsObject()
+  @Type(() => Object)
+  @ApiPropertyOptional({ type: Object })
+  actionValue?: Record<string, unknown>;
+
   @OptionalNotNull()
   @IsInt()
   @Min(0)
@@ -168,6 +188,13 @@ export class UpdateOptionRuleDto {
   @Type(() => Object)
   @ApiPropertyOptional({ type: Object, isArray: true })
   conditions?: unknown[];
+
+  /** See the create DTO. Validated against the action the update leaves in place. */
+  @IsOptional()
+  @IsObject()
+  @Type(() => Object)
+  @ApiPropertyOptional({ type: Object })
+  actionValue?: Record<string, unknown>;
 
   @OptionalNotNull()
   @IsInt()

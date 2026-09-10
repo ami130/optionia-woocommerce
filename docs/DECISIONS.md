@@ -4519,3 +4519,72 @@ error; the second is ordinary use and must not be.
 Rule-hidden is neither: known, and legitimately absent. Conflating it with either
 gives a wrong answer — an error the customer cannot act on, or a silent
 acceptance that defeats M17.4.
+
+---
+
+## ADR-052 — Rule precedence: `hide` wins, and order is never the tiebreak
+
+**Status:** accepted · **Date:** 2026-09-10 · **Milestone:** M17.2, M17.4
+
+### Context
+
+M17.2 requires rule evaluation be **deterministic and order-independent**. Rules
+also carry `sortOrder`, which 17-2 documented as *"presentation, not
+precedence"* — it decides what a merchant reads in the rule list.
+
+Those two facts collide the moment two rules act on one target in opposite
+directions. Found by the 17-3 audit, and **accepted at publish today**:
+
+```text
+rule 1: show option A   when B is empty
+rule 2: hide option A   when B is empty
+```
+
+Not a cycle — one node, no loop — so `rulesHaveNoCycles` correctly says nothing.
+But an evaluator must answer, and "whichever ran last" is exactly what
+order-independence forbids.
+
+### Decision
+
+**1. Within one action pair, the *restrictive* side wins.**
+
+| Pair | Winner | Why |
+|---|---|---|
+| `show` / `hide` | **`hide`** | A hidden field cannot be filled, so hiding is the answer a customer can always act on. Showing a field a rule wanted hidden risks charging for it (ADR-051). |
+| `require` / `unrequire` | **`require`** | The same shape: refusing an incomplete order is recoverable, accepting one that should have been refused is not. |
+
+**2. `set_price` and `set_default` conflicts are refused at publish, not
+resolved.**
+
+Both carry a **payload** (M17.4), so two rules can disagree about a *number*
+rather than a direction — and there is no restrictive side to prefer. `5.00`
+versus `7.00` has no principled winner, and picking one silently charges a
+customer an amount no merchant chose.
+
+⚠️ **Only when the payloads differ.** Two rules setting the same amount agree,
+and refusing them would fail a merchant whose duplicate rules are harmless.
+
+**3. `sortOrder` is never consulted.** It orders the merchant's list and nothing
+else. A precedence that reads it would make the outcome depend on a field the
+dashboard reorders for legibility.
+
+### Consequences
+
+🔴 **Determinism is now a property of the rules, not of the pass order.** Both
+evaluators can process rules in any order and reach the same state: collect what
+fires, then resolve each target by the table above. That is what makes the
+shared fixture meaningful — a fixture cannot pin an order the specification
+refuses to define.
+
+⚠️ **The restrictive-wins rule is what makes `hide` safe to combine with
+ADR-051.** A rule-hidden option is not charged and not stored. If `show` could
+win, a rule intended to hide an option could be overridden by an unrelated one
+and the customer charged for a field their configuration removed — 16c's defect
+with a rule in front of it.
+
+⚠️ **Decision 2 needs a publish validator, and it is not in 17-4.** The check
+needs the payloads, which arrived with M17.4's `actionValue` column, but it is a
+*publish-gate* change and belongs beside the other rule validators. Recorded as
+**M17.4a** rather than left to be rediscovered — a conflicting pair publishes
+today, and the evaluator will resolve `show`/`hide` correctly while
+`set_price` conflicts remain undefined until that check exists.

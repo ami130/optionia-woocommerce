@@ -163,6 +163,18 @@ describe('copy completeness', () => {
     });
 
     /**
+     * 🔴 **The payload travels with the action.** A duplicated `set_price` rule
+     * without its `actionValue` has no amount to set: it evaluates, finds
+     * nothing, and leaves the price the merchant authored — silently.
+     *
+     * Safe verbatim, unlike `targetId` and `conditions`, because it carries no
+     * ids: an amount and a value key mean the same thing in any set.
+     */
+    it('carries the payload the action acts with', () => {
+      expect(copied).toContain('actionValue');
+    });
+
+    /**
      * 🔴 The two fields that must NOT travel verbatim.
      *
      * `targetId` names a row in the source set and `conditions` names options in

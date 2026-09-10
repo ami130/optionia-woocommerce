@@ -765,12 +765,89 @@ function cycleIn(edges: ReadonlyMap<string, ReadonlySet<string>>): boolean {
   return false;
 }
 
+/**
+ * The price types that live on an **option** rather than a value.
+ *
+ * Each holds a **function of the customer's input** — a rate per character, a
+ * rate per unit, a bracket table — not an amount. `PRICING-SPEC.md` §2 places
+ * all three at the option level for that reason.
+ */
+const OPTION_LEVEL_PRICE_TYPES: ReadonlySet<string> = new Set(['per_char', 'per_unit', 'tiered']);
+
+/**
+ * `set_price` cannot override an option that prices itself (ADR-049).
+ *
+ * 🔴 **A blocker, and ADR-049 said so in 17-0 while nothing implemented it.**
+ * The decision was written, tagged M17.4, and fell between stages: too
+ * pricing-specific for 17-3's cycle work, and assumed already done by the time
+ * 17-4 planned to consume it. Found by auditing what the ADR claimed against
+ * what the code did.
+ *
+ * ## Why refusing is the honest answer
+ *
+ * `per_char`, `per_unit` and `tiered` hold a **function**, not a number. A rule
+ * setting a flat amount on one does not override a value — it **replaces a
+ * function with a constant**, discarding the merchant's rate silently and
+ * charging the same for a 3-character engraving as for a 300-character one.
+ * There is no arithmetic that reconciles them.
+ *
+ * ⚠️ **Refused at publish rather than at authoring**, deliberately. A merchant
+ * may author the rule and *then* change the option's pricing to `per_unit`,
+ * which would make an already-saved rule invalid — validating only at creation
+ * would let that through. Publish is where the whole document is visible at
+ * once, which is the same reason cycle detection lives here.
+ *
+ * ⚠️ **A rule targeting a VALUE is fine even when its option prices itself.**
+ * The two never collide: an option-level type prices what the customer supplied,
+ * and an option that supplies a quantity or a string has no values to target.
+ */
+export const setPriceDoesNotFightOptionPricing: PublishValidator = {
+  name: 'set-price-does-not-fight-option-pricing',
+  validate({ tree, rules }) {
+    /** Option id -> the option-level price type it carries, if any. */
+    const optionPricing = new Map<string, string>();
+
+    tree.groups.forEach(({ options }) => {
+      options.forEach(({ option }) => {
+        const type = (option.pricing as Record<string, unknown> | null)?.type;
+
+        if (typeof type === 'string' && OPTION_LEVEL_PRICE_TYPES.has(type)) {
+          optionPricing.set(option.id, type);
+        }
+      });
+    });
+
+    return rules
+      .filter((rule) => rule.isEnabled && rule.action === 'set_price')
+      .flatMap((rule) => {
+        const type = optionPricing.get(rule.targetId);
+
+        if (rule.targetType !== 'option' || type === undefined) {
+          return [];
+        }
+
+        return [
+          {
+            severity: PublishSeverity.BLOCKER,
+            code: 'SET_PRICE_OVERRIDES_OPTION_PRICING',
+            subject: `rule:${rule.id}`,
+            message:
+              `A rule sets a flat price on an option priced by ${type}, which charges ` +
+              'by what the customer supplies. The rule would replace that rate with one ' +
+              'amount for every customer. Point the rule at a value, or remove it.',
+          },
+        ];
+      });
+  },
+};
+
 export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   setHasContent,
   optionsHaveValues,
   rulesHaveTargets,
   ruleTargetsAreInThisSet,
   rulesHaveNoCycles,
+  setPriceDoesNotFightOptionPricing,
   setHasAssignments,
   patternsAreSafe,
 ];
