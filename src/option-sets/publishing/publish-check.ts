@@ -46,6 +46,15 @@ export interface PublishContext {
     conditions: readonly unknown[];
     matchType: string;
     action: string;
+    /**
+     * What the action acts with — `{ amountMinor }` or `{ valueKey }` (M17.4).
+     *
+     * ✏️ **Added in M17.4a**, which is the first check that needs to compare two
+     * rules' payloads rather than read one rule's shape. The loader has always
+     * fetched whole `OptionRule` rows; this interface narrows them to what the
+     * checks of the day require, and is widened rather than the loader changed.
+     */
+    actionValue: Record<string, unknown> | null;
   }>;
   /**
    * Live assignments, loaded as a count for the publish preflight.
@@ -841,6 +850,92 @@ export const setPriceDoesNotFightOptionPricing: PublishValidator = {
   },
 };
 
+/**
+ * Two rules cannot set **different** payloads on one target (M17.4a, ADR-052).
+ *
+ * 🔴 **Without this, `sortOrder` decides a price** — which every other part of
+ * this system says it must not. Measured, in both languages identically:
+ *
+ * ```text
+ * two set_price rules on one target, 500 and 700
+ *   document order [500, 700] -> charges 700
+ *   document order [700, 500] -> charges 500
+ * ```
+ *
+ * That contradicts three things at once: M17.2 requires evaluation be
+ * *"deterministic and order-independent"*; ADR-052 says *"`sortOrder` is never
+ * consulted"*; and the service, controller and API contract all describe it as
+ * *"presentation, not precedence"*. Yet the loader orders by it and the
+ * evaluator takes the last write, so a merchant reordering their rule list for
+ * readability changes what customers are charged.
+ *
+ * ## Why refusing, rather than defining a precedence
+ *
+ * ADR-052 resolves `show`/`hide` and `require`/`unrequire` by **meaning** — the
+ * restrictive side wins, which needs no ordering. Payloads have no restrictive
+ * side: `5.00` versus `7.00` has no principled winner, and picking one silently
+ * charges a customer an amount no merchant chose.
+ *
+ * ⚠️ **Only when the payloads DIFFER.** Two rules setting the same amount agree,
+ * and refusing them would fail a merchant whose duplicate rules are harmless.
+ *
+ * ⚠️ **Disabled rules are excluded**, as they are from the cycle check: a
+ * conflict between rules that never run is not one a storefront can reach.
+ *
+ * ⚠️ **Conditions are not consulted.** Two rules may set different prices under
+ * conditions that can never both hold — but deciding that is the satisfiability
+ * problem the cycle detector deliberately does not solve either, and a merchant
+ * told "these two rules disagree" can act on it whether or not the overlap is
+ * reachable.
+ */
+export const rulePayloadsDoNotConflict: PublishValidator = {
+  name: 'rule-payloads-do-not-conflict',
+  validate({ rules }) {
+    /** `targetId + action` -> the distinct payloads set on it. */
+    const payloads = new Map<string, Map<string, string>>();
+
+    rules
+      .filter((rule) => rule.isEnabled && PAYLOAD_ACTIONS.has(rule.action) && rule.actionValue)
+      .forEach((rule) => {
+        const key = `${rule.action}:${rule.targetId}`;
+        const bucket = payloads.get(key) ?? new Map<string, string>();
+
+        /*
+         * Keyed by the serialized payload so two rules setting the same amount
+         * collapse to one entry, and the rule ids are kept so the message can
+         * name what disagrees rather than only that something does.
+         */
+        bucket.set(JSON.stringify(rule.actionValue), rule.id);
+        payloads.set(key, bucket);
+      });
+
+    const findings: PublishFinding[] = [];
+
+    payloads.forEach((bucket, key) => {
+      if (bucket.size < 2) {
+        return;
+      }
+
+      const [action, targetId] = key.split(':');
+
+      findings.push({
+        severity: PublishSeverity.BLOCKER,
+        code: 'RULE_PAYLOADS_CONFLICT',
+        subject: `option:${targetId}`,
+        message:
+          `Two or more rules set a different ${action === 'set_price' ? 'price' : 'default'} ` +
+          `on the same thing (rules ${[...bucket.values()].sort().join(', ')}). There is no ` +
+          'rule about which should win, so one of them must change or be removed.',
+      });
+    });
+
+    return findings;
+  },
+};
+
+/** The actions that carry a payload, and so can disagree about a value. */
+const PAYLOAD_ACTIONS: ReadonlySet<string> = new Set(['set_price', 'set_default']);
+
 export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   setHasContent,
   optionsHaveValues,
@@ -848,6 +943,7 @@ export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   ruleTargetsAreInThisSet,
   rulesHaveNoCycles,
   setPriceDoesNotFightOptionPricing,
+  rulePayloadsDoNotConflict,
   setHasAssignments,
   patternsAreSafe,
 ];

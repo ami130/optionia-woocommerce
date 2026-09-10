@@ -10,6 +10,7 @@ import {
   runPublishChecks,
   ruleTargetsAreInThisSet,
   rulesHaveNoCycles,
+  rulePayloadsDoNotConflict,
   setPriceDoesNotFightOptionPricing,
   type PublishContext,
   patternsAreSafe,
@@ -79,6 +80,8 @@ function rule(overrides: Partial<PublishContext['rules'][number]> = {}) {
     matchType: 'all',
     /* `show` is answer-affecting, so a test wanting an edge gets one by default. */
     action: 'show',
+    /* No payload: `show` is one of the four actions that act on their own. */
+    actionValue: null,
     ...overrides,
   };
 }
@@ -1073,6 +1076,123 @@ describe('pre-publish checks', () => {
     });
   });
 
+  /**
+   * 🔴 **Without this, `sortOrder` decides a price** (M17.4a, ADR-052).
+   *
+   * Measured in both languages identically before this check existed: two
+   * `set_price` rules of 500 and 700 on one target charged **700** in document
+   * order `[500, 700]` and **500** in `[700, 500]` — last-wins.
+   *
+   * That contradicts M17.2's order-independence, ADR-052's *"`sortOrder` is
+   * never consulted"*, and the service, controller and API contract, all of
+   * which call it *"presentation, not precedence"*.
+   *
+   * ⚠️ **The shared fixture is structurally unable to catch it**: the two
+   * evaluators agree precisely, on the wrong thing.
+   */
+  describe('rules that set different payloads on one target', () => {
+    const priced = (id: string, amountMinor: number) =>
+      rule({ id, action: 'set_price', actionValue: { amountMinor } });
+
+    it('blocks two set_price rules that disagree about the amount', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({ rules: [priced('r1', 500), priced('r2', 700)] }),
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.code).toBe('RULE_PAYLOADS_CONFLICT');
+      expect(findings[0]?.severity).toBe(PublishSeverity.BLOCKER);
+    });
+
+    it('names both rules, so a merchant knows what disagrees', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({ rules: [priced('r1', 500), priced('r2', 700)] }),
+      );
+
+      expect(findings[0]?.message).toContain('r1');
+      expect(findings[0]?.message).toContain('r2');
+    });
+
+    /**
+     * ⚠️ Two rules setting the **same** amount agree. Refusing them would fail a
+     * merchant whose duplicate rules are harmless.
+     */
+    it('allows two rules that set the same amount', () => {
+      expect(
+        rulePayloadsDoNotConflict.validate(
+          context({ rules: [priced('r1', 500), priced('r2', 500)] }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('blocks two set_default rules that disagree about the value', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({
+          rules: [
+            rule({ id: 'r1', action: 'set_default', actionValue: { valueKey: 'large' } }),
+            rule({ id: 'r2', action: 'set_default', actionValue: { valueKey: 'small' } }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_PAYLOADS_CONFLICT']);
+    });
+
+    /**
+     * Different **targets** do not conflict — each is decided on its own, which
+     * is the whole point of keying by target rather than by action alone.
+     */
+    it('allows different amounts on different targets', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({
+          rules: [
+            priced('r1', 500),
+            rule({ id: 'r2', targetId: 'option-2', action: 'set_price', actionValue: { amountMinor: 700 } }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /**
+     * A price and a default are different questions about one option, and
+     * answering both is ordinary — only two answers to the *same* question
+     * conflict.
+     */
+    it('allows a price and a default on one target', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({
+          rules: [
+            priced('r1', 500),
+            rule({ id: 'r2', action: 'set_default', actionValue: { valueKey: 'large' } }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /** A conflict between rules that never run is not one a storefront reaches. */
+    it('ignores a conflict whose rules are disabled', () => {
+      const findings = rulePayloadsDoNotConflict.validate(
+        context({
+          rules: [priced('r1', 500), rule({ id: 'r2', action: 'set_price', actionValue: { amountMinor: 700 }, isEnabled: false })],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    it('says nothing about actions that carry no payload', () => {
+      expect(
+        rulePayloadsDoNotConflict.validate(
+          context({ rules: [rule({ id: 'r1', action: 'hide' }), rule({ id: 'r2', action: 'show' })] }),
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe('the validator list', () => {
     it('runs every registered validator', () => {
       const names = PUBLISH_VALIDATORS.map((validator) => validator.name);
@@ -1084,6 +1204,7 @@ describe('pre-publish checks', () => {
         'rule-targets-are-in-this-set',
         'rules-have-no-cycles',
         'set-price-does-not-fight-option-pricing',
+        'rule-payloads-do-not-conflict',
         'set-has-assignments',
         'patterns-are-safe',
       ]);
