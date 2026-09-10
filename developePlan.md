@@ -19278,6 +19278,66 @@ for**.
 | Payload published verbatim, ignoring the action | **killed** by three |
 | `option_id` renamed to `optionId` | **caught by the gate**, by name |
 
+#### 🔴 17-5 audit — two shapes describing one wire, and a claim that was false
+
+Four probes serializing real entities and comparing the output against the shared
+fixture. **Defensive handling held up** — a pre-17-1 object-shaped `conditions`,
+a null, an `in`-list operand and an unknown extra key all behave correctly. Two
+findings did not.
+
+##### 🔴 K1 — The serializer emitted `sort_order`; the fixture omitted it
+
+Measured key-for-key:
+
+```text
+serializer  action, action_value, conditions, id, match_type, sort_order, target_id, target_type
+fixture     action, action_value, conditions, id, match_type,             target_id, target_type
+```
+
+🔴 **M17.6 builds the PHP evaluator against the fixture**, so it would have been
+written against a shape **missing a key the real document always carries** — and
+the fixture is the one artifact that exists to stop the two languages diverging.
+
+⚠️ **`assignment-wire.json`'s lesson, one artifact over.** That fixture exists
+because a hand-written shape is a guess, and the Phase 8 envelope defect was *two
+internally consistent halves that disagreed*. I built this fixture in M17.4 from
+what the **evaluator** needed and the serializer in M17.5 from what the
+**document** needs, and never compared them.
+
+🔴 **Nothing would have caught it.** `rule_cases` was read only by the evaluator
+spec; no test connected the serializer's output to the fixture's input. There is
+one now, comparing **key sets** — mutation-verified: dropping `sort_order` from
+the converter fails it by name.
+
+##### 🔴 K2 — The plan said the dashboard carries rules. It did not.
+
+J3 recorded that *"adding rules to `OptionSetTree` changes what the authoring
+view carries."* **`toAuthoring` ignored `tree.rules` entirely**, and
+`AuthoringOptionSet` had no field for them.
+
+**Both halves wrong, in opposite directions**: a claim in the plan that was not
+true, and a fifth query on every dashboard render whose result was discarded.
+
+Fixed by adding the projection M17.6's builder needs — **camelCase, keeping
+`isEnabled` and `disabledReason`**, which is the deliberate opposite of the
+published projection. A merchant must see a rule the cascade switched off *and
+why*; a storefront never receives one, so there the flag has nothing to say.
+
+##### 🟠 K3 — A malformed stored `conditions` publishes as a rule that never fires
+
+A pre-M17.1 row whose `conditions` is an object rather than an array serializes
+to `conditions: []`, and the evaluator treats an empty list as **never firing**.
+
+Safe direction — the storefront is unchanged — and **silent**: the merchant sees
+the rule in the builder and it does nothing, with no publish finding.
+`conditionOptionIds` on an empty list yields no ids, so
+`ruleTargetsAreInThisSet` says nothing either.
+
+⚠️ **Recorded rather than fixed.** M17.1's schema refuses that shape, so only a
+row predating it can reach here — and a publish warning belongs with **17-7's**
+server-side authority work, where "a rule that cannot fire" is the same sentence
+`RULE_TARGET_NOT_PUBLISHED` already says one state earlier.
+
 #### 🟡 J6 — 3.2 MB of rules per set can now reach every cached document
 
 `rulesPerSet` is 200 and `MAX_CONDITIONS_BYTES` is 16 KB, and nothing bounds the
