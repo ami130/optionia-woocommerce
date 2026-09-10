@@ -1,5 +1,8 @@
 import { OptionGroup } from '../entities/option-group.entity';
 import { OptionSet } from '../entities/option-set.entity';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { OptionRule } from '../entities/option-rule.entity';
 import { OptionValue } from '../entities/option-value.entity';
 import { Option } from '../entities/option.entity';
@@ -226,6 +229,85 @@ describe('OptionSetSerializer', () => {
    * `maxLength` arrived spelled in a way `SelectionResolver` never looks for:
    * *present in the document, enforced nowhere.*
    */
+  /**
+   * Rules in the authoring view (M17.5, corrected by its own audit).
+   *
+   * ✏️ **The tree loaded rules and this projection discarded them** — a fifth
+   * query on every dashboard render whose result was thrown away, while the plan
+   * recorded that the authoring view carried them. Both halves were wrong, in
+   * opposite directions, and the audit found them by reading the projection
+   * rather than the claim.
+   */
+  describe('rules in the authoring view', () => {
+    it('carries the rule the editor has to draw', () => {
+      const [authored] = serializer.toAuthoring(tree({ rules: [rule()] })).rules;
+
+      expect(authored).toEqual({
+        id: 'rule-1',
+        targetType: 'option',
+        targetId: OPTION_ID,
+        action: 'hide',
+        matchType: 'all',
+        conditions: [{ optionId: OPTION_ID, operator: 'is_empty' }],
+        actionValue: null,
+        sortOrder: 10,
+        isEnabled: true,
+        disabledReason: null,
+        createdAt: AT.toISOString(),
+        updatedAt: AT.toISOString(),
+      });
+    });
+
+    /**
+     * 🔴 **The opposite of the published projection, deliberately.** A merchant
+     * must see a rule the cascade switched off *and why*; a storefront never
+     * receives one, so there the flag has nothing to say.
+     */
+    it('keeps a disabled rule, with the reason it was disabled for', () => {
+      const [authored] = serializer.toAuthoring(
+        tree({ rules: [rule({ isEnabled: false, disabledReason: 'target_deleted' })] }),
+      ).rules;
+
+      expect(authored?.isEnabled).toBe(false);
+      expect(authored?.disabledReason).toBe('target_deleted');
+    });
+
+    /**
+     * ⚠️ **camelCase, passed through as stored.** The dashboard authored these
+     * in this shape and reads them back in it; the published projection is the
+     * one place they are rewritten for a PHP reader.
+     */
+    it('leaves conditions in the shape the dashboard authored', () => {
+      const [authored] = serializer.toAuthoring(
+        tree({ rules: [rule({ conditions: [{ optionId: OPTION_ID, operator: 'equals', value: 'x' }] })] }),
+      ).rules;
+
+      expect(authored?.conditions).toEqual([
+        { optionId: OPTION_ID, operator: 'equals', value: 'x' },
+      ]);
+    });
+
+    it('carries a payload without renaming it', () => {
+      const [authored] = serializer.toAuthoring(
+        tree({ rules: [rule({ action: 'set_price', actionValue: { amountMinor: 500 } })] }),
+      ).rules;
+
+      expect(authored?.actionValue).toEqual({ amountMinor: 500 });
+    });
+
+    it('survives a stored shape that is not a list', () => {
+      const [authored] = serializer.toAuthoring(
+        tree({ rules: [rule({ conditions: null as never })] }),
+      ).rules;
+
+      expect(authored?.conditions).toEqual([]);
+    });
+
+    it('carries no rules when a set has none', () => {
+      expect(serializer.toAuthoring(tree()).rules).toEqual([]);
+    });
+  });
+
   describe('rules in the published document', () => {
     it('emits every key in the document’s snake_case convention', () => {
       const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;
@@ -342,6 +424,47 @@ describe('OptionSetSerializer', () => {
 
     it('carries no rules when a set has none', () => {
       expect(serializer.toPublished(tree()).rules).toEqual([]);
+    });
+
+    /**
+     * 🔴 **The serializer and the shared fixture describe one wire shape, and
+     * nothing tied them together until this.**
+     *
+     * The fixture is what M17.6's PHP evaluator is built against; the serializer
+     * is what actually reaches a storefront. Measured before this test: the
+     * serializer emitted `sort_order` and the fixture omitted it, so the PHP
+     * evaluator would have been written against a shape **missing a key the real
+     * document always carries**.
+     *
+     * That is `assignment-wire.json`'s lesson one artifact over — that fixture
+     * exists because a hand-written shape is a guess, and the Phase 8 envelope
+     * defect was two internally consistent halves that disagreed. The fixture was
+     * built in M17.4 from what the evaluator needed and the serializer in M17.5
+     * from what the document needs, and neither was compared to the other.
+     *
+     * Compares **key sets**, not values: the fixture's ids and amounts are its
+     * own, and pinning those here would make every fixture edit fail a
+     * serializer test for no reason.
+     */
+    it('emits exactly the keys the shared rule fixture declares', () => {
+      const fixture = JSON.parse(
+        readFileSync(join(__dirname, '..', '..', '..', 'test', 'fixtures', 'shared', 'rule-fixtures.json'), 'utf8'),
+      ) as { rule_cases: ReadonlyArray<{ rules: ReadonlyArray<Record<string, unknown>> }> };
+
+      const fixtureKeys = new Set<string>();
+
+      fixture.rule_cases.forEach((testCase) => {
+        testCase.rules.forEach((raw) => {
+          Object.keys(raw).forEach((key) => fixtureKeys.add(key));
+        });
+      });
+
+      /* A rule carrying a payload, so `action_value` is in the produced set. */
+      const produced = serializer.toPublished(
+        tree({ rules: [rule({ action: 'set_price', actionValue: { amountMinor: 500 } })] }),
+      ).rules[0] as unknown as Record<string, unknown>;
+
+      expect(new Set(Object.keys(produced))).toEqual(fixtureKeys);
     });
   });
 

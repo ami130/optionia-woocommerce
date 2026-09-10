@@ -121,6 +121,44 @@ export interface AuthoringOptionSet {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly groups: readonly AuthoringGroup[];
+  /**
+   * The set's conditional rules, for the rule builder (M17.6).
+   *
+   * ✏️ **The tree loaded these from M17.5 and this projection discarded them** —
+   * a fifth query on every dashboard render whose result was thrown away, while
+   * the plan recorded that the authoring view carried them. Both halves were
+   * wrong, in opposite directions.
+   *
+   * ⚠️ **camelCase, and it keeps `isEnabled` and `disabledReason`** — the
+   * opposite of the published projection, deliberately. A merchant needs to see
+   * a rule the cascade switched off *and why*; a storefront never receives one
+   * at all, so the flag has nothing to say there.
+   */
+  readonly rules: readonly AuthoringRule[];
+}
+
+/**
+ * One rule, as the editor sees it.
+ *
+ * `conditions` and `actionValue` are passed through as stored: the dashboard
+ * authored them in this shape and reads them back in it. The **published**
+ * projection is where they are rewritten for a PHP reader, and doing it in one
+ * place is what stops the two conventions leaking into each other.
+ */
+export interface AuthoringRule {
+  readonly id: string;
+  readonly targetType: string;
+  readonly targetId: string;
+  readonly action: string;
+  readonly matchType: string;
+  readonly conditions: readonly unknown[];
+  readonly actionValue: Record<string, unknown> | null;
+  readonly sortOrder: number;
+  readonly isEnabled: boolean;
+  /** Why the *system* switched it off, or null when the merchant did. */
+  readonly disabledReason: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 /* -------------------------------------------------------------------------

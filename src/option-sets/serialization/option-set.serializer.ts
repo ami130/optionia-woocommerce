@@ -19,6 +19,7 @@ import type {
   AuthoringOptionSet,
   AuthoringOptionValue,
   AuthoringPresentationalItem,
+  AuthoringRule,
   PublishedGroup,
   PublishedItem,
   PublishedOption,
@@ -103,6 +104,36 @@ export class OptionSetSerializer {
       createdAt: iso(set.createdAt) as string,
       updatedAt: iso(set.updatedAt) as string,
       groups: tree.groups.map((node) => this.groupToAuthoring(node)),
+      /*
+       * ⚠️ **Every rule, disabled ones included** — the opposite of the
+       * published projection. A merchant must see a rule the cascade switched
+       * off and why; a storefront never receives one, so the flag has nothing to
+       * say there.
+       */
+      rules: tree.rules.map((rule) => this.ruleToAuthoring(rule)),
+    };
+  }
+
+  private ruleToAuthoring(rule: OptionRule): AuthoringRule {
+    return {
+      id: rule.id,
+      targetType: rule.targetType,
+      targetId: rule.targetId,
+      action: rule.action,
+      matchType: rule.matchType,
+      /*
+       * Passed through as stored. The dashboard authored these in camelCase and
+       * reads them back in it; the published projection is the one place they
+       * are rewritten for a PHP reader, which is what keeps the two conventions
+       * from leaking into each other.
+       */
+      conditions: Array.isArray(rule.conditions) ? rule.conditions : [],
+      actionValue: rule.actionValue,
+      sortOrder: rule.sortOrder,
+      isEnabled: rule.isEnabled,
+      disabledReason: rule.disabledReason,
+      createdAt: iso(rule.createdAt) as string,
+      updatedAt: iso(rule.updatedAt) as string,
     };
   }
 
