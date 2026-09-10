@@ -308,6 +308,37 @@ describe('OptionSetSerializer', () => {
     });
   });
 
+  /**
+   * 🔴 **A rule may target a value, and the plugin resolves a target by id.**
+   *
+   * Groups and options carried an `id` on the wire and values did not — the
+   * serializer's own note explains why: ids are *"the join key between a
+   * storefront and the dashboard"*, and nothing on the storefront had needed a
+   * value's until M17.8's evaluator did.
+   *
+   * Without it a `target_type: "value"` rule reached the storefront naming
+   * something the document did not contain, and could never apply — the same
+   * "publishes and governs nothing" shape M17.3's checks exist to refuse.
+   */
+  it('gives every published value an id, so a value-targeted rule can find it', () => {
+    const published = serializer.toPublished(tree());
+    const [value] = published.groups[0]?.options[0]?.values ?? [];
+
+    expect(value?.id).toBe('value-1');
+  });
+
+  /**
+   * ⚠️ `value_key` is unique **within one option**, so it cannot identify a
+   * value across a set the way `target_id` must. Both ship; neither replaces
+   * the other.
+   */
+  it('keeps value_key alongside the id, because they answer different questions', () => {
+    const [value] = serializer.toPublished(tree()).groups[0]?.options[0]?.values ?? [];
+
+    expect(value?.value_key).toBe('front');
+    expect(value?.id).not.toBe(value?.value_key);
+  });
+
   describe('rules in the published document', () => {
     it('emits every key in the document’s snake_case convention', () => {
       const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;

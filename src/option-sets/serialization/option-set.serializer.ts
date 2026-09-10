@@ -78,9 +78,13 @@ export interface OptionSetTree {
  *   already a tree; a child that names its parent is the same fact twice, and
  *   two ways to disagree.
  *
- * Group and option `id` **are** included: the plugin reports analytics events
- * and order selections against them, so they are the join key between a
- * storefront and the dashboard.
+ * Group, option **and value** `id` are included: the plugin reports analytics
+ * events and order selections against them, so they are the join key between a
+ * storefront and the dashboard — and since M17.5 a rule may **target** any of
+ * the three, which the plugin resolves by id.
+ *
+ * ✏️ A value's `id` was absent until M17.8 needed it. `value_key` is unique
+ * within one option and so cannot identify a value across a set.
  */
 @Injectable()
 export class OptionSetSerializer {
@@ -337,6 +341,12 @@ export class OptionSetSerializer {
    */
   private valueToPublished(value: OptionValue): PublishedValue {
     return {
+      /*
+       * A rule may target a value (`RuleTargetType.VALUE`), and the plugin
+       * resolves a target by id — so a value without one is a target the
+       * storefront cannot find. `value_key` is unique only within one option.
+       */
+      id: value.id,
       value_key: value.valueKey,
       label: value.label,
       sort_order: value.sortOrder,

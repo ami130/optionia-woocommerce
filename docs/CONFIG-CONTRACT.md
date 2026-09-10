@@ -77,6 +77,7 @@ breaking change.
               "sort_order": 10,
               "values": [
                 {
+                  "id": "01a03fa7-…",
                   "value_key": "none",
                   "label": "None",
                   "sort_order": 10,
@@ -84,6 +85,7 @@ breaking change.
                   "is_default": true             // present only when true
                 },
                 {
+                  "id": "01a03fa8-…",
                   "value_key": "front",
                   "label": "Front",
                   "sort_order": 20,
@@ -263,7 +265,8 @@ engraving.
 
 | Field | Type | Notes |
 |---|---|---|
-| `value_key` | string | Stable identifier. Stored in order meta. |
+| `id` | string | UUID. The join key a **rule** targets (`target_type: "value"`), and what analytics and order selections report against. Added with M17.5's rules; a document published before that carries values without it. |
+| `value_key` | string | Stable identifier **within its option**. Stored in order meta. ⚠️ Not unique across a set, so it cannot serve as a rule's `target_id`. |
 | `label` | string | Snapshotted per order, so renaming later does not rewrite history. |
 | `sort_order` | int | |
 | `price_config` | object | Always present. See below. |

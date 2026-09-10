@@ -166,6 +166,23 @@ export interface AuthoringRule {
  * ---------------------------------------------------------------------- */
 
 export interface PublishedValue {
+  /**
+   * The value's id.
+   *
+   * ✏️ **Added in M17.5's second half**, for M17.8. Groups and options carried
+   * an `id` and values did not — the serializer's own note explains why: ids are
+   * *"the join key between a storefront and the dashboard"*, and nothing on the
+   * storefront had needed a value's until rules did.
+   *
+   * 🔴 **`RuleTargetType` is `option | group | value`**, so a rule may act on a
+   * value — and the plugin resolves a target by id. Without this, a
+   * value-targeted rule reached the storefront naming something the document did
+   * not contain, and could never apply.
+   *
+   * `value_key` is not a substitute: it is unique **within one option**, so it
+   * cannot identify a value across a set the way `target_id` must.
+   */
+  readonly id: string;
   readonly value_key: string;
   readonly label: string;
   readonly sort_order: number;
