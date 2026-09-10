@@ -203,6 +203,58 @@ export const RuleMatchType = {
 } as const;
 export type RuleMatchType = (typeof RuleMatchType)[keyof typeof RuleMatchType];
 
+/**
+ * How one condition compares an option's answer against the merchant's operand.
+ *
+ * The nine M17.1 names. Stored as strings rather than symbols so the published
+ * document reads as English — a plugin author debugging a rule sees
+ * `greater_than`, not `gt`.
+ *
+ * ⚠️ **Comparison semantics belong to the evaluator, not to this list.**
+ * `GREATER_THAN` on a number field compares numbers; on a text field there is no
+ * defined ordering, and inventing one independently in two languages is how they
+ * begin to disagree — the reasoning `option_delta()` already gives for refusing
+ * `fixed` at the option level. Which operators are legal against which option
+ * type is a schema question (M17.1) and a fixture question (M17.2), settled in
+ * one place each.
+ */
+export const RuleOperator = {
+  EQUALS: 'equals',
+  NOT_EQUALS: 'not_equals',
+  CONTAINS: 'contains',
+  GREATER_THAN: 'greater_than',
+  LESS_THAN: 'less_than',
+  IS_EMPTY: 'is_empty',
+  IS_NOT_EMPTY: 'is_not_empty',
+  IN: 'in',
+  NOT_IN: 'not_in',
+} as const;
+export type RuleOperator = (typeof RuleOperator)[keyof typeof RuleOperator];
+
+/**
+ * The operators that take no operand.
+ *
+ * `is_empty` and `is_not_empty` ask about the answer alone. A schema accepting a
+ * `value` alongside them would let a merchant save a condition half of which is
+ * silently ignored — the `freeUnits: 5` shape Phase 16's audit found, where a
+ * setting saved successfully and did nothing.
+ */
+export const UNARY_RULE_OPERATORS: readonly RuleOperator[] = [
+  RuleOperator.IS_EMPTY,
+  RuleOperator.IS_NOT_EMPTY,
+];
+
+/**
+ * The operators whose operand is a **list** rather than a single value.
+ *
+ * Separated for the same reason as the unary set: `in` with a scalar operand is
+ * a merchant meaning `equals` and getting silence.
+ */
+export const LIST_RULE_OPERATORS: readonly RuleOperator[] = [
+  RuleOperator.IN,
+  RuleOperator.NOT_IN,
+];
+
 /* -------------------------------------------------------------------------
  * Assignment
  * ---------------------------------------------------------------------- */
