@@ -20714,6 +20714,20 @@ Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
 
+⚠️ **Thirteen occurrences by Stage 17-3**, and the thirteenth was a **fourth full
+hang**: 22 e2e suites passed, then the run stalled with the output file untouched
+for over 160 seconds and jest still alive. Killed with `pkill`, as the other three
+were. Zero failures among everything that had run.
+
+The re-run after that hang then flaked in its own right — **the fourteenth**:
+`cascade` and `concurrency` failed 2 of 904 with *`Fixture failed to create a
+value: 400 {}`*. Alone they pass **32/32** and **28/28**. Neither suite reads
+anything 17-3 touched.
+
+🔴 **Four hangs and ten flakes, all in the same phase of the same command.** The
+unit half has never once done this — 48 suites and 911 tests complete in seconds
+every time. It is the sequential e2e run, and nothing else.
+
 ⚠️ **Twelve occurrences by Stage 17-2.** The twelfth hit `config-delivery`: 4 of
 its 38 tests failed with *`Fixture failed to create set: {}`* — the empty body
 again, in fixture setup rather than any assertion. Alone, the suite passes
