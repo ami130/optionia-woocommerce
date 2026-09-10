@@ -234,6 +234,24 @@ export interface PublishedRule {
   readonly target_id: string;
   readonly action: string;
   readonly match_type: string;
+  /*
+   * 🔴 **`action_value` is MISSING, and M17.5 must add it.**
+   *
+   * M17.4 gave `OptionRule` an `actionValue` column because three of the six
+   * actions could not otherwise be expressed — `set_price` had no amount to set
+   * and `set_default` no value to write. That column reaches the entity, the
+   * DTOs, the service and the evaluator, and **stops here**: a merchant can
+   * author "set price to 5.00", it validates, it stores, it publishes, and the
+   * document the plugin receives cannot carry the amount.
+   *
+   * Not added in M17.4 because nothing fills `rules` yet — the serializer emits
+   * `[]` and `OptionSetTree` carries no rules at all, so a field here would have
+   * been a promise with no writer. M17.5 adds both together.
+   *
+   * ⚠️ **Recorded here rather than only in the plan** because this interface is
+   * where someone implementing M17.5 looks, and "the payload is missing" is
+   * invisible from a shape that never mentions it.
+   */
   /**
    * The conditions, as a flat list — never a nested tree (M17.1).
    *

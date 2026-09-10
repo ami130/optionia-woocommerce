@@ -186,26 +186,59 @@ export function evaluateRules(
   answers: Answers,
   optionsUnder: ReadonlyMap<string, readonly string[]>,
 ): RuleOutcome {
+  /**
+   * The options hidden so far. **Accumulated, never recomputed.**
+   *
+   * 🔴 **This is what stops an ordinary rule oscillating for ever.** Hiding an
+   * option clears its answer (ADR-051), so a rule whose condition reads an
+   * option its own target contains would otherwise flip between two states:
+   *
+   * ```text
+   * pass 1  A answered -> "hide A when A is answered" fires -> A cleared
+   * pass 2  A cleared   -> the rule no longer fires        -> A restored
+   * pass 3  identical to pass 1, for ever
+   * ```
+   *
+   * Measured before this set existed: that rule reached the cap and **refused**,
+   * making the product unbuyable — while **M17.3 publishes it with a 201**,
+   * because its cycle detector deliberately exempts a self-edge as a legitimate
+   * one-step rule. The publish gate and the evaluator contradicted each other,
+   * and the evaluator was the half that was wrong.
+   *
+   * ⚠️ **Not confined to self-reference.** Any rule whose *target contains* the
+   * option its condition reads had the same shape — measured, a group hiding the
+   * option its own condition tested refused, while the same rule over a group not
+   * containing that option settled in two passes.
+   *
+   * Accumulating keeps the fixed point **monotone**: a hide never comes back off,
+   * so each pass can only add, and the loop must settle. It is also what a
+   * customer sees — a field that vanished does not reappear because vanishing
+   * removed the reason it vanished.
+   */
+  const hidden = new Set<string>();
   let current: Record<string, unknown> = { ...answers };
 
   for (let pass = 1; pass <= MAX_RULE_PASSES; pass += 1) {
-    const states = resolve(rules, current);
-    const next: Record<string, unknown> = { ...answers };
+    const states = resolve(rules, current, hidden);
+
+    states.forEach((state, targetId) => {
+      if (state.hidden) {
+        hidden.add(targetId);
+      }
+    });
 
     /*
      * ADR-051: a rule-hidden option is not charged and not stored, so its answer
      * is cleared before the next pass — and a cleared answer may satisfy another
      * rule's condition, which is what makes cascading real.
      *
-     * Rebuilt from the ORIGINAL answers each pass rather than mutated, so a
-     * value cleared by a rule that stops firing comes back. Mutating would make
-     * the result depend on pass order, which M17.2 forbids.
+     * Rebuilt from the ORIGINAL answers each pass rather than mutated, so the
+     * result cannot depend on the order rules were visited (M17.2). What carries
+     * between passes is `hidden`, not the answers.
      */
-    states.forEach((state, targetId) => {
-      if (!state.hidden) {
-        return;
-      }
+    const next: Record<string, unknown> = { ...answers };
 
+    hidden.forEach((targetId) => {
       (optionsUnder.get(targetId) ?? []).forEach((optionId) => {
         delete next[optionId];
       });
@@ -247,7 +280,11 @@ export function evaluateRules(
  * what makes the result identical whatever order the rules arrive in, and what
  * makes a shared fixture meaningful at all.
  */
-function resolve(rules: readonly EvaluableRule[], answers: Answers): Map<string, TargetState> {
+function resolve(
+  rules: readonly EvaluableRule[],
+  answers: Answers,
+  alreadyHidden: ReadonlySet<string>,
+): Map<string, TargetState> {
   const states = new Map<string, TargetState>();
 
   const seed = (targetId: string): TargetState =>
@@ -305,6 +342,38 @@ function resolve(rules: readonly EvaluableRule[], answers: Answers): Map<string,
         /* An action a newer build authored. Ignored, never fatal (AC4). */
         break;
     }
+  });
+
+  /*
+   * 🔴 **A target hidden by an earlier pass stays hidden**, even when the rule
+   * that hid it no longer fires — because what stopped it firing was the hide
+   * itself clearing the answer its condition read.
+   *
+   * This one block is what makes the fixed point **monotone**, and therefore what
+   * makes it terminate. Without it, "hide A when A is answered" flips between two
+   * states for ever and reaches the cap — measured, and **M17.3 publishes that
+   * rule with a 201**, deliberately exempting a self-edge as a legitimate
+   * one-step rule. The evaluator refusing it made the product unbuyable on a
+   * document the publish gate had approved.
+   *
+   * ⚠️ **One mechanism, not two.** An earlier version also seeded `hidden` from
+   * this set inside `seed()`, which was redundant — mutation showed removing
+   * *either* half alone changed nothing, because each hid the other's absence.
+   * Two mechanisms for one fact is the divergence shape this codebase keeps
+   * paying for, so the seeding went and this stayed.
+   *
+   * It also matches what a customer sees: a field that vanished does not
+   * reappear because vanishing removed the reason it vanished.
+   */
+  alreadyHidden.forEach((targetId) => {
+    states.set(targetId, {
+      ...(states.get(targetId) ?? {
+        required: null,
+        priceMinor: null,
+        defaultValueKey: null,
+      }),
+      hidden: true,
+    });
   });
 
   return states;

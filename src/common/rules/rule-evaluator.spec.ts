@@ -303,31 +303,38 @@ describe('evaluateRules', () => {
      * passed their suites.
      */
     /**
-     * 🔴 **A reachable oscillation, not a hypothetical one.**
+     * 🔴 **The cap is reached by DEPTH now, not by oscillation.**
      *
-     * The rule hides the very option its condition reads:
+     * Hides accumulate, so each pass can only add one — which is what makes the
+     * fixed point monotone and stops an ordinary rule flipping for ever. A chain
+     * longer than the cap is therefore the only way to exceed it, and it is a
+     * real shape: each option's disappearance reveals the next.
      *
-     * ```text
-     * pass 1  B answered -> fires -> B cleared
-     * pass 2  B cleared  -> does not fire -> B restored
-     * pass 3  identical to pass 1
-     * ```
-     *
-     * B is restored because answers are rebuilt from the original each pass —
-     * which is what keeps the result independent of pass order, and is exactly
-     * what makes this two-cycle possible. It cannot settle.
-     *
-     * ✏️ **The first version of this test asserted
-     * `refused === null || states.size === 0`** — true either way, so it passed
-     * whatever the evaluator did. A mutation returning the state reached at the
-     * cap survived it. Caught by mutation, not by review.
+     * ✏️ **This test used to drive an oscillation** — "hide A when A is
+     * answered" — which reached the cap because the answer was restored every
+     * other pass. That was the H1 defect: M17.3 **publishes** that rule with a
+     * 201, deliberately exempting a self-edge as a legitimate one-step rule, so
+     * the evaluator refusing it made the product unbuyable on a document the
+     * publish gate had approved.
      */
-    it('refuses a rule set that never settles', () => {
-      const rules = [
-        rule({ id: 'r1', targetId: B, action: 'hide', conditions: [{ optionId: B, operator: 'is_not_empty' }] }),
-      ];
+    it('refuses a cascade deeper than the pass limit', () => {
+      const ids = Array.from({ length: MAX_RULE_PASSES + 3 }, (_, i) => `opt-${i}`);
+      const under = new Map(ids.map((id) => [id, [id]] as const));
 
-      const outcome = evaluateRules(rules, { [B]: 'x' }, selfMap);
+      /* Each option hides once the one before it has gone. */
+      const rules = ids.slice(1).map((id, index) =>
+        rule({
+          id: `r${index}`,
+          targetId: id,
+          action: 'hide',
+          conditions: [
+            { optionId: ids[index] as string, operator: index === 0 ? 'is_not_empty' : 'is_empty' },
+          ],
+        }),
+      );
+
+      const answers = Object.fromEntries(ids.map((id) => [id, 'x']));
+      const outcome = evaluateRules(rules, answers, under);
 
       expect(outcome.refused).not.toBeNull();
       expect(outcome.passes).toBe(MAX_RULE_PASSES);
@@ -339,16 +346,72 @@ describe('evaluateRules', () => {
      * that looks right, which this project has shipped twice.
      */
     it('reports a refusal with an empty state, never a partial one', () => {
-      const rules = [
-        rule({ id: 'r1', targetId: B, action: 'hide', conditions: [{ optionId: B, operator: 'is_not_empty' }] }),
-        /* A second rule that WOULD have produced a state, to prove none survives. */
-        rule({ id: 'r2', targetId: C, action: 'require', conditions: [{ optionId: A, operator: 'is_empty' }] }),
-      ];
+      const ids = Array.from({ length: MAX_RULE_PASSES + 3 }, (_, i) => `opt-${i}`);
+      const under = new Map(ids.map((id) => [id, [id]] as const));
 
-      const outcome = evaluateRules(rules, { [B]: 'x' }, selfMap);
+      const rules = ids.slice(1).map((id, index) =>
+        rule({
+          id: `r${index}`,
+          targetId: id,
+          action: 'hide',
+          conditions: [
+            { optionId: ids[index] as string, operator: index === 0 ? 'is_not_empty' : 'is_empty' },
+          ],
+        }),
+      );
+
+      const outcome = evaluateRules(rules, Object.fromEntries(ids.map((id) => [id, 'x'])), under);
 
       expect(outcome.refused).not.toBeNull();
       expect(outcome.states.size).toBe(0);
+    });
+
+    /**
+     * 🔴 **The H1 regression, stated as its own case.**
+     *
+     * M17.3 publishes "hide A when A is answered" with a 201. An evaluator that
+     * refused it would make the product unbuyable on a document the publish gate
+     * had approved — the two halves contradicting each other, with the evaluator
+     * in the wrong.
+     */
+    it('settles a rule that hides the option its own condition reads', () => {
+      const outcome = evaluateRules(
+        [rule({ targetId: A, action: 'hide', conditions: [{ optionId: A, operator: 'is_not_empty' }] })],
+        { [A]: 'answered' },
+        selfMap,
+      );
+
+      expect(outcome.refused).toBeNull();
+      expect(outcome.states.get(A)?.hidden).toBe(true);
+    });
+
+    /**
+     * ⚠️ **The same shape through containment, which is the half that is not
+     * self-reference.** A group hiding the option its condition tests oscillated
+     * for exactly the same reason — measured, while the same rule over a group
+     * *not* containing that option settled in two passes.
+     */
+    it('settles a group rule whose target contains its condition option', () => {
+      const group = 'group-1';
+      const outcome = evaluateRules(
+        [
+          rule({
+            targetType: 'group',
+            targetId: group,
+            action: 'hide',
+            conditions: [{ optionId: B, operator: 'is_not_empty' }],
+          }),
+        ],
+        { [A]: 'x', [B]: 'y' },
+        new Map([
+          [group, [A, B]],
+          [A, [A]],
+          [B, [B]],
+        ]),
+      );
+
+      expect(outcome.refused).toBeNull();
+      expect(outcome.states.get(group)?.hidden).toBe(true);
     });
 
     it('settles a rule set that does converge', () => {
