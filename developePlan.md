@@ -52,28 +52,26 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-1 — the `rules` table.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-2 — rule CRUD.**
 
-**Stage 17-0 is complete**: the three blocking decisions are settled as
-**ADR-049, ADR-050 and ADR-051**. See
-[Stage 17-0 complete](#-stage-17-0-complete--the-three-decisions-2026-09-10) for
-what writing them found that the analysis had not.
+**Done so far:** 17-0 (ADR-049, ADR-050, ADR-051) and **17-1** — `RuleOperator`
+plus the `.strict()` condition schemas, 21 tests, five mutants each killed by a
+named failing test.
 
-Stage 17-1 is a migration, an entity, and the condition schemas — **every one
-`.strict()` from its first commit** (F6). Phase 16's audit found *no* price
-schema was strict, so a merchant setting `freeUnits: 5` saved successfully and
-was charged as if they had set nothing. `PublishedRule.conditions` is typed
-`Record<string, unknown>` today, which is that same shape before a single rule
-exists.
+Stage 17-2 is the CRUD surface over the **existing** `option_rules` table and
+`OptionRule` entity, both of which shipped in Phases 5–7 and are already used by
+the cascade service. Tenant-scoped, with a **negative test per route** —
+`check-isolation.sh` gates that and runs in CI.
 
-**Backend before plugin throughout this phase.** `forbidNonWhitelisted: true`
-means an unknown DTO field is a 400, so a plugin sending a field the API has not
-shipped fails closed (ADR-043).
+⚠️ **The entity's shape is the contract, not a starting point.** `targetId` is
+polymorphic and deliberately not a foreign key, so a rule whose target is deleted
+survives to be flagged rather than cascading away; `disabledReason` exists so a
+merchant can be told *which* target vanished. Both are load-bearing for
+`cascade.service.ts` today.
 
-⚠️ **The wire slot already exists.** `PublishedRule` and `rules: []` ship in the
-frozen `schema_version: 1` document, so filling them is **additive** exactly as
-`CONFIG-CONTRACT.md` planned — not a schema break. Every connected plugin already
-parses the key.
+⚠️ **`optionId` inside a condition is still unvalidated against the set** — by
+design. That check belongs with the publish-time cycle detection in **17-3**,
+where the whole document is visible at once.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18875,6 +18873,70 @@ result cannot depend on filter invocation order. Rule evaluation must therefore 
 a pure function of `(document, selections)` with no hidden state — if it is not,
 the validated line and the stored line can differ. This constrains stage 17-8 more
 tightly than the analysis knew, and it is now in ADR-051.
+
+### ✅ Stage 17-1 complete — `RuleOperator` and the strict condition schemas, 2026-09-10
+
+**Rescoped before it began**, once the ground-state correction above showed the
+table, entity and three enums already shipped. What 17-1 actually added:
+
+| Added | Where |
+|---|---|
+| `RuleOperator` — the nine M17.1 operators | `common/database/enums.ts` |
+| `UNARY_RULE_OPERATORS`, `LIST_RULE_OPERATORS` | the two sets that take no operand / a list |
+| `ruleConditionSchema` — three shapes, discriminated on `operator` | `types/rule-condition.schema.ts` |
+| `ruleConditionsSchema` — the list plus its connective | same |
+| 21 tests | `rule-condition.schema.spec.ts` |
+
+**Every object is `.strict()` from its first commit** (F6). The union is
+discriminated on `operator` so an unknown one produces *"expected one of…"*
+rather than three stacked branch failures — the reasoning `pricingConfigSchema`
+already gives.
+
+**Three shapes, not one, because the operators genuinely differ:**
+
+- **binary** (`equals`, `not_equals`, `contains`, `greater_than`, `less_than`) — operand required
+- **list** (`in`, `not_in`) — operand is a non-empty array
+- **unary** (`is_empty`, `is_not_empty`) — **no operand accepted at all**
+
+The third is where `.strict()` earns its place: without it,
+`{ operator: 'is_empty', value: 'Blue' }` saves with half the condition silently
+ignored — the `freeUnits: 5` shape Phase 16's audit measured, where a setting was
+stored, accepted by the UI, and charged as though absent.
+
+##### Five mutants, five named failures
+
+Each guard proven by a **named failing test**, never an exit code:
+
+| Mutation | Killed by |
+|---|---|
+| `.strict()` off the unary shape | *refuses a value alongside is_empty* (+1 more) |
+| `.min(1)` → `.min(0)` on the match list | *refuses an empty list, which could never match* |
+| `.min(1)` → `.min(0)` on conditions | *refuses a rule with no conditions, because it would always fire* |
+| `.strict()` off the top level | *refuses an unknown top-level field* |
+| `less_than` dropped from the union | *accepts every operator RuleOperator declares* |
+
+⚠️ **The fifth is the 16c guard.** That stage shipped a complete `per_char`
+evaluator behind a closed API gate — every registry type carried
+`noTypeLevelPricing`, so nothing could author it. A schema covering eight of nine
+operators would do the same to the ninth, silently, while the enum advertised it.
+The test compares the schema against the **enum** rather than a hand-written list,
+so the two cannot drift.
+
+##### Two decisions recorded rather than assumed
+
+🔴 **Conditions are flat, not nested.** M17.1 specifies `IF <conditions, matched
+ALL|ANY>` — one list, one connective. The entity's docblock mentions *"nested
+groups"*, and this schema deliberately does not implement them: nesting
+multiplies what the cycle detector, both evaluators, the shared fixture and the
+rule builder each must handle, for expressiveness no milestone asks for. A
+merchant needing `(A AND B) OR C` writes two rules. A test asserts the refusal so
+that adding nesting later is deliberate.
+
+⚠️ **`optionId` is not checked against the option set here.** Whether the id names
+an option *in this set* is a cross-object question needing the set loaded, and it
+belongs with the publish-time check that also detects cycles (17-3). Validating it
+in two places would be two answers to one question — the divergence shape this
+project keeps paying for.
 
 ### ~~🔴 Three decisions blocking stage 17-1~~ — resolved above
 
