@@ -264,6 +264,7 @@ final class RuleEvaluator {
 				'required'          => null,
 				'price_minor'       => null,
 				'default_value_key' => null,
+				'price_conflict'    => false,
 			);
 
 			switch ( $action ) {
@@ -288,6 +289,41 @@ final class RuleEvaluator {
 					$amount = $rule['action_value']['amount_minor'] ?? null;
 
 					if ( is_int( $amount ) ) {
+						/*
+						 * 🔴 **Two rules setting DIFFERENT amounts cancel,
+						 * rather than the later one winning.**
+						 *
+						 * ADR-052 refuses conflicting payloads at publish,
+						 * because `5.00` versus `7.00` has no principled
+						 * winner. But AC4 makes the document input rather than
+						 * authority, so a stale cache, a partial publish, or a
+						 * build older than the publish rule can still deliver
+						 * the pair — and "last writer wins" then makes the
+						 * price a function of **array order**.
+						 *
+						 * That is M17.4a's defect one layer down: it was
+						 * `sort_order` deciding a price, and this is document
+						 * order deciding the same price. Found in 17-8 by
+						 * resolving one pair in both orders and getting 1500
+						 * and 1700.
+						 *
+						 * Cancelling is the only resolution that is
+						 * order-independent AND never invents a number no
+						 * merchant chose. `price_conflict` carries the fact so
+						 * the caller reports it rather than silently charging
+						 * the authored price.
+						 *
+						 * Two rules setting the SAME amount agree and are not a
+						 * conflict — the case ADR-052 explicitly declines to
+						 * refuse.
+						 */
+						if ( ! empty( $state['price_conflict'] )
+							|| ( null !== $state['price_minor'] && $state['price_minor'] !== $amount ) ) {
+							$state['price_minor']    = null;
+							$state['price_conflict'] = true;
+							break;
+						}
+
 						$state['price_minor'] = $amount;
 					}
 					break;
@@ -319,6 +355,7 @@ final class RuleEvaluator {
 				'required'          => null,
 				'price_minor'       => null,
 				'default_value_key' => null,
+				'price_conflict'    => false,
 			);
 			$state['hidden'] = true;
 

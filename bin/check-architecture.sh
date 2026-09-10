@@ -416,21 +416,15 @@ while IFS= read -r file; do
   # and the exemption was removed. The gate passed without it, which is the
   # evidence that the class was pending rather than dead.
   #
-  # `RuleEvaluator` is exempted on the same terms, with the same kind of fuse.
-  # M17.6 builds it and proves it against the shared `rule-fixtures.json`, which
-  # both languages now execute; its caller arrives in **17-8**, where
-  # `SelectionResolver::resolve()` is restructured so rules run BEFORE selections
-  # are validated — because whether a submitted value is legal depends on the
-  # rule outcome.
-  #
-  # ⚠️ **DELETE THIS LINE IN 17-8.** If the gate then passes without it, the
-  # class was pending rather than dead — which is exactly the evidence `Pricing`
-  # produced when its own exemption was removed in Stage 6. If it still fails,
-  # 17-8 did not actually wire the evaluator and the gate is right.
+  # `RuleEvaluator` was exempted here through 17-7, on a fuse marked DELETE IN
+  # 17-8. 17-8 gave it its caller — `Engine\SelectionResolver` evaluates rules
+  # BEFORE selections are validated, because whether a submitted value is legal
+  # depends on the rule outcome — and the exemption was removed. The gate passed
+  # without it, which is the evidence that the class was pending rather than
+  # dead. Second time this fuse has worked as designed.
   case "$class" in
     Autoloader|Plugin) continue ;;
     Money) continue ;;
-    RuleEvaluator) continue ;;
   esac
 
   # Referenced anywhere in src/, the entry file, **or a template** other than

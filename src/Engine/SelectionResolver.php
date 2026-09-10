@@ -238,6 +238,77 @@ final class SelectionResolver {
 	public const ERROR_TOO_LONG = 'too_long';
 
 	/**
+	 * Error code: a selection names an option a rule has hidden.
+	 *
+	 * 🔴 **A third state, between "known" and "unknown".** `ERROR_UNKNOWN_OPTION`
+	 * means the product does not have that option at all; this means it has it
+	 * and the customer's *other* answers took it off the page. Reported
+	 * separately because they need different messages — "that isn't an option
+	 * here" would be a lie, and the customer's fix is to change the answer that
+	 * hid it, not this one.
+	 *
+	 * ⚠️ **Refused, not ignored.** M17.4 requires that submitting a value for a
+	 * rule-hidden option *fails validation*, and the reason is the same one that
+	 * makes unknown ids an error rather than a shrug: a payload that is quietly
+	 * dropped was still a payload somebody sent, and "it had no effect on the
+	 * price" is a weaker guarantee than "it was refused". A hidden option that
+	 * silently accepted a forged value would also be a way to reach a price the
+	 * page never offered.
+	 */
+	public const ERROR_HIDDEN_BY_RULE = 'hidden_by_rule';
+
+	/**
+	 * Error code: the rules did not settle, so nothing could be resolved.
+	 *
+	 * ADR-050: reaching the evaluator's pass cap **refuses**. The alternative —
+	 * proceeding with whatever the last pass happened to produce — makes the
+	 * price depend on where the loop was cut, which is the one thing a
+	 * customer-facing total must never do.
+	 *
+	 * Publish-time cycle detection (17-3) should make this unreachable through
+	 * the dashboard. It is enforced here anyway, because AC4 makes the document
+	 * input rather than authority: a document from an older cloud, or a newer
+	 * one, is still a document this build has to survive.
+	 */
+	public const ERROR_RULES_UNSETTLED = 'rules_unsettled';
+
+	/**
+	 * Reported in `unpriced` when two rules set different prices on one target.
+	 *
+	 * Not an error code: the line still resolves and the authored price still
+	 * applies to everything else. It is the same signal `per_char` on a
+	 * non-typed option produces — *"this build could not price part of this
+	 * configuration, and here is what"* — so a merchant is told rather than a
+	 * customer charged an amount nobody chose.
+	 */
+	public const UNPRICED_RULE_CONFLICT = 'rule_price_conflict';
+
+	/**
+	 * Rule target types, as the cloud's `RuleTargetType` spells them.
+	 *
+	 * Constants rather than literals because the three are read together and
+	 * mean different things structurally — an option target hides an answer, a
+	 * group target hides several, a value target hides none and removes a
+	 * choice. A typo in any one of them would silently stop a rule applying,
+	 * which is the failure mode hardest to notice.
+	 */
+	private const TARGET_OPTION = 'option';
+
+	/**
+	 * A rule target naming a group: hides every option inside it.
+	 *
+	 * @see self::TARGET_OPTION
+	 */
+	private const TARGET_GROUP = 'group';
+
+	/**
+	 * A rule target naming one value: removes a choice, never the question.
+	 *
+	 * @see self::TARGET_OPTION
+	 */
+	private const TARGET_VALUE = 'value';
+
+	/**
 	 * A flat amount in minor units, added per chosen value.
 	 *
 	 * The cloud's schema publishes five price types -- `fixed`, `percentage`,
@@ -376,6 +447,35 @@ final class SelectionResolver {
 		$chosen  = array();
 
 		/*
+		 * 🔴 **Rules are evaluated BEFORE a single selection is validated, and
+		 * the order is the whole point of this stage.**
+		 *
+		 * Whether a submitted value is legal *depends on* the rule outcome: an
+		 * option a rule has hidden must refuse the value the customer posted for
+		 * it, and an option a rule has hidden cannot be missing-and-required.
+		 * Validating first and consulting rules afterwards would mean deciding
+		 * legality against a page that no longer exists.
+		 *
+		 * ⚠️ **Evaluated from the selections as posted**, not from what survives
+		 * validation. A condition reading an answer that later fails its own
+		 * validation still fired on the page the customer saw, and the two runs
+		 * of this resolver (`AddToCartValidator`, then `CartItemData::attach()`)
+		 * must agree — so the input to the evaluator has to be the request, which
+		 * is identical across both, rather than a partial result, which is not.
+		 * ADR-051 records why that matters.
+		 */
+		$rules       = self::index_rules( $option_sets );
+		$containment = self::index_containment( $option_sets );
+		$evaluation  = RuleEvaluator::evaluate( $rules, $selections, $containment );
+
+		if ( null !== $evaluation['refused'] ) {
+			return Result::error( self::ERROR_RULES_UNSETTLED );
+		}
+
+		$rule_hidden  = self::hidden_options( $rules, $evaluation['states'], $containment );
+		$hidden_value = self::hidden_values( $rules, $evaluation['states'] );
+
+		/*
 		 * Grams a selection adds to the line, summed the same way deltas are
 		 * (M16.8). Only a *chosen value* can carry one — a typed engraving or an
 		 * uploaded file has no weight of its own — so this accumulates in the
@@ -403,6 +503,28 @@ final class SelectionResolver {
 			if ( ! isset( $options[ $option_id ] ) ) {
 				$errors[] = array(
 					'code'   => self::ERROR_UNKNOWN_OPTION,
+					'field'  => $option_id,
+					'params' => array(),
+				);
+
+				continue;
+			}
+
+			/*
+			 * 🔴 **Checked immediately after "does this option exist", because
+			 * it is the same question one step further on.** The product has the
+			 * option; the customer's other answers took it off the page. M17.4
+			 * requires this to fail validation rather than be dropped — see
+			 * `ERROR_HIDDEN_BY_RULE` for why a silent drop is the weaker
+			 * guarantee.
+			 *
+			 * Before the per-type branches, so a forged value for a hidden
+			 * option is refused for being hidden rather than for failing a
+			 * pattern it should never have been measured against.
+			 */
+			if ( isset( $rule_hidden[ $option_id ] ) ) {
+				$errors[] = array(
+					'code'   => self::ERROR_HIDDEN_BY_RULE,
 					'field'  => $option_id,
 					'params' => array(),
 				);
@@ -961,7 +1083,55 @@ final class SelectionResolver {
 				continue;
 			}
 
-			$deltas[]      = self::delta_for( $values[ $value_key ], $base_minor, $unpriced );
+			/*
+			 * 🔴 **A rule-hidden value is a value the option no longer offers.**
+			 * Refused as `ERROR_HIDDEN_BY_RULE` rather than `ERROR_UNKNOWN_VALUE`
+			 * for the same reason the option-level check is separate: the key is
+			 * real and the merchant authored it, and telling a customer their
+			 * choice does not exist would send them looking for a typo they did
+			 * not make.
+			 *
+			 * ⚠️ **Keyed by the value's `id`, not its `value_key`.** A rule
+			 * targets an id, and `value_key` is unique only within one option —
+			 * matching on it would let a rule hiding `large` in one option hide
+			 * `large` in every other. The published value carries an `id` from
+			 * M17.8 for exactly this lookup.
+			 */
+			$value_id = isset( $values[ $value_key ]['id'] ) && is_scalar( $values[ $value_key ]['id'] )
+				? (string) $values[ $value_key ]['id']
+				: '';
+
+			if ( '' !== $value_id && isset( $hidden_value[ $value_id ] ) ) {
+				$errors[] = array(
+					'code'   => self::ERROR_HIDDEN_BY_RULE,
+					'field'  => $option_id,
+					'params' => array(),
+				);
+
+				continue;
+			}
+
+			/*
+			 * ADR-049: a `set_price` rule **replaces** the value's own price
+			 * rather than adding to it — see `set_price_for()` for why adding
+			 * was rejected, and for the option-level case it refuses.
+			 */
+			$ruled_price = self::set_price_for(
+				$options[ $option_id ],
+				$evaluation['states'],
+				$option_id,
+				$value_id,
+				$unpriced
+			);
+
+			if ( false === $ruled_price ) {
+				// A refused rule price contributes nothing; see `set_price_for()`.
+				$deltas[] = 0;
+			} else {
+				$deltas[] = null === $ruled_price
+					? self::delta_for( $values[ $value_key ], $base_minor, $unpriced )
+					: $ruled_price;
+			}
 			$weight_grams += self::weight_for( $values[ $value_key ] );
 			$suffix        = self::sku_suffix_for( $values[ $value_key ] );
 
@@ -985,7 +1155,45 @@ final class SelectionResolver {
 		 * vaguer one, and counting it twice would report the same field twice.
 		 */
 		foreach ( $options as $option_id => $option ) {
-			if ( empty( $option['is_required'] ) || isset( $chosen[ $option_id ] ) ) {
+			/*
+			 * 🔴 **A hidden option is never required.** Requiring an answer to a
+			 * question the customer cannot see is an unbuyable product: the form
+			 * refuses, and the field it names is not on the page to fill in.
+			 *
+			 * Skipped before `is_required` is even read, because a rule can make
+			 * an option required *and* another rule hide it — ADR-052 resolves
+			 * that pair in one direction only, and this is it. Hidden wins,
+			 * because the alternative is a dead end for the customer.
+			 */
+			if ( isset( $rule_hidden[ $option_id ] ) ) {
+				continue;
+			}
+
+			/*
+			 * 🔴 **A rule's answer replaces the merchant's, in both directions.**
+			 * `is_required` is the authoring-time answer; `require` and
+			 * `unrequire` are the runtime ones, and a rule that fired knows
+			 * something the author did not — which other answers the customer
+			 * gave.
+			 *
+			 * ⚠️ **`unrequire` must be able to lift an authored `is_required`,
+			 * or it is an action that does nothing.** ADR-052 settles
+			 * `require` against `unrequire` — restrictive wins, and the
+			 * evaluator has already applied that — but it is silent on
+			 * rule-versus-authoring. Read as: an option nobody wrote a rule
+			 * about keeps the merchant's answer (`null`, the common case), and
+			 * one a rule *did* fire on takes the rule's, because the merchant
+			 * authored that rule too.
+			 *
+			 * 📌 Recorded as an open question for 17-11 rather than settled
+			 * here: if the phase's exit audit disagrees, this line is where it
+			 * changes.
+			 */
+			$ruled = $evaluation['states'][ $option_id ]['required'] ?? null;
+
+			$required = null === $ruled ? ! empty( $option['is_required'] ) : $ruled;
+
+			if ( ! $required || isset( $chosen[ $option_id ] ) ) {
 				continue;
 			}
 
@@ -1101,6 +1309,297 @@ final class SelectionResolver {
 		}
 
 		return $options;
+	}
+
+	/**
+	 * The amount a `set_price` rule sets for this selection, or null.
+	 *
+	 * ADR-049, in two halves.
+	 *
+	 * **Against a value-level price it replaces**, and the delta becomes the
+	 * rule's amount outright. Adding was rejected there: a merchant writing
+	 * *"set price to 5.00"* means the price **is** 5.00, and under `percentage`
+	 * the additive reading produces a number they cannot predict without knowing
+	 * the base. Replacement is also the only reading that is idempotent, which
+	 * is what lets two rules setting the same amount agree — and what keeps the
+	 * outcome independent of rule order (ADR-052).
+	 *
+	 * 🔴 **Against an option-level price it refuses**, returning null and
+	 * recording the type as unpriced. `per_char`, `per_unit` and `tiered` hold a
+	 * *function of the customer's input* — a rate, a bracket table — not an
+	 * amount, so a flat `set_price` does not override a number, it overrides a
+	 * function with a constant and charges the same for a 3-character engraving
+	 * as for a 300-character one. The cloud refuses the combination at publish;
+	 * this reports it, because AC4 makes the document input rather than
+	 * authority and a stale cache can still deliver one.
+	 *
+	 * ⚠️ **Reported as unpriced, not silently dropped.** The admin notice names
+	 * it, so the merchant learns from their own dashboard rather than from a
+	 * customer's invoice. This mirrors `option_delta()`'s treatment of `per_char`
+	 * on a non-typed option rather than inventing a second pattern.
+	 *
+	 * Both the option and the chosen value are consulted, because a rule may
+	 * target either — and a rule targeting the option sets the price for
+	 * whichever value the customer picked.
+	 *
+	 * ⚠️ **Three answers, not two.** `null` means no rule set a price and the
+	 * authored one applies; an `int` is the amount a rule set; `false` means a
+	 * rule set one this build refuses to honour, and the authored price must
+	 * NOT be used in its place.
+	 *
+	 * @param array<string, mixed>                $option    The option, from the cached config.
+	 * @param array<string, array<string, mixed>> $states    Target id -> resolved state.
+	 * @param string                              $option_id The option's id.
+	 * @param string                              $value_id  The chosen value's id, or ''.
+	 * @param array<int, string>                  $unpriced  Collected, by reference.
+	 * @return int|false|null Amount, refusal, or "no rule spoke".
+	 */
+	private static function set_price_for(
+		array $option,
+		array $states,
+		string $option_id,
+		string $value_id,
+		array &$unpriced
+	) {
+		/*
+		 * A cancelled `set_price` is reported, never silently replaced by the
+		 * authored price. Two rules disagreeing about an amount is a
+		 * configuration this build cannot price — the same category as
+		 * `per_char` on a non-typed option — so the admin notice names it.
+		 */
+		if ( ! empty( $states[ $option_id ]['price_conflict'] )
+			|| ( '' !== $value_id && ! empty( $states[ $value_id ]['price_conflict'] ) ) ) {
+			if ( ! in_array( self::UNPRICED_RULE_CONFLICT, $unpriced, true ) ) {
+				$unpriced[] = self::UNPRICED_RULE_CONFLICT;
+			}
+
+			/*
+			 * 🔴 **`false`, not `null`** — the two answers are different and the
+			 * caller must not confuse them. `null` means *"no rule spoke, use
+			 * the authored price"*; `false` means *"a rule spoke and this build
+			 * refuses to price it"*, and falling back to the authored amount
+			 * there would charge a price the merchant's own rules overrode.
+			 *
+			 * Measured: while this returned `null`, a cancelled conflict billed
+			 * the authored 250 on a line whose rules had set 500 and 700 — the
+			 * merchant told nothing, the customer charged an amount no rule
+			 * chose.
+			 */
+			return false;
+		}
+
+		$amount = $states[ $option_id ]['price_minor'] ?? null;
+
+		/*
+		 * The value's own rule wins over one targeting the whole option: it is
+		 * the more specific statement, the same way a value's `price_config`
+		 * is more specific than the option's `pricing`.
+		 */
+		if ( '' !== $value_id && isset( $states[ $value_id ]['price_minor'] ) ) {
+			$amount = $states[ $value_id ]['price_minor'];
+		}
+
+		if ( ! is_int( $amount ) ) {
+			return null;
+		}
+
+		$pricing = $option['pricing'] ?? null;
+		$type    = is_array( $pricing ) && is_scalar( $pricing['type'] ?? null ) ? (string) $pricing['type'] : '';
+
+		if ( in_array( $type, self::OPTION_PRICED_TYPES, true ) ) {
+			if ( ! in_array( $type, $unpriced, true ) ) {
+				$unpriced[] = $type;
+			}
+
+			/*
+			 * Refused, not absent: the option prices itself with a function of
+			 * the customer's input, and `option_delta()` still applies it. The
+			 * `set_price` is what is discarded, so the caller falls back to the
+			 * authored pricing here — which is why this is `null` and the
+			 * conflict above is `false`.
+			 */
+			return null;
+		}
+
+		return $amount;
+	}
+
+	/**
+	 * Every rule across this product's sets, in document order.
+	 *
+	 * Flattened because rules live on a **set** and a product may match several,
+	 * while the evaluator takes one list — a rule in set A whose condition reads
+	 * an option in set B is a document this build has to survive, and separate
+	 * evaluations per set could not settle it.
+	 *
+	 * ⚠️ **`sort_order` is deliberately not consulted**, here or anywhere.
+	 * ADR-052: the conflict rules are total — `hide` beats `show`, `require`
+	 * beats `unrequire`, and a later `set_price` replaces an earlier one — so
+	 * ordering the list cannot change the outcome. M17.4a proved the alternative
+	 * the hard way: while `sort_order` decided prices, two rules of 500 and 700
+	 * produced order-dependent totals, in both languages identically.
+	 *
+	 * @param array<int, array<string, mixed>> $option_sets Sets assigned to this product.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function index_rules( array $option_sets ): array {
+		$rules = array();
+
+		foreach ( $option_sets as $set ) {
+			foreach ( (array) ( $set['rules'] ?? array() ) as $rule ) {
+				if ( is_array( $rule ) ) {
+					$rules[] = $rule;
+				}
+			}
+		}
+
+		return $rules;
+	}
+
+	/**
+	 * The option ids a rule has hidden, as a set keyed by option id.
+	 *
+	 * The evaluator answers in terms of **targets**; everything downstream of it
+	 * here asks about **options** — is this answer allowed, is this required
+	 * check owed, does this delta belong on the line. This translates once, so
+	 * no caller has to know that a group id and an option id are different kinds
+	 * of key.
+	 *
+	 * 🔴 **A hidden *value* must not hide its option, and the state map alone
+	 * cannot tell the difference.** `RuleEvaluator` keys its states by
+	 * `target_id` and carries no `target_type` — deliberately, because conflict
+	 * resolution is per target and the type never enters it. But
+	 * `index_containment()` maps a value id to the option that owns it, which is
+	 * the right answer to *"where does this target live"* and the wrong answer to
+	 * *"what does hiding it clear"*: hiding one colour of five removes a choice,
+	 * not the question.
+	 *
+	 * So the **rules** are consulted for the type, not the states. Measured
+	 * before this read `target_type`: a rule hiding a single value emptied the
+	 * whole option, and a required option with four remaining choices reported
+	 * `required` against a customer who could see and pick them.
+	 *
+	 * A hidden value is handled where values are looked up instead — as a value
+	 * the option no longer offers.
+	 *
+	 * @param array<int, array<string, mixed>>    $rules       Every rule, flattened.
+	 * @param array<string, array<string, mixed>> $states      Target id -> resolved state.
+	 * @param array<string, array<int, string>>   $containment Target id -> the options under it.
+	 * @return array<string, bool>
+	 */
+	private static function hidden_options( array $rules, array $states, array $containment ): array {
+		$hidden = array();
+
+		foreach ( $rules as $rule ) {
+			$target_id   = isset( $rule['target_id'] ) && is_scalar( $rule['target_id'] ) ? (string) $rule['target_id'] : '';
+			$target_type = isset( $rule['target_type'] ) && is_scalar( $rule['target_type'] ) ? (string) $rule['target_type'] : '';
+
+			if ( self::TARGET_OPTION !== $target_type && self::TARGET_GROUP !== $target_type ) {
+				continue;
+			}
+
+			if ( empty( $states[ $target_id ]['hidden'] ) ) {
+				continue;
+			}
+
+			foreach ( $containment[ $target_id ] ?? array() as $option_id ) {
+				$hidden[ $option_id ] = true;
+			}
+		}
+
+		return $hidden;
+	}
+
+	/**
+	 * The value keys a rule has hidden, as a set keyed by value id.
+	 *
+	 * The other half of `hidden_options()`: a `value` target removes one choice
+	 * from an option that remains on the page. Kept separate because the two
+	 * answer different questions and are consulted at different points — this
+	 * one where a chosen key is looked up, that one where an option is skipped
+	 * entirely.
+	 *
+	 * @param array<int, array<string, mixed>>    $rules  Every rule, flattened.
+	 * @param array<string, array<string, mixed>> $states Target id -> resolved state.
+	 * @return array<string, bool>
+	 */
+	private static function hidden_values( array $rules, array $states ): array {
+		$hidden = array();
+
+		foreach ( $rules as $rule ) {
+			$target_id   = isset( $rule['target_id'] ) && is_scalar( $rule['target_id'] ) ? (string) $rule['target_id'] : '';
+			$target_type = isset( $rule['target_type'] ) && is_scalar( $rule['target_type'] ) ? (string) $rule['target_type'] : '';
+
+			if ( self::TARGET_VALUE !== $target_type || empty( $states[ $target_id ]['hidden'] ) ) {
+				continue;
+			}
+
+			$hidden[ $target_id ] = true;
+		}
+
+		return $hidden;
+	}
+
+	/**
+	 * Which options each rule target controls, keyed by target id.
+	 *
+	 * 🔴 **A rule names a target, but hiding acts on options.** `target_type` is
+	 * `option | group | value`, and only an option holds an answer — so before
+	 * the evaluator can clear what a hidden branch collected, something has to
+	 * answer *"if this target goes away, which answers go with it?"*.
+	 *
+	 * Three containments, and they are not symmetrical:
+	 *
+	 * - a **group** controls every option inside it;
+	 * - an **option** controls itself, because hiding it clears its own answer;
+	 * - a **value** controls the option that owns it, because a value is not
+	 *   separately answerable — the option it belongs to is.
+	 *
+	 * ⚠️ **A value maps to its option, and that is deliberately lossy.** Hiding
+	 * one value of a five-value radio does not clear the answer unless the
+	 * answer *was* that value, and this index cannot express the difference. The
+	 * caller checks the chosen key; this only says where to look. Recording it
+	 * here because the map reads like a containment and is really a lookup.
+	 *
+	 * Built from the same walk as `index_options()` rather than derived from it,
+	 * because that one flattens groups away — the set id survives on the option
+	 * and the group id does not.
+	 *
+	 * @param array<int, array<string, mixed>> $option_sets Sets assigned to this product.
+	 * @return array<string, array<int, string>>
+	 */
+	private static function index_containment( array $option_sets ): array {
+		$under = array();
+
+		foreach ( $option_sets as $set ) {
+			foreach ( (array) ( $set['groups'] ?? array() ) as $group ) {
+				$group_id = isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '';
+
+				foreach ( (array) ( $group['options'] ?? array() ) as $option ) {
+					if ( ! is_array( $option ) || ! isset( $option['id'] ) || ! is_scalar( $option['id'] ) ) {
+						continue;
+					}
+
+					$option_id = (string) $option['id'];
+
+					if ( '' !== $group_id ) {
+						$under[ $group_id ][] = $option_id;
+					}
+
+					$under[ $option_id ][] = $option_id;
+
+					foreach ( (array) ( $option['values'] ?? array() ) as $value ) {
+						if ( ! is_array( $value ) || ! isset( $value['id'] ) || ! is_scalar( $value['id'] ) ) {
+							continue;
+						}
+
+						$under[ (string) $value['id'] ][] = $option_id;
+					}
+				}
+			}
+		}
+
+		return $under;
 	}
 
 	/**

@@ -198,6 +198,14 @@ final class RuleEvaluatorTest extends TestCase {
 				$stated['default_value_key'] = $state['default_value_key'];
 			}
 
+			/*
+			 * Projected only when true, like `hidden`: a case saying nothing
+			 * about a conflict asserts there is none.
+			 */
+			if ( ! empty( $state['price_conflict'] ) ) {
+				$stated['price_conflict'] = true;
+			}
+
 			if ( array() !== $stated ) {
 				$out[ $target_id ] = $stated;
 			}
