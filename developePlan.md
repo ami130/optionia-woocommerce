@@ -52,31 +52,32 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-6 — the PHP
-evaluator.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-7 — the evaluator's
+own iteration cap, and where it is enforced.**
 
-**Done:** 17-0 (four ADRs) through **17-5**, each with its own audit. Rules now
-reach a storefront: the serializer fills them, `action_value` reaches the wire,
-disabled rules are absent, and `check-wire-keys.sh` refuses a camelCase rule key.
+**Done:** 17-0 (four ADRs) through **17-6**, each with its own audit. Both
+languages now execute the same 37 rule cases, and the two coercions they disagree
+on by default — booleans and non-numeric answers — are pinned by the fixture
+rather than by either language's cast.
 
-Stage 17-6 is the PHP twin of `rule-evaluator.ts`, and it lands **three things in
-one change** — the fixture is already vendored in the plugin, but its gate block
-is not, because a gate that is red for a known reason is one people learn to
-ignore:
+Stage 17-7 owns **ADR-050's second half**. The publish gate rejects cycles
+(17-3); this is the guarantee that holds when the publish gate never saw the
+document at all — the plugin evaluates a **cached** one, and
+`DegradationMatrixTest` names four ways it keeps serving that cache.
 
-1. `SelectionResolver`'s rule evaluator, matching ADR-052's precedence exactly.
-2. A PHP suite reading `rule_cases` **and** `expect_passes`.
-3. The §4 block in the plugin's `check-shared-fixtures.sh`, mirrored from the
-   backend's — the two scripts must stay identical apart from their paths, which
-   `check-fixture-parity.sh` enforces.
+🔴 **The cap exists in both evaluators already and is not yet reachable from a
+storefront.** `RuleEvaluator::MAX_PASSES` is proven by a fixture case, but nothing
+calls the evaluator: its caller arrives in **17-8**, when `resolve()` is
+restructured so rules run *before* selections are validated.
 
-🔴 **The fixture's 20 cases are the contract.** One reaches the cap and expects a
-**refusal with no partial state** (ADR-050) — the case that exists because
-16b's fixture proved both ends of pricing and neither language proved the middle.
+⚠️ **17-8 must delete `RuleEvaluator` from `check-architecture.sh`'s exemption
+list.** If the gate then passes, the class was pending rather than dead —
+`Pricing`'s exemption produced exactly that evidence in Stage 6. If it still
+fails, 17-8 did not actually wire it.
 
-⚠️ **Carry-forward rule 3 lands with it:** M17.4 requires a rule-hidden option be
-**rejected server-side**, not merely invisible — the one the Shopify app never
-did.
+⚠️ **K3 carries into 17-7** (from the 17-5 audit): a pre-M17.1 row whose
+`conditions` is an object publishes as a rule that **never fires** — safe, silent,
+and with no publish finding.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -19277,6 +19278,95 @@ for**.
 | Disabled rules published | **killed** by two |
 | Payload published verbatim, ignoring the action | **killed** by three |
 | `option_id` renamed to `optionId` | **caught by the gate**, by name |
+
+### ✅ Stage 17-6 complete — the PHP evaluator, 2026-09-10
+
+The fixture is no longer a file one language reads. **37 cases, executed by
+both**, and the analysis found three coercion gaps *before* any PHP was written —
+which is why the fixture was extended first, so it could not be shaped to match
+whatever the evaluator happened to do.
+
+| Added | |
+|---|---|
+| `Engine\RuleEvaluator` | a static engine mirroring `Pricing`, pure, no WordPress |
+| `RuleEvaluatorTest` | 39 tests, reading `rule_cases` **and** `expect_passes` |
+| Fixture | 20 → **37** cases; all nine operators now covered |
+| Gate §4 | mirrored into the plugin — both scripts identical apart from paths |
+
+#### 🔴 L1 — `(string) true` is `'1'` in PHP and `'true'` in JavaScript
+
+Measured before writing anything:
+
+| | JS | PHP |
+|---|---|---|
+| `true` | `"true"` | **`"1"`** |
+| `false` | `"false"` | **`""`** |
+| `1.0`, `0.5` | `"1"`, `"0.5"` | `"1"`, `"0.5"` |
+
+Numbers agree; **booleans do not**. `z.boolean()` is in the condition schema, so a
+merchant can author `equals: true` — and it would have matched in one language
+and not the other.
+
+🔴 **The fixture had zero boolean operands**, so it would not have caught this.
+Worse, a TypeScript test comment asserted *"equality is well defined in both
+languages"*, which is false for exactly this case.
+
+#### 🔴 L2 — `(float) 'abc'` is `0.0`, and the fixture found a defect in the CLOUD
+
+| Input | `Number()` (JS) | `(float)` (PHP) |
+|---|---|---|
+| `"abc"` | `NaN` | **`0.0`** |
+| `"0x10"` | **`16`** | `0.0` |
+| `"9abc"` | `NaN` | **`9.0`** |
+
+So PHP's cast makes `less_than 5` fire on `"abc"`, and **JavaScript's makes
+`greater_than 5` fire on `"0x10"`**.
+
+🔴 **The second half was a live defect in the TypeScript evaluator**, found by
+running the extended fixture against it before the PHP existed. Both now share
+one rule — **decimal notation only** — matched by a regex in each language rather
+than by either language's cast.
+
+⚠️ **This is 16d's shape.** There, PHP returned a bare `0` where TypeScript
+reported `unpriced`, and the two parted company at exactly the boundary where the
+money was wrong. Here the disagreement decides whether a field is **hidden**,
+which under ADR-051 decides whether it is **charged**.
+
+#### 🔴 L3 — Four of nine operators had zero fixture coverage
+
+`contains`, `in`, `not_in` and `less_than` were executed by neither language's
+fixture run. All nine are covered now.
+
+#### ⚠️ The architecture gate refused an unwired evaluator, and it was right
+
+`check-architecture.sh` reports a class no other source file references as *"dead,
+or built but not wired"* — which is 16c's shape, where a complete `per_char`
+evaluator shipped behind a closed API gate.
+
+`RuleEvaluator`'s caller arrives in **17-8**, when `resolve()` is restructured so
+rules run *before* selections are validated. So it is exempted **on the same
+terms `Pricing` was**, with the same kind of fuse: *delete this line in 17-8, and
+if the gate then passes without it, the class was pending rather than dead.*
+`Pricing`'s exemption produced exactly that evidence when it was removed in
+Stage 6.
+
+⚠️ **The gate's own docblock warns that a fake reference to silence it is worse
+than the gap it closes.** An exemption naming the stage that removes it is the
+alternative it already sanctions.
+
+##### Mutations — four, each killed by a named fixture case
+
+| Mutation | Killed by |
+|---|---|
+| PHP's own `(string)` on a boolean | *"a boolean operand does NOT match '1' — PHP's own cast would say it does"* (+2) |
+| PHP's own `(float)` cast | *"less_than does not fire on a non-numeric answer — PHP's (float) would make it 0"* (+1) |
+| `show` clears `hide` | *"hide beats show when both fire"* |
+| The cap returns partial state | *"a cascade deeper than the pass limit is refused, with no partial state"* |
+
+✏️ **One test flaw the run exposed:** `assertSame` on arrays is order-sensitive,
+and a rule set's states are keyed by target id — the insertion order is the order
+rules happened to fire, which M17.2 makes explicitly meaningless. Two identical
+state maps failed on ordering alone. Now compared as maps, `ksort`ed both sides.
 
 #### 🔴 17-5 audit — two shapes describing one wire, and a claim that was false
 
