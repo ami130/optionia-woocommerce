@@ -20,6 +20,9 @@ declare( strict_types=1 );
 
 namespace Optionia\Admin;
 
+use Optionia\Api\AllowsDeliberateRetry;
+use Optionia\Api\PostsToCloud;
+use Optionia\Config\Synchroniser;
 use Optionia\Connection\Callback;
 use Optionia\Connection\Handshake;
 use Optionia\Connection\StateMachine;
@@ -34,6 +37,12 @@ final class ConnectionSection {
 
 	/** Query flag carrying the outcome of a connection attempt. */
 	private const RESULT_FLAG = 'optionia_connection';
+
+	/** A merchant-initiated sync succeeded. */
+	private const RESULT_SYNCED = 'synced';
+
+	/** A merchant-initiated sync failed; the shop keeps its saved copy. */
+	private const RESULT_SYNC_FAILED = 'sync_failed';
 
 	/**
 	 * Handshake starter.
@@ -50,14 +59,47 @@ final class ConnectionSection {
 	private Callback $callback;
 
 	/**
+	 * Circuit breaker, cleared when a merchant asks for a connection.
+	 *
+	 * @var AllowsDeliberateRetry
+	 */
+	private AllowsDeliberateRetry $breaker;
+
+	/**
+	 * Pulls configuration when a merchant asks for it.
+	 *
+	 * @var Synchroniser
+	 */
+	private Synchroniser $synchroniser;
+
+	/**
+	 * The cloud, for telling it we are leaving.
+	 *
+	 * @var PostsToCloud
+	 */
+	private PostsToCloud $api;
+
+	/**
 	 * Construct.
 	 *
-	 * @param Handshake $handshake Handshake starter.
-	 * @param Callback  $callback  Callback handler.
+	 * @param Handshake             $handshake Handshake starter.
+	 * @param Callback              $callback  Callback handler.
+	 * @param AllowsDeliberateRetry $breaker      Circuit breaker.
+	 * @param Synchroniser          $synchroniser Configuration synchroniser.
+	 * @param PostsToCloud          $api          Cloud client, for announcing a disconnect.
 	 */
-	public function __construct( Handshake $handshake, Callback $callback ) {
-		$this->handshake = $handshake;
-		$this->callback  = $callback;
+	public function __construct(
+		Handshake $handshake,
+		Callback $callback,
+		AllowsDeliberateRetry $breaker,
+		Synchroniser $synchroniser,
+		PostsToCloud $api
+	) {
+		$this->handshake    = $handshake;
+		$this->callback     = $callback;
+		$this->breaker      = $breaker;
+		$this->synchroniser = $synchroniser;
+		$this->api          = $api;
 	}
 
 	/**
@@ -67,6 +109,7 @@ final class ConnectionSection {
 		add_action( 'admin_init', array( $this, 'maybe_handle_callback' ) );
 		add_action( 'admin_init', array( $this, 'maybe_connect' ) );
 		add_action( 'admin_init', array( $this, 'maybe_disconnect' ) );
+		add_action( 'admin_init', array( $this, 'maybe_sync' ) );
 	}
 
 	/**
@@ -110,6 +153,21 @@ final class ConnectionSection {
 
 		Request::require_post( Keys::NONCE_CONNECT, 'optionia_connect_nonce' );
 
+		/**
+		 * Clear the circuit before asking.
+		 *
+		 * A store whose credential was revoked keeps heartbeating daily, and
+		 * every one of those pings earns a 401 -- five of them open the circuit,
+		 * with no success in between to reset it. The merchant then clicks this
+		 * button and the request never leaves the site.
+		 *
+		 * The breaker is there to stop automatic traffic hammering a failing
+		 * cloud. This is not automatic traffic: someone is sitting here waiting
+		 * for an answer. Reconnection must not be blocked by the very failures
+		 * that made it necessary.
+		 */
+		$this->breaker->allow_deliberate_retry();
+
 		$url = $this->handshake->begin();
 
 		if ( null === $url ) {
@@ -131,6 +189,38 @@ final class ConnectionSection {
 	}
 
 	/**
+	 * Fetch configuration now, because a merchant asked.
+	 *
+	 * WP-Cron is request-triggered, so on a low-traffic shop a fifteen minute
+	 * schedule can mean hours. This is the deterministic escape hatch M9.3
+	 * requires: a merchant who has just published and cannot see the change
+	 * gets to ask rather than wait.
+	 */
+	public function maybe_sync(): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- presence check only; verified below.
+		if ( ! isset( $_POST['optionia_sync_submit'] ) ) {
+			return;
+		}
+
+		Request::require_post( Keys::NONCE_SYNC_NOW, 'optionia_sync_nonce' );
+
+		/**
+		 * Clear the circuit before asking, exactly as connecting does.
+		 *
+		 * A shop whose cloud has been unreachable accumulates breaker failures
+		 * from its own scheduled syncs — and the merchant pressing this button
+		 * is precisely the person who has noticed. Refusing them locally, with
+		 * no request leaving the site, would make the escape hatch useless in
+		 * the one situation it exists for.
+		 */
+		$this->breaker->allow_deliberate_retry();
+
+		$this->redirect_with(
+			$this->synchroniser->sync() ? self::RESULT_SYNCED : self::RESULT_SYNC_FAILED
+		);
+	}
+
+	/**
 	 * Forget the credential locally.
 	 *
 	 * The cloud is told separately — a merchant disconnecting from the dashboard
@@ -144,6 +234,34 @@ final class ConnectionSection {
 		}
 
 		Request::require_post( Keys::NONCE_DISCONNECT, 'optionia_disconnect_nonce' );
+
+		/*
+		 * Tell the cloud first, while the credential still exists.
+		 *
+		 * 🔴 Without this a merchant disconnecting here left a **live credential**
+		 * behind: the store stayed `connected` in the cloud and the dashboard went
+		 * on offering a Disconnect for a store already gone. Found by a merchant
+		 * within minutes of using it, because every automated test disconnects
+		 * through the dashboard -- the path that already worked.
+		 *
+		 * It cannot be done afterwards, and it cannot be left to the heartbeat:
+		 * both authenticate with the very token the lines below delete, so once
+		 * this method finishes there is no way left to say anything.
+		 *
+		 * **Best-effort on purpose.** The local clear below runs whatever happens
+		 * -- an unreachable cloud, an expired credential, a 500. A plugin that
+		 * refused to disconnect because the network was down would strand a
+		 * merchant with no way out but database access, which is the failure this
+		 * whole method exists to prevent.
+		 */
+		try {
+			$this->api->post( '/store/disconnect' );
+		} catch ( \Throwable $e ) {
+			// Deliberately swallowed: see above. The cloud keeps a live credential
+			// the merchant can still revoke from the dashboard, which is strictly
+			// better than a plugin that cannot let go.
+			unset( $e );
+		}
 
 		delete_option( Keys::OPTION_STORE_TOKEN );
 		delete_option( Keys::OPTION_CONNECTION_STORE );
@@ -195,6 +313,27 @@ final class ConnectionSection {
 		}
 
 		echo '</tbody></table>';
+
+		/**
+		 * "Sync now" (M9.3).
+		 *
+		 * WP-Cron is request-triggered, so on a low-traffic shop a fifteen
+		 * minute schedule can mean hours. A merchant who has just published and
+		 * cannot see the change needs a way to ask, rather than being told to
+		 * wait and hope.
+		 */
+		echo '<form method="post">';
+		wp_nonce_field( Keys::NONCE_SYNC_NOW, 'optionia_sync_nonce' );
+		echo '<p><button type="submit" name="optionia_sync_submit" class="button">'
+			. esc_html__( 'Sync now', 'optionia' )
+			. '</button></p>';
+		echo '<p class="description">'
+			. esc_html__(
+				'Fetches the latest option sets from Optionia. Your product pages keep working while it runs.',
+				'optionia'
+			)
+			. '</p>';
+		echo '</form>';
 
 		echo '<form method="post">';
 		wp_nonce_field( Keys::NONCE_DISCONNECT, 'optionia_disconnect_nonce' );
@@ -270,9 +409,17 @@ final class ConnectionSection {
 				'error',
 				__( 'That connection link did not match this shop. Start again from the button below.', 'optionia' ),
 			),
+			self::RESULT_SYNCED        => array(
+				'success',
+				__( 'Options are up to date.', 'optionia' ),
+			),
+			self::RESULT_SYNC_FAILED   => array(
+				'error',
+				__( 'Optionia could not fetch the latest options. Your product pages keep working from the saved copy — try again in a moment.', 'optionia' ),
+			),
 			Callback::RESULT_FAILED    => array(
 				'error',
-				__( 'Optionia could not complete the connection. Check the site can reach the internet, then try again.', 'optionia' ),
+				__( 'Optionia could not reach the connection service. This is usually temporary — wait a moment and try again. If it keeps happening, check that this site can make outbound HTTPS requests.', 'optionia' ),
 			),
 		);
 

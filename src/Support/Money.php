@@ -237,7 +237,7 @@ final class Money {
 	 */
 	public function plus( Money $other ): self {
 		$this->assert_same_scale( $other );
-		self::assert_in_range( (float) $this->minor + (float) $other->minor );
+		self::assert_in_range( (float) $this->minor + (float) $other->minor );  // overflow-guard.
 
 		return new self( $this->minor + $other->minor, $this->decimals );
 	}
@@ -251,7 +251,7 @@ final class Money {
 	 */
 	public function minus( Money $other ): self {
 		$this->assert_same_scale( $other );
-		self::assert_in_range( (float) $this->minor - (float) $other->minor );
+		self::assert_in_range( (float) $this->minor - (float) $other->minor );  // overflow-guard.
 
 		return new self( $this->minor - $other->minor, $this->decimals );
 	}
@@ -263,7 +263,7 @@ final class Money {
 	 * @throws \RangeException When the result overflows the integer range.
 	 */
 	public function times( int $factor ): self {
-		self::assert_in_range( (float) $this->minor * (float) $factor );
+		self::assert_in_range( (float) $this->minor * (float) $factor );  // overflow-guard.
 
 		return new self( $this->minor * $factor, $this->decimals );
 	}
@@ -279,7 +279,7 @@ final class Money {
 	 * @throws \RangeException When the intermediate overflows the integer range.
 	 */
 	public function percentage( int $basis_points ): self {
-		self::assert_in_range( (float) $this->minor * (float) $basis_points );
+		self::assert_in_range( (float) $this->minor * (float) $basis_points );  // overflow-guard.
 
 		$numerator = $this->minor * $basis_points;
 		$divisor   = 10000;
@@ -354,7 +354,7 @@ final class Money {
 	 * @throws \RangeException When the result cannot be represented exactly.
 	 */
 	private static function assert_in_range( float $exact ): void {
-		if ( abs( $exact ) <= (float) PHP_INT_MAX ) {
+		if ( abs( $exact ) <= (float) PHP_INT_MAX ) {  // overflow-guard.
 			return;
 		}
 

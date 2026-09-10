@@ -65,6 +65,19 @@ final class Handshake {
 			array(
 				'site_url'       => home_url( '/' ),
 				'callback'       => $this->callback_url(),
+
+				/**
+				 * Where the cloud pushes "new configuration is available" (M9.4).
+				 *
+				 * A different URL from `callback`: that one is a browser redirect
+				 * to an admin screen, and a server posting there reaches a login
+				 * page rather than the plugin.
+				 *
+				 * Sent on every handshake, including reconnects, so a store that
+				 * connected before this route existed gains one the moment its
+				 * merchant upgrades and reconnects.
+				 */
+				'push_url'       => PushEndpoint::url(),
 				'state'          => $state,
 				'challenge'      => self::pkce_challenge( $verifier ),
 				'plugin_version' => OPTIONIA_VERSION,

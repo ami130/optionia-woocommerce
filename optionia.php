@@ -3,7 +3,7 @@
  * Plugin Name:       Optionia
  * Plugin URI:        https://optionia.com/
  * Description:       Advanced product options for WooCommerce, managed from your Optionia dashboard.
- * Version:           0.1.0
+ * Version:           0.2.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            ParseLab
@@ -38,7 +38,25 @@ define( 'OPTIONIA_PLUGIN_FILE', __FILE__ );
  * Plugin version. Single source of truth — the header above is parsed by
  * WordPress, this constant is used by the code. A release check asserts they match.
  */
-define( 'OPTIONIA_VERSION', '0.1.0' );
+/**
+ * The plugin version, and the storefront asset cache key.
+ *
+ * 🔴 **This must be bumped whenever `assets/css/frontend.css` or
+ * `assets/js/frontend.js` changes.** `Frontend\Assets::version()` passes it to
+ * `wp_enqueue_style`/`wp_enqueue_script` as the `ver` query argument outside
+ * `WP_DEBUG`, so a browser or CDN holding the previous file keeps serving it
+ * until this changes.
+ *
+ * That is not hypothetical: the stylesheet went from an empty placeholder to the
+ * full layout rules in one change, and without a bump every returning customer
+ * would have kept the empty one — options rendering unstyled on a store the
+ * merchant had just seen working.
+ *
+ * `Activation\Migrator::maybe_upgrade()` compares this against the stored
+ * option on each admin request and re-runs `dbDelta` plus cron setup when they
+ * differ, so a bump is safe to make and cheap on the happy path.
+ */
+define( 'OPTIONIA_VERSION', '0.2.0' );
 
 /**
  * Minimum supported environment. Checked on activation (hard failure) and on

@@ -49,6 +49,24 @@ final class Migrator {
 		$stored = (string) get_option( Keys::OPTION_VERSION, '' );
 
 		if ( OPTIONIA_VERSION === $stored ) {
+			/*
+			 * 🔴 **The plugin version matching does not mean the schema does.**
+			 *
+			 * These are two independent counters, and a release can move either
+			 * one. Measured: `optionia_uploads` was added while the plugin
+			 * version had already been bumped to `0.2.0` for an unrelated asset
+			 * change, so this returned here and the table was **never created**
+			 * — a feature fully wired, fully tested, and broken on every site
+			 * already running that version.
+			 *
+			 * A missing table fails silently: a `wpdb` error in a log nobody
+			 * reads, and an upload that quietly refuses. So the schema is
+			 * checked even on the happy path. It is one option read when
+			 * versions agree, which is the same cost the early return was
+			 * protecting.
+			 */
+			$this->upgrade_schema();
+
 			return;
 		}
 

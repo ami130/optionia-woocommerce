@@ -89,5 +89,91 @@
 	-->
 	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
 		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+		<!--
+		`AddToCartValidatorTest` drives `woocommerce_add_to_cart_validation`
+		through `apply_filters()` to exercise each of WooCommerce's six call
+		sites. The rule reads that as this plugin *declaring* an unprefixed hook;
+		it is WooCommerce's hook, and prefixing it would test nothing. Scoped to
+		the one file rather than to `/tests/*`, so a genuinely unprefixed
+		Optionia hook in any other suite is still caught.
+		-->
+		<exclude-pattern>/tests/unit/AddToCartValidatorTest.php</exclude-pattern>
+		<!-- Same reason: the M11.7 suite drives WooCommerce's own hook. -->
+		<exclude-pattern>/tests/unit/AdversarialAddToCartTest.php</exclude-pattern>
+		<!-- Same reason: the M12.4 suite drives WooCommerce's own check-cart hook. -->
+		<exclude-pattern>/tests/unit/CheckoutValidatorTest.php</exclude-pattern>
+		<!-- Same reason: the M12.8 suite re-validates a reorder through that same hook. -->
+		<exclude-pattern>/tests/unit/OrderAgainTest.php</exclude-pattern>
+		<!--
+		The JavaScript fixture generator sets `$GLOBALS['product']`, which is
+		WooCommerce's own global and the same one every renderer test assigns.
+		Prefixing it would mean the renderer no longer finds a product, so the
+		script would render nothing and the fixtures would be empty.
+		-->
+		<exclude-pattern>/tests/js/generate-fixtures.php</exclude-pattern>
+		<!--
+		Same reason again: `test_machine_keys_cannot_be_edited_from_the_order_screen`
+		models `wc_save_order_items()` by applying WooCommerce's own
+		`woocommerce_hidden_order_itemmeta`, which is what feeds its reserved-key
+		list. Prefixing it would model nothing.
+		-->
+		<exclude-pattern>/tests/unit/OrderLineItemTest.php</exclude-pattern>
 	</rule>
+
+	<!--
+		Substituting $wpdb is the whole point of a test double.
+
+		`Activation\Activator` reads `$wpdb->prefix` and `get_charset_collate()`
+		to build its schema statement. Without replacing the global there is no
+		way to exercise the install and upgrade path at all, which is why those
+		228 lines had no tests until this exemption existed. Production code is
+		still prohibited from touching WordPress globals.
+	-->
+	<rule ref="WordPress.WP.GlobalVariablesOverride">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
+	<!--
+		The bootstrap is a harness, not a WordPress file: it necessarily mixes
+		function stubs with the two classes core would otherwise provide
+		(WP_Error, and a halt exception standing in for wp_die()/exit). Splitting
+		them across files would scatter the stub surface that is easiest to audit
+		in one place.
+
+		Escaping is likewise inapplicable — these stubs return fixtures to a test
+		runner, never to a browser.
+	-->
+	<rule ref="Universal.Files.SeparateFunctionsFromOO">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+	</rule>
+	<rule ref="Generic.Files.OneObjectStructurePerFile">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.Security.EscapeOutput">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.Security.SafeRedirect">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+	</rule>
+
+	<!--
+	`serialize()` in the test harness is not a discouraged practice, it is the
+	behaviour under test. WooCommerce stores the cart with `maybe_serialize()`
+	(`includes/class-wc-session-handler.php:574`), so a session double that
+	round-tripped through JSON would prove the payload survives a boundary
+	WordPress does not have. The object-injection concern the sniff raises needs
+	untrusted input; these calls round-trip an array the same test just built.
+
+	Scoped to the two files that model the session, so a `serialize()` anywhere
+	in production code is still flagged.
+	-->
+	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+		<exclude-pattern>/tests/unit/CartHarnessFidelityTest.php</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize">
+		<exclude-pattern>/tests/bootstrap.php</exclude-pattern>
+		<exclude-pattern>/tests/unit/CartHarnessFidelityTest.php</exclude-pattern>
+	</rule>
+
 </ruleset>

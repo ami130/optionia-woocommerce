@@ -26,7 +26,7 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Consecutive-failure circuit breaker backed by an option.
  */
-final class CircuitBreaker {
+final class CircuitBreaker implements AllowsDeliberateRetry {
 
 	/**
 	 * Consecutive failures before the circuit opens.
@@ -84,6 +84,40 @@ final class CircuitBreaker {
 		);
 
 		return true;
+	}
+
+	/**
+	 * Close the circuit because a person asked for this request.
+	 *
+	 * The breaker exists to stop *automatic* traffic hammering a failing cloud.
+	 * A merchant clicking "Connect" is not automatic traffic: they are present,
+	 * waiting, and will read whatever happens next.
+	 *
+	 * Without this, a store whose credential was revoked accumulates one
+	 * breaker failure per daily heartbeat -- never a success to reset it -- and
+	 * on the fifth day the circuit opens. The merchant then clicks Connect and
+	 * the request never leaves the site: they are told to check their internet
+	 * connection, which is working perfectly. Reconnection is the one action
+	 * that must not be blocked by the failures that made it necessary.
+	 */
+	public function allow_deliberate_retry(): void {
+		$state = $this->state();
+
+		if ( 0 === $state['failures'] ) {
+			return;
+		}
+
+		$this->logger->debug(
+			'Circuit reset for a merchant-initiated request.',
+			array( 'failures' => $state['failures'] )
+		);
+
+		$this->save(
+			array(
+				'failures'  => 0,
+				'opened_at' => 0,
+			)
+		);
 	}
 
 	/**

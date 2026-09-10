@@ -14,6 +14,8 @@ declare( strict_types=1 );
 
 namespace Optionia\Support;
 
+use Optionia\Config\Synchroniser;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -29,12 +31,21 @@ final class Cron {
 	private Logger $logger;
 
 	/**
+	 * The synchroniser this schedules.
+	 *
+	 * @var Synchroniser
+	 */
+	private Synchroniser $synchroniser;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param Logger $logger Logger.
+	 * @param Logger       $logger       Logger.
+	 * @param Synchroniser $synchroniser Configuration synchroniser.
 	 */
-	public function __construct( Logger $logger ) {
-		$this->logger = $logger;
+	public function __construct( Logger $logger, Synchroniser $synchroniser ) {
+		$this->logger       = $logger;
+		$this->synchroniser = $synchroniser;
 	}
 
 	/**
@@ -52,12 +63,13 @@ final class Cron {
 	/**
 	 * Handle the recurring sync event.
 	 *
-	 * A placeholder until Phase 9 implements synchronisation. Registered now so
-	 * the scheduled hook has a listener and WP-Cron does not log an orphaned
-	 * event on every run.
+	 * Delegates rather than fetching here: this class schedules, and knowing
+	 * how to talk to the cloud would make it the second place that does.
+	 * `Config\Synchroniser` owns the conditional request and what to do with
+	 * each answer.
 	 */
 	public function on_sync_due(): void {
-		$this->logger->debug( 'Configuration sync due; synchroniser lands in Phase 9.' );
+		$this->synchroniser->sync();
 	}
 
 	/**

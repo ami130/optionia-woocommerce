@@ -40,6 +40,12 @@ final class Scheduler {
 	 * the duration of the call.
 	 */
 	public static function schedule(): void {
+		// Each event guards itself. A single early return would mean that an
+		// upgrade from a version predating the heartbeat -- where the sync event
+		// already exists -- never schedules it, self-heal included.
+		self::schedule_heartbeat();
+		self::schedule_order_reports();
+
 		if ( wp_next_scheduled( Keys::CRON_SYNC_CONFIG ) ) {
 			return;
 		}
@@ -65,6 +71,24 @@ final class Scheduler {
 	}
 
 	/**
+	 * Schedule the daily heartbeat (M8.5).
+	 *
+	 * `daily` is a core schedule, so unlike the sync interval it needs no
+	 * filter and cannot be refused for being unregistered.
+	 *
+	 * Offset by an hour rather than a minute: activation already fires a sync,
+	 * and a store that reports its environment sixty seconds after install
+	 * reports an install, not a running shop.
+	 */
+	private static function schedule_heartbeat(): void {
+		if ( wp_next_scheduled( Keys::CRON_HEARTBEAT ) ) {
+			return;
+		}
+
+		wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Keys::CRON_HEARTBEAT );
+	}
+
+	/**
 	 * Register the custom interval.
 	 *
 	 * Attached temporarily during activation, and permanently by Support\Cron
@@ -87,6 +111,36 @@ final class Scheduler {
 	}
 
 	/**
+	 * Drain the order-report queue every fifteen minutes (M12.7).
+	 *
+	 * Shares the sync interval rather than inventing a second one: both are
+	 * "talk to the cloud soon, but not now", and a store already pays for a
+	 * quarter-hourly wake-up. A separate schedule would double the cron traffic
+	 * to say the same thing.
+	 */
+	private static function schedule_order_reports(): void {
+		if ( wp_next_scheduled( Keys::CRON_REPORT_ORDERS ) ) {
+			return;
+		}
+
+		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- 15-minute interval is intentional and documented.
+
+		$scheduled = wp_schedule_event(
+			time() + self::INTERVAL,
+			Keys::CRON_SCHEDULE_QUARTER_HOUR,
+			Keys::CRON_REPORT_ORDERS
+		);
+
+		remove_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) );
+
+		if ( is_wp_error( $scheduled ) ) {
+			// Same fallback as the config sync: hourly is worse than quarter-
+			// hourly and far better than never.
+			wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', Keys::CRON_REPORT_ORDERS );
+		}
+	}
+
+	/**
 	 * Clear all scheduled events.
 	 *
 	 * Uses wp_clear_scheduled_hook() rather than unscheduling a single
@@ -95,5 +149,7 @@ final class Scheduler {
 	 */
 	public static function clear(): void {
 		wp_clear_scheduled_hook( Keys::CRON_SYNC_CONFIG );
+		wp_clear_scheduled_hook( Keys::CRON_HEARTBEAT );
+		wp_clear_scheduled_hook( Keys::CRON_REPORT_ORDERS );
 	}
 }

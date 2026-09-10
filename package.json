@@ -1,0 +1,14 @@
+{
+  "name": "optionia-woocommerce-plugin",
+  "private": true,
+  "description": "Dev-only tooling for the storefront runtime's tests. The plugin itself ships no Node dependencies.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.11"
+  }
+}

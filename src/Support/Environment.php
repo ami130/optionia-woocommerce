@@ -54,6 +54,57 @@ final class Environment {
 			);
 		}
 
+		/*
+		 * The extensions text measurement needs.
+		 *
+		 * `Engine\Text::measure()` counts grapheme clusters, which is what a
+		 * customer sees and what an engraving machine cuts — a flag is one mark,
+		 * not two code points or eight bytes. That needs `intl`, and `mbstring`
+		 * backs the fallback.
+		 *
+		 * Declared in `composer.json` too, but a merchant installs a plugin by
+		 * uploading a zip, so composer never runs on their host. This is the
+		 * check that actually protects them: without it, a store on a build
+		 * lacking `intl` gets a fatal error at add-to-cart, on the pricing path —
+		 * precisely what "never a fatal error on a merchant's store" exists to
+		 * prevent.
+		 */
+		foreach ( array( 'intl', 'mbstring' ) as $extension ) {
+			if ( ! extension_loaded( $extension ) ) {
+				$problems[] = array(
+					'code'    => 'missing_extension',
+					'context' => array( 'extension' => $extension ),
+				);
+			}
+		}
+
+		/*
+		 * `fileinfo`, which file options need and nothing else does (ADR-041).
+		 *
+		 * 🔴 **Without it, "verified by content" silently becomes "trust the
+		 * extension".** `wp_check_filetype_and_ext()` runs on `fileinfo`, and
+		 * where it is missing WordPress falls back to the filename — so M15.3's
+		 * core requirement inverts into the exact thing it was written to
+		 * prevent, with no error anywhere. A PHP shell named `artwork.jpg` is
+		 * what that failure looks like, and Stage 1 measured such a file
+		 * executing on a host that ignores `.htaccess`.
+		 *
+		 * ⚠️ **Reported separately from `intl` and `mbstring`, because the
+		 * consequence differs.** Those two are needed for the plugin to work at
+		 * all; this one is needed only for *file* options. A store with no file
+		 * option is unaffected, so this must not read as "Optionia is broken".
+		 *
+		 * The merchant learns here, at authoring time. A merchant who publishes a
+		 * file option on such a host and finds out from a customer's failed
+		 * order has been failed twice.
+		 */
+		if ( ! extension_loaded( 'fileinfo' ) ) {
+			$problems[] = array(
+				'code'    => 'missing_upload_extension',
+				'context' => array( 'extension' => 'fileinfo' ),
+			);
+		}
+
 		if ( version_compare( get_bloginfo( 'version' ), OPTIONIA_MIN_WP, '<' ) ) {
 			$problems[] = array(
 				'code'    => 'wp_version',
@@ -127,6 +178,32 @@ final class Environment {
 
 			case 'woocommerce_missing':
 				return __( 'Optionia requires WooCommerce to be installed and active.', 'optionia' );
+
+			case 'missing_extension':
+				return sprintf(
+					/* translators: %s: PHP extension name, e.g. intl */
+					__( 'Optionia requires the PHP %s extension, which is not installed on this server. Your host can enable it.', 'optionia' ),
+					$problem['context']['extension'] ?? ''
+				);
+
+			case 'missing_upload_extension':
+				/*
+				 * ⚠️ **Deliberately not the `missing_extension` wording.**
+				 *
+				 * That message says Optionia *requires* the extension, which is
+				 * true of `intl` and false here: a store with no file option is
+				 * entirely unaffected. Reusing it would tell a merchant their
+				 * plugin is broken when it is working, and the ones who act on
+				 * that are the ones who did not need to.
+				 */
+				return sprintf(
+					/* translators: %s: PHP extension name, e.g. fileinfo */
+					__(
+						'File upload options need the PHP %s extension, which is not installed on this server. Every other option type works normally; your host can enable it.',
+						'optionia'
+					),
+					$problem['context']['extension'] ?? ''
+				);
 
 			default:
 				return __( 'Optionia cannot run in this environment.', 'optionia' );

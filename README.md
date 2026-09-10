@@ -58,6 +58,40 @@ composer check:architecture   # layering guards
 composer test:unit            # PHPUnit, no WordPress needed
 ```
 
+### Storefront JavaScript
+
+`assets/js/frontend.js` has its own suite, because two real defects shipped while
+it had none: a dropdown's price estimate silently totalled £0 for an entire
+release, and the character counter's grapheme parity with PHP was proven twice by
+throwaway harnesses that were then deleted.
+
+```bash
+npm install                   # once, dev-only — nothing here ships
+npm test                      # Vitest, drives the real file through jsdom
+```
+
+The tests are **black-box**: `frontend.js` is an IIFE that exports nothing, so
+they load it into a jsdom window, dispatch real events and assert on the DOM.
+Some read markup produced by the *real* renderer — `tests/js/generate-fixtures.php`
+regenerates it, and `bin/check-js.sh` runs that for you.
+
+⚠️ **`bin/check-js.sh` skips these when `node_modules/` is absent**, so the PHP
+gates still work without Node. In CI that skip is a **failure** instead: absent
+tooling there means 60-odd tests silently did not run.
+
+### Mutation testing
+
+A green suite is not coverage. Use `bin/mutate.sh` from the repository root
+rather than a hand-rolled probe — it reports a mutant as killed when a *suite
+fails to compile* (a lower test total, not a failure), which a naive
+`grep 'N failed'` misses entirely, and refuses to report at all when the
+mutation never applied.
+
+```bash
+bin/mutate.sh 825 optioniaWooCommercePlugin/src/Engine/SelectionResolver.php \
+  'old code' 'mutated code' -- php vendor/bin/phpunit
+```
+
 `bin/check-architecture.sh` enforces the invariants above in CI. A convention
 nobody checks is a convention nobody keeps.
 

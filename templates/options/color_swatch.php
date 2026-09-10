@@ -1,0 +1,131 @@
+<?php
+/**
+ * A colour swatch: one choice from several, each drawn as its colour.
+ *
+ * The same option as `radio` — same axes, same values, same pricing — with a
+ * colour chip in place of a radio dot. `option_values.colorHex` has existed since
+ * Phase 5's schema and reaches the storefront as `color_hex`, so this template
+ * needed no schema work: it reads a field that was already published.
+ *
+ * ## The label is not decoration
+ *
+ * ⚠️ **Colour alone is not an accessible choice.** A customer who cannot
+ * distinguish two chips, or who uses a screen reader, gets nothing from the
+ * swatch — so the value's label is always rendered and never replaced by the
+ * colour. `show_labels` in M14.4b may later control *visual* prominence; it must
+ * not remove the accessible name.
+ *
+ * The chip itself is `aria-hidden`: it repeats what the label already says, and
+ * announcing "#ff0000" beside "Red" is noise.
+ *
+ * Overridable at `{theme}/woocommerce/optionia/options/color_swatch.php`.
+ *
+ * @package Optionia
+ *
+ * @var array<string, mixed> $optionia View model: option, field_name.
+ */
+
+declare( strict_types=1 );
+
+use Optionia\Frontend\OptionView;
+
+defined( 'ABSPATH' ) || exit;
+
+$optionia_option = isset( $optionia['option'] ) && is_array( $optionia['option'] ) ? $optionia['option'] : array();
+$optionia_values = isset( $optionia_option['values'] ) && is_array( $optionia_option['values'] ) ? $optionia_option['values'] : array();
+$optionia_id     = isset( $optionia_option['id'] ) ? (string) $optionia_option['id'] : '';
+
+if ( '' === $optionia_id || array() === $optionia_values ) {
+	return;
+}
+
+$optionia_field    = (string) ( $optionia['field_name'] ?? 'optionia' ) . '[' . $optionia_id . ']';
+$optionia_required = ! empty( $optionia_option['is_required'] );
+
+/*
+ * Guidance blocks and the `aria-describedby` that points at them, from the one
+ * helper every template shares. `description` and `help_text` are **both**
+ * published by the API; each template used to associate only the first, so help
+ * text rendered nowhere at all — see `OptionView`.
+ */
+$optionia_guidance = OptionView::guidance( $optionia_option );
+$optionia_display  = OptionView::display( $optionia_option );
+$optionia_describe = OptionView::described_by( $optionia_option );
+?>
+<div class="optionia-option optionia-option--color-swatch optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?> optionia-option--swatch-<?php echo esc_attr( $optionia_display['swatch_size'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>">
+	<fieldset
+		class="optionia-option__field"
+		<?php echo $optionia_required ? ' aria-required="true"' : ''; ?>
+		<?php echo '' !== $optionia_describe ? ' aria-describedby="' . esc_attr( $optionia_describe ) . '"' : ''; ?>
+	>
+		<legend class="optionia-option__label">
+			<?php echo esc_html( (string) ( $optionia_option['label'] ?? '' ) ); ?>
+			<?php if ( $optionia_required ) : ?>
+				<span class="optionia-option__required" aria-hidden="true">*</span>
+				<span class="screen-reader-text"><?php esc_html_e( '(required)', 'optionia' ); ?></span>
+			<?php endif; ?>
+		</legend>
+
+		<?php foreach ( $optionia_guidance as $optionia_block ) : ?>
+			<p class="<?php echo esc_attr( $optionia_block['class'] ); ?>" id="<?php echo esc_attr( $optionia_block['id'] ); ?>">
+				<?php echo esc_html( $optionia_block['text'] ); ?>
+			</p>
+		<?php endforeach; ?>
+
+		<?php
+		foreach ( $optionia_values as $optionia_index => $optionia_value ) {
+			if ( ! is_array( $optionia_value ) || ! isset( $optionia_value['value_key'] ) ) {
+				continue;
+			}
+
+			$optionia_key      = (string) $optionia_value['value_key'];
+			$optionia_input_id = 'optionia-' . $optionia_id . '-' . sanitize_key( $optionia_key );
+
+			/*
+			 * A colour is merchant input reaching a `style` attribute, so it is
+			 * validated as a hex triple rather than escaped and hoped for.
+			 * `esc_attr` alone would happily emit `red; background-image:url(...)`
+			 * as an attribute value; a pattern match refuses it outright.
+			 */
+			$optionia_hex   = isset( $optionia_value['color_hex'] ) ? (string) $optionia_value['color_hex'] : '';
+			$optionia_valid = 1 === preg_match( '/^#[0-9a-fA-F]{6}$/', $optionia_hex );
+
+			$optionia_price  = isset( $optionia_value['price_config'] ) && is_array( $optionia_value['price_config'] )
+				? $optionia_value['price_config']
+				: array();
+			$optionia_ptype  = isset( $optionia_price['type'] ) ? (string) $optionia_price['type'] : '';
+			$optionia_pminor = 'fixed' === $optionia_ptype && isset( $optionia_price['amount_minor'] )
+				? (int) $optionia_price['amount_minor']
+				: null;
+			?>
+			<label class="optionia-value optionia-value--swatch" for="<?php echo esc_attr( $optionia_input_id ); ?>">
+				<input
+					type="radio"
+					id="<?php echo esc_attr( $optionia_input_id ); ?>"
+					name="<?php echo esc_attr( $optionia_field ); ?>"
+					value="<?php echo esc_attr( $optionia_key ); ?>"
+					data-optionia="value"
+					<?php if ( '' !== $optionia_ptype ) : ?>
+						data-optionia-price-type="<?php echo esc_attr( $optionia_ptype ); ?>"
+					<?php endif; ?>
+					<?php if ( null !== $optionia_pminor ) : ?>
+						data-optionia-price="<?php echo esc_attr( (string) $optionia_pminor ); ?>"
+					<?php endif; ?>
+					<?php checked( ! empty( $optionia_value['is_default'] ) ); ?>
+					<?php echo $optionia_required ? ' required' : ''; ?>
+				/>
+				<?php if ( $optionia_valid ) : ?>
+					<span
+						class="optionia-value__swatch"
+						style="background-color: <?php echo esc_attr( $optionia_hex ); ?>"
+						aria-hidden="true"
+					></span>
+				<?php endif; ?>
+				<span class="optionia-value__label"><?php echo esc_html( (string) ( $optionia_value['label'] ?? $optionia_key ) ); ?></span>
+			</label>
+			<?php
+			unset( $optionia_index );
+		}
+		?>
+	</fieldset>
+</div>

@@ -12,6 +12,27 @@
  * records what it believes and reports that belief on every heartbeat, so a
  * disagreement is visible rather than silently resolved in someone's favour.
  *
+ * ## This table mirrors the cloud's, in the opposite orientation
+ *
+ * The cloud's `store-state.ts` declares `ALLOWED_FROM` -- for each state, which
+ * states may *precede* it. This declares the successors: from each state, where
+ * it may go. Inverted, the two are edge-for-edge identical, and they should stay
+ * that way: both sides accepting the same transitions is what M8.1b means by
+ * "both sides agree on state after any transition".
+ *
+ * Read one against the other carefully. Comparing them in the same orientation
+ * makes every state look like it diverges, which is a false alarm this project
+ * has already raised once.
+ *
+ * **Agreeing on the edges is not the same as agreeing on the state.** Neither
+ * side ever writes `REVOKED` to the other's record. The plugin reaches it from
+ * a 401 on its own request; the cloud never revokes a store to itself in
+ * Phase 8, because `stores.status` reaching `REVOKED` is an operator act on
+ * Phase 26's surface -- a deferral `audit-coverage.e2e-spec` enforces. So a
+ * credential rotation legitimately leaves the plugin `REVOKED` while the cloud
+ * stays `CONNECTED`, and `StoresService` treats that pairing as expected rather
+ * than as drift.
+ *
  * @package Optionia
  */
 

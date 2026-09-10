@@ -9,6 +9,12 @@ declare( strict_types=1 );
 
 namespace Optionia\Tests\Unit;
 
+use Optionia\Config\Repository;
+use Optionia\Support\Logger;
+use Optionia\Support\Settings;
+use Optionia\Api\FetchesFromCloud;
+use Optionia\Config\Synchroniser;
+use Optionia\Api\AllowsDeliberateRetry;
 use Optionia\Admin\ConnectionSection;
 use Optionia\Api\PostsToCloud;
 use Optionia\Connection\Callback;
@@ -53,7 +59,17 @@ final class ConnectionSectionTest extends TestCase {
 
 		$client->expects( $this->never() )->method( 'post' );
 
-		return new ConnectionSection( new Handshake( $client ), new Callback( $client ) );
+		return new ConnectionSection(
+			new Handshake( $client ),
+			new Callback( $client ),
+			$this->createMock( AllowsDeliberateRetry::class ),
+			new Synchroniser(
+				$this->createMock( FetchesFromCloud::class ),
+				new Repository( new Logger( new Settings() ) ),
+				new Logger( new Settings() )
+			),
+			$this->createMock( PostsToCloud::class )
+		);
 	}
 
 	/**
@@ -137,14 +153,35 @@ final class ConnectionSectionTest extends TestCase {
 
 	/**
 	 * The outcome of the last attempt is reported in words, not codes.
+	 *
+	 * The wording asserted here is deliberately about *what the merchant should
+	 * do*, not a fixed phrase. An earlier message told them to check their
+	 * internet connection, which was actively misleading: the most common cause
+	 * of this notice is a local circuit breaker opened by earlier failures, and
+	 * the site's connectivity is usually fine.
 	 */
 	public function test_a_failed_attempt_explains_itself(): void {
 		$_GET['optionia_connection'] = Callback::RESULT_FAILED;
 
 		$output = $this->render();
 
-		$this->assertStringContainsString( 'could not complete', $output );
+		$this->assertStringContainsString( 'could not reach', $output );
+		$this->assertStringContainsString( 'try again', $output );
 		$this->assertStringContainsString( 'notice-error', $output );
+	}
+
+	/**
+	 * The failure notice does not blame the merchant's network.
+	 *
+	 * Retrying is what actually works, so that is what it must say first.
+	 */
+	public function test_failure_notice_leads_with_retrying(): void {
+		$_GET['optionia_connection'] = Callback::RESULT_FAILED;
+
+		$output = $this->render();
+
+		$this->assertStringContainsString( 'temporary', $output );
+		$this->assertStringNotContainsString( 'Check the site can reach the internet', $output );
 	}
 
 	/** A refused link tells the merchant what to do next. */
@@ -170,5 +207,114 @@ final class ConnectionSectionTest extends TestCase {
 		$GLOBALS['optionia_test_options'][ Keys::OPTION_CONNECTION_STATE ] = StateMachine::CONNECTED;
 
 		$this->assertStringContainsString( 'optionia_disconnect_nonce', $this->render() );
+	}
+
+	/**
+	 * 🔴 **Disconnecting must tell the cloud, before it forgets how.**
+	 *
+	 * A merchant pressing Disconnect in WordPress used to leave a **live
+	 * credential** behind: the plugin cleared its token, nothing told the
+	 * backend, the store stayed `connected` there, and the dashboard went on
+	 * offering a Disconnect for a store already gone.
+	 *
+	 * It cannot be reconciled afterwards. Both this call and the heartbeat
+	 * authenticate with the very token the handler deletes, so once the method
+	 * finishes there is nothing left to say anything with — the message has to
+	 * go first.
+	 */
+	public function test_disconnect_tells_the_cloud_before_forgetting_the_token(): void {
+		update_option( Keys::OPTION_STORE_TOKEN, 'osk_live_example' );
+
+		/*
+		 * ⚠️ **The ordering is the assertion, not merely that the call happens.**
+		 * A mutant that moved the call *below* `delete_option()` passed a test
+		 * checking only that `post()` ran once — and that mutant is the original
+		 * bug: by then the credential is gone, so the request cannot authenticate
+		 * and the cloud never hears it.
+		 *
+		 * Capturing the token as the call is made is what pins the order.
+		 */
+		$token_at_call = null;
+
+		$api = $this->createMock( PostsToCloud::class );
+		$api->expects( $this->once() )
+			->method( 'post' )
+			->with( $this->identicalTo( '/store/disconnect' ) )
+			->willReturnCallback(
+				static function () use ( &$token_at_call ) {
+					$token_at_call = get_option( Keys::OPTION_STORE_TOKEN, false );
+				}
+			);
+
+		$this->run_disconnect( $api );
+
+		$this->assertSame(
+			'osk_live_example',
+			$token_at_call,
+			'The cloud must be told while the credential still exists.'
+		);
+
+		$this->assertFalse(
+			get_option( Keys::OPTION_STORE_TOKEN, false ),
+			'The local token must still be cleared.'
+		);
+	}
+
+	/**
+	 * 🔴 **And it must disconnect anyway when the cloud cannot be reached.**
+	 *
+	 * The local clear is the merchant's only escape hatch. A plugin that refused
+	 * to let go because the network was down would strand them with no remedy but
+	 * database access — which is the failure the local-first design exists to
+	 * prevent. Best-effort means the throw is swallowed, not that it is unlikely.
+	 */
+	public function test_disconnect_completes_even_when_the_cloud_is_unreachable(): void {
+		update_option( Keys::OPTION_STORE_TOKEN, 'osk_live_example' );
+
+		$api = $this->createMock( PostsToCloud::class );
+		$api->method( 'post' )->willThrowException( new \RuntimeException( 'network down' ) );
+
+		$this->run_disconnect( $api );
+
+		$this->assertFalse(
+			get_option( Keys::OPTION_STORE_TOKEN, false ),
+			'An unreachable cloud must not trap a merchant in a connected state.'
+		);
+	}
+
+	/**
+	 * Drive the real handler with a genuine nonce-bearing request.
+	 *
+	 * @param PostsToCloud $api The cloud client to hand the section.
+	 */
+	private function run_disconnect( PostsToCloud $api ): void {
+		$_POST = array(
+			'optionia_disconnect_submit' => '1',
+			'optionia_disconnect_nonce'  => wp_create_nonce( Keys::NONCE_DISCONNECT ),
+		);
+
+		$client = $this->createMock( PostsToCloud::class );
+
+		$section = new ConnectionSection(
+			new Handshake( $client ),
+			new Callback( $client ),
+			$this->createMock( AllowsDeliberateRetry::class ),
+			new Synchroniser(
+				$this->createMock( FetchesFromCloud::class ),
+				new Repository( new Logger( new Settings() ) ),
+				new Logger( new Settings() )
+			),
+			$api
+		);
+
+		try {
+			// The handler ends in wp_redirect() + exit; the stub halts there.
+			$section->maybe_disconnect();
+			$this->fail( 'Disconnect should have redirected.' );
+		} catch ( \Optionia_Test_Halt $halt ) {
+			unset( $halt );
+		} finally {
+			$_POST = array();
+		}
 	}
 }
