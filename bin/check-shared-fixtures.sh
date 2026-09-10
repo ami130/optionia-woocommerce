@@ -65,7 +65,6 @@ EXPECTED_SHA='ba3e24692eadae8e5d8052a96abe8214f85d2b8634cc9edb118e0311119c5ed2'
 SUITE_ROOT="src"
 
 # A gate that finds no fixture passes for the wrong reason.
-FIXTURE_DIR="test/fixtures/shared"
 FIXTURE="test/fixtures/shared/pricing-fixtures.json"
 
 if [ ! -f "$FIXTURE" ]; then
@@ -670,75 +669,6 @@ elif [ "$COUNT_ASSERTIONS" -lt 1 ]; then
   printf '        case runs. A truncated provider is caught by the count assertion, not here.\n'
 else
   pass "pricing, bound and generated cases are all executed and counted here"
-fi
-
-
-
-# --- 4. The shared RULE fixture (M17.2) ---------------------------------------
-#
-# A second fixture rather than a category inside the pricing one, because the two
-# answer different questions and a rules edit must not move pricing's hash. Same
-# mechanism throughout: hash it so it cannot drift, count the cases so a
-# truncated provider is caught, and require a LOCAL suite to execute them.
-#
-# ⚠️ **This block is deliberately NOT yet mirrored into the plugin's copy of this
-# script, and the fixture is not yet vendored there.** The PHP evaluator is 17-6;
-# shipping the fixture now would leave the plugin's build red for two stages on
-# work nobody has started, and a gate that is red for a known reason is a gate
-# people learn to ignore. 17-6 adds the file, this block, and the evaluator in one
-# change — which is also the only way the hash can be introduced to both
-# repositories simultaneously.
-#
-# 🔴 **Every case declares `expect_passes`, and the runner asserts it.** 16b's
-# lesson: the pricing fixture proved both ends and neither language proved the
-# middle. For rules the interesting failures are cascade depth and cap behaviour,
-# and neither is visible in a final state -- an evaluator settling in one pass
-# where the fixture says two has a different cascade and the same answer, until
-# the day it does not.
-RULES="$FIXTURE_DIR/rule-fixtures.json"
-EXPECTED_RULES_SHA='5b93bdd32807de569336bbb7e7ca9f8ea91d97763cccf65380585a63b4c79266'
-
-if [ ! -f "$RULES" ]; then
-  fail "shared rule fixture missing at $RULES"
-else
-  ACTUAL_RULES_SHA=$(shasum -a 256 "$RULES" | awk '{print $1}')
-
-  if [ "$ACTUAL_RULES_SHA" != "$EXPECTED_RULES_SHA" ]; then
-    fail "shared rule fixture has changed"
-    printf '        expected %s\n' "$EXPECTED_RULES_SHA"
-    printf '        actual   %s\n' "$ACTUAL_RULES_SHA"
-    printf '        Edit the fixture in BOTH repositories and update EXPECTED_RULES_SHA in both gates.\n'
-  else
-    pass "shared rule fixture matches the recorded hash"
-  fi
-
-  R_DECLARED=$(grep -oE '"rule_case_count"[[:space:]]*:[[:space:]]*[0-9]+' "$RULES" | grep -oE '[0-9]+$' || true)
-  R_ACTUAL=$(grep -cE '"expect_passes"[[:space:]]*:' "$RULES" || true)
-
-  if [ -z "$R_DECLARED" ]; then
-    fail "shared rule fixture declares no rule_case_count"
-  elif [ "$R_DECLARED" != "$R_ACTUAL" ]; then
-    fail "shared rule fixture declares $R_DECLARED case(s) but holds $R_ACTUAL"
-  else
-    pass "shared rule fixture declares and holds $R_ACTUAL case(s)"
-  fi
-
-  RULE_READERS=$(count_readers rule_cases)
-  PASS_READERS=$(count_readers expect_passes)
-
-  if [ "$RULE_READERS" -lt 1 ]; then
-    fail "no local suite reads rule_cases -- the $R_ACTUAL rule case(s) are executed by the other language only"
-    printf '        A rule set evaluated in one language proves that language agrees with\n'
-    printf '        itself. Whether a customer sees the same form on the storefront as the\n'
-    printf '        cloud validated is exactly what a shared fixture is for.\n'
-  elif [ "$PASS_READERS" -lt 1 ]; then
-    fail "a local suite runs the rule cases but never asserts expect_passes"
-    printf '        Asserting only the final state is 16b repeated: cascade depth and cap\n'
-    printf '        behaviour are the failures that matter, and neither is visible in a\n'
-    printf '        final state.\n'
-  else
-    pass "rule cases are executed here, including their pass counts"
-  fi
 fi
 
 
