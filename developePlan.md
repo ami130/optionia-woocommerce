@@ -52,40 +52,28 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-4 — the TypeScript
-evaluator and the shared fixture.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-5 — the serializer
+fills `rules`.**
 
-**Done:** 17-0 (three ADRs), **17-1** + audit, **17-2** + audit, **17-3** + audit
-— three publish validators, eight mutants killed, verified against real publishes.
+**Done:** 17-0 (four ADRs), **17-1**–**17-4**, each with its own audit. 17-4 added
+the `actionValue` column three of six actions needed, ADR-052's precedence, the
+TypeScript evaluator, and a 16-case shared fixture where **every case declares
+`expect_passes`**.
 
-Stage 17-4 writes the cloud's evaluator and, more importantly, **the fixture both
-languages will be held to**. Three constraints carry into it:
+Stage 17-5 makes rules actually reach a storefront: `OptionSetTree` carries none
+today, so `toPublished()` cannot emit them. It also extends
+`check-wire-keys.sh`, which asserts every key the plugin reads is one the API
+publishes.
 
-1. 🔴 **The fixture must prove the middle, not just the ends.** 16b's lesson,
-   recorded: *the fixture proved both ends of pricing and neither language proved
-   the middle*. For rules the interesting failures are **iteration order**,
-   **cascade depth** and **cap behaviour** — none visible in a final state. The
-   fixture declares intermediate passes.
-2. 🔴 **Cap behaviour is a fixture case, not an implementation detail** (ADR-050).
-   16d is the precedent: PHP returned a bare `0` where TypeScript reported
-   `unpriced`, and they disagreed at exactly the boundary where the money is
-   wrong.
-3. ⚠️ **The edge rules from 17-3 must match.** Only `show`/`hide`/`set_default`
-   affect an answer; `set_price` and `require`/`unrequire` do not. An evaluator
-   disagreeing with the cycle detector would refuse documents the detector
-   passed, or loop on ones it blocked.
+⚠️ **Two things are deliberately parked, both with a destination:**
 
-🔴 **17-4 inherits one open question from 17-3's audit (F3).** Two rules with
-contradictory actions on one target — `show` and `hide`, same condition —
-**publish freely today**, and correctly: one node, no loop, so the cycle detector
-has nothing to say. Whether that needs a publish-time check cannot be decided
-until the evaluator exists, because the answer depends on what the evaluator
-does: resolve it deterministically (last-wins by `sortOrder`) or oscillate into
-ADR-050's cap. **17-4 decides, then 17-3's gate is revisited if needed** —
-guessing now would put a rule in the publish gate that the runtime contradicts.
-
-⚠️ **Rules still do not reach the published document.** `OptionSetTree` carries
-none, so the snapshot half is **17-5**. 17-3 validates what *would* be published.
+- **[M17.4a](#m174a--refuse-conflicting-set_price-payloads-at-publish)** — two
+  rules setting *different* amounts on one target. ADR-052 resolves `show`/`hide`
+  by precedence; payloads have no principled winner, so they are refused at
+  publish rather than resolved.
+- **17-6** — the PHP evaluator and the plugin's copy of `rule-fixtures.json`.
+  Vendoring the fixture now would leave the plugin's build red for two stages,
+  and a gate red for a known reason is one people learn to ignore.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -19063,6 +19051,139 @@ over as many options, and a deep chain in a recursive search would risk a stack
 overflow **inside a publish** — surfacing as a 500 rather than the actionable
 message this check exists to produce.
 
+### ✅ Stage 17-4 complete — the evaluator, the payload it needed, and one fixture, 2026-09-10
+
+**The analysis found a blocker before any code**: three of the six actions could
+not be expressed at all.
+
+#### 🔴 G1 — `set_price` and `set_default` had no payload
+
+`OptionRule` carried **nine columns and none held a value**. `PublishedRule` the
+same. So a `set_price` rule had **no amount to set** and `set_default` **no value
+to write** — while ADR-049 reasoned in detail about what `set_price` *means*.
+
+🔴 **ADR-049 is tagged M17.4 and assumed a shape that did not exist.** I wrote it
+in 17-0 against a schema I had read, and never checked the entity could carry
+what it described. Same error class as 17-1's ground-state miss: **reasoning
+about a shape without measuring it**. The reasoning was sound; the column was
+absent.
+
+Fixed with one `actionValue` JSON column, validated **per action**:
+`{ amountMinor }` for `set_price`, `{ valueKey }` for `set_default`, and
+**refused** for the four that act on their own — an amount on a `hide` rule is
+the `freeUnits: 5` shape, stored and never read.
+
+#### 🔴 G2 — ADR-049's publish refusal was never implemented
+
+*"`set_price` against `per_char`/`per_unit`/`tiered` is refused at publish."*
+**Nothing implemented it.** The only references outside the enum were in my own
+17-3 test file.
+
+⚠️ **It fell between stages** — too pricing-specific for 17-3's cycle work, and
+assumed done by the time 17-4 planned to consume it. Now
+`setPriceDoesNotFightOptionPricing`, a blocker: those three types hold a
+**function of the customer's input**, and a flat amount replaces a rate with one
+number for every customer.
+
+#### 🔴 G3 — "Order-independent" and `sortOrder` could not both be true
+
+M17.2 requires order-independence; rules carry `sortOrder`; 17-3's audit found
+contradictory rules publishing freely. **[ADR-052](../optioniaWooCommerceBackend/docs/DECISIONS.md)**
+settles it: within a pair, the **restrictive side wins** — `hide` over `show`,
+`require` over `unrequire` — and `sortOrder` is never consulted.
+
+🔴 **`hide` winning is what makes ADR-051 safe.** A rule-hidden option is not
+charged and not stored. If `show` could win, a rule meaning to hide an option
+could be overridden and the customer charged for a field their own configuration
+removed — 16c's defect with a rule in front of it.
+
+⚠️ **`set_price` conflicts cannot be resolved that way** — two payloads disagree
+about a *number*, and `5.00` versus `7.00` has no principled winner. Refused at
+publish instead, recorded as **[M17.4a](#m174a--refuse-conflicting-set_price-payloads-at-publish)**
+rather than left to be rediscovered.
+
+#### The fixture proves the middle
+
+`rule-fixtures.json` — 16 cases, and **every one declares `expect_passes`**.
+16b's lesson stated plainly: *the fixture proved both ends of pricing and neither
+language proved the middle*. An evaluator settling in one pass where the fixture
+says two has a different cascade and the same answer, until the day it does not.
+
+The gate hashes it, counts the cases, and requires a **local** suite to read both
+`rule_cases` and `expect_passes`.
+
+⚠️ **The plugin half is deliberately held back.** Vendoring the fixture there now
+would leave the plugin's build **red for two stages** on work nobody has started,
+and a gate red for a known reason is a gate people learn to ignore. 17-6 adds the
+file, the gate block and the PHP evaluator in one change — which is also the only
+way one hash reaches both repositories at once. **Verified**: with the fixture
+present and no PHP evaluator, the plugin gate fails exactly as it should.
+
+#### A bug the simplification caught
+
+The first fixed-point loop compared `JSON.stringify` signatures. **Key order in
+`JSON.stringify` follows insertion**, so two identical answer sets built in
+different orders compare unequal — the loop would have run to the cap on a
+document that had already settled, and ADR-050 makes reaching the cap a
+**refusal**. Replaced with a key-by-key comparison.
+
+#### 🔴 Two mutants survived, and both were tests that proved nothing
+
+The guards were right. **Two of the tests written to prove them were not**, and
+only mutation found it.
+
+**Survivor 1 — the cap test asserted a tautology.**
+
+```ts
+expect(outcome.refused === null || outcome.states.size === 0).toBe(true);
+```
+
+True whichever branch the evaluator took, so a mutation **returning the state
+reached at the cap** — ADR-050's exact defect — passed it. Worse, the case did
+not oscillate at all, so the cap was never reached.
+
+A reachable oscillation exists and is now the fixture: a rule hiding the very
+option its condition reads. Answers are rebuilt from the original each pass —
+which is what keeps the result order-independent — so a hide that stops firing
+restores the answer, and the two states alternate for ever. Measured: **10
+passes, refused, empty states.**
+
+**Survivor 2 — the value-target test used an id the map never held.**
+
+It targeted `value-1` while the fixture priced `option-1`. Two different ids, so
+the lookup missed whatever the guard did, and removing the `targetType !==
+'option'` check survived. Now it targets the **priced option's id** under
+`targetType: 'value'` — the case that separates *"is this id priced"* from *"is
+this rule aimed at an option"*, which is the whole question the guard answers.
+
+⚠️ **Both tests read correctly and asserted nothing.** This is the shape Phase 15
+found in `UploadContentTest`, where every test named "a real PNG" uploaded the
+attack shape, and Phase 16 found in the "rounds half up" case that truncation
+also got right. **A test that passes against the mutant is a test that was never
+about the guard** — and reviewing it cannot tell you, because it reads as though
+it were.
+
+#### ✅ The copy-completeness guard caught the new column, unprompted
+
+Adding `actionValue` failed `copy completeness › OptionRule › accounts for every
+column` **immediately** — the guard 17-2's audit added, doing exactly its job on
+a column that did not exist when it was written.
+
+A duplicated `set_price` rule without its payload has **no amount to set**: it
+evaluates, finds nothing, and leaves the price the merchant authored, silently.
+The fourth thing this file has caught, after `groupLabel`, presentational items
+and rules themselves.
+
+⚠️ **Safe verbatim, unlike `targetId` and `conditions`**, because it carries no
+ids — an amount and a value key mean the same thing in any set.
+
+#### 🟡 G6 — `bound_cases` is the one category no gate counts
+
+Nine of ten pricing categories have their declared count verified.
+`bound_case_count` exists in the fixture and appears in **no** check. Pre-existing
+and small; recorded rather than fixed here, because touching the pricing
+fixture's gate in a rules stage risks its hash for no rules benefit.
+
 #### 🔴 17-3 audit — one real gap, found by asking a different question
 
 The DFS was probed in isolation against the graphs most likely to break a
@@ -19406,6 +19527,30 @@ submitted value for it is a validation error. Conversely, conditionally-required
 are enforced only when their condition holds.
 
 **Acceptance:** submitting a value for a rule-hidden option fails validation.
+
+### M17.4a — Refuse conflicting `set_price` payloads at publish
+
+**Added 2026-09-10**, from ADR-052.
+
+`show`/`hide` and `require`/`unrequire` conflicts are **resolved** by the
+evaluator: the restrictive side wins, which is order-independent and needs no
+gate. `set_price` and `set_default` cannot be resolved that way — both carry a
+**payload**, so two rules disagree about a *number* rather than a direction, and
+`5.00` versus `7.00` has no principled winner. Picking one silently charges a
+customer an amount no merchant chose.
+
+**A publish blocker**, beside the other rule validators, firing only when two
+enabled rules set **different** payloads on one target. Two rules setting the
+same amount agree; refusing those would fail a merchant whose duplicates are
+harmless.
+
+⚠️ **Not built in M17.4**, which added the `actionValue` column the check needs
+and the evaluator that resolves the other four actions. This is a publish-gate
+change and belongs with `setPriceDoesNotFightOptionPricing`, not with an
+evaluator.
+
+**Exit:** two rules setting different amounts on one target block the publish,
+naming both; two setting the same amount do not.
 
 ### M17.5 — Frontend rule runtime
 
