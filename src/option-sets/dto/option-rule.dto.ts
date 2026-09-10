@@ -7,8 +7,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
-  IsString,
-  Length,
+  IsUUID,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -58,10 +57,21 @@ export class CreateOptionRuleDto {
    * publish-time check that also detects cycles (M17.3) — the same boundary
    * `ruleConditionsSchema` draws for each condition's `optionId`. Validating it
    * in two places would be two answers to one question.
+   *
+   * 🔴 **`@IsUUID()`, not `@Length(1, 36)`.** Measured before this: a rule with
+   * `targetId: 'not-a-uuid'` was **accepted and stored**. Every comparable id in
+   * this API — `storeId`, `ReorderEntryDto.id`, all seven of this controller's
+   * path params — is UUID-validated, so the create route was looser about ids
+   * than the reorder route beside it.
+   *
+   * ⚠️ **It is not cosmetic, because a malformed id is permanent.** It can never
+   * match a real row, so the rule is inert — and `CascadeService` matches
+   * `targetType` **and** `targetId` together, so no delete will ever sweep it
+   * into `TARGET_DELETED`. The mechanism that exists to tell a merchant "this
+   * rule lost its target" cannot fire for a target that never existed.
    */
-  @IsString()
-  @Length(1, 36)
-  @ApiProperty()
+  @IsUUID()
+  @ApiProperty({ type: String })
   targetId!: string;
 
   @IsIn(Object.values(RuleAction), {
@@ -128,10 +138,10 @@ export class UpdateOptionRuleDto {
   @ApiPropertyOptional({ enum: Object.values(RuleTargetType) })
   targetType?: RuleTargetType;
 
+  /** See the create DTO: `@IsUUID()`, because a malformed id is permanently inert. */
   @OptionalNotNull()
-  @IsString()
-  @Length(1, 36)
-  @ApiPropertyOptional()
+  @IsUUID()
+  @ApiPropertyOptional({ type: String })
   targetId?: string;
 
   @OptionalNotNull()

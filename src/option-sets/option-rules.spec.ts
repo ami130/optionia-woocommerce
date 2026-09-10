@@ -40,18 +40,30 @@ describe('OptionRulesService', () => {
       }),
     };
     const sets = { findById: jest.fn().mockResolvedValue({ id: setId }) };
+    /*
+     * The target lookups. `findById` is the scoped read, so returning a row
+     * stands for "exists, in this tenant, and is this kind" — the three things
+     * `assertTargetIsWhatItClaims` asks. Each is separate so a test can make
+     * exactly one of them miss.
+     */
+    const groups = { findById: jest.fn().mockResolvedValue({ id: 'g' }) };
+    const options = { findById: jest.fn().mockResolvedValue({ id: optionId }) };
+    const values = { findById: jest.fn().mockResolvedValue({ id: 'v' }) };
     const parents = { touchSet: jest.fn().mockResolvedValue(undefined) };
     const audit = { record: jest.fn().mockResolvedValue(undefined) };
 
     const service = new OptionRulesService(
       rules as never,
       sets as never,
+      groups as never,
+      options as never,
+      values as never,
       parents as never,
       audit as never,
       {} as never,
     );
 
-    return { service, rules, sets, parents, audit, created };
+    return { service, rules, sets, groups, options, values, parents, audit, created };
   }
 
   describe('rulesPerSet', () => {
@@ -133,6 +145,60 @@ describe('OptionRulesService', () => {
       } catch (error) {
         expect(JSON.stringify(error)).toContain('conditions.1');
       }
+    });
+  });
+
+  /**
+   * 🔴 **The target check, and why it is not merely tidiness.**
+   *
+   * `CascadeService` disables an orphaned rule by matching `targetType` **and**
+   * `targetId` together. A rule claiming `option` while pointing at a value id
+   * is swept by neither branch — so when that value is deleted the rule is not
+   * disabled, not flagged `TARGET_DELETED`, and governs nothing for ever while
+   * looking authored in the builder.
+   *
+   * Measured before this check: accepted with a 201.
+   */
+  describe('the target it claims to act on', () => {
+    it('refuses a target that does not exist', async () => {
+      const { service, options } = build(0);
+
+      options.findById.mockResolvedValue(null);
+
+      await expect(service.create(setId, validInput)).rejects.toThrow();
+    });
+
+    it('refuses an option id when the rule claims to target a group', async () => {
+      const { service, groups } = build(0);
+
+      /* The id is a real option's, but no GROUP has it. */
+      groups.findById.mockResolvedValue(null);
+
+      await expect(
+        service.create(setId, { ...validInput, targetType: RuleTargetType.GROUP }),
+      ).rejects.toThrow();
+    });
+
+    it('looks the target up in the table its type names, not another', async () => {
+      const { service, groups, options, values } = build(0);
+
+      await service.create(setId, { ...validInput, targetType: RuleTargetType.VALUE });
+
+      expect(values.findById).toHaveBeenCalledWith(validInput.targetId);
+      expect(options.findById).not.toHaveBeenCalled();
+      expect(groups.findById).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The lookup is the **scoped** read, so a target belonging to another tenant
+     * reads as absent rather than leaking that it exists.
+     */
+    it('treats another tenant’s target as not found', async () => {
+      const { service, options } = build(0);
+
+      options.findById.mockResolvedValue(null);
+
+      await expect(service.create(setId, validInput)).rejects.toThrow();
     });
   });
 

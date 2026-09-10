@@ -1,3 +1,5 @@
+import { v7 as uuidv7 } from 'uuid';
+
 import {
   BINARY_RULE_OPERATORS,
   LIST_RULE_OPERATORS,
@@ -15,6 +17,16 @@ import {
 } from './rule-condition.schema';
 
 /**
+ * A real UUIDv7-shaped id.
+ *
+ * ✏️ **These tests used `'opt-1'` until the 17-2 audit**, which is not an id any
+ * option could have — so every one of them asserted behaviour against input the
+ * API now refuses. A fixture standing in for a valid id has to *be* a valid id,
+ * the same lesson `UploadContentTest`'s polyglot PNG constants taught in Phase 15.
+ */
+const OPTION_ID = '0199b8c2-0000-7000-8000-000000000001';
+
+/**
  * Rule conditions (M17.1).
  *
  * **These tests are as much about the message as the verdict.** A merchant told
@@ -25,7 +37,7 @@ describe('ruleConditionSchema', () => {
   describe('the three operator shapes', () => {
     it('accepts a binary comparison with its operand', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.EQUALS,
         value: 'yes',
       });
@@ -35,7 +47,7 @@ describe('ruleConditionSchema', () => {
 
     it('accepts a list comparison with a non-empty list', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IN,
         value: ['red', 'blue'],
       });
@@ -45,7 +57,7 @@ describe('ruleConditionSchema', () => {
 
     it('accepts a unary comparison with no operand at all', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IS_EMPTY,
       });
 
@@ -64,7 +76,7 @@ describe('ruleConditionSchema', () => {
   describe('an operand the operator cannot use', () => {
     it('refuses a value alongside is_empty', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IS_EMPTY,
         value: 'Blue',
       });
@@ -74,7 +86,7 @@ describe('ruleConditionSchema', () => {
 
     it('names the offending field rather than saying the condition is invalid', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IS_NOT_EMPTY,
         value: 'Blue',
       });
@@ -87,7 +99,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses an unknown field, however plausible', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.EQUALS,
         value: 'yes',
         caseSensitive: true,
@@ -100,7 +112,7 @@ describe('ruleConditionSchema', () => {
   describe('an operand of the wrong shape', () => {
     it('refuses a scalar where a list is required — `in` is not `equals`', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IN,
         value: 'red',
       });
@@ -110,7 +122,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses an empty list, which could never match', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IN,
         value: [],
       });
@@ -120,7 +132,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses a list longer than the ceiling', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.IN,
         value: Array.from({ length: MAX_OPERAND_LIST_LENGTH + 1 }, (_, i) => `v${i}`),
       });
@@ -130,7 +142,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses a binary comparison with no operand — "equals what?"', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.EQUALS,
       });
 
@@ -148,7 +160,7 @@ describe('ruleConditionSchema', () => {
   describe('operands whose TYPE the operator cannot compare', () => {
     it('refuses greater_than against text — there is no ordering to agree on', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.GREATER_THAN,
         value: 'blue',
       });
@@ -158,7 +170,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses less_than against a boolean', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.LESS_THAN,
         value: true,
       });
@@ -168,7 +180,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses contains against a number — `contains 1` would match "10"', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.CONTAINS,
         value: 42,
       });
@@ -178,7 +190,7 @@ describe('ruleConditionSchema', () => {
 
     it('refuses contains against a boolean — `contains false` would match "falsely modest"', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.CONTAINS,
         value: false,
       });
@@ -190,7 +202,7 @@ describe('ruleConditionSchema', () => {
       for (const value of ['blue', 42, true]) {
         expect(
           ruleConditionSchema.safeParse({
-            optionId: 'opt-1',
+            optionId: OPTION_ID,
             operator: RuleOperator.EQUALS,
             value,
           }).success,
@@ -202,7 +214,7 @@ describe('ruleConditionSchema', () => {
       for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
         expect(
           ruleConditionSchema.safeParse({
-            optionId: 'opt-1',
+            optionId: OPTION_ID,
             operator: RuleOperator.GREATER_THAN,
             value,
           }).success,
@@ -217,7 +229,7 @@ describe('ruleConditionSchema', () => {
      */
     it('refuses -0, which does not survive a round trip intact', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
+        optionId: OPTION_ID,
         operator: RuleOperator.LESS_THAN,
         value: -0,
       });
@@ -258,22 +270,48 @@ describe('ruleConditionSchema', () => {
       expect(result.success).toBe(false);
     });
 
+    /*
+     * 🔴 A malformed id is worse than a deleted one, because nothing sweeps it.
+     *
+     * `CascadeService` disables a rule whose target row vanished, recording
+     * `TARGET_DELETED` so the merchant is told which target went missing. A row
+     * that never existed cannot vanish — so a condition naming `'not-a-uuid'`
+     * is permanently unsatisfiable, and permanently invisible.
+     */
+    it('refuses an id no option could ever have', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'not-a-uuid',
+        operator: RuleOperator.IS_EMPTY,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('accepts the UUIDv7 that BaseEntity actually generates', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: uuidv7(),
+        operator: RuleOperator.IS_EMPTY,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
     it('trims a padded id rather than storing the padding', () => {
       const result = ruleConditionSchema.safeParse({
-        optionId: '  opt-1  ',
+        optionId: `  ${OPTION_ID}  `,
         operator: RuleOperator.IS_EMPTY,
       });
 
       expect(result.success).toBe(true);
       if (!result.success) return;
 
-      expect(result.data.optionId).toBe('opt-1');
+      expect(result.data.optionId).toBe(OPTION_ID);
     });
   });
 
   it('refuses an operator nobody defined', () => {
     const result = ruleConditionSchema.safeParse({
-      optionId: 'opt-1',
+      optionId: OPTION_ID,
       operator: 'starts_with',
       value: 'A',
     });
@@ -310,7 +348,7 @@ describe('ruleConditionSchema', () => {
 
     const unreachable = Object.values(RuleOperator).filter(
       (operator) =>
-        !ruleConditionSchema.safeParse({ optionId: 'opt-1', operator, ...operandFor(operator) })
+        !ruleConditionSchema.safeParse({ optionId: OPTION_ID, operator, ...operandFor(operator) })
           .success,
     );
 
@@ -336,7 +374,7 @@ describe('ruleConditionSchema', () => {
 });
 
 describe('ruleConditionsSchema', () => {
-  const one = { optionId: 'opt-1', operator: RuleOperator.IS_EMPTY } as const;
+  const one = { optionId: OPTION_ID, operator: RuleOperator.IS_EMPTY } as const;
 
   it('accepts a flat list of conditions', () => {
     expect(ruleConditionsSchema.safeParse([one]).success).toBe(true);
@@ -383,7 +421,7 @@ describe('ruleConditionsSchema', () => {
    */
   describe('the aggregate byte budget', () => {
     const fatCondition = {
-      optionId: 'opt-1',
+      optionId: OPTION_ID,
       operator: RuleOperator.IN,
       value: Array.from({ length: MAX_OPERAND_LIST_LENGTH }, () => 'x'.repeat(MAX_OPERAND_LENGTH)),
     };

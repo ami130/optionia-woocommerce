@@ -89,7 +89,18 @@ const optionId = z
   .string()
   .trim()
   .min(1, 'A condition must name the option it tests.')
-  .max(36, 'An option id is at most 36 characters.');
+  /*
+   * 🔴 **A UUID, not merely a short string.** Measured before this: an
+   * `optionId` of `'not-a-uuid'` was accepted and stored. It can never match a
+   * real option, so the condition is permanently unsatisfiable — and unlike a
+   * *deleted* target, nothing sweeps it: `CascadeService` disables rules whose
+   * target row vanished, and a row that never existed cannot vanish. The rule
+   * looks authored and governs nothing, for ever.
+   *
+   * `.uuid()` accepts v7, which is what `BaseEntity` generates. Kept beside
+   * `.trim()` so `'  <uuid>  '` is still normalised rather than refused.
+   */
+  .uuid('A condition must name an option by its id.');
 
 /** A single scalar operand. */
 const scalarOperand = z.union([
