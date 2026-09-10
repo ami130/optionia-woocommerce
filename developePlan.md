@@ -21379,7 +21379,17 @@ often as it is not, which is the worst shape for a gate: rare enough to look lik
 a real defect when it appears, common enough that a red build stops meaning
 anything.
 
-🔴 **Four hangs and fourteen flakes, all in the same phase of the same command.** The
+**Nineteen came from the 17-6 audit's verification**: `cascade` and
+`option-sets-http`, **2 of 904**, on the empty-bodied `{}` in fixture setup.
+Alone they pass **32/32** and **36/36**.
+
+⚠️ **One of the two failures named a rule test** — *"disables and flags a rule
+targeting the group"* — which is exactly the shape that costs analysis time: a
+failure whose *name* implicates the stage under test, in a suite whose fixture
+merely could not create a group. It passed alone, on the same commit, minutes
+later.
+
+🔴 **Four hangs and fifteen flakes, all in the same phase of the same command.** The
 unit half has never once done this — 48 suites and 911 tests complete in seconds
 every time. It is the sequential e2e run, and nothing else.
 
