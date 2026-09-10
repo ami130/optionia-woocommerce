@@ -33,9 +33,21 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# ...except the example, which documents what a developer must set and holds no
+# value. Excluding it means a new checkout has no record of the variables the
+# app needs, and the first symptom is a blank screen.
+!.env.local.example
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright
+# Traces and screenshots from a failed E2E run. Useful locally, and large —
+# a retained trace is a zip of every DOM snapshot in the flow.
+/test-results/
+/playwright-report/
+/blob-report/
