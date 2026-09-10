@@ -21235,7 +21235,16 @@ earlier by the same suite. Alone it passes **78/78**.
 each time on a different assertion and each time passing alone. Nothing about a
 serializer changes whether a set the suite just created is visible to it.
 
-🔴 **Four hangs and thirteen flakes, all in the same phase of the same command.** The
+**Eighteen came from the 17-5 audit's verification**: `config-delivery`, **1 of
+904**, on the familiar empty-bodied `{}` in fixture setup. Alone it passes
+**38/38**.
+
+⚠️ **A single test out of 904.** At that rate the full run is green roughly as
+often as it is not, which is the worst shape for a gate: rare enough to look like
+a real defect when it appears, common enough that a red build stops meaning
+anything.
+
+🔴 **Four hangs and fourteen flakes, all in the same phase of the same command.** The
 unit half has never once done this — 48 suites and 911 tests complete in seconds
 every time. It is the sequential e2e run, and nothing else.
 
