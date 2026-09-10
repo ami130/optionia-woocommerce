@@ -56,7 +56,8 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 detection.**
 
 **Done:** 17-0 (ADR-049/050/051), **17-1** + its eight-finding audit, and **17-2**
-— six CRUD routes, four gates satisfied, four mutants killed.
+— six CRUD routes, four gates satisfied, four mutants killed — plus **17-2's own
+audit**: four findings, three fixed, one recorded.
 
 Stage 17-3 is the first stage that needs the **whole set at once**, and it owns
 three questions 17-1 and 17-2 deliberately deferred to it:
@@ -71,6 +72,17 @@ three questions 17-1 and 17-2 deliberately deferred to it:
 already disables such a rule with `TARGET_DELETED`, so 17-3 must distinguish
 "points at nothing" (already handled, stays disabled) from "points at something
 that points back" (new, refuse the publish).
+
+⚠️ **Two narrower questions are already answered, so 17-3 must not re-answer
+them.** Since the 17-2 audit, `OptionRulesService` refuses a `targetId` that is
+not a UUID and one whose row is not the **kind** the rule claims — because a
+mismatched pair is invisible to the cascade and would govern nothing for ever.
+17-3 owns only what needs the **whole set**: is the target in *this* set, and do
+the rules form a cycle.
+
+🟡 **A self-referential rule is legitimate.** "Hide A when A is empty" is a
+one-step rule, not a cycle — verified accepted. The detector must not over-fire
+on it.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18952,6 +18964,98 @@ stage cannot build.
 | `OptionRulesService` | six methods; `rulesPerSet` enforced on create |
 | `OptionRulesController` | six routes under `option-sets/:id/rules` and `rules/:id` |
 | Tests | 11 unit, 6 isolation probes, 3 capability probes, 4 audit drives |
+
+#### 🔴 17-2 audit — four findings, three fixed and one recorded, 2026-09-10
+
+Nine live probes against the running API. **The tenancy work held up better than
+expected** — what failed was id validation, and it failed quietly.
+
+##### ✅ What survived attack
+
+| Probe | Result |
+|---|---|
+| Reorder listing another tenant's rule id | **400**, victim's `sortOrder` untouched |
+| Reorder mixing an own rule with a foreign one | **400**, and **neither** written — it refuses atomically |
+| Does `rulesPerSet` count soft-deleted rules? | **No.** Delete then recreate → 201 |
+| Write path | `update`/`delete` go through `scopedIds()`; `create` calls `assertParentOwned` in a transaction |
+
+The mixed reorder is the one worth naming: a partial write, applying the legal
+half before rejecting the illegal one, is the obvious way for that endpoint to be
+wrong. It is not.
+
+##### 🔴 D1 — `targetId` accepted arbitrary strings, unlike every sibling
+
+**Measured: `targetId: 'not-a-uuid'` accepted and stored, 201.** It carried
+`@Length(1, 36)` where `storeId`, `ReorderEntryDto.id` and all seven of this
+controller's path params use `@IsUUID()` — so the **create** route was looser
+about ids than the **reorder** route beside it. The condition schema's `optionId`
+had the same weakness.
+
+⚠️ **Not cosmetic, because a malformed id is permanent.** It can never match a
+row, so the rule is inert — and nothing sweeps it, since `CascadeService`
+disables rules whose target *vanished*, and a row that never existed cannot
+vanish.
+
+✏️ **The spec had been asserting against invalid input all along.** Every test
+used `'opt-1'`, which is not an id any option could have. Same shape as Phase
+15's polyglot PNG fixtures: a fixture standing in for valid input has to *be*
+valid input. All 23 uses now carry a real UUIDv7.
+
+##### 🔴 D2 — A `targetType`/`targetId` mismatch was silent and permanent
+
+**Measured: `targetType: 'option'` with a *value's* id accepted, 201.**
+
+The consequence is in `CascadeService`, which matches both fields **together**:
+
+```ts
+{ targetType: target.type, targetId: In(target.ids), … }
+```
+
+A rule claiming `option` while pointing at a value is swept by **neither** branch
+— the option pass never sees that id, the value pass never sees that type. When
+the value is deleted the rule is not disabled and not flagged `TARGET_DELETED`.
+It governs nothing, for ever, while looking authored in the builder.
+
+Fixed with one **scoped** read against the table the declared type names — which
+doubles as a tenancy check, since another tenant's target reads as absent rather
+than leaking that it exists. `targetExists` has **no `default` branch**, so
+`RuleTargetType` gaining `item` (M5.4c gives presentational items conditional
+visibility) is a compile error rather than a silently-valid target.
+
+⚠️ **The naive fix would have been wrong.** Looking the id up in all three tables
+proves it exists and loses the type dimension — the exact mismatch. Verified by
+mutation: that version fails **four** named tests.
+
+##### 🟠 D3 — Cross-set targeting: recorded, not fixed
+
+A rule in set A may point at set B's option. It passes D2's check — the row
+exists and is an option — and is refused only at publish (M17.3).
+
+**The deferral has a consequence the analysis understated:** until publish, the
+builder shows the rule as valid, and the cascade will **not** disable it when B's
+option is deleted, because a cascade sweeps within the deleted row's own set. So
+the `TARGET_DELETED` guarantee is narrower than it reads.
+
+Left to M17.3 deliberately — "is this row in this set" needs the whole set loaded,
+which is that stage's shape — but now stated on `OptionRulesService` so it is
+designed for rather than rediscovered.
+
+##### 🟡 D4 — A self-referential rule is accepted, and correctly
+
+A rule hiding option A when A is empty is a legitimate one-step rule, not a
+cycle. Recorded because it looks alarming: **M17.3's cycle detector must not
+over-fire on it.**
+
+##### Verification
+
+| | |
+|---|---|
+| Garbage `targetId` | 400 |
+| Garbage condition `optionId` | 400 |
+| `option` type + value id | 400 |
+| Well-formed UUID naming nothing | 400 |
+| **Controls** — option, group and value targets | **201, 201, 201** |
+| Cross-set target (D3) | 201, by design |
 
 #### 🔴 C1 — `enableImplicitConversion` silently destroyed every condition
 
