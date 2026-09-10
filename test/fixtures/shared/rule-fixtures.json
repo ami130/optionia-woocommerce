@@ -1,7 +1,7 @@
 {
-  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included \u2014 the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included \u2014 the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. TWO COERCION RULES ARE PINNED HERE BECAUSE THE LANGUAGES DISAGREE BY DEFAULT. (1) A boolean operand compares as 'true'/'false' \u2014 PHP's own (string) cast gives '1' and '', so a PHP evaluator must not use it. (2) A non-numeric answer never satisfies greater_than or less_than \u2014 PHP's (float) cast turns 'abc' into 0.0 and would make `less_than 5` fire. Both were measured, and neither was covered before M17.6. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
   "version": 1,
-  "rule_case_count": 20,
+  "rule_case_count": 37,
   "rule_cases": [
     {
       "name": "a rule that does not fire changes nothing",
@@ -801,6 +801,490 @@
       },
       "expect_passes": 10,
       "expect_refused": true,
+      "expect_states": {}
+    },
+    {
+      "name": "a boolean operand matches the string 'true', not '1'",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": true
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "true"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "a boolean operand does NOT match '1' \u2014 PHP's own cast would say it does",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": true
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "1"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "false matches the string 'false', not the empty string",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": false
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "false"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "false does NOT match '' \u2014 an empty answer is unanswered, not false",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": false
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": ""
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "greater_than does not fire on a non-numeric answer",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "abc"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "less_than does not fire on a non-numeric answer \u2014 PHP's (float) would make it 0",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "less_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "abc"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "less_than fires on a numeric answer below the operand",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "less_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "3"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "a hexadecimal string is not a number",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "0x10"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "a numeric prefix is not a number",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "9abc"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "exponent notation is a number in both languages",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "1e3"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "surrounding whitespace does not stop a number being one",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": " 9 "
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "contains finds a substring",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "eng"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "engraved"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "contains does not fire when the substring is absent",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "zzz"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "engraved"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "in matches one of the listed values",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "in",
+              "value": [
+                "red",
+                "blue"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "blue"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "in does not fire on a value outside the list",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "in",
+              "value": [
+                "red",
+                "blue"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "green"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "not_in fires on a value outside the list",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_in",
+              "value": [
+                "red",
+                "blue"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "green"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "not_in does not fire on an unanswered option",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_in",
+              "value": [
+                "red",
+                "blue"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
       "expect_states": {}
     }
   ]

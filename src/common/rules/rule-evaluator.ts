@@ -412,14 +412,10 @@ function compareNumeric(
   operand: unknown,
   compare: (a: number, b: number) => boolean,
 ): boolean {
-  const left = Number(answer);
-  const right = Number(operand);
+  const left = numericValue(answer);
+  const right = numericValue(operand);
 
-  if (answer === '' || answer === null || answer === undefined) {
-    return false;
-  }
-
-  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+  if (left === null || right === null) {
     return false;
   }
 
@@ -441,6 +437,55 @@ function sameAnswers(a: Record<string, unknown>, b: Record<string, unknown>): bo
   }
 
   return keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
+}
+
+/**
+ * A value as a number, or `null` when it is not one.
+ *
+ * 🔴 **Neither language's own coercion can be trusted here, and they disagree in
+ * opposite directions.** Measured:
+ *
+ * | Input | `Number()` (JS) | `(float)` (PHP) | `is_numeric()` (PHP) |
+ * |---|---|---|---|
+ * | `"abc"` | `NaN` | **`0.0`** | false |
+ * | `"0x10"` | **`16`** | `0.0` | false |
+ * | `"9abc"` | `NaN` | **`9.0`** | false |
+ * | `"1e3"` | `1000` | `1000.0` | true |
+ * | `" 9 "` | `9` | `9.0` | true |
+ *
+ * So PHP's cast makes `less_than 5` fire on the answer `"abc"`, and JavaScript's
+ * makes `greater_than 5` fire on `"0x10"`. **A rule's outcome decides whether a
+ * field is hidden, and ADR-051 makes a hidden field one that is not charged** —
+ * so a disagreement here is a disagreement about money.
+ *
+ * The shared rule fixture pins the answer: **decimal notation only**, matching
+ * `is_numeric()` minus its hex-free quirks. Anything else is not a number, in
+ * both languages, whatever their casts would say.
+ */
+function numericValue(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  /*
+   * Decimal, with an optional sign and exponent. Deliberately NOT `Number()`:
+   * that accepts `0x10`, `0b11` and `Infinity`, none of which `is_numeric()`
+   * reads the same way — and a rule that fires in one language only is the
+   * defect a shared fixture exists to prevent.
+   */
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** An `in` / `not_in` operand, defensively. */
