@@ -52,33 +52,28 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17 — Conditional Logic Engine](#phase-17--conditional-logic-engine).**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-1 — the `rules` table.**
 
-It is blocked on **three design decisions**, each of which changes what gets built rather
-than merely how:
+**Stage 17-0 is complete**: the three blocking decisions are settled as
+**ADR-049, ADR-050 and ADR-051**. See
+[Stage 17-0 complete](#-stage-17-0-complete--the-three-decisions-2026-09-10) for
+what writing them found that the analysis had not.
 
-1. **`set_price` versus Phase 16's pricing.** When a rule sets a price on a value that
-   already carries a `price_config`, does the rule *replace* that delta, *add* to it, or is
-   the combination *refused at publish time*? — recommendation: **replace** for value-level
-   types (`fixed`, `percentage`), **refuse** where an option-level type (`per_char`,
-   `per_unit`, `tiered`) already prices the whole option, because those two cannot be
-   reconciled coherently.
-2. **Non-convergence.** Rule A shows a field, rule B hides it, forever. At the iteration cap,
-   accept the state reached or refuse the evaluation? — recommendation: **refuse and report**.
-   A silently truncated rule pass is a wrong price that looks right.
-3. **Hidden-value policy.** When a rule hides a field the customer already filled in, clear
-   the answer or keep it — and restore it if the field re-shows? — recommendation:
-   **clear, do not restore**. A hidden field still carrying a charge is the same class of
-   defect as the price freeze found in 16c.
+Stage 17-1 is a migration, an entity, and the condition schemas — **every one
+`.strict()` from its first commit** (F6). Phase 16's audit found *no* price
+schema was strict, so a merchant setting `freeUnits: 5` saved successfully and
+was charged as if they had set nothing. `PublishedRule.conditions` is typed
+`Record<string, unknown>` today, which is that same shape before a single rule
+exists.
 
-Phase 17 also **owns M16.4 (conditional pricing)**, deferred out of Phase 16, and
-**[M17.4](#phase-17--conditional-logic-engine)** — carry-forward rule 3, *hidden options are
-rejected server-side, not merely hidden*, which is the one the Shopify app never did.
+**Backend before plugin throughout this phase.** `forbidNonWhitelisted: true`
+means an unknown DTO field is a 400, so a plugin sending a field the API has not
+shipped fails closed (ADR-043).
 
-⚠️ **What this block said before 2026-09-10:** *"Do not start Phase 14 until all ten
-[Gate 1 criteria] pass."* All ten passed on 2026-09-03 and Phases 14–16 were built — but
-this block was never updated, so the plan's own entry point spent a week telling every new
-session to do work that was already finished.
+⚠️ **The wire slot already exists.** `PublishedRule` and `rules: []` ship in the
+frozen `schema_version: 1` document, so filling them is **additive** exactly as
+`CONFIG-CONTRACT.md` planned — not a schema break. Every connected plugin already
+parses the key.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18821,7 +18816,40 @@ specifically**; it is where a regression would reach a cart total.
 | Schema not `.strict()` (16f) | 17-1 |
 | A deferral pointing nowhere | Anything cut from this phase gets a milestone number before the stage closes |
 
-### 🔴 Three decisions blocking stage 17-1
+### ✅ Stage 17-0 complete — the three decisions, 2026-09-10
+
+**Decided as recommended, and written as ADRs rather than as plan prose** so they
+sit beside the forty-eight decisions they interact with:
+
+| ADR | Decision |
+|---|---|
+| **[ADR-049](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | `set_price` **replaces** a value-level price; **refused at publish** against `per_char`, `per_unit`, `tiered`; the plugin reports rather than trusts |
+| **[ADR-050](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | Cycles rejected at publish **and** an evaluator cap in both languages; reaching the cap **refuses**; the cap is a fixture case |
+| **[ADR-051](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | A rule-hidden option is **not charged, not stored, not restored** |
+
+**Three things the analysis did not have, found while writing them:**
+
+⚠️ **`option_delta()` already implements ADR-049's shape.** The shipped resolver
+refuses `per_char` on a non-typed option with exactly the two-layer structure
+ADR-049 needed: the cloud's registry refuses at authoring time, and the plugin
+reports at runtime because AC4 makes a document input rather than authority.
+Phase 17 reuses that pattern instead of inventing a second one — the alternative
+is two ways of handling "configuration this build cannot price".
+
+⚠️ **`fixed` at the option level is already precedent for refusing rather than
+inventing.** `option_delta()` returns silently for it, on the stated grounds that
+*"inventing one independently in two languages is how they begin to disagree"* —
+which is the argument ADR-049 makes for `set_price` against option-level pricing.
+
+🔴 **The resolver runs TWICE per add-to-cart, and both runs must agree.**
+`AddToCartValidator` resolves to decide legality; `CartItemData::attach()`
+**re-resolves** rather than carrying state across filters, deliberately, so the
+result cannot depend on filter invocation order. Rule evaluation must therefore be
+a pure function of `(document, selections)` with no hidden state — if it is not,
+the validated line and the stored line can differ. This constrains stage 17-8 more
+tightly than the analysis knew, and it is now in ADR-051.
+
+### ~~🔴 Three decisions blocking stage 17-1~~ — resolved above
 
 **Recommendations given; all three are yours.**
 
