@@ -143,7 +143,16 @@ final class RuleEvaluatorTest extends TestCase {
 			$ids[ $rule['target_id'] ] = true;
 
 			foreach ( $rule['conditions'] as $condition ) {
-				$ids[ $condition['option_id'] ] = true;
+				/*
+				 * ⚠️ The fixture deliberately carries **unreadable** conditions,
+				 * to pin that both languages treat one as `false` rather than
+				 * skipping it. This map only needs the ids it can see; a
+				 * condition with none contributes nothing, exactly as it
+				 * contributes nothing to the evaluation.
+				 */
+				if ( is_array( $condition ) && isset( $condition['option_id'] ) ) {
+					$ids[ $condition['option_id'] ] = true;
+				}
 			}
 		}
 

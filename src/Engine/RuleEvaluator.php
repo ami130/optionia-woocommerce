@@ -208,11 +208,22 @@ final class RuleEvaluator {
 		$any = 'any' === ( $rule['match_type'] ?? 'all' );
 
 		foreach ( $conditions as $condition ) {
-			if ( ! is_array( $condition ) ) {
-				continue;
-			}
-
-			$holds = self::condition_holds( $condition, $answers );
+			/*
+			 * 🔴 **An unreadable condition is FALSE, never skipped.**
+			 *
+			 * `continue` was the first version, and it made the two evaluators
+			 * disagree: measured, a rule with `[valid-and-true, garbage]` under
+			 * `all` fired in PHP and did not in TypeScript, which evaluates the
+			 * garbage as false. Under ADR-051 a hidden field is one that is not
+			 * charged, so the two languages disagreed about **money** — the
+			 * exact class M17.6 exists to close.
+			 *
+			 * PHP's was the wrong answer. A condition the evaluator cannot read
+			 * is one it cannot confirm, and under `all` an unconfirmable
+			 * condition must fail — skipping made a rule *more* likely to fire
+			 * the more corrupt its document was.
+			 */
+			$holds = is_array( $condition ) && self::condition_holds( $condition, $answers );
 
 			if ( $any && $holds ) {
 				return true;
