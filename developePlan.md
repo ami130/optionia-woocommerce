@@ -20363,6 +20363,31 @@ Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
 
+⚠️ **Eleven occurrences by Stage 17-1**, and the tenth and eleventh came from
+the **same change** — a new schema file and an enum, touching nothing either
+failing suite reads.
+
+The eleventh, on the re-run after the hang: `config-document` failed **3 of its
+32 tests** with the classic signature — `Fixture failed to create a value: 404`
+and `a option: 400`, both with `{}` bodies, in *fixture setup* rather than in any
+assertion. Run alone, the same suite passes **32/32**. Full run: 890 of 893.
+
+🔴 **The cost is now measurable in this session alone.** One hang needing
+`pkill`, one full e2e re-run, one isolated suite run, and roughly twenty minutes
+of waiting — to establish that a change adding a Zod schema did not break the
+config document. That is the argument for M30.11 being real work rather than
+housekeeping: every occurrence must be disproved before the work it interrupted
+can be trusted.
+
+**The tenth** was a **third full hang**, on
+2026-09-10: the unit suite passed 47/47 and 859 tests, then the e2e run stalled
+mid-`connect-handshake` with the jest process alive and the output file untouched
+for over three minutes. Killed with `pkill`, exactly as the first two were. The
+suites that had already run — `concurrency`, `publish`, `config-delivery`,
+`assignments`, `config-document` — all **passed** before the stall, and the
+change under test was a new schema file plus an enum, touching nothing either
+suite reads.
+
 ⚠️ **Nine occurrences by Stage 16z**, where a run that changed **only comments**
 failed `config-document` and `connect-handshake` together — 90 tests from those
 two suites pass in isolation. A change that cannot alter behaviour producing a
