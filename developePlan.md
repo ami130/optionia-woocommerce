@@ -18663,6 +18663,181 @@ modes written down whether or not they can be fixed.
 
 **Depends on:** Phase 14
 
+### Phase 17 — pre-flight analysis, 2026-09-10
+
+**Measured against the three repositories before planning**, because the last
+three phases each found the plan's own assumptions stale — 16c's blocker had
+been answered two phases earlier, 16e's decision was made in Phase 7.
+
+#### Ground state — what already exists
+
+| Thing | State | Consequence |
+|---|---|---|
+| `PublishedRule` interface | **Exists** in `projections.ts` — `id`, `target_type`, `target_id`, `action`, `match_type`, `conditions`, `sort_order` | The wire shape is already designed. Phase 17 fills it, and does not get to redesign it lightly |
+| `rules: []` in the document | **Shipped**, hardcoded empty in `option-set.serializer.ts:214` | Every connected plugin already parses the key. Filling it is **additive**, not a schema break — exactly as `CONFIG-CONTRACT.md` §Additive planned |
+| `rules` database table | **Does not exist** | A migration is the first code |
+| Rule CRUD, evaluator, UI | **None, in any repository** | Genuinely greenfield |
+| Plugin reading rules | **None.** Every `rules` match in plugin source is *validation* rules or `flush_rewrite_rules()` | M17.4's rejection is new code, not an edit |
+| `SelectionResolver::is_hidden()` | Exists — but keys on the **`hidden` presentation**, "who supplies the value" | 🔴 **Not** rule-visibility. Reusing this name for rule-hidden options would conflate two unrelated ideas |
+| Shared fixture mechanism | `pricing-fixtures.json` + `assignment-wire.json`, hash-pinned in both repos | M17.2 reuses it. A third fixture, same gate |
+
+#### F1 — `set_price` versus Phase 16, and it is worse than a preference
+
+M17.1 lists `set_price` as an action. Phase 16 shipped **five price types across
+two positions** — `price_config` prices a *value*, `pricing` prices an *option*.
+The plan was written before any of that existed and never revisited.
+
+The collision is not symmetrical, which is what makes it a decision rather than a
+default:
+
+- Against a **value-level** type (`fixed`, `percentage`): a rule setting a price
+  on a value that already has a `price_config` is two answers to one question.
+  Coherent to resolve — one of them wins.
+- Against an **option-level** type (`per_char`, `per_unit`, `tiered`): the option's
+  price is a *function of the customer's input*, evaluated per character or per
+  unit. A rule setting a flat price on it does not override a number; it
+  **overrides a function with a constant**, silently discarding the merchant's
+  per-unit rate. There is no sensible arithmetic here.
+
+⚠️ **A wrong answer is a mispriced order, not a broken screen.** This is the same
+class as 16c's price freeze — quoted 85.00, charged 130.00 — which shipped green
+for two phases.
+
+#### F2 — Cycle detection is specified at publish, and that is not sufficient
+
+M17.3 says cycles are *"detected at publish time and rejected"*. Necessary and
+**not sufficient**, for a reason the architecture already establishes:
+
+`AC1` makes the cloud the source of truth and the plugin a projection — but the
+plugin evaluates against a **cached document**, and `M9.x` guarantees it keeps
+serving the last good copy when the API is unreachable. So the plugin will
+evaluate rule sets it did not validate, from a cache that may predate any
+publish-time check, on a site the cloud cannot reach.
+
+**The evaluator needs its own iteration cap regardless.** Publish-time rejection
+stops a merchant *authoring* a cycle; the cap stops a cached document *hanging a
+storefront*. Both, or the storefront is one bad document from an infinite loop.
+
+#### F3 — What happens at the cap is undecided, and both answers are defensible
+
+If rules have not converged when the cap is hit:
+
+- **Accept the state reached** — the customer sees something, possibly with a
+  field wrongly shown or hidden, and can buy at a price computed from it.
+- **Refuse and report** — the line cannot be added; the merchant gets a notice.
+
+A silently truncated rule pass is a **wrong price that looks right**, which this
+project has now shipped twice (16c's freeze, 16d's silent-free overflow) and
+caught both times only in adversarial review.
+
+#### F4 — Hidden-value policy is explicitly deferred by the plan itself
+
+M17.5 asks for *"a documented policy on whether they are restored if re-shown"*
+and does not state one. Three sub-questions, and only the first is obvious:
+
+1. A rule hides a field the customer filled → is the value still **charged**?
+2. → is it still **stored** on the order?
+3. If the field re-shows → is the old answer **restored**?
+
+🔴 **(1) is not a preference.** A hidden field that still carries a charge is
+16c's defect exactly. It must not be charged.
+
+#### F5 — M17.4 collides with `forbidNonWhitelisted` and with AC4
+
+M17.4: *"submitting a value for a rule-hidden option fails validation."*
+`SelectionResolver::resolve()` already walks selections first and reports any
+option id the product does not have — deliberately, so a payload cannot carry
+another tenant's options. **Rule-hidden is a third state** between "known" and
+"unknown", and the resolver has no representation for it.
+
+⚠️ **Order matters and is not stated.** Rules must be evaluated **before**
+selections are validated, because whether a submitted value is legal *depends on*
+the rule outcome. Today `resolve()` validates immediately. This is a structural
+change to a 2663-line function with one public entry point, not an added branch.
+
+#### F6 — `conditions` is `Record<string, unknown>`, and nothing validates it
+
+`PublishedRule.conditions` is typed as an open record. Phase 16's audit found
+**no price schema was `.strict()`**, so a merchant setting `freeUnits: 5` saved
+successfully and was charged as if they had set nothing. The same shape is
+already present here, before a single rule exists.
+
+**Every condition schema is `.strict()` from its first commit.**
+
+#### F7 — Two evaluators, and the fixture must prove the middle
+
+16b's lesson, recorded: *the fixture proved both ends of pricing and neither
+language proved the middle*. A rule fixture that asserts only final visibility
+would repeat it exactly — the interesting failures are **iteration order**,
+**cascade depth**, and **cap behaviour**, none of which is visible in a final
+state.
+
+The fixture declares intermediate passes, not just outcomes.
+
+---
+
+### Phase 17 — execution plan
+
+**Eleven stages.** Backend before plugin throughout: `forbidNonWhitelisted: true`
+means an unknown DTO field is a 400, so a plugin sending a field the API has not
+shipped fails closed (ADR-043).
+
+| # | Stage | Repo | Closes |
+|---|---|---|---|
+| **17-0** | **Decide F1, F3, F4** — three ADRs, no code | — | F1, F3, F4 |
+| 17-1 | `rules` table + entity + migration, `conditions` `.strict()` | backend | F6 |
+| 17-2 | Rule CRUD, tenant-scoped, negative test per route | backend | — |
+| 17-3 | Publish-time cycle detection, actionable message | backend | F2 (half) |
+| 17-4 | TS evaluator + **shared fixture** with intermediate passes | backend | F7 |
+| 17-5 | Serializer fills `rules`; wire-key gate extended | backend | — |
+| 17-6 | PHP evaluator against the *same* fixture, hash-pinned | plugin | F7 |
+| 17-7 | Evaluator iteration cap, independent of publish | plugin | F2, F3 |
+| 17-8 | `resolve()` restructured: rules **before** validation | plugin | F5 |
+| 17-9 | Frontend runtime — show/hide, value policy | plugin | F4 |
+| 17-10 | Rule builder UI, plain-language summaries, tester | dashboard | — |
+| 17-11 | Adversarial suite + exit-criteria audit | all | — |
+
+#### Why 17-0 is a stage and not a preamble
+
+Three decisions change *what gets built*, not how. F1 decides whether `set_price`
+is even accepted against option-level pricing — which changes the schema in 17-1,
+the first stage. Deciding it after would mean a migration to undo.
+
+#### Stage 17-8 is the risky one
+
+`resolve()` is 2663 lines with a single public entry point, and every phase from
+11 to 16 has added to it. Moving rule evaluation *ahead* of selection validation
+reorders a function that currently computes price, weight, SKU suffixes, labels
+and unpriced reporting in one pass. **Budget adversarial review for this stage
+specifically**; it is where a regression would reach a cart total.
+
+#### What this phase must not repeat
+
+| Prior defect | Guard here |
+|---|---|
+| Green suite hiding a real defect (16b, 16c) | Every guard proven by a **named failing test**, never an exit code |
+| Evaluator shipped behind a closed API gate (16c) | 17-5's wire-key gate runs before 17-6 writes PHP |
+| Two languages disagreeing at a boundary (16d) | Cap behaviour is a **fixture case**, not an implementation detail |
+| Schema not `.strict()` (16f) | 17-1 |
+| A deferral pointing nowhere | Anything cut from this phase gets a milestone number before the stage closes |
+
+### 🔴 Three decisions blocking stage 17-1
+
+**Recommendations given; all three are yours.**
+
+1. **`set_price` versus Phase 16 pricing** — *replace* the value's delta for
+   value-level types, and **refuse at publish** where an option-level type
+   (`per_char`, `per_unit`, `tiered`) already prices the option. Replace is what a
+   merchant means by "set". Refusing the second case is the honest answer to
+   overriding a function with a constant, and a publish-time error is visible where
+   a silent override is not.
+2. **Non-convergence at the iteration cap** — **refuse and report.** A truncated
+   rule pass is a wrong price that looks right, and this project has shipped that
+   twice. A refusal is loud, bounded, and reaches the merchant.
+3. **Hidden-value policy** — **not charged, not stored, not restored.** Not
+   charging is not a preference (F4). Not restoring keeps one visible state rather
+   than a hidden one a customer cannot see and did not confirm.
+
 ### M17.1 — Rule model
 
 ```text
@@ -18707,10 +18882,21 @@ Engraving = Yes"*), conflict warnings, and a rule tester.
 ```text
 [ ] Rules evaluate identically in PHP and TS against shared fixtures
 [ ] Cycles rejected at publish with an actionable message
+[ ] The evaluator's own iteration cap holds on a CACHED document          (F2)
+[ ] Cap behaviour is a fixture case, agreed by both languages             (F3, F7)
 [ ] Hidden-option submissions rejected server-side
+[ ] A rule-hidden option is not charged and not stored                    (F4)
+[ ] set_price's interaction with all five Phase 16 price types is decided,
+    implemented, and refused where it cannot be expressed                 (F1)
+[ ] Every condition schema is .strict()                                   (F6)
 [ ] Nested/cascading rules correct
 [ ] Merchants can author rules without documentation
 ```
+
+⚠️ **Five criteria added 2026-09-10** from the pre-flight analysis above. The
+original five were written before Phase 16 existed and before the plugin cached
+config documents — neither `set_price`'s collision with five price types nor the
+cap on a cached document was expressible when they were drafted.
 
 ---
 
