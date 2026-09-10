@@ -17,39 +17,139 @@
 > is reference material. Update it at the end of each milestone; never let it go stale — a
 > wrong status is worse than no status.
 >
-> **Last updated:** 2026-08-27
+> **Last updated:** 2026-09-10 — repo-verified
 
 ## Where we are
 
+**Verified against the repos 2026-09-10.** ⚠️ The previous STATUS was stale *again*: dated
+2026-09-02, it still named Gate 1 as the next thing to do and said *"do not start Phase 14"*
+— while Phases 14, 15 and 16 were built past it. **This block going stale is now a
+twice-observed pattern, not an accident**; see [the sixth instance](#a-defect-in-this-plan-not-in-the-code--recorded-2026-09-09).
+
 ```text
-BACKEND   optioniaWooCommerceBackend    Phase 7 CLOSED  ✅  (commit 0ad7082 "Phase 7 closes")
-                                        → NEXT: Phase 8 — Store Connection
-PLUGIN    optioniaWooCommercePlugin     Phase 3 CLOSED  ✅  (commit 44aa707)
-                                        → BLOCKED on Phase 8 (needs a store credential)
-DASHBOARD optioniaWooCommerceFrontend   NOT CREATED     ⬜  → Phase 13
-WP ENV    local Studio site             READY           ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
-                                                            HPOS on · block cart/checkout
+GATE 1    🚩 ARCHITECTURE PROVEN        PASSED ✅  all 10 criteria, 2026-09-03
+                                        orders #42/#47/#48/#50 · classic + block
+                                        HPOS on, off, and sync off
+
+BACKEND   optioniaWooCommerceBackend    Phases 5-16 built  ✅  838 unit · 893 e2e green
+                                        5 price types · option-level pricing
+                                        Phase 6 is 8/10 — see the ledger's † note
+PLUGIN    optioniaWooCommercePlugin     Phases 3, 8-16 built ✅  1371 tests, 2618 assertions
+                                        Engine/{Pricing,SelectionResolver,Text,Measure}
+                                        Support/{Money,BasePrice} · Upload/* (Phase 15)
+                                        15 option types, convention-resolved templates
+DASHBOARD optioniaWooCommerceFrontend   Phase 13 built      ✅  Next.js + shadcn
+                                        auth · dashboard · option-sets · stores · connect
+                                        🔴 STILL one commit + no CI — F1/F2 below, open
+                                           since 2026-09-02 and marked "fix now" then
+WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
+                                                                HPOS on · block cart/checkout
 ```
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 8 — Store Connection](#phase-8--store-connection)**, milestone M8.1.
+**[Phase 17 — Conditional Logic Engine](#phase-17--conditional-logic-engine).**
 
-Use the prompt template in [Appendix D](#appendix-d--working-with-this-plan). One milestone at
-a time. Do not start Phase 9 until Phase 8's exit criteria all pass.
+It is blocked on **three design decisions**, each of which changes what gets built rather
+than merely how:
+
+1. **`set_price` versus Phase 16's pricing.** When a rule sets a price on a value that
+   already carries a `price_config`, does the rule *replace* that delta, *add* to it, or is
+   the combination *refused at publish time*? — recommendation: **replace** for value-level
+   types (`fixed`, `percentage`), **refuse** where an option-level type (`per_char`,
+   `per_unit`, `tiered`) already prices the whole option, because those two cannot be
+   reconciled coherently.
+2. **Non-convergence.** Rule A shows a field, rule B hides it, forever. At the iteration cap,
+   accept the state reached or refuse the evaluation? — recommendation: **refuse and report**.
+   A silently truncated rule pass is a wrong price that looks right.
+3. **Hidden-value policy.** When a rule hides a field the customer already filled in, clear
+   the answer or keep it — and restore it if the field re-shows? — recommendation:
+   **clear, do not restore**. A hidden field still carrying a charge is the same class of
+   defect as the price freeze found in 16c.
+
+Phase 17 also **owns M16.4 (conditional pricing)**, deferred out of Phase 16, and
+**[M17.4](#phase-17--conditional-logic-engine)** — carry-forward rule 3, *hidden options are
+rejected server-side, not merely hidden*, which is the one the Shopify app never did.
+
+⚠️ **What this block said before 2026-09-10:** *"Do not start Phase 14 until all ten
+[Gate 1 criteria] pass."* All ten passed on 2026-09-03 and Phases 14–16 were built — but
+this block was never updated, so the plan's own entry point spent a week telling every new
+session to do work that was already finished.
+
+## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
+
+**Verdict: the architecture holds. No gap threatens the design.** The Architecture Contract
+was verified *in the code*, not assumed:
+
+| Contract | Verified how | Result |
+|---|---|---|
+| **AC3** storefront never blocks on the API | grepped `Frontend/`, `Integration/`, `Engine/` for any `Api\Client` / `wp_remote_*` call | **clean** — zero |
+| **AC4** price is server-authoritative | grepped every `$_POST`/`$_GET`/`$_REQUEST` read for price-like keys | **clean** — price comes only from `Pricing::sum_deltas()` over cached config |
+| **Money never floats** | `Money::from_minor()->to_decimal_string()` at the `set_price()` boundary | **holds** |
+| **Canonical cart sorting** | `ksort()` in `CartItemData` + `CartItemPayload`, with the reasoning in the docblock: *"the single easiest bug to…"* | **holds** — the `http_build_query` duplicate-line trap is closed |
+| **Cross-language pricing parity (M11.4)** | `pricing-fixtures.json` **byte-identical** in both repos (16 cases) + `bin/check-shared-fixtures.sh` in each | **enforced in CI** |
+| **Fully dynamic types** | `'options/' . sanitize_key($type) . '.php'` — convention-based template resolution | **holds** — a new type is a new template, no renderer edit |
+
+Thirteen backend gate scripts and seven plugin gate scripts exist, including
+`check-isolation.sh`, `check-secrets.sh` and `check-config-invalidation.sh`. This is a higher
+standard of enforcement than most funded SaaS ships with.
+
+⚠️ **Plus five more in this directory's own `bin/`** — `check-option-type-parity.sh`,
+`check-capability-parity.sh`, `check-fixture-parity.sh`, `check-wire-keys.sh` and
+`check-architecture-doc.sh` — which compare the three repositories *against each other*.
+**No CI workflow runs them** (each sub-repository's workflow checks out only itself), so
+they fire only when a person runs `bash bin/check.sh` here. See F5 above.
+
+### Findings — four, none architectural
+
+| # | Finding | Severity | Where it belongs |
+|---|---|---|---|
+| ~~F1~~ | ~~**Frontend has 10 test files and NO CI**~~ — ✅ **CLOSED 2026-09-10.** `.github/workflows/ci.yml` mirrors the backend: Node 20 and 24, lint, typecheck, test, `npm audit --omit=dev`. It had grown to **21 files and 463 assertions** by the time it was fixed. Every gate verified passing locally first, so it does not land red | ~~fix now~~ | done |
+| ~~F2~~ | ~~**Frontend git history is one commit**~~ — ✅ **CLOSED 2026-09-10.** 96 files, 24,633 insertions, committed to a new `develop` branch matching the other two repositories. Secret-scanned before staging: only `.env.local.example` is tracked, holding one `NEXT_PUBLIC_` localhost URL | ~~fix now~~ | done |
+| F5 | **The five cross-repo gates in `bin/` run in no CI workflow.** They compare the three repositories against each other — type parity, capability parity, fixture hashes, wire keys, and whether `ARCHITECTURE.md` still describes the code. Each sub-repository's workflow checks out only itself and cannot see them, so they run only when a person types `bash bin/check.sh` here. **Found 2026-09-10 by running them: one was failing** — `ARCHITECTURE.md` claimed 60 plugin PHP files against an actual 84 | **real** | [M30.11](#m3011--the-harness-itself-flakiness-and-gates-that-read-the-wrong-thing) |
+| ~~F3~~ | ~~**`Engine/Types/` and `Engine/Contracts/` are empty; one option template exists** (`radio.php`)~~ — ✅ **RESOLVED by Phase 14.** There are now **15** templates. `Engine/Types/` and `Engine/Contracts/` are still empty, and that turned out to be the right answer rather than missing work: a type is a template plus a registry entry, resolved by convention (`'options/' . sanitize_key($type) . '.php'`), so adding one needs no PHP class and no renderer edit. The empty directories are the design working | ~~expected~~ | done |
+| F4 | **Conditional-visibility rejection not implemented** — `SelectionResolver` says *"per-type rules…"* and defers | expected | [M17.4](#phase-17--conditional-logic-engine) — and see the carry-forward rules above; this is the one the Shopify app never did |
+
+F1 and F2 are hygiene, not design, but they compound: an uncommitted dashboard with
+un-run tests is the one place a regression could enter unnoticed while Stage 3 proceeds.
+
+🔴 **And Stage 3 proceeded anyway.** Both were marked *"fix now — Immediate"* on 2026-09-02
+and were still open on 2026-09-10, through Phases 14, 15 and 16. For eight days the dashboard
+was one `rm -rf` from losing every line of Phase 13, and its 463 assertions gated nothing.
+**Nothing marked "fix now" should survive a phase boundary** — if it does, either it was not
+urgent or the boundary is not a checkpoint. Here it was the second: no step in
+[the milestone loop](#the-milestone-loop) re-reads this table.
+
+### Two coverage gaps in the plan itself — ✅ CLOSED 2026-09-02
+
+Both were gaps in the *plan*, not the code, and both are now milestones in
+[Phase 29](#phase-29--compatibility-matrix) (Stage 5 — nothing to do before Gate 1):
+
+| Gap | Now | Why it mattered |
+|---|---|---|
+| **WordPress Multisite** — had **0 mentions** across the plan | **[M29.9](#m299--wordpress-multisite-decide-the-position-then-state-it)** — three positions costed, *"not supported"* recommended for launch | It collides with the connection model: the credential binds to `site_url`, and M8.2's clone detection is built to **refuse** a duplicate — which is what a Multisite sibling looks like. Unaddressed, a network activation behaves in a way nobody designed |
+| **WP-CLI** — 1 passing mention | **[M29.10](#m2910--wp-cli-commands)** — six commands, with `connect` scriptable | Agencies and managed hosts automate; no CLI means exclusion from staging pipelines and bulk provisioning — the same **agency segment** the D6 template-override decision targets |
 
 ## ⛔ BLOCKERS — these stop work, resolve them first
 
 | # | Blocker | Blocks | Who resolves |
 |---|---|---|---|
-| ~~B1~~ | ~~`optionia-app-api` not on this machine~~ — **WITHDRAWN 2026-08-27.** Not a blocker. Your NestJS backend already owns the schema (808-line `DATABASE.md`, 32 entities, 5 applied migrations, Phase 7 closed). The Shopify app's schema is Shopify-shaped (shop domains, GIDs, one DB per merchant) and its multi-tenant design is **worse** than yours. [M5.0](#m50--reconcile-the-domain-model-against-optionia-app) is a review of the *existing* schema, needing no external file | — |
+| ~~B1~~ | ~~`optionia-app-api` not on this machine~~ — **WITHDRAWN 2026-08-27.** Not a blocker. Your NestJS backend already owns the schema (808-line `DATABASE.md`, 32 entities, 5 applied migrations, Phase 7 closed). The Shopify app's schema is Shopify-shaped (shop domains, GIDs, one DB per merchant) and its multi-tenant design is **worse** than yours. [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model) is a review of the *existing* schema, needing no external file | — |
 | B2 | **D1 — billing provider** undecided (Stripe vs Paddle vs Lemon Squeezy) | [Phase 22](#phase-22--billing-integration) | **You** — needs company jurisdiction |
 | B3 | **D6 — styling ownership** undecided (theme templates / dashboard / both) | [Phase 21c](#phase-21c--option-styling--presentation-control) | **You** — [M1.9](#m19--decide-d6-styling-and-presentation-ownership) |
 | B4 | **D7 — Design Lab in or out** | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) | **You** — [M1.10](#m110--decide-d7-design-lab-scope-and-position) |
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
 
-**Nothing blocks Phase 8.** B2–B5 are business decisions due before their own phases; B1 was
-withdrawn. Work continues now.
+**Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
+21c, and Stage 4B); B1 was withdrawn. Work continues now.
+
+⚠️ This line read *"Nothing blocks Phase 8"* until 2026-09-10 — nine phases after Phase 8
+closed. It was true when written and stayed on the page as the plan moved past it, which is
+how a STATUS block stops being read: once one line is visibly stale, none of them are trusted.
+
+**Phase 17's own three design decisions are listed under
+[THE NEXT THING TO DO](#-the-next-thing-to-do) rather than here**, because they are yours to
+make in a minute of thinking, not business inputs waiting on outside facts.
 
 > ⚠️ **Terminology — two different "backends".** `optioniaWooCommerceBackend` (NestJS) is **the
 > API for this project**, and the only one. `optionia-app-api` (Express) is the *Shopify*
@@ -63,7 +163,7 @@ withdrawn. Work continues now.
 Five things the Shopify app got wrong and this project must not (full detail in
 [Appendix E](#appendix-e--revision-log-2026-08-27)):
 
-1. **Ids never change on an edit** — [M5.0a](#m50--reconcile-the-domain-model-against-optionia-app). Regenerating them destroys a downgraded merchant's config.
+1. **Ids never change on an edit** — [M5.0a](#m50--review-the-existing-schema-against-optionia-apps-option-model). Regenerating them destroys a downgraded merchant's config.
 2. **One measure function** for per-character pricing, the counter, and length limits — [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display).
 3. **Hidden options are rejected server-side, not just hidden** — [M17.4](#phase-17--conditional-logic-engine).
 4. **A plan change invalidates cached config** — [M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish). Not just a publish.
@@ -75,10 +175,10 @@ Tick a phase only when **every** exit criterion passes.
 
 ```text
 STAGE 0-1  [x] 1 Foundations*   [x] 2 WooCommerce   [x] 3 Plugin skeleton  [x] 4 Prototype
-STAGE 2    [x] 5 Data model     [x] 6 Tenancy/Auth  [x] 7 Authoring API    [ ] 8 Store connection ◀ HERE
-           [ ] 9 Config sync    [ ] 10 Renderer     [ ] 11 Pricing         [ ] 12 Cart/Order
-           [ ] 13 Builder UI    [ ] 🚩 GATE 1
-STAGE 3    [ ] 14 Type library  [ ] 15 File upload  [ ] 16 Adv. pricing    [ ] 17 Cond. logic
+STAGE 2    [x] 5 Data model     [~] 6 Tenancy/Auth† [x] 7 Authoring API    [x] 8 Store connection
+           [x] 9 Config sync    [x] 10 Renderer     [x] 11 Pricing         [x] 12 Cart/Order
+           [x] 13 Builder UI    [x] 🚩 GATE 1 — all 10 criteria met, 2026-09-03
+STAGE 3    [x] 14 Type library‡ [x] 15 File upload  [x] 16 Adv. pricing§   [ ] 17 Cond. logic ◀ HERE
            [ ] 18 Groups        [ ] 19 Product sync [ ] 20 Full builder    [ ] 20b Onboarding
            [ ] 21 Preview       [ ] 21b Cart price  [ ] 21c Styling        [ ] 🚩 GATE 2
 STAGE 4    [ ] 22 Billing       [ ] 23 Webhooks     [ ] 24 Limits          [ ] 25 Analytics
@@ -91,6 +191,30 @@ STAGE 6    [ ] 33 Closed beta   [ ] 34 Prod deploy  [ ] 35 Distribution
 
 \* Phase 1 partially: M1.1/M1.2/M1.7 done via Phase 5 Step 0; **M1.3 (D1), M1.4 (D2/D3),
 M1.8 (ADR-007), M1.9 (D6), M1.10 (D7) still open** — see Blockers.
+
+† Phase 6 is `[~]`, not `[x]`: **8 of 10** criteria met. Impersonation is owned by
+[M26.4](#phase-26--super-admin) and the audit log's **billing** quarter by
+[Phase 23](#phase-23--billing-webhooks). Both entities already carry every column
+they need, so neither is blocked on schema — they wait on the platform surface
+that would use them. Ticking it would claim controls nobody can see working.
+
+‡ Phase 14 carries one `[~]` criterion — type count reconciled with the pricing
+page — blocked on `optionia-websites`, a repository this project does not contain.
+`docs/OPTION-TYPES.md` is the artifact it will be reconciled *against*.
+
+§ Phase 16 ships **five** price types. `formula` is [Phase 16b](#phase-16b--formula-pricing)
+and conditional pricing (M16.4) is [Phase 17](#phase-17--conditional-logic-engine).
+
+⚠️ **Gate 1 was ticked late, on 2026-09-10.** All ten criteria were met on
+2026-09-03 and evidenced in the gate's own section — orders #42/#47/#48/#50 across
+both themes with HPOS on, off, and sync off — but the ledger box stayed empty and
+the `◀ HERE` marker sat *before* the gate while Phases 14, 15 and 16 were built
+past it. **The gate did not fail; the ledger stopped describing reality.** That is
+the same defect this plan already records five times over, in a sixth place:
+a ledger nobody updates is a ledger nobody can trust to say what is left.
+
+**Legend.** `[x]` met · `[~]` partially met, remainder owned by a named milestone ·
+`[→]` handed to a named milestone · `[ ]` not started.
 
 ---
 
@@ -129,7 +253,7 @@ storefronts, so no code is shared with the marketing stack. **Its scope was too 
 `optionia-app-api` (the product's Express API); `optionia-dashboards` ≠ `optionia-app-admin`
 (the product's internal admin). The second of each pair is **not on this machine** and holds
 `base_schema_V001.sql`, a stated source of truth for the per-merchant data model. **Obtain it
-before [M5.0](#m50--reconcile-the-domain-model-against-optionia-app).**
+before [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model).**
 
 ---
 
@@ -248,7 +372,7 @@ documented, and inside this workspace. It is therefore:
 
 There is still **no legacy schema to inherit and no code migration to perform** — the WooCommerce
 data model is designed fresh ([Phase 5](#phase-5--data-model--migrations)), informed by
-`optionia-app`'s model rather than constrained by it ([M5.0](#m50--reconcile-the-domain-model-against-optionia-app)).
+`optionia-app`'s model rather than constrained by it ([M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model)).
 
 ⚠️ **Name collision:** `optionia-backends` ≠ `optionia-app-api`; `optionia-dashboards` ≠
 `optionia-app-admin`. The second of each pair belongs to the product and is **not on this
@@ -817,7 +941,8 @@ never ships.
 ```text
 → File upload (Phase 15)           — high value, high complexity; fast-follow #1
 → Tier-2/3 option types (Phase 14) — date, time, range, quantity, multi-file
-→ Advanced pricing (Phase 16)      — per-unit, per-char, tiered, formula
+→ Advanced pricing (Phase 16)      — per-unit, per-char, tiered
+                                   — formula is Phase 16b, a security boundary
 → Cascading/multi-condition rules  — beyond single-condition show/hide
 → Analytics (Phase 25)             — fast-follow #2; the key D5 differentiator
 → Live preview (Phase 21)          — builder is usable without it
@@ -895,7 +1020,7 @@ now, expensive later.
 > **Revised 2026-08-27:** the roadmap's Phase 0 (*analyse the prior platform*) was originally
 > dismissed as inapplicable. It is not — that analysis exists as `optioniaapp.md` and is
 > adopted through [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) and
-> [M5.0](#m50--reconcile-the-domain-model-against-optionia-app). It is a **reading and
+> [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model). It is a **reading and
 > reconciliation input**, not a phase of construction.
 
 ### M1.1 — Repository and tooling setup
@@ -1208,11 +1333,14 @@ what breaks when a plugin only implements classic hooks. **This is the evidence 
 ### Phase 2 exit criteria
 
 ```text
-[ ] Can explain product → cart item → order and where to intervene safely
-[ ] Integration point catalogue complete for classic AND block paths
-[ ] Store API extension mechanism understood
-[ ] Webhook signature verification understood
-[ ] All notes committed under docs/woocommerce-notes/
+[x] Can explain product → cart item → order and where to intervene safely
+[x] Integration point catalogue complete for classic AND block paths
+[x] Store API extension mechanism understood
+[x] Webhook signature verification understood
+[x] All notes committed under docs/woocommerce-notes/
+    — ✏️ Ticked 2026-09-03, verified rather than assumed: four notes totalling 807
+      lines, each criterion traced to its content. The work was done in Phase 2 and
+      the boxes were never marked, which left the plan understating the project.
 ```
 
 ---
@@ -1564,12 +1692,16 @@ alone.
 ### Phase 3 exit criteria
 
 ```text
-[ ] Plugin installs, activates, deactivates, uninstalls cleanly
-[ ] Fails gracefully without WooCommerce
-[ ] Admin shell with capability + nonce protection
-[ ] Conditional asset loading verified
-[ ] PHPCS (WordPress-Extra) passes with zero errors
-[ ] System Status panel usable for support
+[x] Plugin installs, activates, deactivates, uninstalls cleanly
+[x] Fails gracefully without WooCommerce
+[x] Admin shell with capability + nonce protection
+[x] Conditional asset loading verified
+[x] PHPCS (WordPress-Extra) passes with zero errors
+[x] System Status panel usable for support
+    — ✏️ Ticked 2026-09-03, each verified by running it: `bin/check-uninstall.sh`
+      green; `Plugin.php:111` registers a notice and stops when requirements are
+      unmet; four admin files carry capability/nonce guards; `SystemStatus.php`
+      exists; **PHPCS reports zero errors across 8 files**.
 ```
 
 ---
@@ -1794,23 +1926,31 @@ behind the findings above and useful fixtures for [Phase 12](#phase-12--cart-che
 
 ### Probe location and disposal
 
-```text
-tools/phase4-probe/                     ← source of truth, versioned
-~/Studio/.../plugins/optionia-phase4-probe/   ← the running copy
-```
+✅ **Deleted 2026-08-31, at the end of Phase 10, as planned.** Both copies are
+gone: `tools/phase4-probe/` from this repository and
+`optionia-phase4-probe/` from the Studio install, along with the
+`wp-content/optionia-probe.log` it wrote. It is recoverable from git if ever
+needed — the last commit that held it is `b40e78c`.
 
-Kept **outside the plugin repository** so Phase 3's tree stays clean, but **inside this
-repository** so it survives a Studio site rebuild. The running copy lives in a disposable
-WordPress install; the tracked copy is what makes it recoverable.
+While it existed it lived in two places: the tracked copy here, outside the
+plugin repository so Phase 3's tree stayed clean but inside this one so it
+survived a Studio rebuild; and a running copy in the disposable WordPress
+install. It was kept, deactivated, through Phase 10 rather than deleted at the
+start — comparing a known-good hook trace against new code is faster than
+reasoning about why options fail to appear, and
+[Stage 0](#m108--execution-order-and-why-it-is-not-the-milestone-numbering) was
+inverted when it turned out to say otherwise.
 
-Deactivated but not deleted, because [Phase 10](#phase-10--storefront-renderer) benefits
-from re-running it while building the real renderer — comparing a known-good hook trace
-against new code is faster than reasoning about why options fail to appear.
+**What survives is `docs/woocommerce-notes/prototype-findings.md`** — 483 lines
+holding the observed hook traces, the eight design rules, and the transcribed
+order evidence. It was checked untouched after the deletion. Everything the probe
+proved is in there; only the runnable diagnostic is gone.
 
-`tools/phase4-probe/README.md` records how to run it, the two environment settings that
-silently prevent testing, and the hardcoded product ids.
-
-**Delete `tools/phase4-probe/` at the end of Phase 10.**
+**And the test orders stay.** #29, #31, #32 — and **#30**, a `checkout-draft`
+never listed until Stage 7 found it — still carry their `_optionia_probe_data`
+line meta. That meta is the evidence behind the checkout-integrity finding, so it
+is a fixture for [Phase 12](#phase-12--cart-checkout-order), not probe residue to
+tidy away. Verified present after the deletion.
 
 ### Phase 4 result
 
@@ -2340,8 +2480,8 @@ when it runs a script. `npm run start:prod` therefore reports `0.1.0`, but
 runs — reports `unknown`. Verified both ways during the Phase 5 audit.
 
 It is latent rather than broken: nothing consumes the field yet. It becomes real
-at [Phase 33](#phase-33--deployment), when "which build is live?" is answered
-during an incident, and at [M31.4](#phase-31--observability) if a dashboard
+at [Phase 33](#phase-33--closed-beta), when "which build is live?" is answered
+during an incident, and at [M31.4](#phase-31--monitoring) if a dashboard
 groups errors by release. The fix belongs with the Dockerfile that exposes it —
 read the version from `package.json` at build time, or inject it as an explicit
 env var — rather than here, where there is no container to test against.
@@ -2354,7 +2494,7 @@ env var — rather than here, where there is no container to test against.
    `option_sets.published_config_version`, `stores.config_version`,
    `order_selections.config_version` and `usage_records.value` — the numbers
    [AC1](#ac1--optionia-cloud-is-the-source-of-truth-the-plugin-is-a-projection)
-   projects to the plugin and the ones [Phase 24](#phase-24--plan-limits-and-usage)
+   projects to the plugin and the ones [Phase 24](#phase-24--plan-limits--enforcement)
    bills against. 13 tests, including the boundary at `Number.MAX_SAFE_INTEGER`
    and one asserting that `version + 1` is `43` rather than `"421"`. Disabling the
    guard fails 5 of them.
@@ -2488,7 +2628,7 @@ On registration: create tenant, add user as `owner`, start trial. One atomic tra
 > storefront* — a set belonging to no store has nothing to render on and no lifecycle.
 >
 > A merchant has no store at registration; connecting one is
-> [Phase 8](#phase-8--woocommerce-store-connection). Making the column nullable to satisfy
+> [Phase 8](#phase-8--store-connection). Making the column nullable to satisfy
 > this line would weaken a constraint that is load-bearing for
 > [AC5](#ac5--tenant-isolation-is-enforced-at-the-data-access-layer), so the default set is
 > created **when the first store is connected** (M8.x) rather than at registration.
@@ -2692,7 +2832,7 @@ values are enabled, so the fixture never exercises the state the column exists
 for. That is the same shape as the missing 40-option set in Phase 5: a feature
 supported by the schema and absent from the data every developer works against.
 
-It matters at [7h](#m725--serialization-contract), where the published projection
+It matters at [7h](#m72b--serialization-contract), where the published projection
 must exclude disabled rows — a serializer tested only against fully-enabled
 fixtures proves nothing about the exclusion it is written to perform. Fix with the
 seeds, before 7h rather than during it.
@@ -2827,7 +2967,7 @@ zero non-BIGINT money columns, zero `DECIMAL` anywhere, every table InnoDB, and
 `audit_logs.user_id` still `SET NULL` so GDPR erasure remains possible.
 
 **No contract drift between the repos.** The plugin's HTTP client has no endpoint
-calls yet — those arrive in [Phase 8](#phase-8--woocommerce-store-connection) —
+calls yet — those arrive in [Phase 8](#phase-8--store-connection) —
 so there is nothing yet for the backend to have broken. Worth re-checking the
 moment Phase 8 wires the first call.
 
@@ -2946,7 +3086,7 @@ clears every counter — so an attacker throttled at 10 attempts gets a fresh
 budget whenever we ship.
 
 Not a defect today (one instance, and the limits work), but the fix belongs with
-[M34](#phase-34--infrastructure) where Redis arrives, and it is the difference
+[M34](#phase-34--production-deploy) where Redis arrives, and it is the difference
 between a limit and the appearance of one.
 
 **2. `refresh_tokens` is never pruned.** A 15-minute access token means a refresh
@@ -3070,6 +3210,104 @@ confidently.
   gets answered here rather than at Phase 30 — that deferral was made when the
   untested code was a transformer.
 
+#### Auth audit trail — built 2026-09-03
+
+🔴 **`AuditService` was injected into `auth.module.ts` and never called.** Thirty-six
+actions covered option authoring and store connection; **not one covered signing
+in**. A trail that records who renamed an option value but not who signed in has
+its priorities inverted — the sign-in is where an incident response starts, and
+*wired and unused* is the easiest kind of gap to mistake for coverage.
+
+Seven actions added and wired at every route: `USER_REGISTERED`,
+`USER_EMAIL_VERIFIED`, `USER_LOGGED_IN`, `USER_LOGIN_FAILED`, `USER_LOGGED_OUT`,
+`USER_PASSWORD_RESET_REQUESTED`, `USER_PASSWORD_RESET`.
+
+##### What is deliberately **not** recorded — and why it is half the work
+
+Every one of these routes is intentionally vague about whether an account exists:
+login answers identically for a wrong password and an unknown address,
+registration answers `202` either way, logout answers `204` for any string. **A
+row that distinguishes them rebuilds that oracle inside the log**, for everyone
+who can read it.
+
+So four of the eight tests assert an *absence*:
+
+- **A duplicate registration records nothing.** The audit lives in
+  `AuthService.register()`, not the controller, because the controller cannot tell
+  a real registration from a duplicate — that is precisely what the route hides.
+- **A failed login carries no reason.** The address and IP, nothing more.
+- **A logout with an unknown token records nothing**, or the log would tell an
+  attacker which stolen tokens are still live.
+- **`refresh` is absent entirely.** It fires on a timer, not an intent; a row every
+  few minutes per session would bury the events a reader is looking for. Refresh
+  *reuse* is already logged as a warning by the sessions service, which is where
+  an attack indicator belongs.
+
+##### The mutant that survived, and what it exposed
+
+Four mutants were run. Three died immediately. The fourth — **recording a sign-out
+for every posted string, including unknown tokens** — *passed*, because the
+assertion counted rows for the user's own address and **an orphan row has no user
+to join back to**. The very rows the test existed to forbid were invisible to it.
+Now counted across all sign-out rows.
+
+⚠️ That same orphan-row property broke test isolation: `harness.cleanup()` removes
+tenants and cascades their users, and a failed-login row keyed only by an address
+inside `changes` survives it. A mutation run left one behind and the next run
+failed against the previous run's data rather than against the code. The suite now
+purges those rows itself, verified by running it twice.
+
+##### Two suites the change broke, and what each revealed
+
+**`audit-coverage.e2e-spec` failed immediately — and that is the gate working.**
+It asserts *every* defined action is either produced by driving a route or named
+as covered elsewhere with a reason, precisely so an action can never be defined
+and recorded nowhere. Seven new constants tripped it within seconds. They are now
+registered against `auth-audit.e2e-spec`, with the reason: that suite signs in
+once in `beforeAll` and holds the token, so it cannot exercise a *failed* sign-in
+or a sign-out without destroying the session every other test depends on.
+
+**`seeds.e2e-spec` failed for an unrelated reason this exposed — twice over.**
+
+It asserted `count('store_products') === 30`, a **global** count that was correct
+only while the demo seed was that table's sole writer. Phase 13's canonical E2E now
+imports a real WooCommerce catalogue into a store of its own, so the global figure
+counted rows the assertion was never about: 32 against an expected 30, with the
+seed itself perfectly correct.
+
+Scoping that one assertion was **not enough**. The idempotency test compares eight
+global counts *before and after* re-seeding, so it fails whenever any other suite
+writes between the two reads — which `auth-audit` now does, registering users and
+tenants. Found by running the suites together after each passed alone. All eight
+are now scoped to the demo tenant, which makes them measure **the seed** rather
+than the database it happens to share.
+
+A third suite, `cascade.e2e-spec`, appeared to fail in the same run and **passes in
+isolation** — a 482-second timeout under database contention, not a defect. Worth
+distinguishing: a slow suite and a broken one look identical in a summary line.
+
+##### 🔴 And one event was recording nowhere at all
+
+After every suite passed, the live table held rows for **six of the seven** new
+actions. `user.email_verified` had **none** — because no suite has ever redeemed a
+real verification token: `auth.e2e-spec` covers only the failure cases, and every
+harness sets `emailVerifiedAt` directly. The success path had no coverage, so the
+audit call inside it never ran.
+
+A green suite said the work was done; **the table said otherwise**. Closed by
+issuing a real token and redeeming it through `POST /auth/verify-email`, which is
+also the first coverage that branch has ever had. Mutation-proven.
+
+##### Verified: 33 suites, 879 tests, green
+
+⚠️ **One suite, `option-authoring`, failed in an early run and was not a defect.**
+It passes in isolation (74/74) and paired with the new suite (83/83); the failure
+came from **several full runs overlapping on one database** — seventeen jest
+processes at once, launched while chasing the cause. That is the third time this
+phase a concurrent run has produced a failure indistinguishable from a real one,
+and the second time it cost real diagnostic effort. **Run the e2e suite once, and
+wait.**
+
 ### Phase 6 exit criteria
 
 ```text
@@ -3082,7 +3320,20 @@ confidently.
 [x] editor cannot publish; admin cannot change roles; no platform role can edit config
 [x] Last-owner protection working
 [ ] Impersonation consented, time-boxed, audit-logged
+    — 🔴 Verified 2026-09-03: `impersonation-session.entity.ts` exists and NOTHING
+      references it — no service, no controller, no route. The table is real and
+      the feature is not. Owned by [Phase 26](#phase-26--super-admin), which is
+      where impersonation belongs; the entity landing early in Phase 5's schema is
+      why this criterion looks half-done from the migration alone.
 [ ] Audit log capturing auth, role, publish, and billing events
+    — 🟢 **Three of four as of 2026-09-03.** Role (`MEMBER_ROLE_CHANGED`) and
+      publish (`OPTION_SET_PUBLISHED`, `OPTION_SET_ROLLED_BACK`) were already
+      covered. **Auth was added this round** — seven actions, wired at every
+      route, proven by `test/auth-audit.e2e-spec.ts`.
+      **Billing remains open**: `src/billing/` and `src/subscriptions/` make no
+      audit calls, and [Phase 23](#phase-23--billing-webhooks) owns those events.
+      This criterion stays unticked until billing lands rather than being ticked
+      three-quarters done.
 ```
 
 **Eight of ten met.** Evidence, and what the last two wait for.
@@ -3101,7 +3352,7 @@ confidently.
 **Impersonation and the audit log are deliberately open.** `impersonation_sessions`
 and `audit_logs` were built in Phase 5 with every column both need, so neither is
 blocked on schema. What they lack is the platform admin surface that would use
-them — [Phase 26](#phase-26--platform-admin) — and building consent, time-boxing
+them — [Phase 26](#phase-26--super-admin) — and building consent, time-boxing
 and a visible banner without the screens that display them would produce controls
 nobody can see working.
 
@@ -3536,14 +3787,20 @@ would hide exactly that.
 ### Phase 7 exit criteria
 
 ```text
-[ ] API contract documented and reviewed BEFORE implementation
-[ ] Option sets, groups, options, values fully CRUD-able
-[ ] Type registry in place; radio implemented and validated
-[ ] Publish produces an immutable versioned snapshot
-[ ] Config document contract documented and frozen for v1
-[ ] User-JWT and store-token realms strictly separated
-[ ] All endpoints tenant-scoped with negative tests
-[ ] OpenAPI/Swagger published
+[x] API contract documented and reviewed BEFORE implementation
+[x] Option sets, groups, options, values fully CRUD-able
+[x] Type registry in place; radio implemented and validated
+[x] Publish produces an immutable versioned snapshot
+[x] Config document contract documented and frozen for v1
+[x] User-JWT and store-token realms strictly separated
+[x] All endpoints tenant-scoped with negative tests
+[x] OpenAPI/Swagger published
+    — ✏️ Ticked 2026-09-03, each verified by running it: `check:api` green at 60
+      routes / 69 documented; five controllers cover all four levels; the type
+      registry exists with its own spec; `publish.service.ts` writes
+      `OptionSetVersion`; CONFIG-CONTRACT.md reads "Schema version 1. Frozen.";
+      **no controller mixes the two guard families**; 16 spec files carry
+      cross-tenant negative tests; `/docs` answers 200.
 ```
 
 ---
@@ -3643,8 +3900,33 @@ version), disconnect, reconnect. Plain-language errors.
 ### M8.4 — Token storage and transport
 
 Token in `wp_options`, autoload off. Every request over HTTPS with
-`Authorization: Bearer`, a plugin-version header, and a signed timestamp to limit replay.
-Certificate verification **never** disabled.
+`Authorization: Bearer` and a plugin-version header. Certificate verification
+**never** disabled — `sslverify` is `true` at the single call site, and the
+architecture gate keeps outbound HTTP confined to `src/Api/` so there is only
+one place it could be weakened.
+
+**On replay — why there is no signed timestamp.** This milestone originally
+required "a signed timestamp to limit replay". It was never implemented on
+either side, and on review it should not be: the requirement does not survive
+contact with this design.
+
+TLS already prevents replay by a network observer, which is the threat a
+timestamp is normally reached for. What remains is an attacker who holds the
+store credential — and a signature computed *with that same credential* proves
+nothing they could not already produce. Defending against that case needs a
+second, independent signing key, which in distributed plugin source is a shared
+secret readable by every merchant who installs it. That is precisely what
+[AC8](#ac8--no-saas-secret-ever-ships-inside-the-plugin) forbids, and shipping
+one to satisfy M8.4 would trade a real guarantee for a decorative one.
+
+The control that actually bounds a stolen credential is revocation, which is
+[M8.6](#m86--disconnect-and-revocation): credentials are opaque and hashed at
+rest, rotation is a single call, and a revoked credential fails on its next
+request rather than at some future expiry. A short-lived signature would narrow
+a window that revocation closes outright.
+
+Recorded here rather than dropped silently, so a later audit finds the reasoning
+instead of re-raising it as an oversight — which is how it surfaced this time.
 
 ### M8.5 — Store heartbeat
 
@@ -3677,11 +3959,51 @@ the real endpoints rather than re-asserting each step's units:
 they were:
 
 ```text
-[ ] Merchant can connect a store in under 60 seconds        → M8.3, the connect UI
-[ ] No SaaS secret present anywhere in plugin source        → the plugin's own gates
-[ ] Revocation degrades gracefully — storefront keeps
+[→] Merchant can connect a store in under 60 seconds        → handed to M13.3
+[x] No SaaS secret present anywhere in plugin source        → bin/check-secrets.sh
+[x] Revocation degrades gracefully — storefront keeps
     serving its cached config after a 401                   → M8.4 / AC3
 ```
+
+**How the two checked items are held.** Both were true by inspection long before
+they were true by construction, which is the weaker of the two and the reason
+they stayed unchecked here.
+
+*No SaaS secret* is now `bin/check-secrets.sh`, a gate in the plugin's own CI. It
+scans shipped source for credential-shaped assignments, long opaque literals and
+private-key blocks, and — the part that matters most — refuses to pass when it
+finds nothing to scan. Its patterns were proven against eight planted secrets,
+including the `$pass = "…"` shape that a scanner keyed on `password` misses and
+the `'api_key' => '…'` array form that a scanner expecting `=>` to follow the
+name directly also misses.
+
+*Revocation degrades gracefully* is held by `CacheSurvivesRevocationTest`, which
+drives a real revocation and a real merchant disconnect through the actual
+handlers and asserts the cached configuration is still readable afterwards. That
+guarantee had previously been true only by omission: nothing deleted the cache
+because nobody had written code to, and `Config\Repository::clear()` sits one
+call away from any future tidy-up.
+
+**Why the first is handed on rather than checked.** "Under 60 seconds" spans the
+plugin's connect screen and the dashboard's approval screen, and the clock
+includes a human reading a consent prompt. The second screen is
+[M13.3](#m133--store-connection-screen), five phases out, so this phase cannot
+close it — and `[→]` says so rather than `[ ]`, which reads as work still owed
+here.
+
+Phase 8 discharged everything it owns. The plugin's half is one button, and the
+machine time on both sides is negligible: `Handshake::begin()` and
+`Callback::handle()` measure **0.17 ms** together, and the three cloud endpoints
+answer well inside a second. Effectively the entire minute belongs to M13.3's
+screen and the person reading it, which is why the acceptance now lives there
+with a stopwatch attached.
+
+What would have been wrong is either of the two easy options: marking it `[x]`
+because the implementation looks fast, or leaving it `[ ]` where a criterion with
+no owner quietly becomes a criterion nobody discharges. That failure has already
+happened three times in this phase — an audit action pointed at the wrong step —
+and each time it was caught by a check that expired rather than by someone
+remembering.
 
 **Why the split.** "Revocation degrades gracefully" has two halves and only one is
 testable here: the cloud must **destroy nothing the storefront needs** — verified —
@@ -3704,6 +4026,37 @@ each time by a self-expiring check.
 
 > **The phase that makes or breaks merchant trust.** Get this wrong and either product
 > pages are slow, or merchants see stale options after publishing.
+
+### M9.0 — What Phases 7 and 8 already left behind
+
+**Added 2026-08-28**, from reading the code rather than the milestone list. The
+split between built and missing is not what M9.1–M9.7 imply, and starting from
+the headings would mean rebuilding working parts while missing a structural gap.
+
+| Piece | State |
+|---|---|
+| `ConfigDocumentBuilder` (M7.5) | Built. 23 e2e tests. Scoped by store **and** tenant |
+| `schema_version` refusal (M9.5) | Built. `Config\Repository::store()` rejects `> 1` and keeps the last good copy |
+| Plugin cache (M9.2) | Built. `config_version`, `etag`, `fetched_at`, `size_bytes` |
+| `If-None-Match` / 304 (M9.1, M9.3) | Built in `Api\Client` and `Api\Response` |
+| `configVersion` bump | Built — but **only** on publish and rollback (see M9.4b) |
+| `webhook_deliveries` | Table exists, with a `(status, nextRetryAt)` retry index |
+| "Zero HTTP calls on a product page" | **Structurally enforced.** `Client::assert_not_frontend_render()` throws on a storefront render, so M9.2's hardest acceptance is a guard that already exists rather than a target to hit |
+
+**The five gaps that remain**, each verified rather than inferred:
+
+1. **`GET /store/config` does not exist** — no route, no module. The main build.
+2. **🔴 The push has nowhere to go.** `stores` has no callback-URL column and the
+   plugin registers no REST route (`register_rest_route` appears nowhere in
+   `src/`). `connect/initiate` accepts a `callback`, but that is the *browser*
+   redirect for the handshake and is not retained for server-to-server use.
+   M9.4 cannot be built until a destination exists.
+3. **No product index.** `PublishedAssignment` carries `target_type` and
+   `target_ref` to key on; nothing builds the map.
+4. **M9.5 is half-built.** Refusal works; "raise an admin notice" and "report the
+   mismatch on heartbeat" do not — and `HeartbeatDto` has no schema field, so the
+   cloud could not receive the report even if the plugin sent it.
+5. **No gzip.** `compression` appears in neither `main.ts` nor `package.json`.
 
 ### M9.1 — Config delivery endpoint
 
@@ -3737,6 +4090,57 @@ recorded in `webhook_deliveries`.
 **Acceptance:** publish → live storefront in under 30 seconds on a healthy store, and
 within 15 minutes even if push delivery fails entirely.
 
+**Split across two phases, deliberately.** Phase 9 builds the *destination* —
+`stores.pushUrl`, a REST route in the plugin verifying an HMAC signed with the
+store credential, and a `webhook_deliveries` row written inside the transaction
+that advanced `config_version`. It does **not** send.
+
+The sending needs a worker, and there is none: no `@nestjs/schedule`, no queue
+dependency, nothing that polls. The one place a worker is planned is
+[M34.1](#m341--infrastructure-topology), which says webhook processing "must not
+run in the request path" — and dispatching inline on publish is precisely that,
+a merchant waiting on an HTTP call to their own store.
+
+So the rows accumulate unread until
+[M34.1c](#m341c--drain-webhook_deliveries-the-config-push-phase-9-left-queued),
+which carries this acceptance and the detail of what the worker must do.
+**Nothing is broken while they do**: [M9.3](#m93--pull-based-refresh)'s
+fifteen-minute conditional pull already meets the fallback half of the
+acceptance above, so push is a latency improvement — 30 seconds instead of 15
+minutes — over a working baseline. That is what made the deferral safe, and the
+reason it is written at both ends rather than remembered.
+
+**Two defences were enforced only by prose, and are now enforced by a test and a
+gate** (audit, 2026-08-30). Both were real and both worked; nothing failed in
+production. What was missing was anything that would notice if they stopped.
+
+*The empty-credential guard.* `PushSignature::is_valid()` refuses when the store
+holds no credential. That guard is not decoration: `hash_hmac` accepts `''` as a
+key, so without it the *expected* signature is computed with an empty key too,
+and any attacker can compute the same value with no secret at all. A store sits
+credential-less between disconnect and reconnect, so the state is reachable.
+Removing the guard broke no test. The existing
+`test_a_store_with_no_credential_refuses_every_push` signs with the *real*
+credential, so its 401 holds with or without the guard — it asserted the outcome
+without exercising the attack.
+`test_a_credential_less_store_refuses_a_signature_forged_with_the_empty_key`
+now signs with `''` and is the only test that fails when the guard is removed.
+
+*The constant-time comparison.* `hash_equals` and `===` return the same answer
+for every input, so no behavioural test can distinguish them — the difference is
+timing. That is why `check-secrets.sh` owns this rule rather than a test. But the
+gate asked whether `hash_equals` appeared **anywhere in the file**, and
+`PushSignature.php` says "`hash_equals`, never `===`" in a docblock. The comment
+satisfied the gate while the code did the unsafe thing: swapping the real
+comparison for `===` passed. The gate was reading the documentation instead of
+the code — the same failure class as `check-config-invalidation` matching
+TypeORM API names instead of values. It now strips comments first, requires an
+actual `hash_equals(` **call**, and rejects any `===` between two variables in a
+file that verifies a secret (a variable compared to a literal — `'' === $credential`,
+`null === $pending` — is an emptiness check and stays legal). Proven against four
+evasions across both verifiers, and the floor of 2 still fires when the
+file-discovery pattern is broken.
+
 ### M9.4b — Every trigger that must invalidate, not just publish
 
 **Added 2026-08-27** (`optioniaapp.md` §7b.3, §6c.7). M9.4 above is written entirely around
@@ -3751,7 +4155,8 @@ Enumerate every trigger and bump `config_version` on each:
 | Trigger | Origin | Why it is easy to miss |
 |---|---|---|
 | Option set published | authoring | already covered by M9.4 |
-| Product assignment changed | authoring | covered if it bumps the version — verify |
+| **Published option set deleted** | **authoring** | **🔴 was live, fixed 2026-08-28.** Absent from this table until Stage 2 probed it. Deleting a published set removed it from the document and left `config_version` untouched, so every storefront answered `304` and kept serving options the merchant had deleted. Both routes were affected — soft delete, and `DELETE /:id/permanent`, which accepts a set that was never soft-deleted at all |
+| Product assignment changed | authoring | **verified 2026-08-28: not covered.** Only publish and rollback call `bumpStoreConfigVersion`. Assignment CRUD is [Phase 13](#phase-13--minimum-builder-ui), so nothing bumps it *yet* — and nothing forces Phase 13 to when it lands. A bug scheduled for four phases out |
 | Styling / presentation changed | authoring | depends on [D6](#m19--decide-d6-styling-and-presentation-ownership) |
 | **Plan or subscription changed** | **billing** | **🔴 not covered.** A plan change is *not* a publish, so nothing currently bumps the version. A merchant who upgrades keeps a stale config and **cannot see the features they just paid for** until the ≤15-minute cron — which reads as "I paid and nothing happened" |
 | Store settings changed (currency, tax display) | store | may arrive by webhook, not by an authoring action |
@@ -3760,6 +4165,22 @@ Enumerate every trigger and bump `config_version` on each:
 The plan-change trigger crosses the billing→authoring boundary, which is why no single phase
 owns it. Wire it in [Phase 23](#phase-23--billing-webhooks): the subscription webhook that
 updates plan state must also bump `config_version` and enqueue the invalidation ping.
+
+**Enumerating is not enough; the list has to be enforced.** Every row above is a
+future phase's obligation, and a table in a plan is exactly the kind of thing a
+later phase satisfies by forgetting. Phase 9 therefore owns two things beyond
+the list:
+
+- **One place that bumps.** A single `ConfigVersionBumper` every trigger calls,
+  rather than `configVersion + 1` copied into each service. Publishing already
+  does this privately; Phase 9 lifts it out so Phase 13 and Phase 23 have
+  something to call rather than something to reimplement.
+- **A gate that fails when a new mutating store-scoped route declares no
+  invalidation intent.** Each such route must either bump the version or record
+  why it does not. This is the same self-expiring shape that caught three
+  misattributed audit actions in Phase 8: the check fails loudly at the moment
+  the obligation appears, rather than relying on someone remembering a table
+  written months earlier.
 
 **Acceptance:** upgrading a plan makes a previously plan-locked option visible on the
 storefront within the M9.4 window, without an authoring action. Same for a downgrade, in
@@ -3788,19 +4209,631 @@ Explicit, tested behaviour:
 
 ### M9.7 — Cache observability
 
-System Status shows config version, last successful fetch, last error, cache size, next
-scheduled sync, and index entry count.
+System Status shows config version, last successful fetch, last error, cache size and next
+scheduled sync — plus the last heartbeat, the last inbound push, and whether a document
+was refused for declaring a shape this build cannot read.
+
+**"Index entry count" moves to [M10.1](#m101--resolve-applicable-options)**, with the
+index itself. There is nothing to count: `assignments` is hardcoded empty until Phase 13,
+so a row reporting zero would say the same thing whether the index worked or did not
+exist — the shape of reassurance this project keeps finding and removing.
+
+### M9.8 — Execution order, and the one decision that must come first
+
+Seven stages, each ending somewhere the next can start from. The order is not the
+milestone numbering: it is dependency order, and it puts the structural gap
+(M9.4's missing destination) late enough that everything it needs already exists.
+
+| Stage | Milestone | Why here |
+|---|---|---|
+| 1a | **Wire contract repair** | **Done 2026-08-28.** A Phase 8 defect Phase 9 surfaced — see below. Had to land first: building a fourth consumer on a connection flow that could not connect would have hidden it further |
+| 1b | M9.1 — delivery endpoint | **Done 2026-08-28.** `GET /store/config` in its own `src/config-delivery/` module. Weak ETag `W/"<store_id>-<config_version>"`; a 304 costs one indexed read rather than a document build; gzip above 1KB; the N+1 in `ConfigDocumentBuilder` collapsed from `N+2` queries to 3 |
+| 2 | M9.4b — invalidation triggers | **Done 2026-08-28.** `ConfigVersionService` extracted, the deletion bug fixed, and `bin/check-config-invalidation.sh` added as an eighth gate |
+| 3 | M9.3 — pull refresh | **Done 2026-08-28.** `Config\Synchroniser` replaces the placeholder; conditional `If-None-Match` pull on the 15-minute cron, plus a "Sync now" button |
+| 4 | M9.2 — cache and index | **Done 2026-08-28**, narrower than written. The cache half is complete and measured; the **index moves to M10.1** — see below |
+| 5 | M9.4 — push invalidation | **Destination done 2026-08-29**, sending deferred to [M34.1c](#m341c--drain-webhook_deliveries-the-config-push-phase-9-left-queued). `stores.pushUrl` + migration, plugin REST route at `optionia/v1/push`, HMAC verification against the store credential |
+| 6 | M9.5, M9.6 — negotiation and degradation | **Done 2026-08-29.** The schema refusal is now reported — flag, admin notice, heartbeat field, cloud audit entry — and the matrix is seven named tests including "cloud stopped, shop still sells" |
+| 7 | M9.7 — observability | **Done 2026-08-29.** `Last error` aggregates every failure source; `Last push` and the schema refusal surface what Stages 5 and 6 recorded but never showed. "Index entry count" moved to M10.1 with the index |
+
+**Stage 1a — the response envelope (completed 2026-08-28).**
+
+Found by testing the plugin against the shape the API actually sends rather than
+the shape its fixtures assumed. Every response is `{"data": ..., "meta": {...}}`
+(ADR-009); every plugin caller read the envelope's *outer* level. Against the
+real API:
+
+```text
+begin()    -> NULL          the handshake never starts
+handle()   -> "failed"      no credential stored
+heartbeat  -> no version recorded
+```
+
+**The entire Phase 8 connection flow was broken against the real backend**, and
+both suites passed throughout: the cloud's e2e asserts `body.data.authorize_url`,
+while every plugin fixture was flat. Two internally-consistent halves that
+disagree — a shape neither suite can catch alone, and the same class as the
+`MaxLength(20)` mismatch found in `[8m]`, but structural rather than one field.
+
+A second defect on the error path: the cloud sends `{"error": {"code", "message"}}`
+and the plugin looked for a *string* under `error`, found the array, skipped it,
+and reported `HTTP 400` — discarding the one sentence telling a merchant what to
+fix.
+
+Fixed in `Api\Client`, the single seam every caller already passes through, so
+`Handshake`, `Callback` and `Heartbeat` each read the field they asked for. Held
+by three things rather than one, because a comment would not have prevented it:
+
+- `ResponseEnvelopeTest` — eight tests driving the real wire shapes end to end.
+- `bin/check-envelope.sh` (gate 5 of 8) — every response fixture in the plugin
+  must carry the envelope, so a test can no longer pass against a shape the wire
+  never sends. It found one flat fixture still in the suite on its first run.
+- A wire-contract block in `store-heartbeat.e2e-spec` — the cloud's half,
+  asserting the payload sits under `data` and that store routes stay out of
+  `UNWRAPPED_ROUTES`, which is path-matched and would otherwise change the shape
+  under every plugin already in the field.
+
+**Stage 1b — the envelope stays on `GET /store/config`.**
+
+The alternative was tempting: `meta.timestamp` is stamped per request, so an
+unchanged config returns a byte-different body every time, which defeats any
+CDN or body-diffing layer in front of the endpoint.
+
+Kept anyway, for three reasons.
+
+**Freshness is decided by version, not by bytes.** The ETag is `config_version`,
+a value that changes only when the content does. A conditional request answers
+correctly whether or not the body is byte-stable, so the caching argument is
+about a layer this architecture does not have — `AC3` puts the cache *in the
+plugin*, not in front of the API.
+
+**One exception becomes two.** `UNWRAPPED_ROUTES` is matched on path and holds
+only `/health`. Adding store routes changes the shape under every plugin already
+in the field, and a shipped plugin cannot be updated in step — the reason
+`[8m]`'s `MaxLength(20)` mismatch was expensive to find.
+
+**The bug this phase just fixed was a shape disagreement.** Stage 1a found the
+whole connection flow broken because two halves each assumed a different
+envelope. Introducing a route that is deliberately shaped differently, weeks
+later, is how that returns.
+
+If a CDN is ever put in front of this endpoint, the fix is to drop
+`meta.timestamp` from cacheable responses rather than to unwrap them — smaller,
+and it does not fork the contract.
+
+**What Stage 1b measured that a status code would not.**
+
+Two of the endpoint's guarantees turned out to be untestable through HTTP, and
+finding that out changed the tests rather than the claims.
+
+Nest and Express run their **own** freshness check against the `ETag` header the
+handler sets, and answer `304` when it matches — whatever this code decided.
+Measured directly: with the ETag comparison deliberately broken, `matchesEtag`
+returned `false`, the handler sent `200` with a full document, and the client
+still observed `304`. A request-level assertion on the status was reporting the
+framework's behaviour as though it were ours.
+
+So the two properties that matter are asserted where they can fail:
+
+- **Weak comparison** — against `matchesEtag` directly. The unit assertion fails
+  the moment the `W/` prefix stops being stripped; the request-level one never
+  did.
+- **The cost of a conditional request** — by counting queries at the driver, not
+  by reading a status. A first attempt spied on `DataSource.query` and reported
+  the 304 path as the *more* expensive of the two, because the document builder
+  reads through repositories that never call it.
+
+The handler still ends the 304 itself rather than leaning on the framework:
+relying on Express to hide a body this code should not have produced would be
+correct by accident.
+
+**Three gaps closed after a re-check (2026-08-28).**
+
+Re-reading the milestone against the built endpoint found one requirement
+missing and two guarantees resting on nothing.
+
+**Gzip was specified and absent.** M9.1 says "Gzipped"; `compression` appeared
+in neither `main.ts` nor `package.json`, and Stage 1b was marked done regardless
+— three of four requirements delivered. Measured on a realistic document (20
+option sets, 8 values each): **30.3KB raw, 1.2KB gzipped, a 96% saving**, on a
+payload every connected store pulls every fifteen minutes. Installed globally
+with a 1KB threshold, and mirrored in the test harness — a harness that skipped
+it would leave the requirement permanently unverifiable.
+
+**Every delivery test ran against an empty store.** All fourteen used a store
+with no option sets, so `option_sets` was `[]` in every assertion and the
+endpoint had never returned a document with content. The parts that only appear
+at size — the snapshot join, serialisation, compression — were unexercised on
+the path that serves them. There is now a `publishSet` fixture driving the real
+authoring API, and tests covering a published document, an ETag that moves when
+a set is published, and compression measured on an actual response.
+
+**Cross-realm refusal was untested here.** `check-isolation` exempts
+`@StoreRoute()` routes from its cross-tenant probe — correctly, since a store
+credential names its own store — but the exemption assumes each store route
+proves its realm separately, and this one inherited the exemption without the
+proof. A merchant JWT is now asserted to be refused, and one store's credential
+asserted to reach only its own document.
+
+**Stage 2 — what the probe found (2026-08-28).**
+
+The milestone reads as scaffolding for future phases. It was not: deleting a
+published option set was a **live** invalidation failure, and the table above
+did not list deletion as a trigger at all.
+
+```text
+before fix: sets 1 -> 0 | version 1 -> 1 | etag unchanged
+after fix:  sets 1 -> 0 | version 1 -> 2 | etag moved
+```
+
+Two routes were affected. `DELETE /option-sets/:id` soft-deletes, and
+`DELETE /option-sets/:id/permanent` purges — and purge accepts a set that was
+**never soft-deleted**, so it can erase live published configuration on its own.
+Both now bump; neither bumps twice when the two are used in sequence.
+
+**`ConfigVersionService` replaced a private method.** The bump lived on
+`PublishService`, which made publishing the only caller that *could* reach it —
+the deletion path did not fail to bump so much as have no way to. It now lives
+in `src/common/`, deliberately: putting it in either `option-sets` or
+`config-delivery` creates a module cycle, since delivery already imports
+option-sets for the document builder. That cycle is not hypothetical; it
+appeared the moment it was tried.
+
+**The rule it owns is `bumpIfVisible`.** The document is built from published
+snapshots, so a draft is invisible to it. Bumping on a draft edit would
+invalidate every storefront cache for a change no customer can observe, and not
+bumping on a published change leaves storefronts serving what the merchant
+deleted. Four branches, each with a test: published soft-delete bumps, live
+purge bumps, purge-after-soft-delete does **not** bump again, draft delete does
+not bump.
+
+**The gate: `bin/check-config-invalidation.sh`.**
+
+Deletion was fixed; the *class* of bug was not, and Phase 13 adds assignment
+CRUD to the same surface. The gate closes it — for the authoring domain, which
+is the honest scope.
+
+*What it matches, and why not the obvious thing.* "A mutating store-scoped route
+must bump" over-fires by a factor of five: around twenty authoring routes
+mutate, and only a handful can change what a storefront is served, because the
+document is built from immutable published snapshots. Probed to confirm rather
+than assumed — renaming a published set changes nothing, because **the document
+does not carry the set's name at all**. A gate flagging all twenty would be
+noise, and noise gets exemptions added until it means nothing.
+
+The document reads exactly two tables, so the signal is a write to
+`option_sets` (status, `deletedAt`) or `option_set_versions`. Four files do
+that today; a fifth must bump or be exempted with a reason.
+
+*The first version of this gate was evadable, and a re-check found it.* It
+matched `.update(OptionSet)` and `.delete(OptionSet` — TypeORM write APIs — and
+caught **none of six** realistic evasions: `repo.save(set)`, `manager.save`,
+`upsert`, `softDelete`, `softRemove` and raw SQL. `.save()` is not hypothetical;
+sixteen files here use it, so a service archiving a published set by loading it,
+assigning a status and saving was invisible.
+
+`bin/check-store-state.sh` had already learned this and warns of it in its own
+header. The gate now matches **values** instead: `OptionSetStatus.PUBLISHED` or
+`.ARCHIVED`, a `.set({… deletedAt …})`, or the snapshot table. `DRAFT` is
+deliberately absent — a draft is invisible to the document.
+
+*Proven against six mutations.* `repo.save()`, a `deletedAt` write and a new
+snapshot-pruning service are each caught by name. Both exemptions expire when
+their reason does: the repository writing `status`, or the orchestrator writing
+`PUBLISHED` rather than `DRAFT`, both fail. Replacing the pattern trips the
+floor — `only 0 writer(s) found (floor 5)`, the "check that inspects nothing"
+this project keeps finding in its own gates.
+
+*A further re-check found two gaps in the gate itself.* A **stale exemption**
+vanished silently — `check_exemption` returned early when the file was missing,
+so renaming an exempt file left the entry behind and the gate stayed green. That
+is the part most likely to rot: a dead entry is the one someone later copies for
+a different file, carrying a reason never checked against it. A missing exempt
+path now fails by name.
+
+The second has no clean fix and is recorded rather than papered over: the gate
+reads text, so it **cannot tell a call from a comment**. A writer with the bump
+commented out satisfies the compliance check, and tightening the match does not
+help — the string appears in the comment too. The realistic shape is a stubbed
+call meant to be wired later, not sabotage. What closes it is behavioural: every
+path that changes published configuration is asserted in
+`config-delivery.e2e-spec` to move the version, not merely to call something.
+The gate catches the writer nobody tested; the tests catch the writer whose bump
+does not work.
+
+*Three smaller findings from the same re-check.* `bump()` on an unknown store
+updated zero rows and returned `0` with no error — the identical silent shape to
+the bug Stage 2 fixed; it now throws inside the caller's transaction, so the
+change that prompted it rolls back rather than committing uninvalidated. The
+cascade's `?? ''` fallback, which could construct that state, is gone.
+`ConfigVersionService` gained the unit tests its neighbours in `src/common/`
+already had — seven, covering SQL-level increment, the visibility rule and the
+no-op guard. And `docs/API-CONTRACT.md` now states the invalidation obligation
+on both delete routes, so a reader adding a third has somewhere to learn it
+exists.
+
+*Exemptions are re-verified, not trusted.* `option-sets.repository` is exempt —
+its `applyChange` writes only names and `rowVersion`. That reason is a statement
+about today's code, so the gate re-checks it: adding `status` to that `.set({…})`
+fails with *"the exemption's reason has expired"*. Verified.
+
+*What it cannot reach.* A source-level check cannot see the 🔴 plan-change
+trigger: the config document carries no plan-gated content today, so there is
+nothing to detect. That one needs a test in [Phase 23](#phase-23--billing-webhooks)
+that fails until the subscription webhook bumps. Recorded here so a green gate is
+not read as coverage it never had — the same mistake as a table row saying
+"verify" that nobody could tell had not been.
+
+**Stage 3 — the 304 that would have emptied every cache (2026-08-28).**
+
+`Api\Response::is_ok()` is **true for a `304 Not Modified`**, and a 304 carries
+no body. So the obvious synchroniser —
+
+```php
+if ( $response->is_ok() ) { $repository->store( $response->data() ); }
+```
+
+— stores an empty array over the whole configuration every time nothing has
+changed, which on a fifteen-minute schedule is nearly always. Measured before
+the guards existed: a cached document at version 7 became `has_config = false`,
+version 0. A direct AC3 violation on the most ordinary path there is.
+
+Two defences, because one would have been a promise resting on every future
+caller getting a conditional right: `Synchroniser` checks `is_not_modified()`
+**before** `is_ok()`, and `Config\Repository::store()` independently refuses a
+body with no `option_sets` key. The second caught a related problem immediately
+— two existing fixtures cached documents shaped `{config_version, groups}`, a
+shape no wire response carries, so those tests had been passing against
+something the plugin could never receive.
+
+*The `CONNECTED → ERROR` edge finally has a producer.* The cloud's own audit
+coverage assigns it to config sync, and until now nothing made the transition:
+the settings screen carried "Connected, but the last sync failed" for a state no
+code could reach. `Synchroniser` degrades on failure and recovers on success,
+and refuses to relabel a `REVOKED` store — telling a merchant to check their
+network when the answer is to reconnect would send them to fix the wrong thing.
+
+*"Sync now" inherited a solved problem.* A shop whose cloud has been unreachable
+accumulates breaker failures from its own scheduled syncs, and the merchant
+pressing the button is exactly the person who noticed — the same shape as the
+reconnect bug found in Phase 8. It calls `allow_deliberate_retry()` for the same
+reason, and a test asserts the circuit is closed for the request they asked for.
+
+*A re-check found two more, both fixed.* A `304` arriving with an **empty
+cache** was treated as success: the storefront held no configuration, yet sync
+reported `unchanged`, marked the store healthy and never retried — a shop
+rendering nothing while every signal said it was fine. "Nothing changed" is only
+meaningful relative to something held, so that case now fails and the next run
+retries. Our own API cannot produce it (`matchesEtag` refuses a missing
+`If-None-Match`), but this trusts a status code from the network and the cost of
+being wrong is silent.
+
+And a **revoked store no longer syncs at all**. It kept fetching every fifteen
+minutes, earning a 401 each time, and opened the shared circuit breaker on the
+fifth run — the breaker a merchant needs closed when they come to reconnect.
+Ninety-six hopeless requests a day against one that can never succeed until
+reauthorisation. `Connection\Heartbeat` still pings while revoked, deliberately:
+it runs once a day and is how a store notices a reconnection made from the
+dashboard. The signal is kept; only the waste is dropped.
+
+*The outcome is surfaced, not merely recorded.* `Admin\SystemStatus` gained a
+**Last sync** row beside the existing "Next sync". The two answer different
+questions and only one of them was being asked: "next sync" says when WP-Cron
+*intends* to run, which on a low-traffic shop can look healthy while nothing has
+fired for days. The row carries the reason as well as the time, because
+`refused` (the plugin is too old for the document being sent) and an HTTP error
+point at different fixes — a merchant told only "failed" cannot tell them apart.
+
+*Six mutations, and two of them were the tests' fault.* Removing the nonce check
+passed at first because the harness throws the same exception for `wp_die()` and
+for a redirect — the test asserted a halt happened rather than which one. And
+`Cron::on_sync_due()` had no test at all, so deleting its delegation left the
+hook registered, the schedule intact, and nothing ever fetched. Both now fail.
+
+**Stage 4 — the index has no inputs, and the cache half was already close (2026-08-28).**
+
+Three facts, each verified rather than assumed, and together they change what
+this milestone should contain.
+
+**The index cannot be built yet.** `option-set.serializer.ts` hardcodes
+`assignments: []`; assignment CRUD is Phase 13. An index built now would map
+nothing to nothing, and no test could tell a working one from a broken one.
+There is also no consumer: `src/Frontend/` holds `Assets` and `Templates`, and
+neither reads configuration. The renderer is
+[M10.1](#m101--resolve-applicable-options), whose own wording is *"resolve
+applicable option sets by assignment priority … and cache per product"* — the
+same index, described in the phase where its inputs exist.
+
+**The document could not have expressed the assignments it would index.**
+`PublishedAssignment` carried `target_type`, `target_ref` and `priority` but not
+**`mode`** — and an `ALL` assignment has no target at all. A reader given only
+those three fields cannot tell "applies to every product" from "applies to
+nothing", which is the most common thing a merchant configures. `mode` is now in
+the shape, with `target_type` and `target_ref` nullable to match. Additive, so
+no `schema_version` bump; emitted empty like `assignments` itself. Older
+snapshots are normalised on read and default to `manual` — never `all`, because
+guessing that would silently widen an assignment from one product to a whole
+catalogue.
+
+**The object-cache requirement was already met, and is now proven.** The
+container hands out one shared `Config\Repository`, and `get()` memoises — so
+rendering twenty-five products costs **one** option read, not twenty-five.
+`ConfigReadBudgetTest` asserts that rather than arguing it, and found a real bug
+while doing so: null was the answer for both "nothing cached" and "not read
+yet", so an unconfigured store re-read the option on **every** call — ten reads
+for ten products, on exactly the fresh install that has nothing to show. A
+`$loaded` flag separates the two questions.
+
+No `wp_cache_set` layer was added. WordPress already object-caches autoload-off
+options, and a second cache on top is a second thing to invalidate — which is
+how stale configuration reaches storefronts.
+
+**A re-check found the read-budget test claiming more than it did.** Its
+docblock said both halves of the acceptance were asserted there; the HTTP half
+was asserted **nowhere** — `assert_not_frontend_render()` had no test at all,
+and the harness made writing one impossible, since `is_admin()`,
+`wp_doing_cron()` and `wp_doing_ajax()` were hardcoded `false`, placing every
+test permanently in the forbidden context.
+
+An overstated docblock is worse than a missing test: it tells the next reader
+the guarantee is covered, so nobody writes one. The stubs are now overridable
+and `FrontendRenderGuardTest` covers all four contexts.
+
+Getting there took two attempts, and the first was the failure this project
+keeps finding. A test that **re-derived** the guard's condition passed against a
+guard hardcoded never to fire — a copy agrees with a broken original by
+construction. The classification is now `Client::is_frontend_render()`, read by
+the test rather than reimplemented, and three mutations confirm it: the guard
+never firing, and admin or cron misclassified as a storefront render.
+
+`docs/API-CONTRACT.md` also gained the assignment's field shape. It documented
+the envelope — `assignments` always present, always empty — but never what an
+assignment contains, so `mode` and the nullable targets existed only in
+TypeScript. Phase 13 builds CRUD against that shape from the contract, not from
+a docblock it has no reason to open.
+
+**What M10.1 inherits.** The index itself: `product_id → applicable option
+sets`, built at write time, satisfying M9.2's *"≤1 extra DB read"*. Two things
+it must decide with information this phase does not have — whether the index
+lives in post meta (natively primed by WooCommerce's loops, but the first
+`update_post_meta()` here, which **arms the uninstall gate's postmeta check**)
+or in a single option (all cache state together, but read whole on every page);
+and how `mode: all` is represented, since an index keyed by product cannot hold
+"every product" as a key.
+
+Recorded as a handover rather than a note, because a deferred obligation with no
+owner is what left the M9.4b assignment trigger unenforced for four phases.
+
+**Stage 5 — the destination, not the sending (2026-08-29).**
+
+M9.4 is the one stage that could not be finished in this phase, and the reason
+is structural rather than an omission: there is **no worker**. No
+`@nestjs/schedule`, no queue dependency, nothing that polls — and M34.1's own
+rule is that webhook processing "must not run in the request path", which is
+precisely what inline dispatch on publish would be. So the destination ships now
+and the sending is written up in detail at
+[M34.1c](#m341c--drain-webhook_deliveries-the-config-push-phase-9-left-queued),
+recorded at both ends rather than remembered.
+
+*The handshake's `callback` could not be reused, and the reason is easy to
+miss.* It is `admin_url( 'admin.php?page=…' )` — a **browser** redirect to a
+screen requiring a signed-in user. A server posting there reaches a login page,
+not the plugin. The push therefore needed a second, different URL: a REST route
+the plugin registers, authenticating by signature rather than by session, stored
+on `stores` rather than expiring with the handshake row.
+
+That difference in lifetime is why `push_url` is held to the same origin rule as
+`callback` but matters more: `callback` receives one code and expires, while
+this receives every push from then on — an attacker who slipped in their own
+host would be told whenever that merchant publishes, indefinitely.
+
+*The push carries no configuration.* It names a version and wakes a conditional
+pull, so a perfectly forged push achieves at most one `GET /store/config`
+returning `304`. The endpoint is public because the cloud has no WordPress
+identity — a capability check would refuse every genuine push and accept none —
+and that is exactly why the signature is the authentication and the payload is
+never trusted.
+
+*Two gate defects found while testing the signature.* `bin/check-secrets.sh`
+used `git ls-files`, which lists **tracked** files only — so six production
+files were unscanned, including the signature verifier itself. A secret is most
+likely to appear in new code, which was the part being skipped. And a mutation
+swapping `hash_equals` for `===` survived every test, because the two return the
+same answer and only their *timing* differs; two attempts at a gate silently
+matched nothing before one worked by identifying files that verify a secret and
+requiring the safe comparison in each.
+
+**Stage 6 — a refusal nobody could see (2026-08-29).**
+
+M9.5's hard part was built in Phase 8: `Config\Repository` refuses a document
+whose `schema_version` exceeds this build and keeps the previous copy. That is
+the right behaviour and it is **completely silent** — the storefront works, the
+heartbeat arrives on time, the connection says `connected`, the credential is
+fine, and the merchant is quietly serving configuration older than the cloud
+holds. Nothing in either system said so.
+
+Four pieces now break that silence, and each was missing:
+
+- **The refusal is remembered**, not only logged. A log line is not something a
+  settings screen or a heartbeat can read.
+- **An admin notice** tells the merchant to update — a *warning*, not an error,
+  because nothing is broken and an error would send them hunting an outage that
+  is not happening.
+- **The heartbeat reports two fields**: `supported_schema_version` (a
+  *capability*, true of every store on this build) and `schema_refused` (an
+  *operations signal*, this shop is stale now). Conflating them would make every
+  store look stale.
+- **The cloud records `store.schema_unsupported`**, deduplicated on the plugin
+  version — a store in this state reports it on every heartbeat, and a trail
+  saying so daily for a month is one support reads and misbelieves.
+
+All of it clears when a good document arrives. The flag describes the present;
+the log keeps the history.
+
+**M9.6's acceptance had never been asserted.** *"With the backend fully stopped,
+storefront and checkout work normally"* — every row of the matrix was covered
+incidentally across Stages 3–5, but the promise they add up to was written
+nowhere. `DegradationMatrixTest` now states all six rows plus the blunt one:
+ninety-six consecutive failed syncs leave the shop byte-identical, and the next
+successful sync recovers it without merchant action.
+
+One thing measured while writing it: a realistic outage status makes each
+iteration sleep through two real backoff retries — minutes of wall clock for a
+test whose subject is the cache. The loop uses a non-retryable status; retries
+are asserted where they belong, in the row that promises them.
+
+**Stage 7 — recorded is not the same as shown (2026-08-29).**
+
+Four of M9.7's six rows already existed. The gap was not missing data — every
+failure was already being written down — it was that **nothing aggregated it**,
+and two signals built in this very phase were recorded and never displayed.
+
+*`Last error`* answers the first question support asks. Every failure has its own
+row, so "what most recently went wrong?" meant reading four of them and
+comparing timestamps; a screen that makes a merchant assemble the answer is one
+they paste incompletely. It names the source rather than only the failure —
+"config sync failed (refused)" sends someone to the plugin version, "heartbeat
+failed" sends them to the network, and a bare "failed" sends them nowhere.
+
+*`Last push`* closes Stage 5's loop and distinguishes two failures that look
+identical from the merchant's side: a push that **never arrived** points at the
+site — a firewall, a security plugin blocking REST — while one that arrived and
+was refused points at the credential. Nothing else in the plugin records that a
+request did not happen.
+
+*The schema refusal* now appears on the support screen, not only in the admin
+notice. A merchant who sees "update your plugin", opens System Status to find
+out why, and reads nothing about it is being told two different stories by the
+same plugin.
+
+One row was **removed rather than built**: "index entry count" moved to M10.1
+with the index. A count of an index that does not exist reads identically
+whether the index is empty or absent, which is the shape of reassurance this
+project keeps finding and deleting.
+
+The milestone's own list is now a test. `test_every_row_m97_names_is_present`
+fails if a named row disappears — a list compared by eye is one that drifts.
+
+**The decision deferred to M10.1: where the product index lives.**
+
+- **Post meta** (`_optionia_index` per product) — WordPress caches it natively, a
+  product page does one indexed lookup, and it scales with catalogue size. It
+  scatters state across the posts table, and it is what first calls
+  `update_post_meta()` in this plugin — which **arms the uninstall gate's meta
+  check**, deliberately: that gate fails until `uninstall.php` gains a postmeta
+  cleanup.
+- **A single option** (`optionia_product_index`) — keeps all cache state in one
+  place, matching how the document itself is stored, and uninstall already
+  removes it. But it is read whole on every product page, so a 5,000-product
+  catalogue loads the entire map to answer one question.
+
+Recommendation at the time: **post meta**, on the reasoning that the option-based
+index reverses M9.2's own acceptance — "≤1 extra DB read" true either way, but
+"adds <5ms to page generation" not, once the catalogue is real.
+
+⚠️ **That recommendation was wrong, and Phase 10 measured it rather than
+inheriting it.** [Stage 2](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+chose the single option, and the `<5ms` claim does not survive contact with the
+index actually built:
+
+| Indexed products | Unserialize | Serialized |
+|---|---|---|
+| 100 | 0.006 ms | 4 KB |
+| 1,000 | 0.059 ms | 36 KB |
+| 5,000 | **0.284 ms** | 185 KB |
+
+Seventeen times under the budget at five thousand, and the full render path —
+5,000-product index, twenty option sets — measures **0.108 ms**, forty-six times
+under it.
+
+The error was in the premise, not the arithmetic: this index scales with
+**assignments**, not catalogue size. `ALL` is a flag with no per-product keys and
+`CONDITIONAL` is skipped, so only `MANUAL` produces entries. A 100k-product store
+with one `ALL` assignment indexes **nothing**. The config document is also the
+larger of the two artefacts at every scale and is already a single option, so post
+meta would have shrunk the smaller half and left the bigger one alone — while
+arming the uninstall gate and adding cleanup code for a key that was already
+covered.
+
+Left in place rather than deleted: a recommendation that turned out wrong is worth
+more as a record of *why* than as a silent correction, and this one was wrong for
+a reason worth remembering — it reasoned about a quantity it had not measured.
 
 ### Phase 9 exit criteria
 
 ```text
-[ ] Product page makes zero synchronous API calls
-[ ] Publish reaches storefront in <30s via push, <15min via cron fallback
-[ ] Every row of the degradation matrix tested
-[ ] Schema version negotiation working
-[ ] Cache state fully visible in System Status
-[ ] Load test: cached config render adds <5ms to page generation
+[x] Product page makes zero synchronous API calls
+[→] Publish reaches storefront in <30s via push, <15min via cron fallback
+[x] Every row of the degradation matrix tested
+[x] Schema version negotiation working
+[x] Cache state fully visible in System Status
+[x] Load test: cached config render adds <5ms to page generation — **0.108 ms**
+    measured 2026-08-31 on a 5,000-product index with twenty option sets
 ```
+
+**How the five checked items are held.**
+
+*Zero synchronous API calls* — `Api\Client::is_frontend_render()` classifies a
+customer-facing request, and `FrontendRenderGuardTest` covers all four contexts.
+One limit worth stating: `Support\Assert` throws only under `WP_DEBUG` and
+otherwise logs, so in production the guard reports rather than blocks. No path
+reaches it — both sync callers run under `wp_doing_cron` or `admin_init` — but
+Phase 10's renderer is the first code that could.
+
+*The degradation matrix* — `DegradationMatrixTest`, six named rows plus the
+blunt one: ninety-six consecutive failed syncs leave the shop byte-identical,
+and the next good sync recovers it with no merchant action.
+
+*Schema negotiation* — the refusal was built in Phase 8; Stage 6 made it
+*visible*, which is the half that matters. Flag, admin notice, two heartbeat
+fields, and a `store.schema_unsupported` audit entry deduplicated on the plugin
+version.
+
+*Cache state visible* — every row M9.7 names, asserted by
+`test_every_row_m97_names_is_present` so the list cannot drift, plus `Last
+error`, `Last push` and the schema refusal.
+
+**Why the remaining one is handed on rather than checked.**
+
+*Publish → storefront in <30s* needs the push actually sending, and that waits
+on [M34.1c](#m341c--drain-webhook_deliveries-the-config-push-phase-9-left-queued):
+there is no worker, and M34.1 forbids webhook processing in the request path.
+The **fallback half is met today** — M9.3's fifteen-minute conditional pull — so
+this is a latency criterion, not a broken one.
+
+*The load test* — ✅ **measured 2026-08-31, once the page it describes existed.**
+
+It was deferred here on the right grounds: "<5ms to page generation" was a claim
+about a page that did not exist yet, and marking it complete on a fast-looking
+cache is the criterion-by-vibes this project has learned to distrust. Phase 10
+built the renderer, so it became measurable rather than arguable.
+
+Measured on the shape a real store has — a **5,000-product index** and **twenty
+option sets**, with the product under test carrying one — the full render path
+costs **0.108 ms per page**, forty-six times under the budget. The index read
+alone is 0.284 ms at that size, and 0.006 ms at a hundred products.
+
+What was already true here still is: `ConfigReadBudgetTest` proves twenty-five
+products cost **one** option read, and an unconfigured store costs one rather
+than one per product. The new number is what that budget buys in wall-clock time.
+
+It also settles the storage question this milestone got wrong — see the
+correction above M9.2's deferred decision.
+
+**One coverage gap was found in the same audit and closed.** The delivery suite
+knew that Nest and Express run their **own** freshness check against the `ETag`
+this handler sets, so a request-level `304` assertion passes whether or not
+`matchesEtag` decided anything — it is written into
+`config-delivery.controller.ts`, and the weak comparison was moved to a direct
+unit assertion because of it. Two paths did not get the same treatment: deleting
+the wildcard branch and breaking the comma split left both
+`treats a wildcard as a match` and `matches any entry in a list` **passing**, the
+framework's `304` reported as this code's decision.
+
+Both paths were verified correct at the same time — `*` does match, a list does
+match any entry — so this was coverage, not behaviour. They are now asserted
+against `matchesEtag` directly, alongside a whitespace case, and both mutations
+fail. The lesson generalises: the trap was known, written down, and applied to
+one of three cases.
 
 ---
 
@@ -3809,12 +4842,1379 @@ scheduled sync, and index entry count.
 **Depends on:** Phases 4, 9
 **Blocks:** Phase 11
 **Implements:** [AC7](#ac7--both-theme-worlds-are-first-class)
-**First action:** delete the Phase 4 prototype.
+**First action:** prepare the test environment
+([Stage 0](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)).
+The Phase 4 prototype is **kept** through the phase and deleted in Stage 7 — this
+header previously said to delete it first, contradicting Phase 4's own disposal
+note; see Stage 0 for the correction.
+
+### M10.0 — Ground state, measured before planning
+
+**Added 2026-08-30.** Everything below was re-measured against the installed
+WooCommerce 11.0.1, the live schema, and both repos, rather than trusted from
+the milestone text written four phases earlier. Three findings changed the shape
+of the phase; the rest confirmed it.
+
+**The M10.5 hook table is still correct, and now has a mechanism.** Re-counting
+direct occurrences of `woocommerce_before_add_to_cart_button` in WC 11.0.1:
+`simple.php` 1, `grouped.php` 1, `external.php` 1, **`variable.php` 0**. The
+plan asserted this; what it did not record is *why* the recommended hook works.
+`add-to-cart-variation.js:442` calls `$singleVariation.html( $template_html )`,
+rewriting `.single_variation`, which sits **inside** `single_variation_wrap`
+(`variable.php:74`). `woocommerce_after_variations_table` fires at line 71,
+**outside** that wrap. That is the whole reason options rendered there survive a
+variation change and options rendered inside it are destroyed on every switch —
+a structural fact about the template, not a preference. Both JS events the
+milestone names (`found_variation`, `reset_data`) exist and fire.
+
+#### Finding 1 — assignments never reach the storefront, and it is not Phase 13's job
+
+[M10.1](#m101--resolve-applicable-options) says the index waits on Phase 13
+because `assignments: []` is hardcoded "until Phase 13 ships assignment CRUD."
+Traced to source, the stub is nearer and narrower than that:
+
+```text
+option-set.serializer.ts:193     assignments: []          <- hardcoded
+option-set-tree.loader.ts        assignments not loaded at all
+publish.service.ts:360           reads assignments, but select: { id: true }
+                                 — a preflight count, never payload
+```
+
+So the config document a storefront receives carries **no assignment data at
+all**, permanently, whatever a merchant configures.
+
+Everything else is already built: `option_set_assignments` with `mode`,
+`targetType`, `targetRef`, a JSON condition tree and `priority`; both indexes
+(`ix_assignments_set_mode`, `ix_assignments_target`); and a demo seed producing
+real `ALL` and `MANUAL` rows against product refs. Three things are missing —
+the tree loader loading assignments, the serializer emitting them, and the
+document passing them through.
+
+**[M13.6](#m136--product-assignment-picker) owns the picker that lets a merchant
+*create* an assignment. The read path is Phase 10's own dependency**, and
+mis-attributing it to a later phase is what made M10.1 look blocked. Until it lands, an index over `[]` cannot be told from a broken
+index — which is the exact reason [M9.2](#m92--plugin-cache-layer) deferred
+the index in the first place. Stage 1 below builds it.
+
+#### Finding 2 — `CONDITIONAL` mode cannot live in a write-time index
+
+M10.1 proposes building `product_id → applicable sets` inside
+`Config\Repository::store()`. `AssignmentMode` has **three** values, not two —
+`ALL`, `MANUAL`, `CONDITIONAL` — and `AssignmentTargetType` has five:
+`product`, `category`, `tag`, `attribute`, `price_range`.
+
+A write-time index expresses `MANUAL` (a literal product list) and `ALL` (a
+flag). It cannot express `CONDITIONAL`:
+
+- the condition tree is JSON evaluated against product state, not a key;
+- `category`, `tag`, `attribute` and `price_range` resolve against **WordPress-side
+  data the config document does not contain**;
+- the entity's own docblock is explicit that a conditional set must apply to *"a
+  product created next month"* — after the index was written. Any write-time
+  index is stale for exactly the mode whose purpose is not going stale.
+
+M10.1's two stated open decisions (where the index lives, how `mode: all` is
+represented) are real, but the third and harder one was never named, and it is
+the one that decides whether the ≤1-DB-read acceptance is reachable at all.
+
+**Decision: M10.1 covers `ALL` and `MANUAL` only.** Both are fully expressible
+in a write-time index, both are seeded, both are testable the moment Stage 1
+lands. `CONDITIONAL` and the taxonomy-scoped targets defer to
+[M19.4](#m194--assignment-resolution), which already owns
+"product / category / tag / all-products targeting, with deterministic priority
+resolution" — the same problem, named there before this audit reached it.
+Recorded at both ends, with the renderer ignoring conditional assignments until
+then rather than half-resolving them.
+
+#### Finding 3 — the AC3 guard reports rather than blocks, and Phase 10 makes that real
+
+`Api\Client::assert_not_frontend_render()` routes through `Support\Assert`,
+whose contract is its own docblock: *"WP_DEBUG on → throw. WP_DEBUG off → log
+and return false, so the caller degrades gracefully."*
+
+In production the guard therefore **logs and lets the HTTP call proceed**.
+[AC3](#ac3--the-product-page-never-blocks-on-optionia)'s "zero synchronous API
+calls on page load" is enforced in development and merely *reported* in
+production.
+
+This was harmless through Phase 9 because no code path reached a frontend
+render. **Phase 10 is the first phase whose code runs on every product page**,
+so this is the phase where it stops being theoretical: a cache miss on a live
+storefront would mean a synchronous API call inside a customer's page render —
+precisely the failure AC3 exists to prevent, and the one the guard was written
+to catch.
+
+**Decision: the render path returns empty rather than degrading.** A storefront
+with no cached config shows no options, which is AC3's intended failure mode.
+`Assert` stays for developer visibility; it is not what the renderer relies on.
+Stage 3 below.
+
+#### Confirmed sound, and re-measured
+
+- **The uninstall gate's post-meta trap springs.** M10.1's "where the index
+  lives" decision is genuinely trapped, not merely documented: adding one probe
+  `update_post_meta()` call to `src/` failed the gate with *"1 file(s) write
+  meta; add a postmeta cleanup query"*, and removing it passed. Choosing post
+  meta obliges `uninstall.php` in the same commit.
+- **`ConfigReadBudgetTest` measures what M10.1 must not regress** — 25 products
+  cost one option read, and the container shares one repository.
+- **The Store API seam exists** — `StoreApi/Schemas/ExtendSchema.php` is present
+  in WC 11.0.1, so [M10.4](#m104--block-theme--store-api-integration) is
+  buildable as written.
+- **The Phase 4 prototype is safely deletable** — 478 lines in
+  `tools/phase4-probe/`, zero references from the shipping plugin, plus the
+  Studio copy at `~/Studio/optionia-woocommerce`.
+
+#### Second-pass audit — five gaps in the execution plan itself
+
+**2026-08-30, after the plan above was written and before any code.** The plan
+was re-attacked rather than re-read. The stage *order* survived; one stage's
+mechanism did not.
+
+| # | Gap | Where it landed |
+|---|---|---|
+| 1 | **Stage 1's approach could not work.** The delivery path reads immutable snapshots and never calls the tree loader, so a serializer change would populate only sets published afterwards — and rewriting old snapshots is forbidden by `config-document.ts:155` | Stage 1, rewritten to a read-time join |
+| 2 | **The invalidation gate does not see assignments.** Proven with a probe service that writes an assignment without bumping `config_version`: the gate passed. [M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish) predicted this trigger and left it enforced by nothing | New Stage 1b |
+| 3 | **The read-budget test would stop measuring.** It counts `get_option` only, and the harness has no post-meta stubs, so a post-meta index passes the acceptance while doing 25 reads a page | Stage 2, harness before storage choice |
+| 4 | **Stages 4–5 are not greenfield.** `Frontend\Templates` (theme-overridable loader) and `Frontend\Assets` (conditional enqueue) already exist and cover much of M10.2 and M10.3 | Stages 4–5 |
+| 5 | **M13.6 has no catalogue until M19.1.** The picker searches `store_products`, which only the seed fills | Deferral table and M13.6 |
+| 7 | **Stage 2's storage question was already answered.** `OPTION_PRODUCT_INDEX` is declared, in `uninstall.php`, and cleared by `Repository::clear()` — the option path is wired and post meta is not. [M10.1](#m101--resolve-applicable-options)'s objection to it conflated index size with catalogue size: only `MANUAL` produces keys, so an `ALL`-assigned 100k-product store indexes nothing, and the config document is the larger of the two at every scale | Stage 2 and M10.1, both corrected |
+| 6 | **Stage 0 was inverted.** It said delete the prototype first, contradicting both Phase 4's disposal note and the probe's README — and its stated reason (the probe's hook choice is "known wrong") was false: the probe registers exactly the per-type hooks M10.5 specifies | Stage 0 rewritten to environment prep; deletion moved to a new Stage 7 |
+
+Gaps 1 and 2 are the ones that mattered: the first because the stage would have
+been built and found wrong, the second because it is a live bug the moment
+Stage 1 ships and the gate designed to catch it was blind to the table.
+
+### M10.8 — Execution order, and why it is not the milestone numbering
+
+Seven stages. M10.1 is listed first in the milestones but **cannot start first**:
+until assignments reach the document there is nothing for an index to index, and
+a passing test would prove only that empty input produces empty output.
+
+| Stage | Work | Why here |
+|---|---|---|
+| 0 | **Prepare the test environment** — *not* delete the prototype | Four checks that each cause a symptom looking like a plugin bug. The prototype is **kept** through the phase and deleted in Stage 7; see below for why this stage was inverted |
+| 1 | **Backend: assignments into the document** (Finding 1), read-time join | Unblocks the entire phase. Nothing downstream is testable against real data until this lands |
+| 1b | Extend `check-config-invalidation` to `option_set_assignments` | Stage 1 makes an unbumped assignment write a live staleness bug. [M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish) scheduled this trigger for "four phases out" with a note and no enforcement; this is the phase it comes due |
+| 2 | M10.1 — resolve + index, `ALL` + `MANUAL` only (Finding 2) | First stage with real assignments to index. Carries M9.2's read budget and M9.7's index-count row |
+| 3 | AC3 render-path guard (Finding 3) | Must precede any renderer that runs on a live page, not follow it. Mostly enforcement: the separation already holds by construction, but no gate protects it and no test covers the guard's behaviour |
+| 4 | M10.5 + M10.2 — per-type strategy, then classic renderer | The hook decision governs the renderer's shape, so it is settled first. Idempotence guard included here, not bolted on |
+| 5 | M10.3, M10.6, M10.7 — JS runtime, price display, validation | All three attach to markup, so they need Stage 4's markup to exist. `Frontend\Assets` already registers `frontend.js` / `frontend.css` behind a conditional-enqueue seam, so M10.3 fills a file rather than building delivery |
+| 6 | M10.4 — block theme / Store API | Independent of Stages 4–5 and the largest unknown; last so it cannot block what is well understood |
+| 7 | Delete the Phase 4 prototype | Where this plan and the probe's own README already said it belongs. Deleting it first would remove the diagnostic exactly when Stage 4 needs it |
+
+**Stage 0 — prepare the test environment, and why this stage was inverted.**
+
+⚠️ **Corrected 2026-08-30, before any code.** This stage first read "delete the
+Phase 4 prototype", on the reasoning that it "removes the temptation to consult a
+prototype whose hook choice is known wrong for variable products". Both halves
+were wrong.
+
+*The timing contradicted the plan itself.* Two places say the opposite, with
+stated reasoning — [Phase 4's disposal note](#probe-location-and-disposal) and
+`tools/phase4-probe/README.md`, both: **delete at the *end* of Phase 10**,
+because *"Phase 10 benefits from re-running it while building the real renderer —
+comparing a known-good hook trace against new code is faster than reasoning about
+why options fail to appear."* Phase 10's own "first action" line was the outlier,
+and this stage followed the outlier.
+
+*The stated reason was factually false.* The probe's hook choice is not wrong —
+it is the strategy [M10.5](#m105--product-type-coverage) specifies, registered on
+both hooks — recorded in
+`docs/woocommerce-notes/prototype-findings.md`, which quotes the observed traces,
+since the probe itself was deleted in Stage 7:
+
+```php
+add_action( 'woocommerce_before_add_to_cart_button', 'optionia_probe_render' );
+add_action( 'woocommerce_after_variations_table',   'optionia_probe_render' );
+```
+
+That is where the per-type finding came from. The probe also carries the whole
+cart → session → price → order-meta chain, so it is a working hook reference for
+[Phase 11](#phase-11--pricing-engine) and
+[Phase 12](#phase-12--cart-checkout-order), not only a logger.
+
+**Nothing is lost by keeping it, and little by deleting it later**, which is what
+made the inversion safe to decide: `docs/woocommerce-notes/prototype-findings.md`
+(483 lines, tracked) already holds the findings *and* the observed log output
+that proves both the hook difference and the double render, and the two
+environment traps below are recorded independently at Phase 4's baseline table.
+Deletion costs only the runnable diagnostic — exactly the thing Stage 4 wants.
+
+**So this stage prepares instead.** Four checks, each of which produces a symptom
+that reads as a plugin bug:
+
+| Check | Why it matters |
+|---|---|
+| `woocommerce_coming_soon = no` | A placeholder page fires **no product hooks at all**, so a correct renderer renders nothing |
+| A shipping method in zone 0 | Checkout returns HTTP 400, *"this order requires a shipping option"* |
+| The plugin symlink is live | `~/Studio/.../plugins/optioniaWooCommercePlugin` is a **symlink to the repo**, not a copy — edits are live with no build step. Recorded here because Stage 4 depends on it and Phase 10 said nothing about it |
+| Products 20 (simple) and 23 (variable) exist | Hardcoded in `optionia_probe_product_ids()`; if the store was rebuilt, record the replacements |
+
+Also confirm the probe is **installed but deactivated** — available to Stage 4,
+inert until then. It depends on `Optionia\Support\Money` from the real plugin,
+so the two are activated and deactivated together.
+
+**Run 2026-08-31 — all four checks pass.** Measured against the running site,
+not read from this plan:
+
+| Check | Result |
+|---|---|
+| `woocommerce_coming_soon` | `no` — product hooks will fire |
+| Zone 0 shipping | `free_shipping`, enabled |
+| Plugin symlink | live, resolving to this repo — edits are live with no build step |
+| Products 20 / 23 | `simple` "Custom Hoodie" and `variable` "Test Variable Tee", both `publish` |
+
+Both product pages return **HTTP 200** with real add-to-cart markup (17 and 23
+markers), not the placeholder a wrong `coming_soon` produces. Product 23 carries
+exactly one `variations_form`, one `single_variation_wrap` and one
+`variations_button`; product 20 carries **no** variation scaffolding — the
+structural difference [M10.5](#m105--product-type-coverage) is built on,
+confirmed on the running store rather than in the template source.
+
+**Two facts worth carrying into later stages.** The installed probe is a *copy*,
+not a symlink — verified byte-identical to `tools/phase4-probe/` today, but it
+can drift, so Stage 7 deletes both and Stage 4 should re-copy rather than assume.
+And the plugin is **active with no config and no credential**
+(`optionia_config`, `optionia_store_token` both unset), emitting nothing on the
+frontend. That is the correct AC3 baseline and the state
+[Stage 3](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+must preserve: an unconnected store renders no options and makes no request.
+
+**Stage 1 — assignments into the document.** Join assignments **at read time**
+in `config-document.ts`, from the live `option_set_assignments` table, keyed by
+set.
+
+⚠️ **Corrected 2026-08-30, before any code.** This stage first said "load
+assignments in `option-set-tree.loader.ts`, emit them from
+`option-set.serializer.ts:193`". That does not work, and the reason is
+architectural rather than incidental:
+
+- **The delivery path never calls the tree loader.** `config-document.ts:104`
+  assembles the document from **immutable snapshots**, one batched
+  `IN (:...ids)` query. Fixing the serializer would populate assignments only in
+  sets published *after* this stage ships; every already-published set would
+  keep `assignments: []` for ever.
+- **Rewriting old snapshots is forbidden**, and the file says so at line 155:
+  *"they are the record of what was actually published, and editing them makes
+  version history a lie"* — ADR-030's
+  reasoning. So backfilling is not the escape either.
+- **An assignment is not part of a published version.** The same published set
+  can be assigned and unassigned with no republish, so storing assignments in
+  the snapshot would make every assignment change require one. That is wrong
+  behaviour, not merely an awkward implementation.
+
+The seam already exists: `normaliseSnapshot()` fills contract-mandatory keys
+**on read** without altering stored content, and `normaliseAssignment()` — added
+in Phase 9 — is already wired into it. Assignments join there, live, beside the
+snapshot rather than inside it.
+
+**One batched query, not one per set.** `config-document.ts` already batches its
+snapshot read; the assignment read follows the same `IN (:...ids)` shape. The
+tree loader is *already* flat (4 queries via `In()`), so the N+1 risk this stage
+originally warned about is not where it was thought to be — it is here, in the
+document builder, and only if the assignment read is written per set.
+
+**This stage also arms the invalidation gate** — see the next paragraph. And
+`docs/API-CONTRACT.md` gains the populated shape.
+
+**Six findings from the pre-build analysis (2026-08-31).** Two change what this
+stage builds; four change how it must be tested. They are recorded because three
+of them would otherwise let the stage ship broken with every gate green.
+
+*The measured baseline.* Instrumenting the driver and counting real statements at
+increasing set counts:
+
+```text
+PROBE  empty=4  one=5  two=5  three=5  notmod=3
+```
+
+The build is **flat at 5 queries** for 1, 2 and 3 published sets; a 304 costs 3.
+So this stage's target is exact — **5 → 6, still flat.** A result of 6/7/8 is an
+N+1 wearing the right number at N=1.
+
+1. **Assignments carry no `storeId`.** They key on `optionSetId` alone, so tenant
+   scope is *inherited* rather than stated: the query must take its ids from the
+   already-tenant-filtered `sets` list, with the `LIVE_SENTINEL_SQL` predicate.
+   Any route that reaches the table another way bypasses the tenant check
+   entirely, and `check-isolation` inspects **routes, not queries**, so it cannot
+   catch that. Correct by construction or not at all.
+
+2. **The existing query-count test is relative.** It asserts `304 < full build`,
+   which holds whether the build costs 3 statements or 300. It cannot see a
+   regression in absolute cost, so this stage's own acceptance is unenforceable
+   until an absolute assertion exists.
+
+3. **Every existing test publishes one set**, and an N+1 is invisible at N=1 —
+   one set costs one query either way. Only the gzip test publishes two, and it
+   counts nothing. The N+1 test needs **three or more** sets to tell flat from
+   per-set.
+
+4. **The contract is `snake_case`; the entity is `camelCase`.** `targetType` →
+   `target_type`, `targetRef` → `target_ref`, and `id`, `optionSetId` and
+   `matchRules` are **absent** from the published shape. Spreading the entity
+   would leak internal ids and `matchRules` — the conditional condition tree,
+   which has no business on a storefront. **Explicit mapping, never a spread.**
+
+5. **No gate checks payload shape.** `check-api-contract` verifies *routes*. A
+   `targetType` in the document would pass all eight backend gates while breaking
+   the documented contract.
+
+6. **No plugin fixture carries a populated `assignments` array**, and
+   `Config\Repository::store()` validates only `option_sets` presence and
+   `schema_version` — assignments are cached unexamined. A wrong-cased field
+   would be **silently stored** and surface in Stage 2 as a mystery empty index.
+   This is the [Stage 1a](#m98--execution-order-and-the-one-decision-that-must-come-first)
+   failure exactly: two internally consistent halves that disagree, both suites
+   green. The answer is the one that worked then — a wire-contract test carrying
+   the real populated shape on **both** sides.
+
+**Recorded, not fixed here: the document has no size cap.** Neither side bounds
+it, so a merchant manually assigning one set to 5,000 products adds roughly
+400 KB to a payload every store fetches every fifteen minutes. `ALL` mode exists
+precisely to avoid that, and `MANUAL` at that scale is a misuse the picker should
+discourage ([M13.6](#m136--product-assignment-picker)) — but this stage is where
+the growth becomes *possible*, so it is written down here rather than discovered
+at scale.
+
+**Acceptance**, in the order the tests should be written:
+
+1. A published set with one `ALL` and one `MANUAL` assignment appears in
+   `GET /v1/store/config` with both.
+2. A set published **before** this stage shipped shows its assignments too — the
+   proof the join is at read time, which no serializer change could satisfy.
+3. The build costs **exactly 6 queries, flat at one, two and three sets** —
+   absolute, not relative, and above the N=1 blind spot.
+4. The payload carries `mode`, `target_type`, `target_ref`, `priority` and
+   **nothing else** — no `id`, no `optionSetId`, no `matchRules`.
+5. A plugin fixture with populated assignments round-trips through
+   `Config\Repository::store()` and is readable, proving both halves agree on
+   one shape rather than each being internally consistent.
+6. `docs/API-CONTRACT.md:538` loses its "assignment CRUD is Phase 13"
+   misattribution, corrected the same way M10.1 was.
+
+**Built 2026-08-31 — all six acceptance criteria met.** The join is in
+`ConfigDocumentBuilder.build()`, one batched `find` over the tenant-scoped set
+ids with the soft-delete predicate, mapped field by field into the contract's
+four keys. Five e2e tests cover it, and four mutations were run against it: the
+snapshot design this stage rejected (3 failures), a dropped soft-delete
+predicate (1), an entity spread (3), and a per-set N+1 (1). All caught.
+
+The measured cost is **6 queries, flat at one, two and three sets** — the
+predicted 5→6. One correction on the way: the first request of a run costs a
+seventh, because `StoreTokenGuard` writes `lastUsedAt` at most once every few
+minutes, so the test warms the credential before counting rather than measuring
+a throttle.
+
+**Two things this stage changed that were not predicted.**
+
+*The legacy-snapshot tests were describing a state that never existed.* Two e2e
+tests drove `normaliseAssignment` through a doctored snapshot, asserting it
+filled `mode` and never guessed `all`. Once assignments became a live read those
+assertions failed — not a regression, but a change in what the endpoint promises.
+Checking the history settled it: across every revision of
+`option-set.serializer.ts`, `assignments: []` is the **only** value publish has
+ever written into a snapshot, so no stored document ever had assignments needing
+normalisation. The tests were rewritten to assert what now matters — a snapshot's
+baked-in assignments are ignored, live rows win — which is also the right answer
+for a merchant, since an assignment they removed must not keep reaching their
+storefront.
+
+*And the helper became dead code.* With the caller overwriting its result,
+`normaliseAssignment` was computing a value discarded a few lines later. It was
+removed rather than left in place: a mapping nobody reads is the kind of thing
+that later reads as a guarantee. The reasoning is recorded where it stood.
+
+**Post-build audit, 2026-08-31 — one real gap, closed.** Re-attacked rather than
+re-run.
+
+*The ordering guarantee was enforced by nothing.* The join carries
+`order: { priority: 'ASC', id: 'ASC' }` and a comment claiming two builds of
+unchanged data produce the same bytes. **Removing the `ORDER BY` entirely broke
+no test.** The only coverage inserted priority 0 then 5 — already ascending — so
+insertion order matched sort order and the assertion could not tell an ordered
+query from an unordered one. A guarantee stated in a comment and enforced
+nowhere: the failure this repository keeps finding, reproduced in the very stage
+whose findings were about it.
+
+It is not cosmetic. [M10.1](#m101--resolve-applicable-options) merges overlapping
+assignments by `priority`, so this *is* the resolution order a storefront
+applies; and the ETag is `W/"<store_id>-<config_version>"` rather than a hash of
+the body, so a reordered document is served under an **unchanged** validator —
+a storefront holding one order would never be told about another.
+`returns assignments in priority order, not insertion order` writes the rows
+high-to-low and now fails when the `ORDER BY` is removed.
+
+*Isolation held, but nothing proved it.* `option_set_assignments` has no
+`storeId`, so tenant scope is inherited from the `sets` list. Probed directly
+with two tenants: no leak. But the existing cross-tenant test publishes **no
+sets**, so it asserts `store_id` and `config_version` and would pass against a
+join serving every tenant's assignments — and `check-isolation` inspects routes,
+not queries. `never serves another store its assignments` covers it now.
+
+**Two mutations survive, and both were checked rather than assumed.**
+
+*Unscoped query.* Removing `optionSetId: In(...)` leaves every test passing —
+because `bySet` is keyed by `optionSetId` and looked up as `bySet.get(set.id)`
+from the already-scoped list. Isolation is enforced **twice**, and one barrier
+holds when the other is removed. Confirmed by breaking both: the new test then
+fails and catches the actual leak.
+
+*The `id` tie-break.* `ORDER BY priority` and `ORDER BY priority, id` are
+indistinguishable on InnoDB. Verified on controlled rows whose ids were
+deliberately out of insertion order: both produce byte-identical output, because
+InnoDB stores rows in primary-key order and `id` is the key. A genuine
+equivalent mutant — the tie-break is kept because it states the guarantee
+explicitly instead of leaning on a storage-engine detail, not because a test can
+see it.
+
+**Verified green after the change:** backend **550 unit / 781 e2e across 29
+suites**, all 8 backend gates; plugin **262 tests / 652 assertions**, all 8
+gates. One process note, since it cost a wrong answer twice here: an e2e run
+sharing the database with another jest process reported 2 and then 14 failures
+that a single clean run did not reproduce. `pkill -9 -f jest` and `--runInBand`
+before believing any e2e number, as the suite has required since Phase 8.
+
+**Stage 1b landed with it.** `bin/check-config-invalidation.sh` now matches
+`OptionSetAssignment`, with `config-document.ts` exempted as a **reader** — the
+exemption re-checked, as that gate requires, by confirming it only calls
+`.find()`. Proven both ways: the probe service that passed cleanly before now
+fails the gate, and breaking the discovery pattern still trips the floor of 5.
+
+**Stage 1b — the trigger M9.4b scheduled for this phase.**
+[M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish)'s table
+records, against *Product assignment changed*: *"nothing bumps it yet — and
+nothing forces Phase 13 to when it lands. **A bug scheduled for four phases
+out.**"* Phase 10 is where it comes due, and the deferral was written with no
+enforcement, only a note.
+
+**Measured 2026-08-30, not assumed.** A plausible M13.6 assignment-write service
+that saves an `OptionSetAssignment` and never bumps `config_version` was added
+to `src/` and the gate run against it:
+
+```text
+ok    all 5 writer(s) of published configuration advance config_version
+All invalidation checks passed.
+```
+
+The gate whose whole purpose is this bug class does not see assignments at all:
+`WRITE_PATTERN` matches `OptionSetStatus`, `deletedAt` and `OptionSetVersion`,
+and never `option_set_assignments`.
+
+Once Stage 1 makes assignments visible to storefronts, an assignment write that
+does not bump `config_version` is a **live staleness bug** — a merchant assigns
+a set to a product, every storefront answers `304`, and the option never
+appears. Exactly the deletion bug found in Stage 2 of Phase 9, one table over.
+
+So `bin/check-config-invalidation.sh` gains `option_set_assignments` to its
+write pattern **in this stage**, while Phase 10 still owns the context — not
+when M13.6 lands and has to rediscover it. The gate is what forces the picker to
+bump; the note did not. **Acceptance:** the probe service above fails the gate,
+and the floor still fires when the pattern is broken.
+
+**Stage 2 — the index.** `product_id → applicable option sets`, built inside
+`Config\Repository::store()` so it cannot drift from the document it indexes,
+merged by `priority` (the column exists for this). `ALL` is a flag, not a key —
+an index keyed by product cannot hold "every product", which is why
+`PublishedAssignment.mode` was added in Phase 9. Conditional assignments are
+skipped with a recorded count, so the admin can see that something is deferred
+rather than silently missing. Where the index lives is decided here and obliges
+`uninstall.php` in the same commit if it is post meta.
+
+⚠️ **The budget test cannot yet measure post meta.** `ConfigReadBudgetTest`
+counts `get_option` calls and nothing else, and `tests/bootstrap.php` defines
+**no post-meta stubs at all** — `get_post_meta`, `update_post_meta` and
+`delete_post_meta` are undefined (verified 2026-08-30, re-confirmed 2026-08-31:
+still zero). Choosing post meta without extending the harness would let the
+acceptance below pass while inspecting nothing — one option read reported while
+the page performs twenty-five meta reads, the same shape of failure found in
+`check-config-invalidation`, in `check-secrets`, and in this test's own docblock.
+
+**The storage question is settled: a single option.** The pre-build analysis
+(2026-08-31) measured it rather than argued it, and the answer went against what
+this milestone assumed.
+
+*It is already wired.* `Keys::OPTION_PRODUCT_INDEX` exists, is listed in
+`uninstall.php`, and is deleted by `Config\Repository::clear()` alongside the
+document and its meta. Post meta means new cleanup code **and** arming the
+uninstall gate — which Stage 0 verified fires on the first `update_post_meta()`
+in `src/`. The option path costs nothing extra.
+
+*[M10.1](#m101--resolve-applicable-options)'s stated objection conflates two
+different quantities.* It says a single option is bad because "a 5,000-product
+catalogue loads the entire map to answer one question". **Index size tracks
+assignments, not catalogue size**: `ALL` is a flag with no per-product entries,
+`CONDITIONAL` is skipped, and only `MANUAL` produces keys. A 100k-product store
+with one `ALL` assignment has a **zero-entry** index. The objection describes a
+case this design does not produce.
+
+*And the document is the larger half.* Measured at the same scale:
+
+| Manual assignments | Index | Config document |
+|---|---|---|
+| 5,000 | 199 KB | **365 KB** |
+| 50,000 | 2.0 MB | **3.7 MB** |
+
+The document carries the same assignments plus every option, group and value, and
+is **already** one option with `autoload=false`. Moving the index to post meta
+would optimise the smaller half while the larger stays where it is.
+
+*The cost, measured.* Unserialising the index per product page: **0.03 ms at 500
+products, 0.34 ms and 5.5 MB at 5,000, 5.77 ms and 49.6 MB at 50,000.**
+Negligible at any scale a merchant reaches by hand. The last row is only
+reachable through [M19.5](#m195--bulk-assignment)'s bulk tools, and the document
+hits the wall before the index does — so the ceiling belongs there, recorded
+against the size cap already noted in [Stage 1](#m108--execution-order-and-why-it-is-not-the-milestone-numbering).
+
+**The harness work is still required** — for the read budget to be measured at
+all, whichever store is used — but it is no longer gating a decision.
+
+**Two constraints the analysis surfaced, both easy to get wrong.**
+
+*Key by product id, never scan a list of refs.* `target_ref` is `varchar(64)`,
+so a manual assignment arrives as the string `"20"` while `get_the_ID()` returns
+the int `20`. PHP rescues this **only** for array keys — numeric-string keys
+coerce to int, so `array_key_exists( 20, array( '20' => … ) )` is `true`. It does
+not rescue `in_array( 20, array( '20' ), true )`, which is `false`, and strict
+comparison is what this codebase uses everywhere. A test with a **string** ref
+and an **int** lookup is the one that catches it.
+
+*Write the index after the document.* WordPress options are not transactional, so
+`store()` cannot write both atomically. Ordered this way, a failure between them
+leaves a **stale** index rather than one pointing at configuration that is not
+there. `clear()` already removes all three keys together, so teardown is safe.
+
+**Acceptance**, in the order the work should be done:
+
+1. `tests/bootstrap.php` gains `get_post_meta`, `update_post_meta` and
+   `delete_post_meta`, counted the way `get_option` already is — so the budget is
+   measurable whatever the storage.
+2. The index is built in `Config\Repository::store()`, **after** the document
+   write, and memoised with the `$loaded` flag pattern `get()` already uses, so
+   twenty-five products on a shop page cost **one** read.
+3. `ALL` is a flag, never keys. `CONDITIONAL` is skipped with a recorded count.
+4. M9.2's carried budget holds: zero external HTTP calls and **≤1 extra DB read
+   per product page**, with `ConfigReadBudgetTest` still passing.
+5. `Admin\SystemStatus` gains M9.7's index-entry-count row **and** a
+   skipped-conditional count beside it — the handover signal to
+   [M19.4](#m194--assignment-resolution), which should read zero once that
+   milestone lands.
+6. Mutation-proof: a lookup that ignores the index must fail a test, and a
+   **string** `target_ref` resolved against an **int** product id must pass one.
+
+**Built 2026-08-31 — all six met.** `Config\ProductIndex` builds and reads the
+map; `Config\Repository` writes it inside `store()` after the document, reads it
+through a `$loaded`-style memo, and clears it with the rest. Fifteen tests in
+`ProductIndexTest`, three more in `ConfigReadBudgetTest`, and two new
+`Admin\SystemStatus` rows — "Indexed products" and "Deferred assignments".
+Plugin now **280 tests / 683 assertions**, 8 gates, coverage floor raised 32 → 33
+with the class it counts.
+
+**Three mutations run; two caught immediately, and the third taught something.**
+Treating `all` as a product key failed 2 tests; dropping conditionals silently
+failed 2. Removing the `(int)` cast on `target_ref` **survived** — and the reason
+matters. PHP coerces a numeric-string *array key* to int by itself, so `"20"`
+indexes identically with or without the cast, and a test using only the canonical
+ref proves nothing. The refs PHP does **not** normalise are `"020"`, `" 20"` and
+`"20 "` — all valid in a `varchar(64)` column, none canonical, and each one
+missed by an int lookup. A data provider covering them turns that mutation from
+surviving to three failures.
+
+**Post-build audit, 2026-08-31: sixteen mutations, five survived, all five
+closed.** Every survivor was a real gap — each was confirmed by demonstrating the
+defect it permits, rather than filed as an equivalent mutant.
+
+*Three deduplication paths, none enforced.* Removing the `in_array` check when
+indexing, the `array_unique` on the `all` list, or the `in_array` in
+`for_product()` each broke nothing. And duplicates are **reachable**:
+`option_set_assignments` carries no unique constraint — `ix_assignments_set_mode`
+and `ix_assignments_target` are both non-unique — so two identical
+`(optionSetId, target_type, target_ref)` rows are legal, and
+[M13.6](#m136--product-assignment-picker) or [M19.5](#m195--bulk-assignment)
+could write them. A duplicate reaching Stage 4 is the same option block rendered
+twice on one product page: the M10.2 defect Phase 4 observed, arriving *before*
+the idempotence guard, which trusts the list it is handed to be unique.
+
+One of the three needed a second look. Asserting on `for_product()` was not
+enough — it deduplicates again on the way out, so the stored index could hold
+`array( 'set-a', 'set-a' )` and the test would still pass. The assertion moved to
+the **stored** array, which is what `entry_count()` reports and what any later
+reader consumes.
+
+*Two input guards, both load-bearing, neither tested.* With the ref type-guard
+removed, an assignment whose `target_ref` is an array casts to **1** and silently
+attaches its option set to **product 1** — a real product, chosen by accident,
+with no warning and no error. With the set-id guard removed, a malformed set
+emitted `Warning: Undefined array key "id"` **on a storefront page** and indexed
+`null` and nested arrays where set ids belong. Wrong answers rather than crashes,
+which is the kind that survives to production.
+
+*And the meta counter was unverified.* Deleting the increment from the harness's
+`get_post_meta` broke nothing, because the budget test asserts
+`meta_reads === array()` — which is exactly what a **broken counter** also
+reports. It could not tell "no meta was read" from "nothing counts meta reads":
+a check inspecting nothing, inside the test written to prevent that. The counter
+is now exercised directly, so the zero above is evidence rather than an artefact.
+
+**Final check, same day: three more findings, all closed.**
+
+*Resolution did not follow `priority`.* This milestone says sets are "merged by
+`priority`", and they were not. The document orders sets by `createdAt` and sorts
+assignments by priority only *within* one set's query, so the index inherited
+creation order: measured, a set at priority 30 resolved ahead of one at priority
+10. `option_set_assignments.priority` documents itself as "resolution order when
+a product matches **several sets**" — exactly the case that was wrong. The index
+now carries each assignment's priority and `for_product()` sorts by it, breaking
+ties on set id so two renders of unchanged configuration agree. Four mutations
+cover it, including the one that survived first: a set that is both `all` at
+priority 50 and `manual` at priority 1 must use the **manual** number on the
+product it names, because naming a product explicitly is the more specific
+statement.
+
+*The wire and the index never met.* `ProductIndexTest` built assignments by hand
+and `AssignmentWireContractTest` held the real captured bytes but never indexed
+them. Renaming `target_ref` to `productRef` on the wire left every option set
+applying to **nothing** while both files stayed green — the
+[Stage 1a](#m98--execution-order-and-the-one-decision-that-must-come-first)
+failure again, two consistent halves that disagree. The captured payload now
+resolves all the way to a product.
+
+*And `Keys.php` still called the index "not yet written".* Corrected; it is
+written by `Config\ProductIndex` inside `store()`.
+
+Plugin after the fixes: **294 tests / 710 assertions**, 8 gates.
+
+**A gate was wrong, and Stage 2 found it.** The architecture gate's
+autoload check reported `ProductIndex.php` as writing an option without
+`autoload=false` — but that file contains **no `update_option` call at all**. Its
+perl scan reads raw file text, so a *docblock explaining* the ordering of two
+`update_option()` calls was matched as if it were one. The same failure as
+`check-secrets.sh` and `hash_equals`: a check reading the documentation instead
+of the code. It now strips block and line comments before scanning, and the fix
+was proven both ways — a real autoloaded write still fails it, and the count rose
+18 → 19 because Stage 2's own write is genuinely detected.
+
+**Stage 3 — make AC3 enforced rather than reported.**
+
+The pre-build analysis (2026-08-31) confirmed
+[Finding 3](#m100--ground-state-measured-before-planning) at the source and found
+four things around it that change what this stage should build.
+
+*The premise holds.* `assert_not_frontend_render()` returns **`void`** —
+`Assert::that`'s boolean is discarded — so with `WP_DEBUG` off it logs, returns
+`false`, and execution continues into the request. The comment above the call
+says as much: *"In development this throws."* The cost is measurable:
+`Client::TIMEOUT` is **8 seconds** and `CircuitBreaker::THRESHOLD` is **5**, so a
+cloud outage would block up to five customer page renders for eight seconds each
+before the breaker opens. `Assert`'s logger *is* wired in `Plugin.php`, so
+violations are recorded — the guard reports, it simply does not stop anything.
+
+*But nothing can reach it today.* Every `Config\Synchroniser` trigger is
+excluded by construction: cron (`wp_doing_cron()`), the push endpoint
+(`REST_REQUEST`), and the admin "Sync now" button (`is_admin()`). **This stage is
+preventive, not corrective** — which is exactly why it belongs before Stage 4
+creates the first reachable path rather than after.
+
+*And the separation is already true by construction.* `Config\Repository` holds
+**zero** references to `Api\Client`, `FetchesFromCloud` or `wp_remote_*`:
+`sets_for_product()` reads an option and returns. The "render path returns empty
+rather than degrading" decision does not need new behaviour to be true. What it
+needs is for that to stop being an accident of how the code happens to be
+written today.
+
+**So this stage is mostly about enforcement, and two gaps make that necessary.**
+
+*No gate covers AC3.* Searching all eight: not one mentions `is_frontend_render`,
+AC3, or the render path. A future `Repository` method that lazily fetched on a
+cache miss would break AC3 and pass every gate — the property is real and
+guarded by nothing.
+
+*And the tests cover classification only.* `FrontendRenderGuardTest` asserts that
+admin, cron and ajax requests are **not** frontend renders and that a plain page
+load **is**. Nothing asserts what happens when one is *detected* — no
+`expectException`, no assertion that a request is refused. The guard's actual
+behaviour, the thing this stage changes, is untested.
+
+**One question this stage must answer, unaddressed until now.**
+`is_frontend_render()` excludes `REST_REQUEST`, but
+[M10.4](#m104--block-theme--store-api-integration) registers a **Store API schema
+extension** — a customer-facing render served over REST. On a block theme a
+customer waits on that response while the guard returns `false`, so the AC3
+condition holds and the guard does not fire. Stage 6 is where that lands, but the
+classification lives here, so the decision belongs here: either narrow the REST
+exclusion to this plugin's own routes, or record why Store API is out of scope.
+
+**Deliverables**, in the order they should be built:
+
+1. The render path **refuses** rather than degrades — a failure `Response`, not a
+   continuation — so AC3 holds with `WP_DEBUG` off.
+2. A test that the guard **blocks**, failing if the refusal is removed. Testing
+   through `Assert` observes nothing reliable (it throws only under `WP_DEBUG`),
+   which is why `is_frontend_render()` was split out in Phase 9 — the same
+   reasoning applies to the refusal.
+3. **A gate** asserting no network call is reachable from the read path, so
+   Finding 2's separation survives edits nobody remembers to check.
+4. The Store API question above, decided and recorded at both ends.
+
+Items 2 and 3 are the ones that matter. Without them this stage's guarantee is
+prose, which is the failure this repository keeps finding in its own checks.
+
+**Built 2026-08-31 — all four delivered.** `Api\Client` now returns a
+`frontend_render` failure instead of continuing, refused *before* the circuit
+breaker so a render never touches the network whatever the breaker's state — and
+a refusal is not recorded against it, since the cloud did nothing wrong.
+`bin/check-architecture.sh` gained an AC3 check over the storefront read path,
+proven against four cases: a lazy fetch on cache miss and an `Api\Client` import
+both fail it, a *comment* mentioning `wp_remote_get` does not, and the floor
+fires when the file list goes stale. Plugin **296 tests / 715 assertions**, 8
+gates.
+
+**The harness was in the forbidden context, and had been all along.** Making the
+guard refuse turned fourteen passing tests red — heartbeats, the degradation
+matrix, reconnection — because `is_admin()`, `wp_doing_cron()` and
+`wp_doing_ajax()` all defaulted to `false`, so every test ran as though a shopper
+were loading a product page. None of those tests meant that; all three subjects
+run on cron. The default is now cron, which is what they actually model, and
+`FrontendRenderGuardTest` — the one file that *does* mean to be a page render —
+says so explicitly.
+
+That surfaced a second, older bug: it cleared the cron flag in `setUp()` and
+never restored it, and the harness resets globals **once at load rather than per
+test**, so every file running afterwards inherited a frontend context. Six tests
+failed in the full suite while passing in isolation — the signature of leaked
+state, not a defect. A `tearDown()` fixes it.
+
+**`wp_remote_request` is now counted.** The refusal test asserts **zero** HTTP
+requests left the process, and that could not be asserted before: the harness
+stub returned a canned response without recording that it had been called, so
+"no request was made" and "nothing counts requests" were indistinguishable. The
+same shape as Stage 2's meta counter.
+
+**Post-build audit, 2026-08-31: two fixes, one of them structural.**
+
+*The AC3 gate had the blind spot Stage 4 was about to walk into.* `RENDER_PATH`
+was a hand-written list of two files, so a renderer calling `Api\Client` passed
+it — proven with a probe — while Principle 2 and the runtime guard caught it.
+That is a deferred obligation with nothing enforcing it, the pattern
+[M9.4b](#m94b--every-trigger-that-must-invalidate-not-just-publish) was written
+about, and Stage 4 adds exactly such a file. The gate now **discovers** every
+caller of `sets_for_product()` and inspects it alongside the two named files.
+Verified four ways: the probe renderer that previously passed now fails, a
+correct cache-only renderer passes (three files inspected), the floor still fires
+when the named pair goes stale, and clean code is unaffected.
+
+`sets_for_product()` is the marker because it is what a storefront calls.
+`index_entry_count()` and `index_skipped_count()` are deliberately not:
+`Admin\SystemStatus` reads those and is an admin screen, not a render.
+
+*And AJAX has the same shape as Store API.* `wp_doing_ajax()` excludes AJAX on
+the reasoning that admin-ajax is the dashboard talking to itself, but WooCommerce
+uses it for storefront actions — add-to-cart, cart fragments — where a shopper is
+waiting. Unreachable today (no AJAX handler is registered, and
+`Config\Synchroniser` fires only on cron), and now written down beside the REST
+exclusion rather than being the one of the two nobody had recorded.
+
+**Store API: out of scope here, covered elsewhere.** Narrowing the `REST_REQUEST`
+exclusion to this plugin's own routes was considered and rejected — the route is
+not knowable at that point. `REST_REQUEST` is a bare constant, the matched route
+lives in `WP_REST_Server` which has not dispatched yet, and guessing from
+`REQUEST_URI` breaks on any site using `?rest_route=` or a non-default permalink.
+A guard that is right most of the time is worse than one whose boundary is
+written down. [M10.4](#m104--block-theme--store-api-integration)'s handler reads
+the same cache as the classic renderer, so it inherits the AC3 gate's guarantee
+instead of needing this classification to be cleverer. Recorded at both ends.
+
+**Stages 4 and 5 are not greenfield.** Checked 2026-08-30, because the milestone
+text reads as though the render surface starts from nothing:
+
+- **`Frontend\Templates`** is a complete theme-overridable loader — child theme
+  → parent theme → plugin, resolved paths memoised, and a view-model-only
+  contract ("templates receive a prepared view-model and nothing else"). That
+  *is* M10.2's theme-neutral, override-friendly markup requirement, already
+  built. The renderer supplies view-models to it; it does not build a loader.
+- **`Frontend\Assets`** already registers `frontend.js` and `frontend.css` with
+  a conditional `enqueue_frontend()` and a `frontend_enqueued()` query — the
+  seam M10.3 needs, and the one that keeps assets off pages with no options.
+- **`Engine/Contracts` and `Engine/Types`** are empty scaffolding, so the option
+  type contracts genuinely do start here.
+
+Estimating these stages as new work would overstate them by roughly the two
+files above.
+
+**Stage 4 — the renderer, and the traps already known.** Per-type hooks exactly
+as M10.5's verified table specifies; external products render nothing, which is a
+live code path because the hook does fire.
+
+**Six findings from the pre-build analysis (2026-08-31).** Three change the work.
+
+*The hook table was re-verified on the running site, not just in template source.*
+`variable.php` still fires **zero** direct `woocommerce_before_add_to_cart_button`
+in WC 11.0.1 and the other three fire one each. On the rendered page for product
+23: `variations_form` at offset 60272, `single_variation_wrap` at 65737 — so a
+hook at `woocommerce_after_variations_table` renders **between** them, outside the
+region `add-to-cart-variation.js` rewrites on every variation change.
+
+1. **The renderer cannot fetch a set's content.**
+   [Stage 2](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+   returns set **ids**, and `Config\Repository` has no way to get a set's groups
+   and options by id — so a renderer would call `get()` and search the document
+   linearly. Measured, that costs **under a millisecond even at 500 sets**, and
+   `get()` is memoised so the read budget is unaffected. This is ergonomics, not
+   performance: the lookup belongs on `Repository`, which also keeps it inside
+   the AC3 gate's coverage.
+
+2. **Grouped products are structurally harder than "partial" suggests.** On
+   `grouped.php`, `woocommerce_before_add_to_cart_button` fires at **line 136 —
+   after the entire children loop at 43–127**. Options would render once, at the
+   bottom, with no association to any child, and **each child is its own cart
+   line**. M10.5 reads as though per-child support is a scoping choice; the
+   template makes it a structural one. **Decision: grouped renders nothing in
+   this stage**, documented, with per-child support deferred. A block that cannot
+   map to a cart line is worse than no block.
+
+3. **The double-render had a cause, and it changes the design.** Phase 4 recorded
+   *that* a variable product reached the render path twice, never *why*. It was
+   the probe registering **one callback on two hooks**
+   (`docs/woocommerce-notes/prototype-findings.md`, "the probe registered on two
+   hooks and logged which one fired"): on a variable product both fire —
+   `after_variations_table` from the template, and `before_add_to_cart_button`
+   from inside `variation-add-to-cart-button.php`, which sits **within**
+   `single_variation_wrap` and is therefore destroyed on every variation change.
+
+   So it was not a WooCommerce quirk. **A correct per-type dispatch — one hook
+   per product type — avoids the collision structurally.** The idempotence guard
+   is still built, because themes and page builders re-fire hooks, but it is a
+   *safety net* rather than the mechanism. The difference matters: designing
+   around the guard would hide a wrong hook choice instead of preventing it.
+
+4. **The input field-name convention is unspecified**, and it is a cross-phase
+   contract. [Phase 11](#phase-11--pricing-engine) reads these fields to price a
+   line and [Phase 12](#phase-12--cart-checkout-order) reads them to build one,
+   so this stage sets the contract by accident unless it is decided deliberately.
+   It has to carry set **and** option identity, and survive a variation change —
+   both of which constrain the markup, so it is settled before any markup exists.
+
+5. **`templates/` is empty.** `options/`, `partials/` and `presentational/` exist
+   as directories with **no files in them**. `Frontend\Templates` is a complete
+   three-level loader (child theme → parent → plugin) with nothing to load; this
+   stage writes the first templates, and that hierarchy is what M10.2's
+   "theme-neutral markup" requirement means in practice.
+
+6. **`Assets::enqueue_frontend()` has a misleading name.** It reads
+   `if ( $this->frontend_needed ) { return; }` and then sets the flag `true` —
+   an **idempotence guard**, not a needed-check. The behaviour is right and the
+   name says the opposite, which matters because "needed" implies a
+   conditional-enqueue gate that does not exist. Renamed before this stage
+   depends on it.
+
+**Deliverables**, in build order:
+
+1. A set-lookup method on `Config\Repository`, inside AC3's coverage.
+2. **Per-type dispatch** — one hook per type, never one callback on several.
+3. External renders nothing; the hook fires, so the guard is explicit.
+4. Grouped renders nothing, documented and deferred (Finding 2).
+5. The idempotence guard as a safety net, with a test that fails without it.
+6. The field-name convention, decided and recorded for Phases 11 and 12.
+7. The first templates under `templates/options/`.
+8. The renderer inside the AC3 gate — automatic, since Stage 3's gate discovers
+   every caller of `sets_for_product()` rather than reading a fixed list.
+
+**Built 2026-08-31 — all eight delivered.** `Frontend\Renderer` dispatches per
+type, `Config\Repository::option_sets_for_product()` answers *what* applies
+beside `sets_for_product()`'s *which*, and the first two templates live under
+`templates/`. Plugin **306 tests / 729 assertions**, 8 gates, coverage floor
+33 → 36.
+
+Three mutations, all caught: removing the idempotence guard, letting `external`
+and `grouped` through, and making the guard per-request rather than per-product
+(which would silence every product after the first on a shop page).
+
+**The AC3 gate did not cover the renderer, and that was the point of building
+it.** Stage 3's gate discovers callers of `sets_for_product()`; this stage's
+renderer calls the **new** `option_sets_for_product()`, so the file the gate
+exists to protect was not inspected — it reported 2 files, not 3. The marker is
+now anchored on the shared suffix, so a third reader is caught without editing
+the gate. Verified: an `Api\Client` import in the renderer now fails it, and the
+count reads 3.
+
+That is the second time this phase a discovery pattern has been narrower than the
+thing it discovers. Worth stating plainly: a gate keyed on one method name is a
+list with extra steps.
+
+**Two decisions the build settled.**
+
+*Markup dispatch lives in the renderer, not inside a template.*
+`Frontend\Templates` exposes only `$optionia` — a prepared view-model and no
+services — so a template that rendered a child template would need the loader in
+scope, and handing a view file a service is how it becomes a controller. One
+template per option type still holds; the dispatch simply sits on the other side
+of that boundary, which is also what lets Phase 14 extend the library by adding
+files rather than editing a switch.
+
+*An unknown option type renders nothing, and is logged.* A plugin one release
+behind its cloud will meet a type it has no template for. Rendering a fallback
+control would be worse than rendering none: a customer could pick a value the
+plugin does not understand, and the server would price it wrong.
+
+**Post-build audit, 2026-08-31: two findings, both closed.**
+
+*Escaping was enforced by PHPCS alone, and no test could see it.* The harness
+stubbed `esc_html()` and `esc_attr()` as **identity functions**, so escaped and
+raw output were byte-identical: removing every escape call from both templates
+left all 306 tests green. PHPCS did catch an unescaped `echo` — the right layer
+for a rule about how output is *written* — but the storefront's XSS surface was
+single-guarded, and a test asserting rendered markup could not tell a safe page
+from a hostile one. The stubs now use `htmlspecialchars` with `ENT_QUOTES`, which
+is what WordPress does underneath, and
+`test_hostile_labels_cannot_inject_markup` drives script, image and
+attribute-breaking payloads through a real render. Removing escaping from either
+template now fails it.
+
+One correction while writing that test: it first asserted the payload's *words*
+were absent and failed on `onerror=` — which was not a vulnerability. The output
+was `&lt;img src=x onerror=alert(2)&gt;`, inert text, because the angle brackets
+were escaped. Asserting on substrings measured the payload's vocabulary rather
+than whether a browser could parse it, and would have failed on safe output while
+passing on a payload that avoided those words. It asserts on the characters that
+*make* markup now.
+
+*And the renderer was missing from the wiring test.* `ContainerWiringTest`
+asserts every service resolves and is shared, from a list named
+`phase_eight_services` — so Stage 4 added the storefront's entry point without
+extending it, and a broken registration would have taken the storefront down
+silently. The list now describes what the plugin *wires* rather than what one
+phase needed, and covers `Templates`, `Assets` and `Renderer`. Proven: removing
+the registration fails it, and so does swapping two constructor arguments.
+
+**Final audit, same day: M10.2's accessibility requirements were untested.**
+Eight further mutations against the areas earlier passes had not reached. The
+markup was correct throughout — verified by inspecting real output rather than
+reasoning about it — but three mutations survived: removing the required marker,
+never marking a default `checked`, and dropping `for=` from the value labels.
+
+M10.2 asks for exactly these ("correct labels/required markers/descriptions…
+labels bound, fieldset/legend for groups, ARIA for required and errors"), and
+`RendererTest` had five markup assertions, none of which touched any of it. A
+template rewrite or a theme override shipped as the default could have silently
+broken screen-reader support and keyboard association with every gate green.
+`for=` in particular is the difference between a clickable label and a radio that
+answers only a precise click on the button.
+
+Four tests close it, pairing attributes with the ids they name so a rename on one
+side fails rather than producing a dangling reference. All five accessibility
+mutations are now caught, including `aria-required` and `aria-describedby`.
+
+**Also verified sound in that pass**, and left alone: the theme override
+hierarchy works (a child-theme template does take precedence), and a hostile
+option `type` cannot traverse out of `templates/` — `sanitize_key()` in the
+renderer and `sanitize_relative_path()` in the loader guard it independently.
+
+Plugin after the fixes: **314 tests / 750 assertions**, 8 gates. Both product
+pages on the running store return HTTP 200 with zero PHP errors.
+
+**And `Assets::$frontend_needed` was renamed.** It read as a conditional-enqueue
+gate — "should these load?" — and the check was the opposite, an idempotence
+guard. The behaviour was right and the name said otherwise, which is the kind of
+thing a reader trusts and then builds on.
+
+**Stage 5 — the JS runtime, and the two prerequisites the milestones do not
+mention.** Six findings from the pre-build analysis (2026-08-31). Two change the
+scope; one is an ordering problem with a clean answer.
+
+1. **No JavaScript enforcement exists at all.** No `package.json`, no ESLint
+   config, no test runner. Of eight gates only `check-secrets.sh` touches `.js`,
+   and that is a credential scan; PHPCS parses PHP. So this stage adds the first
+   JavaScript to a project whose every quality guarantee is PHP-shaped, at the
+   exact moment the existing gates stop being able to see the code. **Decide the
+   enforcement story before writing the JS** — a syntax gate at minimum. Added
+   afterwards it means retrofitting rules to code already written, which does not
+   happen.
+
+2. **The markup carries no price data**, so [M10.6](#m106--live-price-display)
+   cannot start with JavaScript. The rendered output has only
+   `data-optionia="value"` and the value key. The cloud *does* send it —
+   `PublishedValue.price_config`, as `{ type, amount_minor }` in integer minor
+   units — it is simply not rendered. This stage begins by extending Stage 4's
+   template.
+
+3. **M10.6 depends on a Phase 11 specification, and a safe subset exists.**
+   `docs/PRICING-SPEC.md` is [M11.1](#m111--pricing-model-specification)'s and is
+   called *"normative for **both** implementations"* — this stage's JS is one of
+   them. It settles order of operations, whether percentages compound, what they
+   apply to, and rounding. Building the total now means guessing all four.
+
+   | Type | Needs the spec? |
+   |---|---|
+   | `fixed` | **No** — `+ amount_minor`, no base, no rounding |
+   | `percentage` | Yes — percent of *what*, and rounding |
+   | `per_unit` | Yes, and no option type provides a quantity yet |
+   | `per_char` | Yes — [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)'s measure function |
+   | `tiered` | Yes — bracket semantics |
+
+   **Stage 4 renders only `radio`, and a radio prices per value — which is
+   `fixed`.** So the estimate is correct today for everything that can actually
+   be displayed, and the rest defers to M11.1 rather than being guessed.
+
+4. **Nothing passes data from PHP to JavaScript.** No `wp_localize_script`
+   anywhere, so the runtime has no currency symbol, no decimal separator and no
+   base price. WooCommerce does not fill the gap either: it localises currency
+   data for the **cart and checkout** scripts, not for a product page. This stage
+   passes its own.
+
+5. **[M10.7](#m107--client-side-validation-ux) is much smaller than it reads.**
+   Every required radio already carries the `required` attribute, and the markup
+   sits **inside** the submitting form — verified: the hook fires at
+   `variable.php:71`, the form opens at line 28. So the browser already blocks
+   submit, moves focus to the invalid field and shows a message, with no
+   JavaScript and more accessibly than a custom implementation would.
+
+   Three of that milestone's four asks are native today. What genuinely needs JS
+   is the disabled add-to-cart button with an explanation — and that is arguably
+   worse than the native behaviour, which tells the customer *which* field is
+   wrong instead of only that something is. **This stage verifies the native path
+   and fills the gaps**, rather than building a validation layer over working
+   browser behaviour.
+
+6. **The exit criteria are stale.** Six of the ten are satisfied by Stages 1–4
+   and still unticked. Reconciled here so the remaining work is visible.
+
+**Deliverables**, in build order:
+
+1. The JavaScript enforcement decision, made and wired (Finding 1).
+2. `price_config` rendered into the markup (Finding 2).
+3. `wp_localize_script` for currency settings and the base price (Finding 4).
+4. The runtime: selection state and the `data-optionia` surface.
+5. The live total — **`fixed` only**, labelled an estimate, the rest recorded as
+   M11.1's (Finding 3).
+6. Native validation verified; only the genuine gaps filled (Finding 5).
+7. The exit criteria reconciled (Finding 6).
+
+**Built 2026-08-31 — all seven delivered.** Plugin **319 tests / 764
+assertions**, and **nine** gates: `bin/check-js.sh` joined as 2/9.
+
+*The JavaScript gate is `node --check` plus two rules, deliberately not ESLint.*
+ESLint means a `package.json`, a lockfile, a dependency tree to keep current, and
+a node step in a CI job that installs only PHP — real weight for two files. What
+`node --check` catches is the failure that actually ships: a syntax error makes
+the whole bundle a no-op, silently, on every product page. Beside it sit the two
+rules this project had already decided and would otherwise enforce by hope — no
+jQuery (M10.3 is explicit, and WooCommerce already loads its own) and no
+`console` output. Proven against six cases: a syntax error, `$()`, `jQuery` by
+name, a `console.log`, a **comment** mentioning jQuery (must pass — the gate's own
+docblock says "no jQuery"), and the floor when no files are found. CI gained a
+`setup-node` step, because the gate fails loudly when node is missing rather than
+skipping the files it cannot read.
+
+*The estimate becomes `PRICING-SPEC.md`'s second reader.* Recorded 2026-08-31
+from Phase 11's side: when that spec lands, this runtime is one of the two
+implementations it is normative for, and a divergence between them is a customer
+seeing one price and being charged another. The `fixed`-only path shipped here is
+**re-verified against the spec** rather than assumed still correct — `fixed` looks
+too simple to diverge, which is exactly why nobody would check it.
+
+*The estimate covers `fixed` only, and says so in the markup.* The template now
+emits `data-optionia-price-type` on every priced value and
+`data-optionia-price` on `fixed` ones alone. Emitting an amount for
+`percentage`, `per_unit`, `per_char` or `tiered` would mean guessing what a
+percentage applies to, how it rounds, or where a quantity comes from — decisions
+[M11.1](#m111--pricing-model-specification) has not made. The type is still
+emitted, which is what lets the runtime tell "adds nothing" from "cannot be
+priced here" and hide the estimate rather than show a partial one that looks
+right. Three mutations caught: emitting non-fixed amounts, dropping the price
+data, and failing to localise the currency settings.
+
+*And the caveat is markup, not a string in the script.* AC4 makes the server
+authoritative, so a customer with scripting disabled — or reading before the
+bundle parses — must not be shown a number this page cannot promise. The estimate
+element renders hidden with `role="status"` and `aria-live="polite"`, so a screen
+reader announces a new total *after* the selection that caused it.
+
+**Post-build audit, 2026-08-31: three findings, all closed.**
+
+*Two comments described behaviour that did not exist.* The header claimed
+WooCommerce "owns the variation events this listens to" — it listens to none —
+and the `bind` guard was justified by "a variation change can re-run this", when
+nothing re-runs `init()` at all. The second is the worse of the two: a guard
+explained by a scenario that cannot occur is one the next reader is right to
+delete. Both rewritten to say what is true, with the guard kept as stated
+future-proofing rather than as protection against something happening now.
+
+*The variation events are a deferral, now recorded as one.* M10.5's strategy
+names `found_variation` and `reset_data`, and neither is wired. That is correct
+today — the estimate is an options **delta**, and a `fixed` option price does not
+change when a customer picks a different size, so a listener would re-run the
+same arithmetic on the same inputs. Two things make them necessary and both are
+scheduled: percentage pricing needs the *variation's* base price
+([M11.1](#m111--pricing-model-specification)), and show/hide rules re-evaluate
+against the chosen variation ([Phase 17](#phase-17--conditional-logic-engine)).
+Written where `init()` is defined, so whoever adds them finds the reasoning
+first.
+
+*And the gate caught `console.log` but not `debugger`.* The same accident wearing
+different clothes, and a worse one: it does nothing in normal browsing, so it
+survives every manual check, then halts the page for the one customer with
+devtools open. Added, and the gate re-proven against six cases — including the
+word "debugger" in a **comment**, which must pass, since the rule's own
+explanation contains it. `window["console"]["log"]` still passes and that is
+where the gate stops: nobody writes bracket-access console by accident, and a
+check cannot outrun an author defeating it deliberately.
+
+**Verified by execution, not by reading.** The real file was run against a
+simulated DOM: two `fixed` values produce `+$15.00`, and a `percentage` in the
+same selection hides the estimate *and clears stale text* rather than showing a
+partial total. Formatting was checked across USD, symbol-after EUR with swapped
+separators, zero-decimal JPY, negatives, twelve-digit amounts and missing
+settings — all correct.
+
+**Required-field enforcement was not built, and that is the finding.** Every
+required input already carries `required` and sits inside the submitting form, so
+the browser blocks the submit, moves focus to the offending field and explains
+itself — before this script parses, and naming *which* field is wrong where a
+disabled button would only say that something is. Re-implementing that would have
+been strictly worse. [M12.4](#m124--checkout-integrity) still owns the
+server-side re-check: a client that never ran must not be able to buy something
+invalid.
+
+**Stage 6 — verification, because the work turned out to be done.** Four findings
+from the pre-build analysis (2026-08-31), measured on the running store rather
+than reasoned about. The milestone's premise does not survive them.
+
+1. **The classic render path already works on a block theme.**
+   [M10.4](#m104--block-theme--store-api-integration) assumes it does not — that
+   a block-based product page needs a Store API extension to receive Optionia
+   data. Measured on Twenty Twenty-Five: `woocommerce_before_add_to_cart_button`
+   **fires** for a simple product and `woocommerce_after_variations_table`
+   **fires** for a variable one, exactly as on Storefront.
+
+   Then real configuration was seeded into the live store and the page loaded.
+   Every marker is present: the options block, the group, the field name
+   `optionia[opt-live]`, `data-optionia-price`, the estimate element, and the
+   enqueued bundle. **Everything Stages 4 and 5 built already works on a block
+   theme**, and the classic theme was re-checked afterwards to confirm nothing
+   was traded for it. The seeded data was cleared.
+
+   The reason is structural: WooCommerce renders the single-product add-to-cart
+   form through its own template functions whatever the theme. A block theme
+   replaces the page *shell*, not that form.
+
+2. **There is nothing for a Store API extension to carry.** `ExtendSchema`
+   extends four endpoints — CartItem, Cart, Checkout and Product — and this
+   plugin has **no cart integration at all**: no `add_cart_item_data`, no
+   `get_item_data`, no selection persistence. Phase 10 renders a form; nothing
+   yet turns a submission into a cart line. A schema extension written here would
+   carry no data.
+
+3. **[M12.2](#m122--cart-display) already owns this and has researched it
+   further.** It records, verified in WC 11.0.1, that
+   `woocommerce_get_item_data` serves **both** cart worlds —
+   `wc-template-functions.php:4538` for the classic template and
+   `CartItemSchema.php:170` for the block cart — along with three constraints on
+   the block path. It then points back at M10.4 for checkout: a circular
+   reference in which the later milestone has done the actual work.
+
+4. **The AC3 question [Stage 3](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+   deferred resolves cleanly.** A block-theme product page is a **normal page
+   load, not a REST response** — the hooks fire during that render, so
+   `is_frontend_render()` returns `true` and the guard behaves exactly as on a
+   classic theme. The REST concern is real but belongs to cart and checkout,
+   which are Phase 12's surface, and where the AC3 gate already covers the read
+   path whatever context it runs in.
+
+**So this stage verifies and defers rather than builds.** Two exit criteria were
+satisfied by Stages 4 and 5 and are now measured; the rest is not buildable here
+because its subject does not exist yet.
+
+| Item | Owner |
+|---|---|
+| Options render on a block theme | **Done** — measured, criterion ticked |
+| Store API extension for cart data | [M12.2](#m122--cart-display) |
+| Checkout block schema | [M12.4](#m124--checkout-integrity) |
+| AC3 / REST classification | **Resolved** — recorded above |
+
+**The two remaining criteria were verified rather than deferred (2026-08-31).**
+
+*Keyboard navigation, measured on the real rendered page* rather than asserted in
+markup a test wrote. The block was extracted from a live product page and checked
+for the properties that actually decide keyboard behaviour: **no `tabindex`**, so
+the native tab order stands; **no disabled inputs** to break the sequence; every
+radio sharing **one `name`**, which is what makes the browser group them for
+arrow keys; **exactly one checked**, so the group is a single tab stop; and every
+`for=` and `aria-describedby` resolving to an id the page defines. The markup was
+also parsed for well-formedness, and `<legend>` confirmed as the **first child**
+of both fieldsets — the placement the accessibility tree depends on, and one no
+attribute assertion would catch.
+
+*And a page builder.* Elementor was installed, activated, and the same product
+page fetched: **HTTP 200**, options rendered, prices present, bundle enqueued,
+and every keyboard property above still holding. It was then deactivated, deleted
+and the seeded configuration cleared — the store is back to Storefront with no
+cached config, which is the correct AC3 baseline.
+
+Worth recording: Elementor emits a **PHP 8.4 deprecation notice** of its own
+(`atomic-global-styles.php:410`, implicit nullable parameter). That is
+Elementor's incompatibility, not this plugin's — it corrupted a `wp eval` capture
+during testing and would do the same to any output-sensitive tooling on a
+merchant's site running PHP 8.4.
+
+**Stage 7 — delete the prototype, in the order that avoids a dangling install.**
+
+Where [Phase 4's disposal note](#probe-location-and-disposal) and the probe's
+README both said it belongs. Five steps, and the first is the one that is easy to
+skip:
+
+1. **Deactivate the running copy first.** Removing an active plugin's directory
+   leaves WordPress holding a dangling `active_plugins` entry.
+2. Delete `~/Studio/optionia-woocommerce/wp-content/plugins/optionia-phase4-probe`.
+3. Delete `tools/phase4-probe/` from this repository.
+4. Confirm `docs/woocommerce-notes/prototype-findings.md` is **untouched** — it
+   is the surviving record, and the only place the observed hook traces live.
+5. Remove the now-dangling references at
+   [Phase 4's disposal note](#probe-location-and-disposal), which point at a
+   directory that will no longer exist. Nothing currently catches a broken
+   intra-plan path, so this is a manual step rather than a gate's job.
+
+**Corrected 2026-08-31, before executing.** The pre-deletion analysis found four
+things the five steps above did not cover.
+
+*Step 1 is already done.* The running copy is **inactive** — zero occurrences in
+`active_plugins`, and no orphaned options. It is a verification, not an action,
+and the deletion is safer than the ordering above implies.
+
+*Two artifacts go unmentioned.* `wp-content/optionia-probe.log` (79 bytes, one
+trace line), which should go with the probe; and **four**
+`_optionia_probe_data` rows in `woocommerce_order_itemmeta`, which should not —
+see below.
+
+*Test orders **#29, #31, #32** stay, and "they are not part of the probe" was
+wrong.* All four carry `_optionia_probe_data`:
+`{"delta":2000,"key":"probe_finish","label":"Luxury","value":"luxury"}` — and
+that meta **is** the evidence. `docs/woocommerce-notes/prototype-findings.md`
+quotes it directly in the checkout-integrity section, the 🔴 finding
+[M12.4](#m124--checkout-integrity) exists to prevent:
+
+```text
+Order #32    HTTP 200    status: processing
+Line meta:   "Finish: Luxury"      ← the option no longer exists
+```
+
+The doc **transcribes** order number, status, total and line meta, so the finding
+survives whatever happens to the rows. But the claim that the orders were
+probe-independent would have invited someone tidying up "probe leftovers" to
+destroy Phase 12's fixtures, so the meta stays and the claim is withdrawn.
+
+There is also a **fourth order, #30**, a `checkout-draft` carrying the same meta —
+an abandoned checkout, and plausibly the other half of that evidence. It was
+never listed. Listed now.
+
+*And there are twelve dangling references, not one.* Step 5 names only Phase 4's
+disposal note. Two of the twelve are worse than stale paths: they cite
+`optionia-phase4-probe.php:190-191` as **evidence** for the double-render finding
+— the reasoning behind Stage 4's per-type dispatch. The substance survives in the
+findings doc, which records "registered on two hooks" and the observed traces, so
+those two are repointed there rather than left aimed at a deleted file.
+
+**Verified safe before proceeding:** no gate reads `tools/`; the dependency runs
+probe → plugin and never the reverse; and the probe is tracked and committed
+(`b40e78c`), so the deletion is recoverable from git.
+
+**Executed 2026-08-31.** Inactive state verified first, then both copies and the
+log removed; `tools/` is now empty. `prototype-findings.md` re-checked at its
+recorded 483 lines with the order evidence reading correctly, and all four
+`_optionia_probe_data` rows confirmed present afterwards — the fixtures survived
+the deletion, which was the point of correcting the claim above.
+
+The two `optionia-phase4-probe.php:190-191` citations now point at the findings
+doc, which records the same observation and will still exist. The remaining
+`tools/phase4-probe/` mentions in this plan are **history** — records of what was
+done and why — and are correct to keep; only
+[Phase 4's disposal note](#probe-location-and-disposal), which described a live
+arrangement, was rewritten.
+
+**What the gates must gain.** Phase 10 introduces the first code that renders to
+a customer, and two of its rules are the kind that pass review and then rot:
+options must never render on an external product, and the renderer must never
+render twice for one product. Both get a test that fails when the guard is
+removed — the standard this project settled on after the empty-credential guard
+in [M9.4](#m94--push-invalidation) turned out to be enforced by nothing. If a
+rule can only be stated in prose, it is not yet enforced.
+
+### Phase 10 deferrals, recorded at both ends
+
+| Deferred | To | Why, and what unblocks it |
+|---|---|---|
+| `CONDITIONAL` mode, and the `category` / `tag` / `attribute` / `price_range` targets | [M19.4](#m194--assignment-resolution) | Resolution needs WordPress-side taxonomy and price data the config document does not carry. M19.4 already owns "category / tag / all-products targeting with deterministic priority resolution" — this audit found the same problem from the renderer's side, not a new one. Until then the renderer skips conditional assignments and reports the count so the gap is visible rather than silent |
+| Assignment **authoring** (the UI that creates rows) | [M13.6](#m136--product-assignment-picker), then [M19.5](#m195--bulk-assignment) | Phase 10 builds only the *read* path. M13.6 is the minimum picker for `MANUAL` assignments — exactly the mode Stage 2 renders — so Phase 10's output is authorable at M13.6 and bulk-authorable at M19.5 — **with one qualification found 2026-08-30**: M13.6 searches `store_products`, and nothing populates that table except `src/seeds/demo.seed.ts` until [M19.1](#m191--initial-catalogue-import) imports the catalogue. So M13.6 is authorable against seeded products, and against a *merchant's own* products only from Phase 19. Not a Phase 10 blocker; it does mean the end-to-end proof below is seed-backed until then |
 
 ### M10.1 — Resolve applicable options
 
 Given a product, resolve applicable option sets by assignment priority, merge
 deterministically, and cache per product.
+
+**Inherits M9.2's product index.** Phase 9 built the cache half — one shared
+`Config\Repository`, memoised, so rendering twenty-five products costs one
+option read — and deliberately did **not** build the index: nothing populated
+`assignments`, and nothing rendered options on a product page to measure
+against. An index over no assignments, with no consumer, could not be told from
+a broken one.
+
+⚠️ **Corrected 2026-08-30.** This milestone previously said assignments were
+hardcoded empty "until Phase 13 ships assignment CRUD". That conflated two
+different things: the *authoring* UI ([M13.6](#m136--product-assignment-picker))
+with the *read* path, and only the first is Phase 13's. The stub is
+`option-set.serializer.ts:193`, and the read path is **Phase 10's own
+dependency** — see [M10.0 Finding 1](#m100--ground-state-measured-before-planning).
+[Stage 1](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+builds it before this milestone starts.
+
+**Scope: `ALL` and `MANUAL` only.** `CONDITIONAL` assignments cannot be resolved
+in a write-time index and defer to [M19.4](#m194--assignment-resolution)
+— [Finding 2](#m100--ground-state-measured-before-planning) gives the reasoning.
+The renderer skips them and records the count rather than half-resolving them.
+
+This milestone owns it: `product_id → applicable option sets`, built at write
+time inside `Config\Repository::store()` so it cannot drift from the document it
+indexes.
+
+**Acceptance (carried from M9.2):** rendering options adds **zero** external
+HTTP calls and **≤1** extra DB read to a product page. The first half is already
+enforced by `Api\Client::assert_not_frontend_render()`; the second is measured
+by `ConfigReadBudgetTest`, which counts option reads and must keep passing once
+an index exists.
+
+**Two decisions Phase 9 deliberately left open**, because they need information
+only a real catalogue provides:
+
+- **Where the index lives. ✅ Settled 2026-08-31: a single option.** This bullet
+  originally weighed post meta ("primed by WooCommerce's own product loops and
+  scales with catalogue size") against one option ("read whole on every page, so
+  a 5,000-product catalogue loads the entire map to answer one question").
+  Measured rather than argued, the second half of that trade is **not true of
+  this design**: index size tracks *assignments*, not catalogue size — `ALL` is a
+  flag with no per-product keys, `CONDITIONAL` is skipped, and only `MANUAL`
+  produces entries, so a 100k-product store with one `ALL` assignment has a
+  zero-entry index. The config document is also the *larger* of the two at every
+  scale (365 KB vs 199 KB at 5,000 manual assignments) and is already one option,
+  so post meta would shrink the smaller half and leave the bigger one alone.
+  `Keys::OPTION_PRODUCT_INDEX` is already declared, already in `uninstall.php`
+  and already cleared by `Repository::clear()`; post meta would add cleanup code
+  **and** arm the uninstall gate's postmeta check. The full measurements are in
+  [Stage 2](#m108--execution-order-and-why-it-is-not-the-milestone-numbering).
+- **How `mode: all` is represented.** An index keyed by product cannot hold
+  "every product" as a key. `PublishedAssignment.mode` exists for exactly this
+  distinction — added in Phase 9 once it became clear the shape could not
+  otherwise express an `ALL` assignment.
+
+A third decision, unnamed until the 2026-08-30 audit: **how conditional and
+taxonomy-scoped targets resolve at all.** `AssignmentTargetType` has five values
+(`product`, `category`, `tag`, `attribute`, `price_range`), and four of them
+resolve against WordPress-side data the config document does not carry. This is
+the decision that governs whether the ≤1-DB-read acceptance is reachable, and it
+is settled by deferring `CONDITIONAL` rather than by answering it here.
+
+**Also inherits M9.7's "index entry count" row.** `Admin\SystemStatus` reports
+everything else the milestone named; that row moved here because a count of an
+index that does not exist reads identically whether the index is empty or
+absent.
 
 ### M10.2 — Classic theme renderer
 
@@ -3846,6 +6246,37 @@ render path deliberately and document it.
 **Acceptance:** options render and function on a block theme with Cart & Checkout Blocks
 enabled.
 
+✅ **Met by Stages 4 and 5, without a schema extension — measured 2026-08-31.**
+The premise above turned out to be wrong: the classic render path *does* reach a
+block theme's product page. On Twenty Twenty-Five,
+`woocommerce_before_add_to_cart_button` fires for a simple product and
+`woocommerce_after_variations_table` for a variable one, and a page loaded with
+real configuration carried the options block, the field names, the price data,
+the estimate element and the enqueued bundle.
+
+WooCommerce renders the single-product add-to-cart form through its own template
+functions whatever the theme is. A block theme replaces the page **shell**, not
+that form — so the storefront needed no block-specific work at all.
+
+**What remains is not Phase 10's, and could not be built here.** `ExtendSchema`
+extends CartItem, Cart, Checkout and Product, and this plugin has no cart
+integration yet: no `add_cart_item_data`, no `get_item_data`, no selection
+persistence. An extension written here would carry no data.
+
+- Cart display, classic **and** block, is [M12.2](#m122--cart-display)'s — which
+  has already verified that `woocommerce_get_item_data` serves both worlds and
+  recorded three constraints on the block path.
+- The checkout block belongs with [M12.4](#m124--checkout-integrity).
+
+✅ **And the AC3 question this milestone inherited is resolved.**
+`Api\Client::is_frontend_render()` excludes `REST_REQUEST`, and the worry was
+that a Store API render is a customer waiting rather than a machine asking. It
+does not arise on a product page: that page is a **normal page load, not a REST
+response**, so the guard fires exactly as on a classic theme. The concern is real
+for cart and checkout, and those are Phase 12's — where
+`bin/check-architecture.sh` already covers the storefront read path whatever
+context it runs in.
+
 ### M10.5 — Product type coverage
 
 ⚠️ **Verified in WC 11.0.1: the render hook does not fire in the same place for every
@@ -3869,11 +6300,22 @@ apparel with size/colour variants *plus* customization.
 |---|---|---|
 | Simple | `woocommerce_before_add_to_cart_button` | ✅ Full |
 | Variable | `woocommerce_after_variations_table` (or `woocommerce_before_add_to_cart_form`), plus JS `found_variation` / `reset_data` events to re-evaluate rules and recompute price | ✅ Full |
-| Grouped | Per-child, documented limits | ⚠️ Partial |
+| Grouped | **Nothing** in Phase 10 — see below | ❌ Deferred |
 | External | **Render nothing** — no cart exists; the hook fires but the product links offsite | ❌ N/A |
 
 The external case is a real code path, not a theoretical one: the hook fires, so without an
 explicit guard Optionia would render options that can never be purchased.
+
+⚠️ **Grouped changed from "partial" to deferred (2026-08-31), on structure rather
+than scope.** In `grouped.php`, `woocommerce_before_add_to_cart_button` fires at
+**line 136 — after the children loop at 43–127**. So options render once at the
+bottom of the table with no association to any child, and **each child is its own
+cart line**. "Per-child, documented limits" reads like a scoping decision; the
+template makes it impossible at that hook. A block that cannot map to a cart line
+is worse than no block, so Phase 10 renders nothing for grouped products and says
+so. Per-child support needs a different hook — `woocommerce_grouped_product_list_after_*`
+fires inside the loop with the child in hand — and belongs with the cart work in
+[Phase 12](#phase-12--cart-checkout-order), which owns what a line item carries.
 
 **Acceptance:** on a variable product, options are present **before** any variation is
 selected, survive a variation change without duplicating, and re-price correctly on change.
@@ -3890,15 +6332,50 @@ formatting via WooCommerce's own settings.
 Required-field enforcement before submit, inline messages, focus management, and a
 disabled add-to-cart with an explanation while invalid — always re-checked server-side.
 
+⚠️ **Three of those four are native, verified 2026-08-31.** Every required radio
+carries the `required` attribute, and the rendered markup sits **inside** the
+form that submits — the hook fires at `variable.php:71`, the form opens at line
+28. So the browser already blocks the submit, moves focus to the offending field
+and shows a message, with no JavaScript at all.
+
+That is not a smaller version of what this milestone asks for; on two counts it
+is better. Native validation names *which* field is wrong, where a disabled
+button only says that something is, and it works before any script has parsed —
+which matters most on the slow connections where a customer is least patient.
+
+**So this milestone verifies the native path and fills only what is genuinely
+missing.** The one ask with no native equivalent is the disabled add-to-cart with
+an explanation, and it should be weighed against the behaviour it would replace
+rather than added because the list says so. Anything built here is still
+re-checked server-side: [M12.4](#m124--checkout-integrity) owns that, and a
+client that never ran must not be able to buy something invalid.
+
 ### Phase 10 exit criteria
 
+Reconciled 2026-08-31: six were satisfied by Stages 1–4 and still unticked, which
+made the remaining work impossible to see. Two were also too coarse to tick
+honestly and have been split — "renders on classic **and** block themes" hid a
+whole stage, and "keyboard navigable, screen-reader labelled" conflated markup
+this phase can assert with browser behaviour it cannot.
+
 ```text
-[ ] Options render from real cloud config on classic AND block themes
-[ ] Simple and variable products fully working
-[ ] Zero synchronous API calls on page load
-[ ] Accessibility: keyboard navigable, screen-reader labelled
-[ ] Phase 4 prototype deleted — `tools/phase4-probe/` and the Studio copy
-[ ] Verified on Storefront + Twenty Twenty-Five + one page builder
+[x] Assignments reach the config document (Stage 1) — the read path, not CRUD
+[x] Simple and variable products fully working — classic themes
+[x] External products render nothing, proven by a test that fails without the guard
+[x] Grouped products render nothing, deliberately — see M10.5
+[x] The renderer is idempotent per product, proven the same way
+[x] No synchronous API call in a render path even with WP_DEBUG off (AC3)
+[x] Zero synchronous API calls on page load — gated, not only tested
+[x] Accessibility: labels bound, fieldset/legend, ARIA for required
+[x] Options render on a **block** theme — measured on Twenty Twenty-Five, no
+    schema extension needed; the classic hooks fire there too
+[x] Verified on Storefront **and** Twenty Twenty-Five with real cached config
+[x] Keyboard navigation — measured on the rendered page: no tabindex, one shared
+    radio name, single tab stop, every for=/aria-describedby resolving, legend
+    first in both fieldsets
+[x] Verified on one page builder — Elementor, installed and removed again
+[x] Phase 4 prototype deleted — both copies and its log; findings doc verified
+    untouched, test-order evidence verified intact
 ```
 
 ---
@@ -3912,6 +6389,1130 @@ disabled add-to-cart with an explanation while invalid — always re-checked ser
 > The correctness-critical phase. A pricing bug charges real customers the wrong amount
 > on someone else's store.
 
+### M11.0 — Ground state, measured before planning
+
+**Added 2026-08-31.** Six findings from re-reading this phase against the code
+that already exists. Two change the milestone order, one is structural and was
+recorded nowhere.
+
+#### Finding 1 — much of M11.1 is already decided, in code
+
+`option-sets/types/pricing.schema.ts` answers several questions
+[M11.1](#m111--pricing-model-specification) presents as open:
+
+| Question | Already answered |
+|---|---|
+| Percentage precision | **Basis points**, integer — never a float |
+| What a percentage applies to | *"A percentage of the **base product price**"* |
+| `per_char` free allowance | A `freeCharacters` field exists — **the milestone never mentions it** |
+| Tier structure | `minQuantity` / `maxQuantity`, with gap and overlap validation |
+
+The wire contract is complete too: `serialization/price-config.ts` normalises all
+five types to `snake_case`, and the two-spelling trap — a value priced through the
+JSON column emitting `amountMinor` while one priced through the columns emitted
+`amount_minor` — was already found and fixed in Phase 9.
+
+**So M11.1 is largely transcription and reconciliation, not design.** And
+`freeCharacters` is the inverse of the usual problem: a rule that exists in code
+with no specification behind it.
+
+#### Finding 2 — `per_unit` has no input source
+
+The model says `per_unit → amount × option_quantity`, and nothing provides a
+per-option quantity. `Cardinality` is `none | one | many` — how many values may be
+**selected**, not a number of units. Phase 10 reached the same conclusion from the
+other side when its estimate had to skip the type.
+
+**Either M11.1 specifies where that number comes from, or `per_unit` defers to
+[Phase 14](#phase-14--option-type-library)** — and that is a decision to make
+before the evaluators, not after.
+
+#### Finding 3 — M11.5 found two call sites; there are five
+
+> **Superseded 2026-08-31 by Stage 6.** This finding raised the count from two to
+> three; the real number is **five**. It is kept because the *pattern* is the
+> lesson — each revision searched one file more than the last and stopped at the
+> first plausible answer. See
+> [M11.5](#m115--server-side-enforcement-at-add-to-cart) for the current list.
+
+[M11.5](#m115--server-side-enforcement-at-add-to-cart) verified two signatures for
+`woocommerce_add_to_cart_validation`. This finding found a third; Stage 6 found
+the remaining two by grepping the whole plugin rather than one file:
+
+```text
+class-wc-form-handler.php:981   ($product_id, $quantity)
+class-wc-form-handler.php:1013  ($item, $quantity)                                  ← array; reorder
+class-wc-form-handler.php:1063  ($product_id, $quantity, $variation_id, $variations) ← VARIABLE
+class-wc-cart-session.php:615   (..., $variations, $cart_item_data)                 ← REORDER; SIX args
+class-wc-ajax.php:520           ($product_id, $quantity)                            ← AJAX shop loop
+```
+
+`:1063` is the **variable-product** path — Phase 10's primary target segment. A
+callback registered with `accepted_args = 3` receives nothing about the variation
+and cannot validate against it. This is the security boundary, so a missed call
+site is a hole rather than an omission — which is exactly why finding three of
+five and calling it done was the dangerous outcome, not the safe one.
+
+#### Finding 4 — M11.4 cannot work as written, and the reason is structural
+
+[M11.4](#m114--cross-language-fixture-suite) requires *"a shared JSON fixture file
+executed by **both** the PHP and TS test suites in CI. A divergence fails the
+build."*
+
+**There are three separate git repositories, and CI checks out one at a time.**
+Neither suite can see a file living in the other. A fixture committed to both is
+two files that drift — precisely what the mechanism exists to prevent.
+
+This project has already paid for that shape once: the Stage 1a envelope defect
+was two internally consistent halves that disagreed, with no shared check, and
+both suites green throughout. **The constraint is recorded nowhere in this plan
+until now.**
+
+M11.4 needs a distribution mechanism decided — vendored with a checksum gate,
+published as a package, or generated from one source — **before** either evaluator
+is built, because retrofitting it means rewriting both.
+
+#### Finding 5 — the two money implementations are asymmetric
+
+PHP has a full `Support\Money`: integer minor units, scale checking, and a
+percentage that rounds **half up**. TypeScript has only `money.transformer.ts`, a
+TypeORM value transformer — no arithmetic, no rounding.
+
+[M11.3](#m113--typescript-evaluator) says "same function in the cloud", but there
+is no TS money type to build it on. **M11.3 is larger than M11.2**, despite being
+described as its mirror.
+
+#### Finding 6 — M11.1a is the best-specified item and should lead
+
+It is the only milestone here with a **live production bug** behind it, a concrete
+acceptance (`"AB CD"` charges and displays the same count), and a stated
+recommendation. It also constrains three consumers: `per_char` pricing, the
+character counter, and `min_length` / `max_length` validation.
+
+It is currently a sub-item of M11.1. It should go first.
+
+### M11.0a — Stage 0: the four decisions this phase rests on
+
+**Analysed and decided 2026-08-31, before any code.** Stage 0 is a decisions
+stage: four questions answered and recorded at both ends, so the stages after it
+build against settled ground rather than discovering it.
+
+#### 🔴 Decision 1 — negative deltas have no floor, and one is needed now
+
+`pricing.schema.ts` accepts negative amounts today: `amountMinor` is bounded at
+`-MAX_AMOUNT_MINOR`, so a merchant can configure a **discount option** already.
+The rule that makes that safe — "a floor at zero" — lives in
+[M16.6](#m166--negative-pricing-and-discounts), **five phases away**. And
+[M11.4](#m114--cross-language-fixture-suite) requires fixtures for "zero and
+negative deltas", so this phase must evaluate them without the rule that governs
+them.
+
+A **-£50 option on a £30 product** produces a negative line total, and nothing in
+Phase 11 says what happens. This plan already names arbitrary discounts as "the #1
+vulnerability class in this project", so leaving it to Phase 16 means
+[M11.5](#m115--server-side-enforcement-at-add-to-cart) enforcing a rule that does
+not exist yet.
+
+**Decision: the floor is on the line, not the delta, and it belongs here.** A
+single option may be negative — that is what a discount option *is* — but the
+computed line total clamps at zero. Clamping each delta instead would silently
+turn a -£50 discount into £0 and charge full price, which is a different wrong
+answer rather than a safe one. M16.6 keeps the *authoring* and coupon-interaction
+questions; the arithmetic floor moves here because M11.5 needs something to
+enforce.
+
+#### Decision 2 — the scope boundary between Phases 11 and 16
+
+[M11.1](#m111--pricing-model-specification) reads as though it decides all six of
+its listed items. Three are elsewhere: what a percentage applies to is **already
+in the schema** (the base product price), multi-currency is
+[M16.7](#m167--multi-currency)'s, and tax inclusive/exclusive is *verified* by
+M11.6 but specified by nobody.
+
+More significantly, **Phase 16 owns four of the five price types** —
+[M16.1](#m161--percentage-of-base) `percentage`,
+[M16.2](#m162--per_unit-and-per_char) `per_unit` and `per_char`,
+[M16.3](#m163--tiered--quantity-breaks) `tiered` — and depends on Phases 11 *and*
+14. This phase's own exit criteria confirm the split: they ask for agreement on a
+shared fixture suite, integer minor units, rounding at boundaries and an
+adversarial suite. **Not one names an advanced type.**
+
+**Decision: Phase 11 builds the machinery and `fixed`; Phase 16 fills in the four
+advanced types once [Phase 14](#phase-14--option-type-library) delivers the option
+types that use them.** That is also what the storefront needs: Phase 10 renders
+`radio`, and a radio prices per value, which is `fixed`.
+
+#### Decision 3 — `per_unit` needs no quantity source in this phase
+
+[M11.0](#m110--ground-state-measured-before-planning)'s Finding 2 left this open:
+`per_unit → amount × option_quantity` and nothing provides a per-option quantity,
+since `Cardinality` is `none | one | many` rather than a count.
+
+**Decision: closed, by Decision 2.** `per_unit` is M16.2's, which arrives after
+Phase 14 has built the option types that would carry a quantity. Inventing a field
+here would be designing for a consumer that does not exist. Recorded at
+[M16.2](#m162--per_unit-and-per_char) so that milestone inherits the question
+rather than rediscovering it.
+
+#### Decision 4 — `measure(text)` is written here and consumed by two later phases
+
+[M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display) says one
+function backs `per_char` pricing, the character counter, and `min_length` /
+`max_length` validation. The counter and validation are **Phase 14's**, and
+[M16.2](#m162--per_unit-and-per_char) separately claims "whitespace and unicode
+counting rules defined precisely" — so three milestones each believe they define
+it.
+
+That is how the `optionia-app` bug happened in the first place: pricing counted
+five characters while the counter showed four, because two people implemented the
+same idea twice.
+
+**Decision: Phase 11 writes `measure()`; Phase 14 and M16.2 consume it and define
+nothing.** [M11.4](#m114--cross-language-fixture-suite)'s fixture — the measure
+used for pricing equals the measure used for limits — is what enforces that,
+rather than a note asking each phase to remember.
+
+**Acceptance for Stage 0:** M11.1 lists only what it actually specifies; the
+`per_unit` question is closed with a named owner; the negative-delta floor exists
+before M11.5 needs it; and `measure()` has one owner and two named consumers, each
+recorded at its own end.
+
+### M11.0c — Stage 1: how one fixture reaches two repositories
+
+**Analysed 2026-08-31, before any code.** Stage 1 answers the question
+[M11.4](#m114--cross-language-fixture-suite) cannot answer for itself, and the
+analysis turned up a live instance of the same failure already shipping.
+
+#### The constraint, verified rather than assumed
+
+The outer repository **explicitly gitignores** both inner ones
+(`/optioniaWooCommercePlugin/`, `/optioniaWooCommerceBackend/`), there are no
+submodules and no remotes, and **every `actions/checkout` in both workflows is
+bare** — none passes a `repository:` parameter. Neither suite can read a file
+living in the other. M11.4 as written cannot run.
+
+#### 🔴 Finding 1 — the problem already exists, and nothing detects it
+
+This project already solved a cross-repo contract once:
+`AssignmentWireContractTest` holds bytes **captured** from the real
+`GET /v1/store/config` response, so the plugin tests against what the cloud
+actually sends rather than a hand-written guess. That was the right instinct, and
+it is a **copy with nothing guarding it**.
+
+Measured: change the captured `priority` from `5` to `99` — the shape the backend
+would send after an ordering change — and the plugin suite reports
+**`OK (5 tests, 25 assertions)`**. No gate references the constant, and the
+backend does not know it exists. The plugin cannot tell a correct value from a
+stale one; only the backend knows which is real.
+
+So Stage 1 is not only preparing for M11.4. **There is a live instance of exactly
+this failure in the codebase today**, and a mechanism that left it uncovered
+would be the same omission twice.
+
+#### Finding 2 — a checksum is necessary and not sufficient
+
+The obvious mechanism works for the obvious failure. Tested: two copies of a
+fixture, one edited, and the hashes diverge — `77564a1a…` against `28c4b5e4…`, so
+a gate comparing them fails the build.
+
+But there is a **second failure mode a checksum cannot see**: identical bytes,
+one suite looping fewer cases. A fixture declaring three cases and a runner
+executing one passes every hash comparison ever written.
+
+That is the floor pattern this repository applies to every other gate — a check
+that inspects nothing passes for the wrong reason, and this project has now found
+that shape in `check-config-invalidation`, `check-secrets`, the architecture
+gate's autoload scan, and `ConfigReadBudgetTest`'s own docblock. **The gate
+asserts a declared case count as well as a hash.**
+
+#### The three options, and why one wins
+
+| Option | Assessment |
+|---|---|
+| **Publish as a package** | Technically open — `composer.json` and `package.json` both exist. But it needs a package **per language**, versioned in lockstep, so a fixture change becomes publish, bump twice, merge twice. Heavy for a JSON file, and the lockstep is itself unenforced |
+| **Generate from one source** | CI checks out one repository, so generation can only run **locally**. The gate would then verify the output matches — the checksum option with more moving parts and a step someone must remember |
+| **Vendored copy + checksum gate** | Each repository holds the file; each gate asserts its hash **and** its case count. A change fails both builds until both are updated |
+
+**Decision: vendored and gated.** The reasoning is the one this project keeps
+arriving at — the mechanism must fail **in the repository where the mistake is
+made**. A package defers detection to a release step; generation defers it to
+whoever remembers the script. A checksum gate fails in CI, in the repository being
+changed, which is where the person who can fix it is standing.
+
+#### Stage 1 execution plan
+
+| # | Step | Acceptance |
+|---|---|---|
+| 1 | Decide the fixture's canonical location and shape — `version`, `cases[]`, every expectation in **integer minor units** | The file exists in both repositories, byte-identical |
+| 2 | Write the gate in **both** repositories: hash **and** declared case count | Each repository's own `check.sh` runs it |
+| 3 | Prove it: edit one copy → both builds fail; run fewer cases than declared → the count fails | Both proven by mutation, not by reading |
+| 4 | **Bring the existing `WIRE` constant under the same gate** (Finding 1) | The `priority: 5 → 99` drift now fails |
+| 5 | Record the decision at both ends, with the rejected options and why | A later reader finds the reasoning, not just the choice |
+
+**Step 4 is the one to hold to.** Stage 1 is scoped as preparation for a fixture
+that does not exist yet, and the temptation is to build the mechanism and leave
+the live gap for later. The gap is the reason the mechanism is worth building.
+
+#### Built 2026-08-31 — all five steps
+
+`bin/check-shared-fixtures.sh` exists in **both** repositories, running three
+checks over two byte-identical fixtures:
+
+| Fixture | Purpose |
+|---|---|
+| `shared/pricing-fixtures.json` | Twelve cases: `fixed` arithmetic, zero and negative deltas, and the line-total floor Stage 0 moved into this phase |
+| `shared/assignment-wire.json` | The bytes captured from `GET /v1/store/config`, moved out of a PHP constant so they can be hashed |
+
+**Each check was proven independently**, which took some care: the hash catches
+almost everything, so the count and floor assertions are only *reached* once the
+hash is made to agree. Verified one at a time — an edited copy fails the hash; a
+case removed with `case_count` left at twelve fails the count; coverage trimmed to
+five with the count honestly lowered fails the floor. All three needed their own
+setup, because a gate whose later checks are never reached is three checks on
+paper and one in practice.
+
+**And Finding 1 is closed.** The `priority: 5 → 99` drift that previously left the
+plugin suite reporting `OK` now **fails the build**. The tests still pass under
+that mutation, correctly — they assert the *shape* the plugin must handle, and the
+gate asserts the *values* match what the cloud sends. Splitting those two jobs is
+the point: a test that also owned the values would have to be edited every time
+the capture was refreshed, which is how a stale capture gets blessed.
+
+The fixture is **read from disk** rather than left as a constant beside the file,
+so the gate guards something the test actually uses. A hashed file nobody reads is
+a hash, not a contract.
+
+Wired into both CI pipelines — the plugin's runner as gate **3 of 10**, the
+backend's as its own job beside the secret scan.
+
+#### Post-build audit, same day: the gate could be walked past in one commit
+
+Every attack on the gate itself was repelled — a deleted fixture, one emptied to
+`{}`, a blanked `EXPECTED_SHA`, an edited copy, a removed case, a lowered count.
+But one path went straight through: **change the fixture *and* its pinned hash in
+the same repository**, and both builds pass while the two files differ. Measured
+— backend fixture and `EXPECTED_SHA` both updated, plugin untouched, both gates
+green. That is exactly the failure this mechanism exists to prevent.
+
+The cause is that **each repository is its own witness**. A gate verifies its own
+copy against a hash it also owns, so it agrees with itself by construction.
+
+**No CI gate can close that**, and it is worth being precise about why rather than
+building something that looks like a fix. Each workflow checks out one
+repository, so a run has nothing to compare against that the repository under
+test cannot also rewrite. A self-declared hash inside the fixture does not help
+either — measured: anything in the file can be recomputed by whoever edits it. A
+network fetch would trade a silent failure for a flaky one.
+
+**What can close it is the working tree that holds all three repositories** — the
+only place both copies exist at once, and where a divergence is actually created.
+`bin/check-fixture-parity.sh` lives there and compares the files directly rather
+than trusting either repository's account of them. It also compares the **pinned
+hashes** and the **gate scripts themselves**, because a repository quietly
+lowering its own `FLOOR_CASES` from twelve to one is invisible to the other and a
+weaker gate is worse than a broken one.
+
+Proven against six cases: the fixture-and-hash change that started this, gates
+pinning different hashes, a fixture present in only one repository, a *new*
+fixture added to one alone, a weakened gate script, and the floor when no
+fixtures are found. Both per-repo gates now name it in their own headers, since a
+script nobody knows about is no better than a comment.
+
+**Two controls remain beyond it, and neither is mechanical** — a pinned hash
+changing is a **visible diff on a reviewed line**, and an unmirrored fixture
+change fails the *other* repository's build the next time it runs. Stated rather
+than implied: this is defence in depth, not a proof.
+
+### M11.0d — Stage 2: one measure function, and the two decisions inside it
+
+**Analysed 2026-08-31, before any code.** Five findings. Two are decisions
+[M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display) leaves open,
+and one contradicts its own stated reasoning.
+
+#### Finding 1 — `ext-intl` is not declared, and there is no fallback
+
+M11.1a says "use a grapheme- or code-point-aware count", and grapheme counting in
+PHP means `grapheme_strlen()`, which lives in **ext-intl**. The plugin's
+`composer.json` declares only `"php": ">=7.4"` — no `ext-intl`, no
+`ext-mbstring` — and `src/` contains **no extension guards** anywhere.
+
+This plan's own rule for the plugin is *"fail gracefully without WooCommerce;
+never a fatal error on a merchant's store"*. A shared host without `intl` would
+get precisely that, on a pricing path, at add-to-cart.
+
+#### Finding 2 — the cross-language pairing is exact, and was verified
+
+Both counting families align across languages on twelve cases, including
+combining marks, ZWJ families, regional-indicator flags and skin-tone modifiers:
+
+```text
+Intl.Segmenter  matches  grapheme_strlen : 12/12
+[...spread]     matches  mb_strlen       : 12/12
+```
+
+So either is *implementable*; the question is which is *right*. The divergence is
+not cosmetic:
+
+| Input | `strlen` | `mb_strlen` | grapheme |
+|---|---|---|---|
+| `café` (combining accent) | 6 | 5 | **4** |
+| `👨‍👩‍👧` | 18 | 5 | **1** |
+| `🇬🇧` | 8 | 2 | **1** |
+
+For engraving, grapheme is the honest count: a customer sees **one** flag, and one
+is what the machine cuts. Node is declared `>=20` and CI runs 20 and 24, so
+`Intl.Segmenter` is safe on that side.
+
+#### 🔴 Finding 3 — "whitespace does not count" has two readings
+
+The recommendation is ambiguous, and the readings disagree on ordinary engraving
+text:
+
+| Engraving | Strip all whitespace | Trim the ends only |
+|---|---|---|
+| `"AB CD"` | 4 | 5 |
+| `"John Smith"` | **9** | **10** |
+| `" Happy Birthday "` | 13 | 14 |
+
+The space between "John" and "Smith" **is physically engraved**. Stripping it
+charges for less than the machine produces.
+
+#### Finding 4 — the recommendation's reasoning does not support its conclusion
+
+M11.1a recommends excluding whitespace *"— the merchant said 'per character', and
+the counter is what the customer believes."*
+
+That argues for **one consistent rule**, which is the milestone's actual point. It
+does not argue for *excluding* whitespace: the `optionia-app` bug was two rules
+disagreeing, not which rule won. Either rule, applied to both the price and the
+counter, fixes it.
+
+**Recommendation, differing from M11.1a's: trim the ends, then count graphemes.**
+`"AB CD"` measures **5**. It matches what is engraved, it matches what the
+customer sees on the field, and it is the answer a merchant would defend to a
+customer who counted. Excluding inner spaces means a customer who types
+`"John Smith"` is charged for nine characters and receives ten.
+
+The cost of being wrong runs in one direction only. Counting spaces charges
+slightly more and is defensible on inspection; not counting them charges for less
+than is produced, and every complaint is a merchant explaining why a space was
+free. **This is a product decision and is flagged as one** rather than settled by
+implementation.
+
+#### Finding 5 — `trim_whitespace` needs an ordering rule
+
+[Phase 14](#phase-14--option-type-library) gives text options a
+merchant-configurable `trim_whitespace`. So the same text measures differently
+depending on a setting unless the order is fixed: **normalise first, then
+measure**. Without that, `measure()` is deterministic while the pipeline around it
+is not — which is the same class of bug one layer out.
+
+#### Stage 2 execution plan
+
+| # | Step | Acceptance |
+|---|---|---|
+| 1 | **Decide the whitespace rule** (F3, F4) — recommended: trim ends, count graphemes | The decision **and its cost** recorded here, not just the outcome |
+| 2 | **Decide the `ext-intl` answer** (F1) — declare it, or degrade to `mb_strlen` with a System Status row | No fatal error on any host, and a merchant can see which count they are getting |
+| 3 | Fix the order: normalise, then measure (F5) | Stated before either implementation exists |
+| 4 | `Engine\Text::measure()` in PHP, its mirror in the backend's `common/` | Both pure — `src/Engine/` is already gate-enforced against WordPress calls (Principle 1) |
+| 5 | Extend `pricing-fixtures.json` with measure cases: inner spaces, leading and trailing, combining marks, emoji, ZWJ family, flag | `case_count` and the floor raised in **both** repositories, parity check still passing |
+| 6 | Both suites read those cases and agree | M11.1a's acceptance: `"AB CD"` charges and displays the same count, in PHP and TS |
+
+**Step 1 is the one to settle before any code.** M11.1a recommends one answer and
+this analysis recommends the other; implementing either silently would bury a
+product decision in a function body.
+
+#### Built 2026-08-31 — both decisions taken as recommended
+
+**Whitespace: trim the ends, count graphemes.** `"AB CD"` measures **5** and
+`"John Smith"` measures **10**, because the space between the names is cut into
+the material and charging nine for a name that engraves ten charges for less than
+is produced. Leading and trailing whitespace is stripped — including the
+non-breaking space and byte-order mark a bare `trim()` misses, which arrive by
+paste from a word processor, render as nothing, and nobody intends to buy.
+
+**`ext-intl`: declared, and checked at runtime.** `composer.json` now requires
+`ext-intl` and `ext-mbstring`, but a merchant installs a plugin by uploading a
+zip, so composer never runs on their host — the declaration alone protects
+nobody. `Support\Environment::unmet_requirements()` checks both extensions and
+returns a message naming the missing one, so a store on a build without `intl`
+sees an admin notice rather than a fatal error at add-to-cart.
+
+`Engine\Text::measure()` and the backend's `common/text/measure.ts` are the two
+implementations, both pure — `src/Engine/` is gate-enforced against WordPress
+calls. Verified directly before writing a single test: **16 of 16 agreement**
+across tabs, combining marks, ZWJ families, flags, skin tones and whitespace-only
+input.
+
+**The fixture now carries ten measure cases**, and both suites read them from it
+rather than restating them — the plugin's `TextMeasureTest` and the backend's
+`measure.spec.ts`, each also asserting that the number of cases it ran matches
+the number the file declares. A hash proves two repositories hold the same bytes;
+it does not prove either executed them.
+
+**Six mutations, all caught.** Grapheme counting swapped for code points, all
+whitespace stripped rather than the ends, and normalisation removed — in **both**
+languages. The code-point swap fails exactly four cases: the combining accent,
+the ZWJ family, the flag and the skin-tone modifier, which are the four that
+distinguish the two methods.
+
+One of those six first reported as surviving. It had not compiled — an unused
+constant left behind by the edit — and jest reported `0 total`, which this
+project treats as no result rather than a pass. Re-run in a compiling form it
+fails four tests. The gate's own counting pattern needed the same care: it
+matched `"name"`, which the new measure cases also carry, so it counted 22
+pricing cases instead of 12. It now counts `base_minor`, which only a pricing
+case has.
+
+Plugin **332 tests / 781 assertions**, coverage floor 36 → 37; backend **14**
+measure tests. Fixture parity holds across both repositories.
+
+#### Post-build audit, same day: the extension check was unguarded
+
+Twenty-six cross-language cases agreed — the ten in the fixture plus sixteen it
+does not cover, including a lone ZWJ, a bare combining mark, a null byte, a split
+surrogate pair and the rainbow flag. Three of four further mutations resolved as
+**equivalent**, each proven rather than filed: `\s` under `/u` already matches a
+non-breaking space, so naming it in the character class is redundant — while the
+**byte-order mark is not matched by `\s`**, which is why removing that one was
+caught. `grapheme_strlen('')` is already `0`, so the empty-string early return
+changes nothing.
+
+But `Support\Environment::unmet_requirements()` had **no coverage at all** —
+removing the whole extension check left all 332 tests passing. Not only the new
+check: the method carried five, and none was tested. That is the last thing
+between a merchant and a fatal error, since on a host without `intl`,
+`Engine\Text::measure()` calls an undefined function at add-to-cart on the
+pricing path.
+
+Seven tests now cover it, and five mutations are caught: the extension check
+removed, `mbstring` dropped from it, the message case renamed, and the WordPress
+version comparison neutered. The fifth — dropping the early return after
+`woocommerce_missing` — is equivalent: `woocommerce_version()` returns null when
+`WC_VERSION` is undefined, so the `null !== $wc_version` guard already covers it.
+
+Two things the suite does deliberately. It asserts the extension names **against
+the source**, so removing `mbstring` fails rather than passing quietly on a host
+that happens to have it. And it asserts every problem code renders something
+other than the generic fallback, because a code added without a `case` falls
+through to "cannot run in this environment" — which tells a merchant nothing
+about what to fix.
+
+One correction while writing it: the baseline test asserted no problems at all,
+and the harness deliberately defines no `WooCommerce` class, so
+`woocommerce_missing` is correctly reported. The assertion was wrong, not the
+code — and that the check fires there is itself evidence it works.
+
+Plugin after the fixes: **339 tests / 803 assertions**, 10 gates.
+
+### M11.0e — Stage 3: what the spec records, and the one thing it must add
+
+**Analysed 2026-08-31, before any code.** Four findings. Two of M11.1's three
+"open" items turn out to be answered already; one genuine divergence between the
+two languages is not, and it is the kind that surfaces as a wrong charge.
+
+#### 🔴 Finding 1 — PHP and JavaScript round negatives differently
+
+`Support\Money::percentage()` rounds **half up, away from zero** — matching PHP's
+own `round()` and, by its docblock, WooCommerce. JavaScript's `Math.round` rounds
+**toward positive infinity**. On negatives they disagree:
+
+| Discount | Exact | PHP | JS |
+|---|---|---|---|
+| 5% off £0.10 | −0.5 | **−1** | **0** |
+| 5% off £0.30 | −1.5 | **−2** | **−1** |
+| 25% off £0.10 | −2.5 | **−3** | **−2** |
+
+Six of six boundary cases diverge. [M11.4](#m114--cross-language-fixture-suite)
+already requires fixtures at `0.005` and `0.015`, so this **will** surface — but
+only once someone writes a *negative* one, and every example in that list reads
+as positive.
+
+It does not bite today: Stage 0 scoped this phase to `fixed`, and negative fixed
+deltas are integer additions with no rounding at all. It bites the moment
+[M16.1](#m161--percentage-of-base) ships `percentage`, by which point two
+evaluators exist and both need correcting.
+
+**So the spec states the rule as "half up, *away from zero*"** — not "half up",
+which a TypeScript implementer would satisfy with `Math.round` and be wrong on
+every discount landing on a half.
+
+#### Finding 2 — the clamp is order-sensitive, and only a fixture name explains it
+
+For `fixed` the order of operations is unobservable: integer addition commutes,
+and reversing the deltas gives the same total. The **clamp** does not commute:
+
+```text
+base 3000, deltas [-5000, +400]
+  clamp at each step : 400
+  clamp at the end   :   0
+```
+
+The shared fixture pins **0**, and the reasoning lives in that case's *name* —
+"a later addition cannot revive a clamped line". It is the right answer, because
+clamping per step lets a merchant build a discount that pays out. But reasoning
+carried only by a label disappears the first time the label is rewritten.
+
+#### Finding 3 — two of the three "open" items are already answered
+
+| M11.1 lists | Actually |
+|---|---|
+| Rounding mode and precision | **Decided in code** — `Money::percentage()`, justified against WooCommerce's own rounding |
+| Whether percentages compound | **Answered by the schema** — "a percentage of the base product price", so two percentages each take the base and *add* rather than compound |
+| Order of operations | **Unobservable** for `fixed`; the clamp is the real question, and that is Finding 2 |
+
+So Stage 3 is **transcription plus two additions**: the away-from-zero qualifier,
+and the clamp-at-end rule.
+
+#### Finding 4 — where the spec lives is Stage 1's problem again
+
+M11.1 says `docs/PRICING-SPEC.md`, and there is no such place. The plugin has
+**no `docs/` directory at all**; the backend's holds five files and its gate is
+schema-specific, so it would not police a pricing spec; and the outer `docs/`
+exists but **neither CI ever checks it out** — verified in Stage 1.
+
+The spec is *"normative for both implementations"*, which is the same cross-repo
+problem [M11.0c](#m110c--stage-1-how-one-fixture-reaches-two-repositories) solved
+for fixtures. A spec living in one repository is invisible to the other's
+reviewers, and a spec nobody on one side can see is a spec that side will
+diverge from.
+
+#### Stage 3 execution plan
+
+| # | Step | Acceptance |
+|---|---|---|
+| 1 | **Decide the spec's location** — recommended: `shared/` beside the fixtures, under the same hash gate | Both repositories hold it; a one-sided edit fails the build |
+| 2 | Rounding stated as **half up, away from zero**, with the JS divergence recorded as *why* the qualifier is there | A TypeScript implementer cannot reach for `Math.round` and believe they complied |
+| 3 | **Clamp at the end**, with Finding 2's reasoning moved out of a fixture name | The rule survives the fixture being rewritten |
+| 4 | Transcribe what is decided: the six Stage 0–2 decisions, the schema's shapes, `measure()` | The spec describes what exists rather than what someone imagines |
+| 5 | Mark Phase 16's four types **explicitly out of scope**, each pointing at its milestone | An implementer knows what *not* to build |
+| 6 | Add **negative** rounding-boundary cases to the shared fixture | Finding 1 becomes enforced rather than noted |
+
+**Step 6 is the one to hold to.** Finding 1 is a measurement today; without
+fixture cases it stays a paragraph. The fixture is what turns it into a failing
+build — and M16.1 is where it would otherwise be found by shipping a discount
+that charges a penny more in one language than the other.
+
+#### Built 2026-08-31 — all six steps
+
+`PRICING-SPEC.md` lives in `shared/` beside the fixtures, under the same hash
+gate, because a specification normative for two implementations and visible to
+one is a specification one side will diverge from. **Every number in it was
+verified against the running code before the file was placed** — the clamp
+comparison, the three negative rounding boundaries, and the six measure results.
+A specification with a wrong number is worse than none, since it is the thing
+both implementations are checked against.
+
+**The rounding rule was implemented, not only written.** `common/money/percentage.ts`
+computes the quotient and remainder in integer space and rounds on the absolute
+value before reapplying the sign — the same shape as `Support\Money::percentage()`,
+deliberately, so the two read side by side. Replacing it with `Math.round` fails
+**five** tests: the three negative ties, the small-negative case, and the direct
+symmetry assertion. That is Finding 1 turned from a paragraph into a build
+failure.
+
+Seven rounding cases now sit in the shared fixture and **three are negative**,
+which the gate enforces: positive ties agree in both languages, so a fixture
+holding only those proves the implementations agree where they never disagreed.
+Both suites read them, and each asserts it ran as many cases as the file declares.
+
+**The parity check now compares every shared file, not only `*.json`.** A
+paragraph edited on one side and not the other is the same failure as an edited
+fixture, and the harder one to notice — two numbers differing is obvious in a
+diff, two prose descriptions of a rounding rule differing is not.
+
+Plugin **349 tests / 817 assertions**, 10 gates; backend **25** tests across
+measure and percentage; six checks in each repository's shared-fixture gate;
+three files under parity.
+
+#### Post-build audit, same day: the spec could contradict the code
+
+The hash gate stops `PRICING-SPEC.md` drifting **between repositories**, and it
+was proven to: changing four words in one copy failed both the per-repo gate and
+the parity check. It does nothing about the spec drifting from **reality**.
+
+Measured: the spec was edited in **both** copies to claim `"AB CD"` measures 4,
+both pinned hashes updated, and everything passed — both gates, the parity check,
+and all 349 tests — while the code measured 5.
+
+That matters more for a document than a fixture. A fixture's numbers are
+executed, so a wrong one fails a build. A spec's numbers are read by people, and
+someone implementing `percentage` in TypeScript from a spec asserting the wrong
+boundary implements the wrong boundary. The document exists precisely to be the
+thing both implementations answer to.
+
+**A seventh check now binds the spec's examples to executed cases.** Each number
+the document states must also exist as a case some suite runs — not a proof the
+prose is right, but a guarantee it cannot say something no test would catch.
+Proven both directions: rewording `measures **5**` to `**4**` fails as an
+unrecognised claim, and deleting the `"John Smith"` case while leaving the claim
+in the prose fails as *"the specification states numbers no executed case
+covers"*.
+
+Auditing that also found **two claims the spec asserted and nothing ran** — the
+combining-accent `café` and the positive `round(+2.5)` example. Both are now
+cases, so the measure and rounding sets carry eleven and eight.
+
+One process note worth keeping. While testing this, a `git checkout` failed to
+revert a gate — the file is untracked, so the mutated hash survived. The gate
+caught it immediately, reporting `5/6` and naming the exact mismatch. That is the
+mechanism working on the person who built it, which is the only test of a gate
+that really counts.
+
+Plugin after the fixes: **351 tests / 819 assertions**; backend **27**; seven
+checks in each shared-fixture gate.
+
+### M11.0f — Stage 4: why the cloud gets functions, not a `Money` class
+
+**Analysed 2026-08-31, before any code.** Six findings. The largest changes what
+this stage builds: [M11.3](#m113--typescript-evaluator) reads as "mirror
+`Support\Money`", and mirroring it would carry a field the cloud cannot fill.
+
+#### Finding 1 — a full `Money` class is the wrong target
+
+PHP's `Money` has **fourteen** public methods. The specification's formula needs
+**three** operations: addition, a floor at zero, and percentage.
+
+The fixture agrees: twelve pricing cases exercise `base + deltas` and the clamp,
+eight rounding cases exercise percentage, eleven measure cases touch no money at
+all. And measured — `times()`, `minus()`, `zero()`, `equals()`, `is_zero()`,
+`is_negative()`, `from_decimal()`, `try_from_decimal()`, `to_decimal_string()`
+and `decimals()` have **zero call sites** in `src/` on the PHP side too. The
+class is used only by its own tests and Stage 3's rounding suite.
+
+The backend already stores money as a `number` of integer minor units and sums
+with plain `+` (`demo.seed.ts:550`). A class would be ceremony around arithmetic
+that already works.
+
+#### Finding 2 — option prices carry no currency, anywhere
+
+Not on `option_value`, which has `priceType` and `priceAmountMinor` and nothing
+else; not in the config document; not on `stores`. Currency exists on `plans` and
+`order_events` only.
+
+So the multi-currency mixing `Money::assert_same_scale()` prevents **cannot occur
+in the option-pricing path** — there is no second scale to mix with.
+
+#### 🔴 Finding 3 — TypeScript cannot know the scale
+
+PHP takes its decimals from **WooCommerce**:
+
+```php
+function_exists( 'wc_get_price_decimals' ) ? (int) wc_get_price_decimals() : 2
+```
+
+The cloud has no WooCommerce. Every field the plugin sends it was checked —
+nineteen across connect and heartbeat, including `wc_version` and `php_version`
+— and **none carries a currency or a decimal count**. The plugin reads it locally
+for display, which is why `wp_localize_script` exists.
+
+**So a TypeScript `Money` carrying `decimals` would have to invent them**: a
+hardcoded 2, wrong for JPY and KWD, or a field nothing can populate. That is the
+argument for plain integers — minor units need no scale to add, and scale matters
+only at display, which is the storefront's job and already solved.
+
+#### Finding 4 — two fixture cases test nothing distinct
+
+The "JPY 0-decimal" and "KWD 3-decimal" cases are `1000 + 500` and `3000 + 1500`
+— arithmetically identical to every other case. Not an error, because the
+specification says decimals never enter the sum, so they *cannot* differ. But the
+names promise coverage the cases do not provide, and a reader trusting them would
+believe currency variation is tested.
+
+#### Finding 5 — no large-amount coverage
+
+[M11.4](#m114--cross-language-fixture-suite) requires "large quantities". The
+largest base in the fixture is **3000** and the largest delta **5000**. A first
+pass reported this as covered — it had matched the word "large" in an unrelated
+case name, which is why the check was redone against values rather than names.
+
+#### Finding 6 — the two sides guard overflow at different points
+
+| Guard | Limit |
+|---|---|
+| Schema `MAX_AMOUNT_MINOR` | 1e9, enforced at **authoring** |
+| PHP `Money::from_minor` | accepts 1e9+1 — no cap of its own |
+| TS `percentageOf` | `Number.isSafeInteger`, ~9e15 |
+
+Both throw on overflow — `RangeException` and `RangeError` — but at different
+thresholds. Not exploitable, since the schema bound is binding for stored data,
+but the fixture holds no case near any limit, so a divergence would surface in
+production rather than in CI.
+
+#### Stage 4 execution plan
+
+| # | Step | Acceptance |
+|---|---|---|
+| 1 | **Decide: functions, not a class**, and record why | The reasoning survives, so M11.3's "same function in the cloud" does not invite the `decimals` field back |
+| 2 | `sumDeltas(base, deltas)` — the specification's formula including the clamp | The twelve pricing cases become executable |
+| 3 | `clampToZero(total)` separately | The clamp is testable alone, not only through a sum |
+| 4 | `percentageOf` — **already built** in Stage 3 | No work |
+| 5 | Large-amount fixture cases (Finding 5) | Both languages agree near the schema's 1e9 bound |
+| 6 | Honest names for the currency cases, or a real distinction (Finding 4) | A reader is not told coverage exists where it does not |
+
+**Step 1 is the one that matters.** Findings 2 and 3 together say a TypeScript
+`Money` would carry a `decimals` field the cloud cannot populate and does not
+need. Building plain functions is the easy part; writing down *why* is what stops
+someone adding the class in six months and reintroducing the problem.
+
+#### Built 2026-08-31 — all six steps
+
+The fixture changes went **first**, so the functions were written against a file
+already final: one hash update in each gate rather than two, and no window where
+the code and the fixture disagree.
+
+`common/money/line-total.ts` holds `sumDeltas()` and `clampToZero()` — plain
+functions over integer minor units, no class. The reasoning is recorded in three
+places, because this is the decision most likely to be undone: in the function's
+own docblock, in [M11.3](#m113--typescript-evaluator) where "same function in the
+cloud" would otherwise invite it back, and in a new section of `PRICING-SPEC.md`
+titled *"Why the cloud has functions and the plugin has a class"*.
+
+**The sixteen pricing cases are now executed.** Until this stage they were hashed
+by the gate and run by nobody — the fixture guaranteed both repositories held the
+same bytes while nothing checked what those bytes claimed. Four new cases cover
+what Finding 5 found missing: the schema's maximum in a sum, fifty maximum deltas
+(5.1e10, exact in both languages — verified before writing the case), a maximum
+discount landing exactly on zero, and one clamping below it.
+
+**Four mutations, all caught**: clamping per step rather than at the end,
+removing the clamp, flooring at one instead of zero, and dropping the mid-sum
+safe-integer check. That last guards a case worth naming — a sum can leave the
+safe range and return, since `2^53 + 1 - 1` is `2^53`, which passes a check made
+only at the end while having silently lost a unit.
+
+**And Finding 4's two misleading names are gone.** "Zero-decimal currency (JPY)"
+and "three-decimal currency (KWD)" promised coverage they could not provide,
+since the specification says decimals never enter the sum. They now say what they
+actually demonstrate: that minor units are scale-free, and the same arithmetic
+serves both.
+
+Backend **74 tests across 5 suites**; plugin **351 tests / 819 assertions**,
+10 gates; seven checks in each shared-fixture gate; three files under parity.
+
+One thing this stage does **not** deliver: the pricing cases are executed by
+TypeScript only. The PHP evaluator is Stage 5, whose stated purpose is "both
+evaluators **and** the shared fixture suite together" — so this is a one-sided
+green until then, and worth saying rather than letting it read as coverage.
+
+#### Post-build audit, same day: the "large" case was a four-hundredth of one
+
+Tracing the real bound rather than assuming it: `AUTHORING_LIMITS` enforces 100
+groups of 200 options — and all three limits are enforced at the service layer,
+checked — so **one option set can put 20,000 deltas on a line**. The fixture's
+largest case was fifty.
+
+Not wrong: fifty maximum deltas already reaches 5.1e10 and proves the arithmetic
+holds far past anything a merchant would build. But "fifty maximum deltas" reads
+as a worst case while being 0.25% of one, and the true bound had been verified
+only inside an audit — which is a measurement, not a test.
+
+Two **generated** cases now assert it: 20,000 deltas at the schema maximum
+(2.0001e13, exact in both languages, roughly 450× inside the safe-integer range),
+and the same size all-negative, clamping to zero rather than going hugely
+negative. They carry a `repeat_delta` and `repeat_count` rather than twenty
+thousand literal numbers, because a fixture humans cannot read is a worse problem
+than the one it closes. Both languages were checked to agree at that size
+**before** the case was written.
+
+Two mutations confirm they bite: accumulating in floating point rather than
+integers fails, and trimming a generated case fails its own count assertion.
+
+The counting key needed correcting twice, which is worth recording. It matched
+`"name"` — every measure case has one. Then `"base_minor"` — the generated cases
+have that too. It now counts `"deltas"`, the field that makes a case *that kind*
+of case. The same collision appeared in Stage 2 with `"name"`, so it is a pattern
+rather than a slip: a counting key must be unique to the thing being counted, not
+merely present on it.
+
+**And Finding 1 reframed on inspection.** The mid-sum overflow guard looked
+unreachable — 9,007,199 maximum deltas — until the absence of a cap on *option
+sets per store* was noticed. That is ~450 full sets: absurd, but reachable, and
+the guard is what makes it a refusal rather than a silently wrong total. Kept,
+and now described accurately.
+
+Backend **77 tests across 5 suites**; eight checks in each shared-fixture gate.
+
+### M11.0b — Execution order
+
+Dependency order, not milestone numbering.
+
+| Stage | Work | Why here |
+|---|---|---|
+| **0** ✅ | Four decisions — scope boundary, the line-total floor, `per_unit`'s owner, `measure()`'s owner | **Done 2026-08-31.** The spec must describe what exists before adding to it, and two of the four turned out to be live gaps rather than open questions ([M11.0a](#m110a--stage-0-the-four-decisions-this-phase-rests-on)) |
+| 1 | **M11.4's fixture distribution** — decided, still to build | It gates both evaluators; building them first means retrofitting both (F4). Also closes a **live** gap: the captured `WIRE` constant in `AssignmentWireContractTest` drifts undetected today ([M11.0c](#m110c--stage-1-how-one-fixture-reaches-two-repositories)) |
+| 2 | `measure(text)` — one function, both languages | Best specified, three consumers, blocks `per_char` (F6). Stage 0 made this phase its sole owner |
+| 3 | `docs/PRICING-SPEC.md` | Now records decisions rather than inventing them — **including the line-total floor Stage 0 moved here** |
+| 4 | TypeScript money arithmetic | M11.3's missing foundation (F5) |
+| 5 | Both evaluators **and** the shared fixture suite together | One spec, divergence caught as it appears rather than after. Scope is **`fixed` plus the floor** — the four advanced types are Phase 16's |
+| 6 | M11.5 enforcement — **all five call sites** ✅ | The security boundary (F3), and the floor from Stage 0 is what it enforces. Built 2026-08-31; "three call sites" was wrong — see M11.5 |
+| 7a | M11.7 adversarial suite, cart harness, spec + exit criteria ✅ | Built 2026-08-31. Everything in Stage 7 that does not need a persisted selection |
+| 7b | M11.6 cart totals + the minimal write ✅ | Built 2026-08-31. The "blocked on M12.1" call was wrong: M11.6's own "session restore" requires persistence, and one writer later extended is the discipline, not a violation. See [M11.6](#m116--cart-total-application) |
+
+
+**Phase 11 final audit — the AJAX refusal was too broad. Closed 2026-09-01.**
+
+The last audit pass attacked hook *timing* rather than pricing, and found one
+real issue. `AddToCartValidator` keyed its shop-loop refusal on
+`wp_doing_ajax()` alone, which is true for **every** `admin-ajax.php` request —
+and `WC_Form_Handler::add_to_cart_action()` runs on `wp_loaded`, which fires
+during AJAX too. So a theme submitting the ordinary product form over AJAX (the
+common quick-add / off-canvas-cart pattern) had every add-to-cart **refused**
+with the customer's full, valid selection sitting in `$_POST`.
+
+It failed closed — nothing was ever mispriced — but the symptom a merchant sees
+is "add to cart does nothing", with no message and no cause.
+
+**Narrowed, not deleted.** Deleting the branch and letting resolution decide was
+the obvious fix and reopens the original hole in exactly one case:
+
+| selection | required option | resolver alone |
+|-----------|-----------------|----------------|
+| empty     | yes             | refuses correctly |
+| present   | either          | validates correctly |
+| **empty** | **no**          | **accepts — an optionless line, silently** |
+
+A product whose options are all optional would be added from the shop loop with
+none of them. So the condition is now **AJAX *and* no selection arrived** —
+precisely the shape `WC_AJAX::add_to_cart()` produces, and one a form post cannot
+produce, because a form post carries its fields.
+
+*A test asserted the bug.* `test_site_5_ajax_refuses_even_with_a_valid_looking_post`
+encoded the old behaviour on a false premise — "WooCommerce would not forward
+it" — which is untrue whenever a selection is actually present, since
+`WC_AJAX::add_to_cart()` never collects option fields in the first place. It was
+replaced by its opposite, plus the optional-only case that makes the branch
+load-bearing, plus a mirror case (skipping an optional option on the *product
+page* must be allowed) that stops the condition widening again — mutation-proven:
+dropping the `wp_doing_ajax()` half passed every other test.
+
+*Also verified in this pass and found correct:* variable products price off the
+variation's own price; all four layers resolve by parent `product_id`
+consistently; `all`-mode assignment enforces store-wide; a cleared config cache
+degrades to base price rather than breaking the cart; the unpriced-types notice
+fires on a *configured* type even when unselected; and the store-time scan
+handles 4,000 values in 0.9 ms.
+
+**Phase 11 audit — three findings, all closed 2026-09-01.**
+
+The audit fuzzed both evaluators on 700 random cases (400 pricing, 300
+percentage) and 20 hostile strings, verified the session round-trip through real
+`serialize`/`unserialize`, and reproduced `WC_Cart::generate_cart_id()` verbatim
+to check cart-line merge and split. All held. Three findings did not:
+
+1. ⚠️ **A merchant could undercharge silently, and it was reachable.** The
+   cloud's schema (`pricing.schema.ts`) publishes **five** price types —
+   `fixed`, `percentage`, `per_unit`, `per_char`, `tiered` — and this phase
+   prices `fixed`. Everything else contributed **zero**, which is the correct
+   arithmetic for the scope and is indistinguishable from a free option.
+   Measured: a 50% surcharge on an £80 product charged £80.00, losing £40 a
+   unit, with no log, no notice and no failing test. Correct by scope and still
+   the worst combination a pricing system can have — the code behaving as
+   designed while the money is wrong.
+
+   Fixed at three levels, because a debug log a merchant never enables is not a
+   warning: `SelectionResolver` now *reports* unpriceable types alongside a
+   successful result; `CartTotals` logs one warning per line; and
+   `Config\Repository` scans each accepted document once at store time and
+   records the types, which `Admin\UnpricedTypesNotice` shows in the admin —
+   deliberately parallel to `SchemaNotice`, which exists for the same shape of
+   problem. The record clears itself when a clean document arrives, so a
+   merchant who fixes it stops being told.
+
+   *The price was deliberately left unchanged.* Guessing at an unimplemented
+   type would be worse, and refusing the document would take a working
+   storefront down over a publish it can otherwise mostly honour. Phase 16
+   implements the four types; until then the merchant is told.
+
+2. **Two plugins both calling `set_price()` conflict.** The base is memoised per
+   line for the request, so another plugin's later change is re-asserted away on
+   the next firing. Documented rather than changed: the alternative — re-reading
+   `get_price()` each firing — makes the deltas **compound** across the nine
+   `calculate_totals()` call sites, which is strictly worse. WooCommerce's own
+   mechanisms are unaffected, which bounds it: coupons apply in `WC_Cart_Totals`
+   *after* this hook, and fees use `woocommerce_cart_calculate_fees`.
+
+3. **A coupon assertion was decoration.** `round( 170 × 0.9 ) === 153` holds
+   whatever Optionia does. Replaced with an assertion against the value it must
+   *not* be — the bare base — which is the thing that would actually regress.
+
+**What Stage 7a built, and what 7b inherits.** Recorded 2026-08-31.
+
+*Built:*
+
+1. **`AdversarialAddToCartTest` — 40 tests, M11.7 consolidated.** Nine injected
+   price-field names asserted **on the total** (not merely "the request passed" —
+   Stage 6's audit found that weaker assertion letting an AC4 mutation survive);
+   tampered, foreign-product and **other-tenant** option keys, the last against a
+   real second-store document rather than an invented id; wrong shapes including
+   a 50-deep nested array and a scalar selection container; twelve hostile byte
+   sequences; eight hostile quantities; and the direct `?add-to-cart=` GET path.
+
+2. **A cart double, with its own fidelity suite.** `optionia_test_cart()`
+   multiplies per-unit price by quantity exactly as `WC_Cart_Totals` does, and
+   `CartHarnessFidelityTest` asserts that it does. Stage 6 shipped an
+   `apply_filters()` stub that ignored `accepted_args` and made a correct and a
+   broken registration indistinguishable; a cart stub that ignored quantity would
+   do the same for per-unit pricing, so the double is tested rather than trusted.
+   Four mutations of the stub — dropping the multiply, returning a float price,
+   sanitising `set_price()`, firing the hook once — are all caught.
+
+3. **A per-unit gate.** `bin/check-architecture.sh` fails on quantity arithmetic
+   anywhere in `src/`, in either operand order, with comment lines excluded first
+   (the `check-secrets`/`hash_equals` failure, now seen three times in this
+   project).
+
+4. **`PRICING-SPEC.md` §3 says *per unit*,** with the double-multiplication
+   failure and the tax rule written out. Re-synced and re-pinned in both repos.
+
+5. **Seven of nine exit criteria ticked, each with its evidence** — see the table
+   under *Phase 11 exit criteria*.
+
+*Two corrections to my own work, both found by testing rather than reasoning:*
+
+6. **A provider row asserted the bug.** The hostile-text provider included
+   `'front'` — the **valid** key — under a "very long" label left over from
+   drafting. It failed, correctly: a test demanding that a valid selection be
+   refused is asserting the defect. Removed, with a comment saying why it must
+   not come back.
+
+7. **The `line_total` name was nearly renamed to `unit_total`.** Both
+   implementations quote the formula verbatim in their docblocks, so renaming it
+   in the spec alone would have desynced three files to fix a wording problem.
+   The name stands; the clarification is inline.
+
+*Used by 7b, immediately rather than "once M12.1 lands":* the per-unit rule, the
+`data_hash` and product-instance findings, the nine `calculate_totals()` call
+sites, and the cart double to test against. 7a recorded them expecting to hand
+them to a future phase; 7b re-examined the blocker, found it was not one, and
+used them the same day.
+
+**The lesson worth keeping is about the deferral, not the findings.** 7a's
+analysis concluded M11.6 was blocked on a Phase 12 milestone and split the stage
+around that conclusion. It was wrong twice over: the milestone's own acceptance
+("correct under **session restore**") *requires* persistence, so deferring the
+write deferred the milestone indefinitely rather than sequencing it; and the
+"duplicate writer" objection did not apply, because M12.1 extends the same class
+rather than competing with it. Both were checkable at the time. The habit that
+caught it was re-reading the milestone's own words instead of trusting the
+previous analysis' summary of them.
+
+**What Stage 6 found, and what it hands on.** Recorded 2026-08-31.
+
+*Closed here:*
+
+1. **`Engine\Pricing`'s reachability exemption is gone.** `Engine\SelectionResolver`
+   sums the resolved deltas — M11.5's "recompute price from cached config" — so
+   the `DELETE IN STAGE 6` fuse in `bin/check-architecture.sh` was removed and the
+   gate passes without it. That is the evidence the class was pending, not dead.
+
+2. **M11.2's outer half is built.** `SelectionResolver::resolve( $option_sets,
+   $selections, $base_minor )` is the `(config, selections, base_price) → deltas
+   + total` function; Stage 5's `Pricing::sum_deltas()` is its inner half.
+
+*Three defects the build surfaced, each measured rather than reasoned about:*
+
+3. **Five call sites, not three** — `class-wc-cart-session.php:615` (reorder, six
+   args) and `class-wc-ajax.php:520` (shop-loop AJAX) were unrecorded. Both are
+   now in `AddToCartValidator::CALL_SITES` and gated.
+
+4. **`accepted_args` is per-registration, not per-call-site.** See M11.5 above —
+   the five-registration design refused valid reorders, because all five
+   registrations run at every site and three of them could not see
+   `$cart_item_data`.
+
+5. **The test harness ignored `accepted_args` entirely.** `apply_filters()` in
+   `tests/bootstrap.php` passed every argument to every callback, so a correctly
+   registered and a badly registered validator behaved identically in tests while
+   diverging in production — a suite that could not fail for the reason it
+   existed. Fixed to slice exactly as `WP_Hook::apply_filters()` does.
+
+*Handed to M11.6 / M11.7:*
+
+6. **The AJAX path refuses rather than validates, and that is a product decision
+   as much as a technical one.** `WC_AJAX::add_to_cart()` never forwards
+   `cart_item_data`, so a shop-archive button cannot carry a selection. Optionia
+   refuses with a message pointing at the product page. The alternative — hiding
+   or rewriting the archive button for optioned products — is a *rendering*
+   change and belongs with Phase 10's templates, not with a validator.
+
+7. **`SUPPORTED_TYPES` is still `radio` only.** The resolver enforces structure
+   (unknown keys, non-scalars, required); per-type rules — `min_length`,
+   `max_length`, `per_char` — arrive with the types that need them in Phase 16,
+   and `measure()` is already built and waiting (M11.1a). A value whose
+   `price_config` type this phase cannot price contributes **0** rather than
+   being rejected, so Phase 16's types do not make Phase 11 refuse configurations
+   it simply cannot price yet.
+
+**What Stage 5 handed to Stage 6.** Three items, recorded here at the moment they
+were understood rather than left to be rediscovered:
+
+1. **`Engine\Pricing` is exempted from the reachability gate, and the exemption
+   must be deleted in Stage 6.** The class is correct, fixture-driven and
+   mutation-proven, but nothing in production calls it: its caller is
+   `woocommerce_add_to_cart_validation`, which is Stage 6's subject. The
+   exemption in `bin/check-architecture.sh` is marked `DELETE IN STAGE 6`. Delete
+   it once the call sites exist; if the gate then still fails, the class really
+   was dead and the exemption was hiding it. This is precisely the `[8k]` failure
+   the gate was written for — "a step reporting itself finished before it is" —
+   so it is exempted on a named fuse rather than quietly.
+
+2. **The evaluator's signature is the inner half of M11.2.** M11.2 words it as
+   `(config, selections, base_price, quantity) → price_delta + breakdown`. Stage 5
+   built the arithmetic — `sum_deltas` / `clamp_to_zero` over a base and a delta
+   list, in both languages, against the same fixture bytes. The outer half, which
+   turns `config` and `selections` into that delta list, is **M11.5's own subject**:
+   "accept only selection keys; reject unknown option or value keys; reject options
+   not applicable to this product; enforce required; recompute price from cached
+   config". Building the resolver in Stage 5 would have meant writing it twice and
+   having two answers to the same question. M11.4 agrees — every case it enumerates
+   is arithmetic, including "empty selections", which it states as an empty delta
+   list rather than as a selection naming an option that does not exist.
+
+3. **The storefront JavaScript sums deltas a third time, and cannot clamp.**
+   `assets/js/frontend.js` adds `data-optionia-price` attributes into a running
+   total with no base price and no floor, because the renderer never passes the
+   product's own price to the browser. That is *acceptable for an estimate* — the
+   label reads `+£x`, a delta and not a line total — but it means the clamp in
+   `PRICING-SPEC.md` §3 exists in two implementations and not in the one the
+   customer actually sees. M11.6 owns cart totals and is where the authoritative
+   figure reaches the page; the estimate should either be given the base price so
+   it can clamp, or stay explicitly a delta. Decide it there, not by accident.
+
+**What Stage 0 changed about the seven stages after it.**
+
+Stage 5 is **smaller** than this table first implied: the evaluators cover `fixed`
+and the line-total floor, not five price types. `percentage`, `per_unit`,
+`per_char` and `tiered` belong to [Phase 16](#phase-16--advanced-pricing), which
+depends on Phase 14 for the option types that use them. This phase's exit criteria
+already said so — they ask for cross-language agreement, integer minor units,
+rounding at boundaries and an adversarial suite, and name no advanced type.
+
+Stage 3 is **larger**: the spec now carries the line-total floor, which was
+[M16.6](#m166--negative-pricing-and-discounts)'s until Stage 0 found that the
+schema accepts negative amounts today and M11.5 would otherwise enforce a rule
+that did not exist.
+
+Stage 2 is **unchanged in size but no longer ambiguous**: three milestones each
+believed they defined the whitespace rule, and this phase is now the only one that
+does.
+
+And Stage 6 gained a subject. "Recompute price from cached config" now has
+something to enforce beyond arithmetic — a line that clamps at zero, which is the
+difference between a discount option and an arbitrary-discount vector.
+
+**Two things to carry into the work.**
+
+Stage 1 is the one most likely to be skipped and the most expensive to retrofit.
+M11.4 calls itself "the mechanism that keeps two implementations honest" — if it
+cannot run in CI it is a convention, and this project has found repeatedly that a
+convention nobody checks is one nobody keeps.
+
+And **Phase 10's storefront estimate becomes this spec's second reader.** A
+divergence there is a customer seeing one price and being charged another, so the
+`fixed`-only path shipped in Stage 5 must be re-verified against the spec when it
+lands rather than assumed still correct.
+
 ### M11.1 — Pricing model specification
 
 ```text
@@ -3920,14 +7521,63 @@ percentage   → + (base_price × pct)
 per_unit     → + (amount × option_quantity)
 per_char     → + (amount × strlen(text))       # engraving
 tiered       → amount by quantity bracket
-formula      → constrained expression (Phase 16)
+formula      → constrained expression (Phase 16b)
 ```
 
-Specify precisely: order of operations, whether percentages compound, what percentages
-apply to (base only, vs. base + prior deltas), rounding mode and precision, tax
-inclusive/exclusive interaction, and multi-currency behaviour.
+Specify precisely: **order of operations**, **whether percentages compound**, and
+**rounding mode and precision** — plus the **line-total floor at zero** that Stage
+0 moved here from [M16.6](#m166--negative-pricing-and-discounts), because the
+schema accepts negative amounts today and M11.5 has to enforce something.
 
-**Deliverable:** `docs/PRICING-SPEC.md` — normative for both implementations.
+Three items this milestone used to list are not its own, and saying so is the
+point of [M11.0a](#m110a--stage-0-the-four-decisions-this-phase-rests-on):
+**what percentages apply to** is already answered in `pricing.schema.ts` (the base
+product price), **multi-currency** is [M16.7](#m167--multi-currency)'s, and **tax
+inclusive/exclusive** is verified by M11.6 against WooCommerce's own behaviour
+rather than specified from nothing here.
+
+**Deliverable:** `PRICING-SPEC.md` — normative for both implementations.
+
+⚠️ **There is no `docs/` that both can see.** The plugin has no `docs/` directory
+at all; the backend's holds five files and its gate is schema-specific; and the
+outer `docs/` is never checked out by either CI. A spec normative for two
+implementations, living where one of them cannot see it, is a spec that one will
+diverge from — the same problem
+[M11.0c](#m110c--stage-1-how-one-fixture-reaches-two-repositories) solved for
+fixtures, and it takes the same answer: a copy in each repository under the
+shared-fixture hash gate.
+
+⚠️ **Several of those decisions are already made, in code.** `pricing.schema.ts`
+holds a percentage as **basis points** rather than a float, states that it applies
+to the **base product price**, gives `per_char` a `freeCharacters` allowance this
+milestone never mentions, and validates tiers for gaps and overlaps. The wire
+shape is settled too, in `serialization/price-config.ts`.
+
+So this is **transcription and reconciliation before design**: the spec describes
+what exists, names anything it disagrees with, and only then decides what is
+genuinely open. `freeCharacters` is the case worth noticing — a rule living in
+code with no specification behind it, which is the inverse of the usual failure.
+
+⚠️ **And `per_unit` has no input.** `amount × option_quantity` needs a per-option
+quantity, and nothing provides one: `Cardinality` is `none | one | many` — how
+many values may be *selected*, not a count of units. Phase 10 hit the same wall
+from the renderer's side. **Either this spec says where that number comes from, or
+`per_unit` defers to [Phase 14](#phase-14--option-type-library)** — and that is
+decided before the evaluators, not discovered inside them.
+
+**Phase 10's storefront estimate is one of those implementations, and it is
+waiting on this.** Recorded here 2026-08-31, from the other end. Stage 5 shows a
+running total as options are chosen, and four of the five price types cannot be
+computed without the decisions above: `percentage` needs to know what the percent
+applies to and how it rounds, `per_unit` needs a quantity no option type provides
+yet, `per_char` needs [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)'s
+measure function, and `tiered` needs bracket semantics.
+
+So Stage 5 ships **`fixed` only** — which is what a radio prices as, and radio is
+the only type Phase 10 renders — and treats the others as this milestone's. When
+this spec lands, the storefront estimate is the second reader of it, and a
+divergence between the two implementations shows up as a customer seeing one
+price and being charged another.
 
 #### M11.1a — One measure function, shared by pricing and display
 
@@ -3950,9 +7600,37 @@ Therefore:
 - `PRICING-SPEC.md` defines **one** normative `measure(text)` function, and states whether
   whitespace counts. **Recommendation: it does not** — the merchant said "per character", and
   the counter is what the customer believes.
+
+  ⚠️ **Contested by Stage 2's analysis (2026-08-31), on this reasoning's own
+  terms.** "The counter is what the customer believes" argues for **one rule** —
+  this milestone's actual point — not for excluding whitespace. The
+  `optionia-app` bug was two rules disagreeing; either rule, applied to both the
+  price and the counter, fixes it.
+
+  It is also ambiguous. "Whitespace does not count" reads two ways, and they
+  disagree on ordinary input: `"John Smith"` is **9** if all whitespace is
+  stripped and **10** if only the ends are trimmed. For engraving the space
+  between the names **is cut into the material**, so stripping it charges for less
+  than the machine produces.
+
+  Stage 2 recommends the other answer — **trim the ends, then count graphemes**,
+  so `"AB CD"` is 5 — and flags it as a product decision rather than settling it
+  inside a function. Both directions costed in
+  [M11.0d](#m110d--stage-2-one-measure-function-and-the-two-decisions-inside-it).
 - The **same** function backs `per_char` pricing, the character counter, and `min_length` /
   `max_length` validation, in both languages. `strlen` is not it (it is also byte-length, which
   is wrong for multi-byte text — use a grapheme- or code-point-aware count).
+
+  Verified 2026-08-31: `Intl.Segmenter` matches PHP's `grapheme_strlen` on **12 of
+  12** cases including combining marks, ZWJ families and flags, and `[...spread]`
+  matches `mb_strlen` on the same twelve. Both pairings are implementable; the
+  divergence between the *families* is what matters — `👨‍👩‍👧` counts 18, 5 or
+  **1** depending on the choice, and one is what a customer sees and a machine
+  cuts.
+
+  ⚠️ `grapheme_strlen` needs **ext-intl**, which the plugin neither declares nor
+  guards for. On a host without it that is a fatal error on a pricing path — the
+  failure this plan's plugin rules exist to prevent.
 - [M11.4](#m114--cross-language-fixture-suite) carries a fixture asserting **the measure used
   for pricing equals the measure used for limits**, including a string with inner spaces, a
   multi-byte string, and an emoji.
@@ -3972,6 +7650,33 @@ Same function in the cloud, for preview ([Phase 21](#phase-21--live-preview)) an
 validation. Cloud is authoritative for *authoring*; PHP is authoritative for
 *transactions*.
 
+⚠️ **Not a mirror, and deliberately smaller — decided 2026-08-31.** PHP has a
+full `Support\Money`: integer minor units, scale checking, and a percentage that
+rounds half up away from zero. TypeScript had only `money.transformer.ts`, a
+TypeORM value transformer with no arithmetic.
+
+The cloud gets **plain functions over integer minor units**, not a `Money` class,
+for a reason that is structural rather than stylistic: `Money` carries a
+`decimals` field it reads from **WooCommerce**, and the cloud has no WooCommerce.
+All nineteen fields the plugin sends over connect and heartbeat were checked and
+none carries a currency or a decimal count. A TypeScript `Money` would have to
+hardcode 2 — wrong for JPY and KWD — or expose a field nothing can populate.
+
+Minor units need no scale to add; scale matters only at display, which is the
+storefront's and already solved by `wp_localize_script`. Option prices carry no
+currency anywhere in the schema either, so the multi-currency mixing
+`assert_same_scale()` guards against cannot arise here.
+
+Full reasoning in [M11.0f](#m110f--stage-4-why-the-cloud-gets-functions-not-a-money-class),
+recorded because "same function in the cloud" is exactly the phrase that invites
+someone to add the class back.
+
+So this milestone builds the money type first and the evaluator second, and the
+rounding mode it implements is the one PHP already uses — or the spec changes both
+together. A percentage rounding half up in one language and half even in the other
+is a divergence [M11.4](#m114--cross-language-fixture-suite) is designed to catch
+at exactly the boundaries it names (`0.005`, `0.015`).
+
 ### M11.4 — Cross-language fixture suite
 
 **The mechanism that keeps two implementations honest.** A shared JSON fixture file —
@@ -3982,7 +7687,40 @@ Must cover: each pricing type alone; combinations; zero and negative deltas; rou
 boundaries (`0.005`, `0.015`); large quantities; empty selections; percentage-of-percentage;
 currencies with 0 decimals (JPY) and 3 decimals (KWD).
 
+⚠️ **The rounding boundaries must include negative ones**, and every example above
+reads as positive. Stage 3 measured the reason: PHP rounds half up **away from
+zero** while JavaScript's `Math.round` rounds **toward positive infinity**, so a
+5% discount on £0.30 is −2 minor units in PHP and −1 in JS. Six of six negative
+boundary cases diverge. A fixture that only tests `+0.005` and `+0.015` agrees in
+both languages and proves nothing about the case that actually differs.
+
 **Acceptance:** identical fixtures, identical results, both languages, enforced in CI.
+
+🔴 **This cannot work as written, and the reason is structural.** There are three
+separate git repositories and CI checks out **one at a time**, so neither suite
+can see a file living in the other. A fixture committed to both is two files that
+drift — exactly what this mechanism exists to prevent.
+
+The project has already paid for that shape: the Phase 9 Stage 1a defect was two
+internally consistent halves that disagreed, with no shared check, and both suites
+green throughout.
+
+**So a distribution mechanism is decided before either evaluator is built** —
+retrofitting it afterwards means rewriting both implementations, which is why
+[M11.0b](#m110b--execution-order) puts it at Stage 1 rather than here.
+
+✅ **Answered 2026-08-31: vendored, with a gate in each repository asserting the
+fixture's hash *and* its declared case count.** A package would need one per
+language versioned in lockstep, and generation can only run locally because CI
+checks out a single repository — both defer detection to a step someone must
+remember. A gate fails in the repository where the change was made, which is where
+the person who can fix it is standing. Full reasoning, and the two rejected
+options, in [M11.0c](#m110c--stage-1-how-one-fixture-reaches-two-repositories).
+
+The count matters as much as the hash: identical bytes and a runner looping fewer
+cases than the file declares passes every checksum ever written, which is the
+"inspects nothing" failure this repository has already found in four of its own
+gates.
 
 ### M11.5 — Server-side enforcement at add-to-cart
 
@@ -3991,23 +7729,263 @@ or value keys; reject options not applicable to this product; enforce required; 
 validation rules; recompute price from cached config, ignoring anything price-like in the
 request.
 
-**This filter has two call sites with different signatures** — verified in WC 11.0.1
-`includes/class-wc-form-handler.php`:
+**This filter has FIVE call sites with three different arities** — every
+`apply_filters( 'woocommerce_add_to_cart_validation', ... )` in WC 11.0.1, found
+by grepping the whole plugin rather than one file:
 
 ```php
-apply_filters( 'woocommerce_add_to_cart_validation', true, $product_id, $quantity ); // :981
-apply_filters( 'woocommerce_add_to_cart_validation', true, $item, $quantity );       // :1013
+// includes/class-wc-form-handler.php
+apply_filters( ..., true, $product_id, $quantity );                                    // :981   simple
+apply_filters( ..., true, $item,       $quantity );                                    // :1013  order-again; $item is an ARRAY
+apply_filters( ..., true, $product_id, $quantity, $variation_id, $variations );        // :1063  variable
+
+// includes/class-wc-cart-session.php -- populate_cart_from_order(), the REORDER path
+apply_filters( ..., true, $product_id, $quantity, $variation_id, $variations, $cart_item_data ); // :615  SIX arguments
+
+// includes/class-wc-ajax.php -- WC_AJAX::add_to_cart(), the SHOP-LOOP button
+apply_filters( ..., true, $product_id, $quantity );                                    // :520   AJAX
 ```
 
-The second passes an **array**, not a product id. A callback assuming an integer will
-misbehave on that path — which is the one used by order-again/reorder flows. **Type-check
-the second argument**; never assume it is an int.
+⚠️ **This milestone said "three call sites" until 2026-08-31, and the two it
+missed were the two that mattered most.** The count is stated in full above
+rather than corrected further down, because a reader who stops at the first bold
+claim must not get the wrong number — that error is what nearly shipped a
+security boundary with two holes in it. The history is kept below, because *how*
+it was wrong is the useful part.
+
+**:1013 passes an array, not a product id** — the order-again path. A callback
+assuming an integer misbehaves there, so **type-check the second argument** and
+never assume it is an int.
+
+⚠️ **:1063 was missed until 2026-08-31.** It is the **variable-product** path,
+which is Phase 10's primary target segment — apparel with size and colour
+variants *plus* customization. A callback registered with `accepted_args = 3`
+receives nothing about `$variation_id` or `$variations` and cannot validate a
+selection against the variation it was made on.
+
+⚠️⚠️ **:615 and :520 were missed until Stage 6 built this.** The earlier revision
+looked only in `class-wc-form-handler.php`, which is why it found three.
+
+✅ **GAP 3 (CLOSED — Stage 0, 2026-09-01) — there is a SIXTH call site, in the Store API.** Found 2026-09-01
+during Phase 12 analysis:
+
+```php
+// src/StoreApi/Utilities/CartController.php:335 -- block cart / block checkout
+apply_filters( 'woocommerce_add_to_cart_validation', true, $product_id, $quantity, $variation_id, $variation, $cart_item_data );   // SIX arguments
+```
+
+Stage 6 and Stage 7 both grepped `includes/` and stopped there. The Store API
+lives in `src/`, so every audit that "exhaustively" enumerated the call sites had
+in fact enumerated one directory. **This is the third time the count has been
+wrong** — two, then three, then five, then six — and each correction came from
+searching one directory further, never from a new insight.
+
+*Functionally, this site is already covered.* The registration is at
+`max( CALL_SITES ) = 6`, and WordPress passes every argument a site supplies, so
+the block cart has been validated since Stage 6 — by luck of the arity, not by
+design. What is wrong is the **record**: `CALL_SITES` lists five and
+`bin/check-architecture.sh` asserts exactly five, so the gate currently certifies
+a number that is not true.
+
+Two things follow, and the second matters more than the first:
+
+1. Add `store_api_cart` => 6 to `CALL_SITES` and raise the gate's floor to six.
+2. **The gate should stop asserting a hand-maintained count.** A floor that a
+   human keeps in step with WooCommerce is a floor that goes stale the next time
+   WooCommerce adds a surface.
+
+✅ **Resolved in Stage 0, 2026-09-01 — and the second item resolved differently
+than proposed.**
+
+Deriving the count by grepping WooCommerce is **not possible**: CI is a bare
+`actions/checkout`, and `composer.json` requires `php`, `ext-intl`,
+`ext-mbstring` plus dev tooling — no WordPress, no WooCommerce. A gate cannot
+grep a plugin that is not on disk. That is a fact about this project's CI, not a
+gap to close later.
+
+So the static floor stays, understood for what it is — a guard against the record
+being *reduced*, never evidence that six is right, because it reads our own map.
+What covers the real risk is a **runtime** detector, which is strictly better
+than anything static could be:
+
+- `ARITY_HEADROOM = 2` registers the validator *above* the widest known site.
+  Verified free: `WP_Hook` passes every available argument when
+  `accepted_args >= $num_args` and pads nothing, so a three-argument site still
+  delivers three. Measured across sites supplying 2, 4, 5 and 7 arguments.
+- `WP_Hook` **caps** delivery at `accepted_args`, so registering *at* the maximum
+  would make a seventh argument invisible by construction. The headroom is the
+  whole mechanism, and the gate asserts it is greater than zero — lowering it is
+  a failure, not a tidy-up.
+- `validate()` calls `func_num_args()` and **warns** when a site supplies more
+  than any recorded one. Warn, not refuse: an unrecognised argument is not an
+  attack, and failing a customer's add-to-cart over stale documentation of ours
+  would be the wrong trade.
+
+Seven mutations proved it: deleting the Store API row, removing the headroom,
+lowering an arity, regressing to a per-site loop, refusing instead of warning,
+dropping the headroom in `registered_arity()`, and removing the map entry — all
+caught.
+
+**Stage 0's own audit found two more, both fixed 2026-09-01:**
+
+- **The gate matched a comment.** Setting `ARITY_HEADROOM = 0` while leaving
+  `// ARITY_HEADROOM = 2 would go here.` above it *passed*, because the pattern
+  found the comment. Fourth time this project has shipped a gate that reads
+  documentation instead of code — after `check-secrets`/`hash_equals`, the
+  architecture gate/`update_option`, and the float rule. Comment lines are now
+  stripped before matching, here as in the others.
+- **The gate checked that the constant existed, not that it was used.**
+  `registered_arity()` returning a literal `6` left the constant in place while
+  ignoring it, and the gate still reported "+2 headroom" — describing a property
+  it had not verified. It now asserts the derivation itself.
+- **The Store API site was recorded but never driven.** Sites 1–5 each had their
+  own test section; site 6 was asserted to exist in a map and nothing exercised
+  it — against M11.5's own rule that each site gets its own test rather than one
+  standing in for the others. Four tests added, and the path is genuinely
+  distinct rather than a relabelled site 4: `cart_item_data` is declared with a
+  default of `[]` (`src/StoreApi/Routes/V1/CartAddItem.php:122`), so it exercises
+  `AddToCartRequest`'s "an array with no Optionia key" branch. Mutation-proven:
+  treating any array as authoritative, or dropping the `$_POST` fallback, both
+  fail these tests and nothing else.
+
+This also settles a Phase 10 loose end: [M10.4](#m104--block-theme--store-api-integration)
+concluded no Store API work was needed for *rendering*, and that stands. But
+**validation** does reach the Store API, and [M12.4](#m124--checkout-integrity)
+depends on it — so the block checkout is covered, and now knowingly rather than
+accidentally.
+
+**The reorder site passes a sixth argument.** Registering with `accepted_args = 5`
+— which this milestone previously instructed — silently discards
+`$cart_item_data`, and on that path `$cart_item_data` is the *only* place the
+selection exists: `populate_cart_from_order()` builds it from order item meta via
+`woocommerce_order_again_cart_item_data` and never populates `$_POST`. So a
+`$_POST`-only validator does not merely fail to validate reorder, it **blocks
+reorder entirely** — the Phase 4 finding recorded against
+[M12.1](#m121--cart-item-data-model), reaching this milestone first.
+
+**The AJAX site is a structural bypass, and registering the filter does not fix
+it.** `WC_AJAX::add_to_cart()` reads only `$_POST['product_id']` and `quantity`,
+then calls `WC()->cart->add_to_cart( $product_id, $quantity, $variation_id,
+$variation )` with **no `cart_item_data` argument at all**. `WC_Product_Simple`
+declares `supports[] = 'ajax_add_to_cart'`, and Phase 10 renders options on
+simple products — so a shop-archive button adds an optioned product with zero
+selections attached and nothing for a validator to inspect. The correct response
+on this path is to **refuse** when the product has option sets, directing the
+customer to the product page. A validator that tries to "validate" here would be
+approving an empty selection.
+
+This is the security boundary for [AC4](#ac4--price-is-server-authoritative-always).
+A missed call site here is not an omission in coverage, it is a path where nothing
+checks — so the callback is registered at **all five** sites with each site's own
+`accepted_args` (3/3/5/**6**/3), and each site is exercised by its own test rather
+than one standing in for the others.
+
+**One registration at the maximum arity is the correct shape — corrected during
+Stage 6 build, having first been built the other way.** The obvious reading is
+that each site needs its own registration at its own arity. It is wrong, and
+measurably so: `accepted_args` is a property of the **registration**, not of the
+call site, and WordPress runs *every* registration at *every* site. Five
+registrations therefore ran the callback five times per add-to-cart, and the
+three made at three arguments never received `$cart_item_data` — so a valid
+reorder was refused by the three invocations that could not see its selection.
+
+`WP_Hook::apply_filters()` settles it (`wp-includes/class-wp-hook.php`):
+
+```php
+} elseif ( $the_['accepted_args'] >= $num_args ) {
+    $value = call_user_func_array( $the_['function'], $args );   // no padding
+```
+
+A registration at six therefore receives three arguments from a three-argument
+site and six from the reorder site — PHP's parameter defaults fill the rest. So:
+**one** registration, at `max(CALL_SITES)`, with every parameter after `$passed`
+defaulted. `bin/check-architecture.sh` asserts all three of those properties, and
+detects a looped registration specifically, because the regression that actually
+happened wrapped one `add_filter` line in a `foreach` and a line count still read
+one.
 
 ### M11.6 — Cart total application
 
 `woocommerce_before_calculate_totals`, idempotent under repeated firing, correct under
 quantity change and session restore. Verified against tax-inclusive and tax-exclusive
 stores, and with a coupon applied.
+
+✅ **Built 2026-08-31 (Stage 7b), including the minimal write it depends on.**
+
+*The blocker, and why it turned out not to be one.* This milestone reads a cart
+item's selections and applies the price, and nothing wrote them: no Optionia code
+hooked `woocommerce_add_cart_item_data`, WooCommerce's only collection point for
+`cart_item_data` (WC 11.0.1, `includes/class-wc-cart.php:1294`). The first
+analysis concluded that the write belonged to
+[M12.1](#m121--cart-item-data-model) in Phase 12 and deferred this milestone.
+
+That was wrong on two counts, and re-examining it is what unblocked the phase:
+
+1. **This milestone's own words require persistence.** "Correct under **session
+   restore**" means the selection must survive a page load, which means it must
+   be in `cart_item_data`. A milestone cannot be satisfied without the thing it
+   is defined in terms of, so deferring the write deferred this milestone
+   indefinitely rather than sequencing it.
+2. **A Phase 11 write is not a second writer.** The concern was duplicate writers
+   — the divergence shape behind the Stage 1a envelope defect and M11.4's
+   two-fixtures problem. But M12.1 adds **sibling** keys under
+   `Keys::CART_ITEM_KEY` (resolved labels, per-option deltas, `config_version`, a
+   selection hash) and extends `Integration\CartItemData`;
+   `Keys::CART_ITEM_SELECTIONS` keeps one owner throughout. One writer, later
+   extended, *is* the discipline the concern was protecting — not a violation of
+   it.
+
+So Stage 7b built `Integration\CartItemData` (the write: selection keys only,
+`ksort`ed, nothing volatile, one level deep) and `Integration\CartTotals` (the
+application). M12.1 remains the owner of the full cart item **model** — labels,
+snapshots, deltas, `config_version`, hash — and inherits the writer rather than
+competing with it.
+
+#### What Stage 7a established about this milestone, so 7b need not rediscover it
+
+**`set_price()` takes a PER-UNIT price, not a line total.** `WC_Cart_Totals`
+multiplies by quantity itself (WC 11.0.1,
+`includes/class-wc-cart-totals.php:233`):
+
+```php
+$item->price              = wc_add_number_precision_deep( (float) $cart_item['data']->get_price() * (float) $cart_item['quantity'] );
+$item->price_includes_tax = wc_prices_include_tax();
+```
+
+Setting a line total there would multiply the option deltas by quantity **twice**
+— a quantity-3 line charging three times the option price on top of an
+already-multiplied base. This is the silent-overcharge bug of this milestone, and
+`bin/check-architecture.sh` gates against it.
+
+**Tax is WooCommerce's job, not Optionia's.** `price_includes_tax` comes from the
+store setting, so `set_price()` is given the store's own convention and
+inclusive/exclusive correctness follows. This milestone's "verified against
+tax-inclusive and tax-exclusive stores" is therefore a *test* obligation, not a
+branch in the code — and a code branch would be a bug, since it would tax twice.
+
+**Per-unit does not contradict "clamp the line total".** Quantity is a positive
+multiplier, so `clamp(x) × qty == clamp(x × qty)`; verified across five cases
+with zero divergence. §3 of `PRICING-SPEC.md` stands as written; it just has to
+say *per unit* where it says *line total*, which Stage 7a added.
+
+**Two hazards checked and found safe** — recorded because both are expensive to
+discover late:
+
+- **`data_hash` does not cover price.** WooCommerce silently removes cart items
+  whose product data changed (`class-wc-cart-session.php:235`), but
+  `wc_get_cart_item_data_hash()` hashes only `type` and `attributes`
+  (`wc-cart-functions.php:609`). `set_price()` cannot trigger a spurious removal.
+- **Each cart item holds its own product instance.** `wc_get_product()` ends at
+  `new $classname( $product_id )`, fresh per call, so `set_price()` on one line
+  cannot leak to another line of the same product with different options.
+- Custom `cart_item_data` keys survive the session round-trip with no work:
+  `WC_Cart_Session::get_cart_from_session()` does
+  `array_merge( $values, array( 'data' => $product ) )`.
+
+**Idempotence is a real requirement, not defensive coding.** `calculate_totals()`
+has **nine** call sites in WC 11.0.1 core, and the product object is rebuilt fresh
+on every page load — so the price must be reapplied each request *and* must not
+compound when the hook fires repeatedly within one.
 
 ### M11.7 — Adversarial test suite
 
@@ -4035,13 +8013,48 @@ a wrong price.
 ### Phase 11 exit criteria
 
 ```text
-[ ] Pricing spec written and normative
-[ ] PHP and TS evaluators agree on a shared fixture suite in CI
-[ ] Money handled as integer minor units end-to-end
-[ ] Rounding correct at boundaries; verified for 0/2/3-decimal currencies
-[ ] Correct with tax inclusive and exclusive, and with coupons
-[ ] Full adversarial suite passing
+[x] Pricing spec written and normative
+[x] PHP and TS evaluators agree on a shared fixture suite in CI
+[x] The fixture is one file both suites read, not two that can drift
+[x] Money handled as integer minor units end-to-end
+[x] Rounding correct at boundaries; verified for 0/2/3-decimal currencies
+[x] A line total never goes below zero, whatever deltas are configured
+[x] `measure()` used for pricing equals the one used for limits, both languages
+[x] Correct with tax inclusive and exclusive, and with coupons
+[x] Full adversarial suite passing
 ```
+
+**Evidence, ticked 2026-08-31 at the end of Stage 7a.** Recorded because a bare
+tick is a claim, and this project's habit is to make claims checkable:
+
+| Criterion | Evidence |
+|---|---|
+| Spec normative | `PRICING-SPEC.md`, SHA-pinned in **both** repositories' gates; §8 of `check-shared-fixtures.sh` fails if the spec states a number no executed case covers |
+| Evaluators agree | 24 shared cases (16 pricing + 2 generated + 6 bound) produce **byte-identical stdout** from PHP and TypeScript; diffed as output, not as two green suites |
+| One file, not two | `bin/check-fixture-parity.sh` compares all 3 shared files byte-for-byte, the pinned hashes, and the two gate scripts themselves |
+| Rounding at boundaries | 8 rounding cases including 5 negative ties — the half-up-**away-from-zero** divergence between PHP and `Math.round`; JPY (0 decimals) and KWD (3) both covered |
+| Never below zero | `clampToZero` / `clamp_to_zero`, applied once at the end; mutation-proven in both languages (clamp removed, clamp moved into the loop, sign flipped — all killed) |
+| `measure()` shared | `grapheme_strlen()` ≡ `Intl.Segmenter`, 26/26 agreement; one function feeds pricing, the counter and length validation |
+| Adversarial suite | `AdversarialAddToCartTest` — 40 tests: 9 injected price-field names asserted **on the total**, tampered/foreign/other-tenant keys, wrong shapes, hostile bytes, 8 hostile quantities, direct `?add-to-cart=` GET |
+
+The last two were closed by Stage 7b, once re-analysis showed
+[M11.6](#m116--cart-total-application) was not actually blocked:
+
+| Criterion | Evidence |
+|---|---|
+| Minor units end-to-end | Integers from the shared fixture through `SelectionResolver` to `CartTotals`; conversion to a decimal string happens once, at `set_price()`, via `Money::to_decimal_string()` |
+| Tax inclusive/exclusive | `CartTotalsTest` prices the same line with `wc_prices_include_tax()` false and true and asserts the **same** figure is handed over — a plugin that branched on tax would tax twice |
+| Coupons | Asserted on the discountable subtotal: a coupon sees the option-**inclusive** line (170.00, not the bare 160.00), which is the part Optionia owns; the discount arithmetic itself is WooCommerce's, applied after this hook |
+
+**Phase 11 is complete.** All nine criteria met, with 523 plugin tests across 10
+gates and 610 backend tests.
+
+*End-to-end, verified as one flow rather than three green suites:* a request
+carrying `optionia[opt-a]=front` **plus** injected `price=1` and `delta=-99999`
+passes validation, attaches `{"opt-a":"front"}`, prices at **85.00 per unit** on a
+80.00 product, totals **255.00** at quantity 3, holds that figure across three
+firings of `woocommerce_before_calculate_totals`, and the injected fields change
+nothing.
 
 ---
 
@@ -4050,10 +8063,214 @@ a wrong price.
 **Depends on:** Phase 11
 **Blocks:** Gate 1
 
+### Execution plan
+
+**Written 2026-09-01, before any code**, from an analysis that measured five gaps
+against WC 11.0.1 and against Phase 11's shipped code rather than reading this
+plan for internal consistency. Each gap is recorded in the milestone that owns
+it; this table decides the order, and the order is driven by them.
+
+| Stage | Work | Why here |
+|---|---|---|
+| **0** ✅ | **Correct the call-site record and stop hand-maintaining the count** ([GAP 3](#m115--server-side-enforcement-at-add-to-cart)) — **done 2026-09-01** | Smallest change in the phase and everything downstream leans on it: [M12.4](#m124--checkout-integrity) needs the block path *knowingly* covered, not accidentally. The count has been wrong four times — 2 → 3 → 5 → 6 — always by searching one directory less than WooCommerce has, so the fix is to derive it rather than type it again |
+| **1** ✅ | **Decide the cart-key strategy** ([GAP 1](#m121--cart-item-data-model)) | **Decided 2026-09-01: filter `woocommerce_cart_id`.** Option B cannot freeze anything — there is no per-line store outside `cart_item_data`. Four findings came out of deciding it, including a policy case M12.4's table was missing and a security question Stage 2 must answer |
+| **2** ✅ | **M12.1 — the data model, the cart-key filter, and the delta's integrity** — **done 2026-09-01** | The writer exists; this adds sibling keys under `Keys::CART_ITEM_KEY`. **Not a second writer** — that constraint is why Stage 7b built the first one. Stage 1 added three obligations, below |
+| **3** ✅ | **M12.4's freeze, together with M12.1** ([GAP 2](#m124--checkout-integrity)) — **done 2026-09-01**, folded into Stage 2 because neither works alone | Neither works alone: the freeze needs somewhere to store a delta, and the stored delta is pointless if nothing reads it. Both touch the pricing path Phase 11 mutation-proved, so idempotence and per-unit must be **re-verified**, not assumed to survive |
+| **4** ✅ | **M12.3 — session persistence** — **done 2026-09-01** | Planned as "mostly verification", and that assessment was written before Stage 3. The payload is now four fields including a **signature**, so surviving structurally is no longer the same as surviving usefully. Three of the five scenarios were untested and the harness modelled no session at all |
+| **5** ✅ | **M12.4 proper — checkout re-validation, both worlds** ([GAP 4](#m124--checkout-integrity)) — **done 2026-09-01** | The AC4 boundary at checkout. `woocommerce_check_cart_items` covers classic and block, but errors must be **notices, not exceptions**, and core's own validators are unhooked first on the Store API path |
+| **6** ✅ | **M12.5 — order persistence** ([GAP 5](#m124--checkout-integrity)) — **done 2026-09-01** | One hook covers both worlds: the Store API delegates to `wc()->checkout->create_order_line_items()`. Needs the two-tier meta-key scheme M12.6b specifies, and HPOS on **and** off |
+| **7** ✅ | **M12.2 — cart display**, then **M12.6 / M12.6b** — order display and fulfilment output — **done 2026-09-01** | Display last on purpose: it renders whatever the model holds, so building it earlier means rebuilding it after Stages 2–3. M12.6b is what makes the MVP's "fulfil it from the order screen" true |
+| **8** ✅ | **M12.8 — refunds, edits, reorder** — **done 2026-09-01** | Reorder's read side was built in Phase 11 Stage 6 and nothing wrote to it: order meta is a JSON string, the cart wants an array. One `json_decode` closed a defect open since Phase 4. Refunds: decided *not* to build — `wc_create_refund()` has no per-option concept. M12.7 moved to Stage 9, which is where it turned out to belong |
+| **9** ✅ | **M12.7 — order reporting**, both repositories — **done 2026-09-01** | Split from Stage 8 once the endpoint was found missing. Plugin queues at checkout and drains on cron; backend gains `POST /v1/store/orders`. The bug that mattered was visible only by posting a real payload at the live endpoint — `value_key: ""` is a 400, which the reporter treats as permanent, so **every engraving order would have been dropped in silence** |
+| **10** ✅ | **The audit's findings** — **done 2026-09-01** | Not planned. Mutating Phase 12's guarantees found a secret verifier invisible to the gate meant to protect it (`wp_hash`, not `hash_hmac`), plus an untested fatal-guard, an unvalidated currency case, and documentation drift. The gate's own comment had claimed this could not happen |
+
+**What Stage 1 handed to Stage 2.** The decision is made; these are the pieces
+it obliges, in the order they should be built.
+
+1. **A shared pruning helper first.** Two callers need "this payload, with
+   Optionia's audit fields removed": the cart-key filter, so identical selections
+   merge across a publish, and the reorder rebuild
+   ([M12.8](#m128--refunds-edits-and-edge-cases)), so a replayed order reprices
+   instead of inheriting old prices. Different reasons, same operation — one
+   helper, or they drift.
+
+   ✏️ **The second caller never materialised, and this text is left as written so
+   the correction is visible.** Stage 8 established that
+   `woocommerce_order_again_cart_item_data` starts from an **empty array**, so a
+   reorder has nothing to strip — `Integration\OrderAgain` *constructs* the
+   payload instead. `prune()` therefore has one caller, not two. The helper stays
+   shared regardless: `AUDIT_KEYS` is the single list the signature, the cart key
+   and the reorder payload all depend on, and mutation shows it load-bearing.
+   Corrected in the M12.8 note in Stage 8; **this passage and the class docblock
+   still said "two callers" until the Phase 12 final audit caught them**, which is
+   what documentation drift looks like when only one of three places is fixed.
+
+2. **The `woocommerce_cart_id` filter, written surgically.** No Optionia key means
+   return `$cart_id` untouched. Otherwise prune, preserve every other plugin's
+   data, and recompute core's algorithm. Plus the self-check from
+   [FINDING 1c](#m121--cart-item-data-model): for an Optionia-free payload our
+   computation must equal the unfiltered id, and divergence — a WooCommerce
+   release that changed the hash — must be reported rather than silently adopted.
+
+3. **The delta's integrity mechanism** ([FINDING 1d](#m121--cart-item-data-model)).
+
+   ✅ **Decided and built 2026-09-01: sign the frozen payload with `wp_hash()`.**
+
+   *Rejected — bound the stored delta against current configuration.* The obvious
+   rule, `min( frozen, current )`, **is** the forgery it is meant to stop: a
+   forged lower delta simply wins. And there is nothing to check against —
+   `Config\Repository::store()` overwrites, so exactly one configuration version
+   exists at any moment.
+
+   *Rejected — sign with `Keys::OPTION_STORE_TOKEN`.* It is the cloud credential,
+   so reusing it widens its blast radius; it is **deleted on disconnect**, which
+   would break every cart line's signature at once on a store that can still be
+   selling; and a store can be unconnected and still have carts.
+
+   *Chosen — `wp_hash()` over `selections + deltas + config_version`.*
+   WordPress's own keyed hash over `wp_salt()`: always present, unrelated to the
+   connection, rotated only when a site owner rotates salts. Verified on six
+   cases — genuine verifies; forged delta, forged version, swapped selection and
+   missing signature all rejected; key order stable.
+
+   **On failure the line prices from current configuration, rather than being
+   refused.** Refusing would empty every cart in the store the moment an owner
+   rotated their salts, which is a routine security action. Falling back gains a
+   tamperer nothing — the best they achieve is today's price, which they could
+   have had by adding the item today — and degrades exactly to the behaviour
+   Phase 11 shipped, a known-safe state rather than an unknown one.
+
+4. **Then the model itself**, and only then: `config_version`, resolved labels,
+   per-option deltas, and whatever the integrity decision requires.
+
+✅ **Stages 2 and 3 built 2026-09-01, and GAP 2 is closed.** Measured before and
+after, with the publish performed inside the test:
+
+```text
+quoted at v7   100.00
+after publish  100.00      (was 179.00)
+```
+
+**Phase 11's mutation-proven guarantees were re-verified against the new branch**,
+not assumed to survive: per-unit rather than per-line (85.00 x 3 = 255.00),
+idempotent across nine firings, the zero clamp, and AC4 against injected
+`price` / `delta` / `amount_minor`. All four hold on the frozen path.
+
+*Stage 2's audit found four things, all fixed:*
+
+- **The freeze was written but never read.** The data model shipped first and
+  changed no customer-visible behaviour until `CartTotals` consumed it. Worth
+  naming: for a while this phase had a new data structure and the original bug.
+- **The signature is deliberately not bound to the product**, and the reasoning
+  is now in the docblock rather than absent. It is not exploitable — option ids
+  are the index key in `SelectionResolver::index_options()`, so two products
+  sharing an id share the same option at the same price — and binding it would
+  invalidate every cart line whenever an option set was reassigned.
+- **The frozen payload had no adversarial coverage.** Nine forgery cases added to
+  `AdversarialAddToCartTest`, which is where someone looks to ask what tampering
+  has been considered, plus a positive case so they cannot all pass by nothing
+  ever being honoured.
+- **Session payload growth was unmeasured.** 1.8x for a fifty-option line, ~55 KB
+  for an extreme twenty-line cart. Recorded in the code so a future "why is
+  `wc_sessions` large" question starts from a number.
+
+*Five mutations on the freeze: three killed, one real gap found, one equivalent.*
+The gap was a signed payload whose selections and deltas disagree — `frozen_deltas()`
+cannot catch it, because a signature proves who wrote a payload, not that its
+parts agree, so `CartTotals` distrusts the whole payload rather than pricing part
+of a line from a quote and part from today. The equivalent mutant (`??` versus an
+explicit null check) is documented in place so it is not "fixed" later.
+
+**Verification obligations Stage 2 inherits.** The freeze changes a pricing path
+Phase 11 mutation-proved, so its existing guarantees have to be **re-proven**, not
+assumed: idempotence across nine firings, per-unit rather than per-line, the
+zero-clamp, and AC4 against injected fields. "The tests still pass" is not
+evidence — they were written against the pre-freeze shape.
+
+**Three rules that hold across every stage:**
+
+1. **Assert on the number, with the event performed.** GAP 1 and GAP 2 are both
+   invisible to any test that does not actually republish mid-test — merging
+   works perfectly until a merchant publishes, and the price is stable until
+   something changes it. A test that skips the publish passes either way.
+2. **One writer.** `Integration\CartItemData` owns `Keys::CART_ITEM_KEY`. Every
+   stage that needs to persist something extends it. This is the discipline that
+   the "M11.6 is blocked on M12.1" call got backwards, and it is worth not
+   getting backwards twice.
+3. **Mutation-prove each guard, and re-verify what was already proven.** Stages 2
+   and 3 modify a pricing path with existing mutation-proven guarantees;
+   "the tests still pass" is not evidence that those guarantees survived, because
+   the tests were written against the old shape.
+
+**What is deliberately *not* in this phase:** the four advanced price types
+(Phase 16), the real builder UI (Phase 20), and analytics consumption of the
+order events (Phase 25). [M12.7](#m127--order-reporting-to-cloud) posts the facts;
+nothing here reads them back.
+
 ### M12.1 — Cart item data model
 
 Persist selection keys, resolved labels, per-option price deltas, the `config_version`
 used, and a selection hash. Labels are snapshotted so a rename does not rewrite history.
+
+⚠️ **The writer already exists — this milestone extends it, and must not
+replace it.** Corrected 2026-08-31 by Stage 7b.
+
+An earlier note here said this milestone owned the *only* write, and Phase 11
+Stage 7 deferred [M11.6](#m116--cart-total-application) on that basis. That was
+wrong: M11.6 requires the cart total to be correct under **session restore**,
+which is persistence by definition, so the milestone could not be satisfied
+without it. Phase 11 therefore built the minimal write —
+`Integration\CartItemData`, hooking `woocommerce_add_cart_item_data`
+(`WC_Cart::add_to_cart()`, WC 11.0.1 `includes/class-wc-cart.php:1294`) — and it
+attaches **selection keys only**.
+
+What this milestone adds, as *sibling* keys under `Keys::CART_ITEM_KEY`:
+
+- resolved labels, snapshotted so a rename does not rewrite history;
+- per-option price deltas;
+- the `config_version` in force when the line was created;
+- a selection hash.
+
+**Extend `Integration\CartItemData` rather than adding a second writer.**
+`Keys::CART_ITEM_SELECTIONS` has one owner and must keep it — a sibling key
+written from a different class is how two files come to disagree about the same
+array. `Keys::CART_ITEM_BASE_PRICE` is already a second sub-key written by
+`Integration\CartTotals`, for idempotence across the totals hook's several
+firings; it is per-request and deliberately **not** persisted, so a merchant's
+price change takes effect rather than being masked.
+
+Three constraints the existing writer already honours, and this milestone must
+preserve — all three come from `WC_Cart::generate_cart_id()` hashing the payload
+textually:
+
+1. **Sorted** (`ksort`), or the same selections in a different order make a
+   spurious duplicate cart line;
+2. **Nothing volatile** — a timestamp or nonce would break line merging entirely;
+3. **Flat**, since `http_build_query()` flattens nesting.
+
+**Reorder now round-trips.** Stage 6 built the read side —
+`WC_Cart_Session::populate_cart_from_order()` passes `cart_item_data` as a
+**sixth** filter argument, which `AddToCartRequest` reads — and Stage 7b built the
+write, so the payload is real rather than synthetic.
+
+**Reads the field-name convention Phase 10 Stage 4 sets.** Recorded here
+2026-08-31, from the other end. The renderer's markup decides what arrives in
+`$_POST`, and nothing had specified it — the Phase 4 probe used a bare
+`name="..."`, which is exactly the kind of accident that becomes a contract.
+Stage 4 settles it deliberately, because it must carry **set and option
+identity** and survive a variation change, both of which constrain the markup
+before it exists.
+
+Two consequences reach this milestone. The names must round-trip: whatever this
+reads from `$_POST` has to be re-renderable, since
+reorder restores a selection from **order item meta rather than `$_POST`** — the
+Phase 4 finding (§"Reorder", `docs/woocommerce-notes/prototype-findings.md`) that
+a `$_POST`-only validator blocks reorder entirely. No milestone in this phase
+names reorder explicitly, which is itself worth noticing: it is
+[M12.8](#m128--refunds-edits-and-edge-cases)'s to absorb, and the validator it
+constrains is [M12.4](#m124--checkout-integrity)'s. And they must not collide with WooCommerce's own fields:
+`variation_id`, `attribute_*`, `quantity` and `add-to-cart` are all in the same
+form.
 
 **WooCommerce already derives the cart item key from `cart_item_data`** — verified in
 `WC_Cart::generate_cart_id()` (WC 11.0.1, `includes/class-wc-cart.php`). Different
@@ -4106,9 +8323,148 @@ the **stored** $20. The captured version is what makes that possible and auditab
 line records what it was priced against, so a later dispute or refund can be reasoned
 about. See [M12.4](#m124--checkout-integrity) for the policy this enables.
 
-**Acceptance:** adding identical selections twice yields one line with quantity 2; adding
-different selections yields two lines; re-ordering the selection keys internally does **not**
-create a duplicate line.
+✅ **GAP 1 (CLOSED — Stage 2, 2026-09-01) — this milestone's field list and its own acceptance criterion
+contradict each other.** Found 2026-09-01 by measurement, before any code was
+written.
+
+`WC_Cart::generate_cart_id()` hashes the **whole** `cart_item_data` payload, so
+any field that changes when a merchant publishes splits what should be one cart
+line. Measured, same selection, differing only in the stored version:
+
+```text
+selections only      946bd5f2596c
++ config_version 7   b74fd65635db
++ config_version 8   9abc20ca2894   ← a different line
+```
+
+Of the five fields this milestone lists:
+
+| Field | Effect on the cart key |
+|---|---|
+| selection keys | **required** in the key — different selections must split |
+| resolved labels | harmless; derived from the selections, so it moves with them |
+| **per-option deltas** | **splits lines on any price publish** |
+| **`config_version`** | **splits lines on *any* publish at all** |
+| selection hash | redundant — WooCommerce already hashes the payload |
+
+Concretely: a customer adds "Luxury" on Monday, the merchant publishes an
+unrelated edit, the customer adds "Luxury" again — and gets **two lines of
+quantity 1**, directly contradicting the acceptance below.
+
+The existing "nothing volatile" constraint does not catch this, which is why it
+was missed: `config_version` is not volatile in the sense that warning means. It
+is stable for days at a time. It just is not stable across the one event this
+milestone exists to survive.
+
+**Two viable fixes, both verified present in WC 11.0.1:**
+
+- **A — filter the key.** `woocommerce_cart_id`
+  (`includes/class-wc-cart.php:1135`) runs *after*
+  `woocommerce_add_cart_item_data` (`:1294`), so a filter there sees the full
+  payload and can derive the key from the **selections alone**. Merge stays
+  correct and the audit fields ride along.
+- **B — move the audit fields to order time.** Attach them in
+  [M12.5](#m125--order-persistence) instead, where no key is derived from them.
+  Simpler, but it cannot hold `config_version`, which **must** be captured at
+  add-to-cart for GAP 2 below.
+
+✅ **Decided in Stage 1, 2026-09-01: Option A, and it is not a close call.**
+
+**Option B cannot work.** GAP 2 requires the *delta* frozen at add-to-cart, and
+there is nowhere else to put it — an object property dies with the request while
+the cart survives page loads; a session sidecar is a second per-line store, which
+is the exact shape this project keeps paying for; recomputing *is* the GAP 2 bug.
+Checked for an alternative: a cart item **is** `cart_item_data` merged with six
+reserved keys (`key`, `product_id`, `variation_id`, `variation`, `quantity`,
+`data`, `data_hash`). There is no sidecar. B only works if the freeze is
+abandoned, which contradicts [M12.4](#m124--checkout-integrity)'s policy table.
+
+So: **filter `woocommerce_cart_id`.** One filter covers every path — classic
+add-to-cart (`class-wc-cart.php:1297`), reorder (`class-wc-cart-session.php:624`
+and `:640`) and the Store API (`CartController.php:113`) all route through
+`generate_cart_id()`. Four findings came out of deciding it.
+
+**FINDING 1a — merging across a publish is a policy question, not a mechanism.**
+On a merge WooCommerce does only this (`class-wc-cart.php`):
+
+```php
+if ( $cart_item_key ) {
+    $new_quantity = $quantity + $this->cart_contents[ $cart_item_key ]['quantity'];
+    $this->set_quantity( $cart_item_key, $new_quantity, false );
+}
+```
+
+The **existing** line's `cart_item_data` is kept and the new add's version and
+delta are discarded. So: add Luxury Monday at £20, merchant raises it to £99,
+customer adds Luxury again Tuesday → one line, quantity 2, **both units at £20**.
+The customer bought the second unit after the price rose and was never told.
+
+That is defensible — it is one line at the price first quoted, and it is the
+same direction as the freeze itself — but it is a **third policy case** that
+M12.4's table does not cover, alongside "price changed" and "option deleted". It
+is recorded there rather than left to emerge in Stage 3.
+
+**FINDING 1b — the filter is global and must be surgical.**
+`woocommerce_cart_id` fires for **every** add-to-cart, every product, and it runs
+*after* `woocommerce_add_cart_item_data` (`:1294` then `:1297`) — so by then every
+plugin has contributed. A filter that rebuilt the key from Optionia's selections
+would destroy other plugins' keys, merging two distinct gift-wrap lines into one.
+
+The formulation that works, verified on three cases: prune only Optionia's
+**audit** sub-keys, keep `selections`, keep every other key untouched, then
+recompute core's algorithm.
+
+| Case | Required | Verified |
+|---|---|---|
+| v7 vs v9, same other-plugin data | merge | ✓ |
+| other-plugin data differs | split | ✓ |
+| no Optionia key at all | `$cart_id` returned untouched | ✓ |
+
+**FINDING 1c — it duplicates core's hash, and that needs a self-check.**
+The filter must recompute `md5( implode( '_', $id_parts ) )`. If WooCommerce ever
+changes that, our key diverges — and since we *return* ours, WooCommerce uses it.
+Bounded: not a crash, and keys stay internally consistent, but cart lines stored
+in a session before the upgrade stop matching, so a customer sees duplicate lines
+once after a WooCommerce update.
+
+It comes with a free detector, tested against a simulated algorithm change and
+correctly **detected**: for a payload carrying no Optionia key, our computation
+must equal the unfiltered `$cart_id`. That check belongs in the implementation,
+not only the tests — it is the difference between assuming core's algorithm and
+noticing when the assumption breaks.
+
+**FINDING 1d — a stored delta is the `base_price_minor` bug's shape, with a
+different answer.** Stage 7b found `base_price_minor` in `cart_item_data`
+forgeable — an 80.00 product priced at 5.01 — and fixed it by moving the value
+*out*. GAP 2 now requires putting a delta *in*. The two are not the same case:
+
+- `base_price_minor` was **derivable** from the product, so storing it bought
+  nothing and added an attack surface.
+- A frozen delta is **not derivable** — the old configuration is gone. Storage is
+  the only way to freeze, so the answer cannot be "do not store it".
+
+The threat model, checked rather than assumed:
+
+- **The browser cannot write `cart_item_data`.** `WC_AJAX::add_to_cart()` never
+  reads it; the form handler never populates it from `$_POST`; and the Store API
+  hardcodes `'cart_item_data' => []` (`src/StoreApi/Routes/V1/CartAddItem.php`),
+  so it is not a request parameter at all. WooCommerce sessions are server-side —
+  the client holds only a cookie — so stored values are not client-editable.
+- **Another plugin can**, through `woocommerce_add_cart_item_data`. That is the
+  same actor Stage 7b named, and its conclusion still applies: a price another
+  plugin can set is not server-authoritative.
+
+So the delta must be stored **and validated**, not stored and trusted. Range
+clamping alone is insufficient — a forged *lower* delta (−5000 on an 8000 base →
+3000) is exploitable and well inside the schema range. Stage 2 must decide the
+mechanism; a signature over `selections + delta + config_version` verifies a
+stored delta without needing the configuration that produced it, which is the
+property range checks cannot give.
+
+**Acceptance:** adding identical selections twice yields one line with quantity 2
+— **including across a configuration publish between the two adds**, which is the
+case that exposes GAP 1; adding different selections yields two lines;
+re-ordering the selection keys internally does **not** create a duplicate line.
 
 ### M12.2 — Cart display
 
@@ -4124,8 +8480,18 @@ classic and block cart display. **Verify rather than trust it** — the block pa
 `array()` while the template path receives populated `$item_data`, so a callback that appends
 without checking could behave differently on each.
 
-The *checkout* block is a separate question and may still need `ExtendSchema`
-([M10.4](#m104--block-theme--store-api-integration)).
+The *checkout* block is a separate question and may still need `ExtendSchema` —
+[M12.4](#m124--checkout-integrity)'s, not M10.4's.
+
+**This milestone now owns the block-cart work outright.** Recorded 2026-08-31,
+after Phase 10 measured its own premise and found it wrong: the classic render
+path already reaches a block theme's product page, so M10.4 needed no schema
+extension, and the plugin has no cart integration for one to carry. The
+`woocommerce_get_item_data` finding above — that one filter serves both cart
+worlds — is the substantive research on this question, and it lives here.
+
+The pointer between the two milestones used to run both ways, which is how a
+question ends up with no owner.
 
 ⚠️ **Three verified constraints on the block path** (WC 11.0.1,
 `src/StoreApi/Schemas/V1/CartItemSchema.php`):
@@ -4163,6 +8529,52 @@ block cart Store API   → 1 row    (array row SILENTLY DISCARDED)
 No error, no warning, no log entry. A developer testing only on a classic cart would ship
 this and never see it. Use `Support\Assert::scalar()` at this boundary.
 
+✅ **Built 2026-09-01 (Stage 7) as `Integration\CartDisplay`.** All three
+constraints above were verified verbatim in WC 11.0.1 before writing anything.
+Three findings came out of the analysis.
+
+1. **Hiding a row needs TWO keys, and this milestone named one.** The classic
+   template reads `hidden` (`wc-template-functions.php:4545`); the Store API reads
+   `__experimental_woocommerce_blocks_hidden` and only *derives* `hidden` from it
+   (`CartItemSchema.php:193`). Setting the experimental key alone leaves the row
+   **visible on classic** — the mirror image of the array-value bug, and equally
+   invisible to anyone testing one side. Both are written together in one method,
+   so a core rename stays a one-line change.
+
+2. 🔴 **The breakdown would have contradicted the line total.** `CartTotals`
+   prices from current configuration when the frozen signature does not verify, so
+   a display reading the stored deltas regardless would show `(+20.00)` beside a
+   line charging 99.00 — the cart disagreeing with itself on the customer's
+   screen. **Third occurrence of this seam**, after the order recording a stale
+   delta in Stage 6 and the pricing path itself in Stage 3.
+
+   Fixed as a class of defect rather than a third instance:
+   `CartItemPayload::trusted_deltas()` is now the single answer to "which deltas
+   may this line be priced *and described* with", and `CartTotals` and
+   `CartDisplay` both ask it. Verified: after a salt rotation the line charges
+   179.00 and the breakdown reads `Luxury (+99.00)` — 80.00 + 99.00.
+
+3. **M12.6 / M12.6b turned out to be mostly verification, not build.**
+   `wc_display_item_meta()` renders order item meta into order emails
+   (`templates/emails/email-order-items.php`, plain-text included) and the
+   customer's order page (`templates/order/order-details-item.php`), calling
+   `get_formatted_meta_data()` whose `$hideprefix` defaults to `_`. So Stage 6's
+   two-tier key naming already satisfied the admin screen, both email types, the
+   customer order page and core print output — the milestone's surfaces are
+   satisfied by *naming*, not by separate rendering code. That split is now
+   asserted rather than observed, because a machine key that lost its underscore
+   would print on a customer's invoice as a JSON blob.
+
+   Still genuinely open: third-party PDF-invoice plugins, and M12.6b's
+   "CSV export as usable columns, not a JSON blob in one cell" — our hidden keys
+   *are* JSON, and an export plugin dumping all meta would surface exactly what
+   that requirement forbids. Neither is testable in this harness.
+
+Six mutations killed, including replacing rather than appending rows (which would
+erase variation attributes on classic and nothing on blocks), dropping either
+hidden key, passing an array label through, and trusting stored deltas without
+verification.
+
 **Acceptance:** the same selection renders correctly in classic cart **and** block cart,
 including a multi-select option whose value is a joined string. Cart/checkout implementation
 is varied **independently of theme** — verified in M2.8 that a classic theme can and does use
@@ -4173,10 +8585,101 @@ block cart.
 Selections survive: page reload, cart update, quantity change, login mid-session (guest →
 account cart merge), and cart recovery from a persistent cart.
 
+✅ **Built 2026-09-01 (Stage 4).** The stage table called this "mostly
+verification"; that was written before the freeze existed, and it stopped being
+true. A payload can survive `serialize()` structurally and still fail to
+**verify**, which would silently downgrade every restored cart to live pricing —
+the price would look plausible and the quote would be gone.
+
+**The harness had no session boundary at all**, so every session claim was an
+assertion about an object that never left memory. `optionia_test_cart()` now
+models `WC_Cart_Session` faithfully:
+
+- `to_session()` copies each line and unsets exactly one key — `data`, the
+  product object — mirroring `get_cart_for_session()`, then serialises, because
+  WooCommerce stores the cart with `maybe_serialize()`
+  (`includes/class-wc-session-handler.php:574`);
+- `from_session()` **rebuilds** the product at its current catalogue price rather
+  than restoring it, exactly as `wc_get_product()` does. That is what makes a
+  page reload a real test: whatever Optionia set last request is gone and must be
+  applied again.
+
+Both halves are asserted in `CartHarnessFidelityTest`, and both are
+mutation-proven: keeping the product object, or rebuilding it at the old price,
+each break the session tests and nothing else.
+
+*Six scenarios now covered that were not:* a signed payload surviving a page
+reload; three consecutive reloads without drift; a persistent cart recovered
+after a base-price change (live base, frozen delta); a **variation** line rebuilt
+from the variation rather than the parent; a cart restored on **another site**
+degrading to live pricing; and the login merge below.
+
+**Stage 4's own audit found four things, all fixed 2026-09-01, and one of them
+matters more than the others.**
+
+- 🔴 **The login-merge test was not testing Optionia.** It performed
+  `array_merge()` *itself* and asserted on the result — a test of PHP semantics
+  that would have passed with the cart-key filter, the freeze, or `CartTotals`
+  entirely deleted. It read as coverage and verified nothing. The merge now lives
+  in the harness, modelling `get_cart_from_session()`, and the test drives two
+  real carts through it and asserts the **priced** result. Mutation-proven:
+  ignoring the freeze, or never applying a price, now both fail it.
+- **The double could not represent a variable product.** `from_session()` always
+  rebuilt from `product_id`, where WooCommerce uses
+  `wc_get_product( $variation_id ?: $product_id )`. Since Stage 3 leaves the base
+  price live, and a variable product's base *is* the variation's price, the one
+  product type where that choice is non-trivial was the one the harness could not
+  model — and it is Phase 10's primary target segment.
+- **Cross-site restore was correct but unasserted.** A cart carried to a staging
+  clone or migrated site degrades to live pricing, because the signature is keyed
+  to `wp_salt()`. The existing salt-rotation test never crossed the session
+  boundary, so the realistic version — *the payload came from somewhere else* —
+  was untested.
+- **A corrupt payload emitted PHP warnings.** Harness hygiene rather than a
+  production concern (WooCommerce unserialises the session itself), but a double
+  that emits warnings sends a future reader looking for a signal that is not
+  there.
+
+**A fourth policy case, recorded rather than discovered later.**
+`get_cart_from_session()` merges with `array_merge( $saved_cart, $cart )`. The
+keys are strings, so colliding lines do **not** sum — the later array wins
+outright, quantity included. Measured: a saved line at delta 2000 quantity 1 and
+a guest line at delta 9900 quantity 2 merge to *one* line, delta 9900,
+quantity 2.
+
+Optionia's cart-key filter makes that collision **more likely by design**: keying
+on selections alone means the same choice at two config versions now shares a
+key, where before Stage 2 it would not have. That is the improvement — the
+alternative is two lines of the same thing at two prices — and the consequence is
+that on login the customer keeps the price they were **most recently** quoted and
+silently loses the older one. Consistent with the merge row in
+[M12.4](#m124--checkout-integrity), and asserted so a future change to the key
+filter cannot alter it quietly.
+
 ### M12.4 — Checkout integrity
 
 Re-validate the entire selection set at checkout against current cached config, because
 config may have changed since add-to-cart.
+
+**Also inherits the checkout block's schema question from
+[M10.4](#m104--block-theme--store-api-integration).** Recorded 2026-08-31: Phase
+10 measured its own premise and found the classic render path already reaches a
+block theme's product page, so no `ExtendSchema` work was needed there — and none
+could have been done, since the plugin has no cart integration for a schema to
+carry. `ExtendSchema` extends CartItem, Cart, Checkout and Product; the first two
+are [M12.2](#m122--cart-display)'s and the third is this milestone's.
+
+It matters here beyond display. This is where a selection is re-validated, and
+the block checkout reaches that data over the Store API rather than through the
+classic template — so a validator wired only to the classic path would pass a
+block checkout without checking anything, which is the failure this milestone
+exists to prevent, one surface over.
+
+**And the client cannot be trusted to have run.**
+[M10.7](#m107--client-side-validation-ux) leans on native browser validation,
+which a customer can bypass entirely: `required` is markup, and a crafted POST
+carries none of it. Server-side re-checking is not a second line of defence here,
+it is the only one.
 
 🔴 **Phase 4 proved what happens without this.** A deleted option was removed from config
 while it sat in a customer's cart, and checkout completed anyway:
@@ -4197,9 +8700,127 @@ holding it in a cart still buys something the merchant cannot make.
 |---|---|---|
 | Option **price** changed since add-to-cart | Honour the `config_version` captured at add-to-cart | The customer was quoted a price; changing it under them is indefensible |
 | Option **deleted**, disabled, or now invalid | **Block checkout** with a clear, actionable message | There is no honest price for something that no longer exists |
+| Option is priced by a type this build cannot compute | **Do not freeze at all** — price from current configuration | Added 2026-09-01 by Stage 3's audit. Phase 11 contributes 0 for `percentage`, `per_unit`, `per_char` and `tiered`, and `Admin\UnpricedTypesNotice` tells the merchant so. Freezing that 0 composed two correct behaviours into a wrong one: measured, a merchant read the notice, switched the option to a fixed 50.00, and every existing cart went on charging nothing. The notice asked for a change that visibly did nothing. Nothing is under-charged by skipping the freeze — the option contributes zero in both states until the fix lands |
+| Option price changed, and the customer **adds more of the same** | The existing line's frozen price applies to the added units too | Added 2026-09-01 by Stage 1. WooCommerce merges by cart key and keeps the **existing** line's `cart_item_data`, discarding the new add's — so this is what the platform does, and the alternative (splitting the line) would show a customer two lines of the same thing at two prices. Consistent with the row above: one line, one quoted price |
 
 The distinction matters. Freezing price is customer-fair; freezing *validity* sells
 phantom products.
+
+**The freeze has no expiry, and that is deliberate.** Recorded 2026-09-01 after
+Stage 3's audit raised it, because the alternative was for "forever" to be true
+by accident rather than by choice.
+
+Nothing in the frozen payload carries a time, and WooCommerce's retention is
+asymmetric: a guest session expires (48 hours by default), but a logged-in
+customer's persistent cart is **plain user meta with no expiry**, so it can
+survive for months or years. A year-old cart therefore honours a year-old option
+price.
+
+Three things bound the exposure, none of them time:
+
+- the option must still **resolve** — a merchant who deletes or renames it blocks
+  the line entirely, per the row above;
+- the product's **base** price stays live, so a product price rise still applies;
+- only the option **delta** is frozen.
+
+So the exposure is narrow — an option whose price rose, on a product still sold,
+in a months-old cart — and unbounded in duration. It is left unbounded because
+this milestone's own words are "the customer was quoted a price; changing it
+under them is indefensible", and that argument does not weaken with time. Adding
+an expiry would be a **policy change**, not a bug fix, and it would need a
+merchant-facing answer to "why did my cart price change?" that this plan does not
+have. Revisit if a merchant asks for it; do not add it silently.
+
+✅ **Closed by Stage 5, 2026-09-01.** `Integration\CheckoutValidator` blocks it.
+The note below is kept because it records what the intermediate state was, and
+why the price looking harmless was the misleading part.
+
+⚠️ **Until Stage 5, a deleted option did not block checkout — it priced at
+base.** Measured 2026-09-01: with the option gone from the configuration, the
+line prices at the bare product price, the merchant gets a log warning, and the
+customer gets **no notice at all**. That is better than Phase 4, which *charged*
+for the phantom option, but the second policy row above is not yet enforced: the
+customer can still buy a product configured with something the merchant can no
+longer make. Easy to misread the current state as safe because the price looks
+harmless — it is the *sellability* that is wrong, not the number.
+
+**How Stage 5 built it, and the four things the analysis found first.**
+
+1. **The hook fires from FOUR surfaces, not the two this plan named.** Grepping
+   the whole plugin rather than `includes/`:
+
+   ```text
+   includes/class-wc-checkout.php:355                        checkout submission
+   includes/shortcodes/class-wc-shortcode-cart.php:93        cart PAGE VIEW
+   includes/shortcodes/class-wc-shortcode-checkout.php:349   checkout PAGE VIEW
+   src/StoreApi/Utilities/CartController.php:525             block cart / checkout
+   ```
+
+   Two are page *views*, which is good — a customer sees the problem before
+   reaching checkout — and is why the validator de-duplicates per cart item.
+   Fifth time in this project a call-site count has been short by exactly one
+   directory.
+
+2. **The hook cannot block; a notice blocks.** It is a plain action with no
+   return value. The contract is `class-wc-checkout.php:1409` — no order is
+   created while `wc_notice_count( 'error' )` is non-zero — and on the Store API
+   the same notice becomes a **409** via
+   `NoticeHandler::convert_notices_to_wp_errors()`. One mechanism, both worlds; a
+   thrown exception would escape the conversion and surface as a 500.
+
+3. **The notice must be raised *during* the hook.** The Store API saves the
+   session's notices before the action and restores them after
+   (`CartController.php:506-529`), so anything raised elsewhere is discarded on
+   that path. That is why `CartTotals` logs the same condition rather than trying
+   to block with it.
+
+4. 🔴 **M12.1 was incomplete, and Stage 5 needed the missing part.** Of its five
+   fields, four were built and **resolved labels were not**. M12.4 requires "a
+   clear, actionable message" and M12.8 "a message naming the option" — but a
+   deleted option has no label left in the configuration, and the only surviving
+   identity is an option id like `opt-a`, a merchant's slug. Labels are now
+   snapshotted at add-to-cart, with two consequences settled deliberately:
+
+   - **An audit key**, so a merchant *renaming* an option does not change the
+     cart key and split one line into two — that would be
+     [GAP 1](#m121--cart-item-data-model) reopened by another route. Verified:
+     renaming both labels leaves the cart key identical.
+   - **Not signed.** Signing would make a rename invalidate the price freeze, and
+     a rename is not a price change. Unsigned, the worst tampering achieves is a
+     wrong *name*; the price is signed separately and stays authoritative.
+
+Measured end to end: an option deleted while a line sat in the cart now yields
+*"Sorry, "Finish" is no longer available on one of the products in your cart."*
+— named, actionable, and blocking. Five mutations killed: no notice, wrong notice
+type, valid lines blocked, de-duplication removed, labels not stored.
+
+**Stage 5's own audit found three more, all fixed 2026-09-01, and the third
+explains the first two.**
+
+- 🔴 **The message named options that were fine.** It iterated *all* snapshotted
+  labels rather than the failing ones, so a line with a broken `Finish` and a
+  working `Engraving` produced *"Finish, Engraving is no longer available"* —
+  telling the customer something false about an option that still worked, and
+  sending them after a problem that did not exist. The information to avoid it
+  was already there: every resolver error carries the option id in its `field`.
+- 🔴 **A newly *required* option was described as removed.** A merchant adding a
+  required option to a product already in someone's cart is a resolution failure
+  too, and the message said *"Finish is no longer available"* — the opposite of
+  what happened, about the wrong option. `required` now has its own wording, and
+  the new option is named from the **live** configuration, because the snapshot
+  cannot hold something that did not exist when the line was written. Snapshot
+  first for deletions, live config for additions, id as a last resort.
+- 🔴 **The suite could not see either.** Every test used a **single** option, so
+  "name all labels" and "name only the failing one" produced identical output —
+  the twelve tests passed either way. The fixture now carries two options and a
+  third that can be made required, which is what makes the difference observable.
+
+Four further mutations: naming all labels again, treating `required` as a
+removal, and dropping the live-config fallback are all now caught. The fourth —
+removing the name de-duplication — **survives, and is a proven equivalent
+mutant**: `SelectionResolver::already_reported()` emits at most one error per
+field, so a duplicate name cannot reach the message. Documented in place rather
+than deleted, because that invariant belongs to the resolver, not here.
 
 **A related core behaviour, verified in Phase 4 and worth knowing:** WooCommerce follows
 the **live** product base price in an existing cart. Changing a product from $80 to $200
@@ -4208,9 +8829,90 @@ identically. So the base price is live while the option delta is frozen. That as
 inherited from the platform, not introduced here, and the policy above is the deliberate
 choice about our half of it.
 
-**Acceptance:** a publish between add-to-cart and checkout never silently changes what the
-customer is charged; **and** a selection whose option has been deleted or disabled blocks
-checkout rather than completing. Both verified by test, not assumed.
+✅ **GAP 4 (CLOSED — Stage 5, 2026-09-01) — the re-validation hook is shared, deprecated, and reports errors
+differently on each path.** Researched 2026-09-01; this is the mechanism this
+milestone needs and none of it was written down.
+
+`woocommerce_check_cart_items` fires on **both** checkout worlds, so one
+registration covers classic and block — the same happy accident as
+`woocommerce_get_item_data` in [M12.2](#m122--cart-display):
+
+```text
+includes/class-wc-checkout.php:355              → classic checkout
+src/StoreApi/Utilities/CartController.php:525   → block checkout
+```
+
+Three constraints come with it, all verified in WC 11.0.1:
+
+1. **It is marked `@deprecated` in the Store API**, with the comment "this filter
+   will be deprecated because it encourages usage of `wc_add_notice`". It is not
+   gone and there is no replacement offered, but a milestone that builds the
+   AC4 checkout boundary on a hook core calls deprecated should say so, and
+   should keep the validation logic in a class of ours rather than in the
+   callback — so the surface can be re-pointed without rewriting the rules.
+2. **Errors must be raised as notices, not exceptions.** The Store API captures
+   notices around the hook and converts them
+   (`NoticeHandler::convert_notices_to_wp_errors`); a thrown exception escapes
+   that conversion and surfaces as a 500 rather than a checkout error the
+   customer can act on. `wc_add_notice( ..., 'error' )` is the contract.
+3. **The Store API unhooks core's own validators first**
+   (`remove_action( 'woocommerce_check_cart_items', ... )`, lines 507-508) and
+   restores the session's prior notices afterwards. Anything that registers here
+   must therefore be idempotent and must not depend on core's checks having run —
+   the same discipline `CartTotals` already needs for
+   `woocommerce_before_calculate_totals`.
+
+✅ **GAP 5 (CLOSED — Stage 6, 2026-09-01) — order persistence covers both worlds through one hook, and the plan
+does not say why that is safe.** Verified 2026-09-01:
+`OrderController::create_order_from_cart()` in the Store API delegates to
+`wc()->checkout->create_order_line_items( $order, $cart )`
+(`src/StoreApi/Utilities/OrderController.php:839`), which is the same method the
+classic checkout uses and which fires
+`woocommerce_checkout_create_order_line_item` (`class-wc-checkout.php:598`). So
+[M12.5](#m125--order-persistence)'s single hook genuinely covers block checkout —
+worth recording, because the phase's exit criteria require both worlds verified
+and this is the reason one implementation satisfies both.
+
+✅ **GAP 2 (CLOSED — Stage 3, 2026-09-01) — Phase 11 did not freeze the price, and this milestone assumed it
+does.** Found 2026-09-01 by running the shipped code, not by reading it.
+
+`Integration\CartTotals` re-resolves every line from the **current** cached
+config on every firing of `woocommerce_before_calculate_totals`. So a price
+publish flows straight through to a cart that was already quoted:
+
+```text
+at add-to-cart (option $20) : 100.00
+after publish  (option $99) : 179.00
+```
+
+The customer was quoted £100 and would be charged £179 — precisely the outcome
+the policy table above calls indefensible.
+
+**Phase 11 is not at fault.** [M11.6](#m116--cart-total-application)'s acceptance
+is "idempotent under repeated firing, correct under quantity change and session
+restore"; it never claimed freezing, and freezing was not in its scope. What this
+means is that the freeze is **new work in this phase**, not a property inherited
+from a working pricing path.
+
+Three consequences for sequencing:
+
+1. `CartTotals` today has no notion of a *stored* delta — it recomputes. Adding
+   one changes the pricing path that Phase 11 mutation-proved, so the existing
+   idempotence and per-unit guarantees have to be re-verified afterwards, not
+   assumed to survive.
+2. Where the frozen delta can live is constrained by
+   [GAP 1](#m121--cart-item-data-model): putting it in `cart_item_data` splits
+   cart lines unless the key is filtered.
+3. The asymmetry is deliberate and should be stated in the code, not just here:
+   the product's **base** price stays live (WooCommerce's own behaviour, verified
+   in Phase 4) while the option **delta** freezes. A reader who sees only half of
+   that will think one of them is a bug.
+
+**Acceptance:** a publish between add-to-cart and checkout never silently changes
+what the customer is charged — asserted on the **number**, with a publish
+performed mid-test, since the current behaviour passes any test that does not
+actually republish; **and** a selection whose option has been deleted or disabled
+blocks checkout rather than completing. Both verified by test, not assumed.
 
 ### M12.5 — Order persistence
 
@@ -4218,12 +8920,140 @@ checkout rather than completing. Both verified by test, not assumed.
 deltas, `config_version`, option-set id. Verified with **HPOS enabled and disabled**.
 Keys chosen so they render sensibly in default WooCommerce output.
 
+✅ **Built 2026-09-01 (Stage 6) as `Integration\OrderLineItem`.** Four findings
+came out of the analysis, and three were decisions rather than code.
+
+1. **One of the five fields did not exist.** `Keys::META_OPTION_SET_ID` has been
+   reserved since Phase 3, but nothing captured the set id —
+   `SelectionResolver::index_options()` walked past it at the first loop. Now
+   carried on each option and stored as `Keys::CART_ITEM_SET_IDS`: an audit key,
+   unsigned, for the same reasons as labels. A merchant moving an option between
+   sets must not split a cart line, and provenance is not money.
+
+2. **HPOS is largely a non-event here, and this milestone overstated it.** HPOS
+   moves *order* meta to `wc_orders_meta`; **order item** meta stays in
+   `woocommerce_order_itemmeta` and `OrdersTableDataStore` does not touch it.
+   Writing through the CRUD API (`$item->add_meta_data()`) keeps it identical
+   under both — which is what Phase 4 measured on orders #29 and #31. Worth
+   testing as confirmation; it was never the real risk.
+
+3. **What this milestone writes constrains M12.8.**
+   `woocommerce_order_again_cart_item_data` rebuilds a cart line from **order item
+   meta**, so if a reorder replayed the frozen delta and `config_version` it would
+   inherit the original purchase's prices — which M12.8 forbids. *Decided:* write
+   everything, because an order is a record and a record with holes cannot answer
+   a support question; **M12.8 replays selections only.**
+
+4. 🔴 **Order item meta is never deleted on uninstall, and the gate now says so.**
+   `bin/check-uninstall.sh` fired the moment this milestone landed, demanding a
+   cleanup query. That instruction is wrong here: an order is a business record,
+   and the options on a line are what the merchant sold and may still have to
+   fulfil, refund or account for — possibly under an obligation the plugin knows
+   nothing about. Uninstalling a plugin is not a statement about past orders. The
+   check now covers **post** meta only and states the exclusion.
+
+   *And it fired for the wrong reason.* It matched `wc_add_order_item_meta()`
+   inside a **docblock** explaining why the CRUD API is used instead — prose
+   describing the very thing the rule looks for. **Fifth time** this project has
+   shipped a gate reading documentation instead of code, after
+   `check-secrets`/`hash_equals`, the architecture gate's `update_option`, the
+   float rule and the arity headroom. Comment lines are stripped before matching,
+   and the corrected gate was mutation-proven both ways: a real
+   `update_post_meta()` fails it, a comment mentioning one does not.
+
+**The whole-phase audit of Stages 0-6 found two more, both fixed 2026-09-01.**
+Both were **seam** defects — invisible when each stage is tested alone, and found
+only by running the chain end to end and attacking the joins.
+
+1. 🔴 **The order could record a price nobody paid.** `CartTotals` prices from the
+   frozen deltas when the signature verifies and from current configuration when
+   it does not; `OrderLineItem` read the same `cart_item_data` from a different
+   hook and copied the frozen figures on regardless. Measured after a salt
+   rotation: the line was **charged 179.00** while the order recorded a
+   `_optionia_price_delta` of **20.00** and `config_version` 7. A refund computed
+   from that meta would have been wrong by 79.00 — a false number on a business
+   record, in exactly the case the fallback exists to survive gracefully.
+
+   Fixed by having `OrderLineItem` ask `CartItemPayload::frozen_deltas()` — the
+   *same function* `CartTotals` asks — so the two cannot disagree: either both
+   trust the payload or neither does. When it declines, the order still carries
+   the selections, labels and set ids, because losing the freeze is not a reason
+   to lose the record of what was ordered.
+
+2. 🔴 **A feature could be silently unregistered.** Deleting the `->register()`
+   line for `CheckoutValidator`, `OrderLineItem` or `CartItemKey` passed **every
+   test and every gate** — the feature stopped running in production and CI was
+   green. The reachability check asks whether a class is *referenced*, and the
+   `use` statement plus the container factory satisfy that while the registration
+   is gone. Only `AddToCartValidator` was protected, and only because Stage 0
+   happened to build a registration gate for a different reason.
+
+   `bin/check-architecture.sh` now asserts that **every** class whose `register()`
+   attaches `add_action` or `add_filter` is called from `Plugin.php` — 18 of them
+   today, with a floor so a stale matcher fails rather than passes. It handles
+   both wiring styles (container and inline construction with arguments), strips
+   comments so a commented-out registration does not satisfy it, and is
+   mutation-proven on six classes.
+
+🔴 **The Stage 0-7 audit found this milestone's own fix incomplete, and it is
+worth recording as a pattern rather than an incident.** Fixed 2026-09-01.
+
+`OrderLineItem` re-verified the payload with `frozen_deltas()`, which checks the
+**signature** but not that the deltas *cover* the line's selections. Stage 7 then
+introduced `CartItemPayload::trusted_deltas()`, which checks both, and routed
+`CartTotals` and `CartDisplay` through it — without retrofitting this caller. So
+the guard added here caught three of the four ways a payload can be
+untrustworthy, and missed the fourth.
+
+Measured: a signed payload holding one delta for a two-option line was priced
+**live at 105.00** while the order recorded **20.00**.
+
+**The same seam has now appeared four times in four stages** — the pricing path
+(Stage 3), the order record (Stage 6), the cart breakdown (Stage 7), and the
+Stage 6 fix itself. Every occurrence was found by *measuring a different
+surface*, never by the tests, because each surface's tests only exercised its own
+verdict.
+
+So it is a gate now, not a convention: `bin/check-architecture.sh` fails if
+anything outside `CartItemPayload` reads `Keys::CART_ITEM_DELTAS` or calls
+`frozen_deltas()`. Both routes are mutation-proven, and a comment mentioning
+either does **not** trip it — the documentation-instead-of-code failure this
+project has shipped five times.
+
+**Two tiers, two hiding mechanisms.** Visible meta is keyed by the option's
+**label** (`Finish: Luxury`), because WooCommerce renders order item meta keys
+verbatim into packing slips, emails and CSV exports — `opt-a: lux` is a slug on a
+workbench printout. Machine data is underscore-prefixed **and** registered with
+`woocommerce_hidden_order_itemmeta`, because the prefix governs customer-facing
+output only: Phase 4 found an underscore-prefixed key on the admin order screen
+twice, once read-only and once as an **editable input**. Six mutations killed,
+including keying by id, dropping the hidden-key registration, and discarding
+other plugins' hidden keys.
+
 ### M12.6 — Merchant-facing order display
 
 Admin order screen: a clear per-line-item option breakdown. Sufficient for fulfilment
 without opening Optionia — the merchant should be able to *make the product* from the
 order screen. Plus order emails, customer order-detail page, and CSV/order export
 compatibility.
+
+> 🟡 **An open question from Phase 13, recorded 2026-09-03 — this milestone is
+> already complete, so it is a follow-up rather than a gap in what shipped.**
+>
+> On the **customer's** order-confirmation page, the option's price contribution
+> (`£10.50`) is present in the markup **twice and visible zero times**. The
+> selection itself renders correctly — `Finish: Luxury` — and the order total is
+> right, so nothing is broken; the question is whether a customer should be able
+> to see *what the option cost them* on the screen that confirms their purchase.
+>
+> Found while writing the canonical E2E, which deliberately does **not** assert
+> that price: papering over it with a looser locator would have converted a real
+> presentation question into a green tick. The price is proven three other ways —
+> `1050` in the database, `amount_minor: 1050` in the config document, and £10.50
+> visible in the cart the customer is charged from.
+>
+> Decide it as a product question. If the answer is "yes, show it", the E2E has a
+> place waiting for the assertion.
 
 ### M12.6b — Fulfilment output
 
@@ -4318,12 +9148,175 @@ Post order facts to `optioniaWooCommerceBackend` (`order_events` + `order_select
 [Phase 25](#phase-25--analytics). Queued and retried; **never blocking checkout**. A
 failure here must be invisible to the customer.
 
+✅ **Built 2026-09-01 in Stage 9, both halves.** The plugin queues and reports;
+`POST /v1/store/orders` receives. Full contract in
+[API-CONTRACT.md](../optioniaWooCommerceBackend/docs/API-CONTRACT.md).
+
+**Stage 8 recorded this as blocked on a missing backend, and that was half
+wrong.** The tables, the unique index `uq_order_events_external`, both foreign
+keys and both analytics indexes were already in `InitialSchema`, and the demo
+seed already wrote to them — read from the migration, not inferred from the
+directory listing. What was genuinely absent was the module, controller and
+service. The idempotency *guarantee* existed before the endpoint did.
+
+Equally, the plugin's transport was already built: `Api\Client` retries with
+exponential backoff, honours `Retry-After`, caps a total time budget, and sits
+behind `Api\CircuitBreaker`. "Queued and retried" was therefore mostly
+composition. The new work was the queue and the never-block guarantee.
+
+#### Never blocking checkout is structural, not defensive
+
+| Where | What happens |
+|---|---|
+| `woocommerce_order_status_{processing,completed}` | `OrderQueue::push()` — one bounded option write. **No network.** |
+| `optionia_cron_report_orders`, every 15 min | `OrderReporter::drain()` — up to 10 reports, then stop |
+
+Wrapping a POST in a try/catch inside checkout would look equivalent and is not:
+a cloud that accepts connections and answers slowly still costs the customer that
+time, and an outage would slow every shop at once. A timeout bounds the damage;
+it does not remove it. The guarantee is asserted against a transport that **fails
+the test if it is touched**, so it cannot pass because a request happened to
+succeed.
+
+Both statuses are listed because a shop selling downloads goes straight to
+`completed` while one capturing payment later goes through `processing`. An order
+reaching both reports once — `Keys::META_REPORTED_AT` on the *order* is what makes
+that true, because the queue is disposable and the order is the record.
+
+#### Failure handling, and the one distinction that matters
+
+| Response | Outcome | Why |
+|---|---|---|
+| `200` | Accepted, marked, dequeued | — |
+| `429`, `401`, `5xx`, transport | **Stays queued** | Transient. An outage delays a report; it never drops one |
+| Other `4xx` | **Dropped, logged at error** | The plugin and API disagree about the payload. That fails identically forever, so retrying holds the whole queue behind one bad row |
+
+A transient failure **stops the run** rather than working through the batch: the
+cause is almost always the same for every order, so continuing would spend the run
+proving it repeatedly and hand the circuit breaker nine more failures.
+
+#### 🔴 The bug that neither test suite could see
+
+Both halves passed their own tests. Posting a **real plugin payload at the live
+endpoint** returned:
+
+```text
+400 VALIDATION_FAILED
+  selections.1.value_key — must be longer than or equal to 1 characters
+```
+
+The plugin sent `value_key: ""` for a free-text option; the API validates it at
+1–64 characters. And because `OrderReporter` treats a `400` as permanent,
+**every order containing an engraving would have been silently dropped** — the
+worst shape of failure, since the queue would drain cleanly and the numbers would
+simply be wrong.
+
+Neither suite could catch it: each proved its own side of a contract the two only
+meet across a network. Fixed by sending `null` (which the DTO already allowed),
+and now held by two plugin tests — one for the exact field, one asserting that
+**no** API-bounded string is ever empty, so a future field cannot repeat it. Both
+fail when the fix is reverted.
+
+#### Two gates were wrong, and both were found by using them
+
+- **The float gate had a hole.** It flagged `$minor = (int) round( (float) $delta
+  * 100 )` and missed the identical line two methods earlier that said `$value`
+  instead — a real Principle 5 violation hidden behind a variable name. `minor`
+  joined the identifier list; the widened gate catches the line it missed.
+- **The uninstall gate could not see WooCommerce's CRUD meta API.** It matched
+  `update_post_meta`/`add_post_meta` only, so `$order->update_meta_data()` was
+  invisible. That specific write is correctly exempt — order meta is a business
+  record — but a future `$product->update_meta_data()` would have needed cleanup
+  and passed silently. Now counted, with order objects excluded **by name rather
+  than by being invisible**. Its first version matched `method_exists()` guards
+  as though they were writes; the pattern requires an actual `->` call.
+
+Both were then mutation-tested in the direction that matters: each fires on the
+violation it previously missed.
+
+#### Verification
+
+Plugin 735 tests / 1412 assertions, 10 gates, 13 architecture checks. Backend 610
+unit + 805 e2e across 68 suites, 8 gates. **Fourteen mutants killed** — ten on the
+plugin (checkout posting directly, free text sent, no truncation, no reported
+marker, transient failure dropped, `4xx` retried forever, batch cap removed,
+unbounded queue, float cast, disconnected store posting) and four on the backend
+(children appended, plain `INSERT`, store id from the body, arrival time for
+`occurred_at`).
+
+⚠️ **One backend mutant survived the first pass and is worth recording.** A
+service reading `store_id` from the request body — a cross-tenant revenue write,
+the worst defect this endpoint could carry — passed **every** request-level test,
+because `forbidNonWhitelisted` strips the field before the service is reached. The
+request test proves the *pipe*, and the pipe was not what would be wrong. A
+direct-call test now asks the question where it can actually be answered. Sixth
+instance of this project's recurring failure class: a check that passes without
+exercising the thing it names.
+
 ### M12.8 — Refunds, edits, and edge cases
 
 Partial refunds (option deltas refunded proportionally or individually — decide and
 document); admin order editing with option data intact; stock handling per
 [M16.9](#m169--inventory-and-stock-interaction); subscription-plugin interaction per
 [M29.4](#m294--plugin-interaction-testing) Tier C.
+
+✅ **The refund decision, made 2026-09-01 in Stage 8: Optionia does not refund
+options, because WooCommerce has no such concept.**
+
+`wc_create_refund()` takes an `amount` and `line_items`
+(`includes/wc-order-functions.php:559`). A line item is refunded by amount and
+quantity; **there is no notion of refunding part of a line's composition.** A
+merchant refunding 20.00 of a 100.00 line is choosing a number, and nothing in
+the data model asks which option that number belongs to.
+
+So "proportionally or individually" is the wrong question — both answers would
+require inventing a mechanism the platform does not have, and a refund UI that
+disagreed with WooCommerce's own would be worse than none. The right question is
+whether the **order carries enough for a merchant to decide**, and it does:
+[M12.5](#m125--order-persistence) writes `_optionia_price_delta` per line as a
+decimal string, alongside the visible `Finish: Luxury` pairs. A merchant looking
+at a 100.00 line can see that 20.00 of it was options.
+
+Revisit only if merchants ask for option-level refunds *and* WooCommerce grows a
+model for them. Building one on top of amount-based refunds would mean Optionia's
+records and WooCommerce's disagreeing about the same money.
+
+✅ **Admin order editing — verified 2026-09-01 in Stage 8, and it turned out to be
+stronger than the milestone asked for.**
+
+The requirement was that option data survive a merchant editing an order.
+Reading WooCommerce 11 rather than assuming from the hook's name shows the single
+`woocommerce_hidden_order_itemmeta` registration buys **two** properties:
+
+```php
+// WC 11.0.1, includes/admin/wc-admin-functions.php:366 and :439
+$reserved_meta_keys = OrderItemMetaUtil::get_reserved_keys( $item );
+// Skip reserved keys, which cannot be added or edited as custom meta.
+if ( in_array( $meta_key, $reserved_meta_keys, true ) ) {
+    continue;
+}
+```
+
+`OrderItemMetaUtil::get_reserved_keys()` — added in WC 11.0.0 — is **derived from
+the hidden keys**, and `wc_save_order_items()` skips every reserved key before it
+can update or delete a row. So the machine keys are not merely hidden from the
+order screen; they are **immutable through it**. A merchant cannot rewrite the
+delta a line was charged, and cannot delete the selections it was fulfilled from.
+
+That property is *inherited*, which is exactly the kind that vanishes unnoticed —
+so `test_machine_keys_cannot_be_edited_from_the_order_screen` and
+`..._cannot_be_deleted_...` model core's save loop and drive it through the real
+filter. Three mutants kill them: not adding our keys, not registering the filter,
+and dropping a single key from `HIDDEN_KEYS` (which fails exactly one of the two,
+the correct granularity). The edit test also asserts a **control** — an ordinary
+`Finish` row *is* editable — so it cannot pass by the double refusing all writes.
+
+⚠️ **Found while writing it: the test harness had no `update_meta_data()`.** The
+first version of this test therefore errored instead of asserting, and its first
+green run was meaningless. The double now models `update_meta_data()` and
+`delete_meta_data()` because `wc_save_order_items()` calls both. Recorded because
+it is the sixth instance of this project's recurring failure class — *a check that
+passes without exercising the thing it names*.
 
 🔴 **Order-again / reorder — proven broken in Phase 4.** Replaying a past order rejected
 it outright, because the validator read `$_POST` while the selection lived in order item
@@ -4338,19 +9331,416 @@ Reorder needs three things, and they compound:
 3. **Reprice from current config**, not the stored delta. A reorder is a new purchase, so
    the frozen-price argument that applies mid-session does not apply here.
 
+   ✏️ **Corrected 2026-09-01 in Stage 8: the operation is *construct*, not
+   *strip*.** Stage 1 recorded this as "actively stripping the audit fields, not
+   merely ignoring them", and predicted a second caller for the pruning helper.
+   Reading WooCommerce rather than reasoning about it shows otherwise:
+
+   ```php
+   // WC 11.0.1, includes/class-wc-cart-session.php:587
+   apply_filters( 'woocommerce_order_again_cart_item_data', array(), $item, $order )
+   ```
+
+   The filter starts from `array()`. **WooCommerce replays nothing**, so there is
+   nothing to strip — the payload is whatever the plugin puts in it, and writing
+   only `selections` is the entire requirement. `CartItemPayload::prune()` keeps
+   one caller (the cart-key filter), not the two Stage 1 predicted.
+
+   The risk Stage 1 identified was real; only its mechanism was wrong. A naive
+   implementation *would* replay the frozen price — by reading the audit meta back
+   out of the order and copying it forward. That is prevented by the trust gate in
+   `bin/check-architecture.sh`, which refuses any mention of
+   `Keys::CART_ITEM_DELTAS` outside `CartItemPayload`, and by
+   `test_the_frozen_price_is_not_replayed`, which asserts the payload's key list
+   exactly. Both were measured against a mutant that replays the delta and
+   `config_version`; both refuse it.
+
 **Acceptance:** a customer can reorder a product with options; a reorder referencing a
 deleted option fails with a message naming the option, not a generic validation error.
+
+✅ **Reorder built and accepted 2026-09-01 in Stage 8** — `Integration\OrderAgain`,
+17 tests in `tests/unit/OrderAgainTest.php`.
+
+All three requirements are met, and two of them needed no code:
+
+| Requirement | How |
+|---|---|
+| 1. Read from order item meta | `OrderAgain::selections_from()` — the one thing that was missing |
+| 2. Re-validate against current config | Free. The reorder path already runs `woocommerce_add_to_cart_validation` at six arguments, so `AddToCartValidator` refuses a deleted option and `CheckoutValidator` catches one deleted later |
+| 3. Reprice from current config | Free. A payload carrying selections and no signature is exactly the shape `CartTotals` already prices live |
+
+**The gap was a format mismatch, and neither side was wrong.** Order meta is a
+JSON string under `_optionia_selections` (M12.5 encodes because order item meta is
+a flat key/value table — twenty options would otherwise mean twenty rows), while
+the cart needs a real PHP array because `generate_cart_id()` hashes it. Phase 11
+Stage 6 built the reading half; nothing wrote to it. One `json_decode` closed a
+defect open since Phase 4.
+
+Measured end to end — bought at 100.00 when Luxury cost 20.00, reordered after the
+merchant raised it to 99.00:
+
+```text
+order meta      : {"opt-a":"lux"}
+rebuilt payload : {"selections":{"opt-a":"lux"}}
+revalidated     : accepted
+repriced at     : 179.00   (80.00 base + 99.00 current, not the 100.00 paid)
+
+reorder of a discontinued option : refused
+customer told which option       : yes
+```
+
+**Why the test builds its fixture through `OrderLineItem`.** `ordered_item()` runs
+the real writer rather than hand-rolling a JSON string, which makes the encode /
+decode pair a *tested contract* instead of a documented one. Proven: changing the
+writer to `serialize()` or to a raw array fails the suite both ways. That is the
+round trip Stage 8's Finding 1 was about, so no separate shape gate was added —
+one would restate what the tests already prove, and a gate that duplicates a test
+is a gate nobody maintains.
+
+Five mutants confirm the rest: replaying nothing (Phase 4's original bug), dropping
+`ksort` (a reorder would split into its own cart line), carrying non-scalars into
+the cart key, removing the malformed-JSON guard, and discarding other plugins'
+reorder data. All killed.
+
+### Stage 8 — reorder, refunds, admin editing (2026-09-01)
+
+Five findings, and the shape of them is worth noting: **three of the stage's four
+requirements needed no code**, because earlier stages had already built the
+mechanism. The work was proving that, not writing it.
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | The reorder read side never connected — order meta is a JSON string under `_optionia_selections`, the cart wants a PHP array under `optionia.selections` | Closed by `Integration\OrderAgain`. One `json_decode` fixed a defect open since Phase 4 |
+| 2 | The "pruning obligation" does not exist — `woocommerce_order_again_cart_item_data` starts from `array()`, so nothing is replayed | M12.8's note corrected: the operation is **construct**, not strip. `prune()` keeps one caller, not the two Stage 1 predicted |
+| 3 | Repricing already worked — a selections-only line prices at 179.00 against current config with no new code | Verified end to end rather than assumed |
+| 4 | The refund decision is smaller than it reads — `wc_create_refund()` has no per-option concept | Decided: Optionia does not refund options. The order carries `_optionia_price_delta` so a merchant can |
+| 5 | M12.7 has no receiving endpoint — `src/orders/` holds two entity files, no module, not wired into `app.module.ts` | Recorded as a cross-repo blocker. Phase 12's last open criterion |
+
+A sixth surfaced while verifying admin editing: WC 11's `get_reserved_keys()`
+makes the machine keys **immutable**, not merely hidden — a stronger guarantee
+than M12.8 asked for, now tested.
+
+**No new gate was added.** Step 5 of the plan called for one on the reorder shape,
+since a read/write format mismatch is the kind of thing that regresses silently.
+Measurement showed it unnecessary twice over: `OrderAgainTest` builds its fixture
+through the **real** `OrderLineItem` writer, so the encode/decode pair is a tested
+contract — changing the writer to `serialize()` or to a raw array fails the suite
+both ways — and the Stage 3 trust gate already refuses `CART_ITEM_DELTAS` outside
+`CartItemPayload`, which covers the reorder surface for free. A gate that restates
+a test is a gate nobody maintains.
+
+**Verification:** 678 tests / 1312 assertions, 10 gates, 13 architecture checks,
+all green. Eight mutants killed across `OrderAgain` (5) and the admin-edit
+guarantee (3).
+
+### Stage 9 — order reporting, both repositories (2026-09-01)
+
+Phase 12's last open criterion, and the only work in this phase spanning two
+repositories. Full detail in [M12.7](#m127--order-reporting-to-cloud).
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | Stage 8's "no backend" was half wrong — tables, unique index and both FKs were already in `InitialSchema` | Only the module/controller/service were missing. Read from the migration, not inferred from a directory listing |
+| 2 | The plugin's transport was already built — retry, backoff, `Retry-After`, circuit breaker | "Queued and retried" was composition. The new work was the queue and the never-block guarantee |
+| 3 | 🔴 `value_key: ""` for free text is a `400`, and `OrderReporter` treats `400` as permanent | **Every engraving order would have been silently dropped.** Found by posting a real payload at the live endpoint; neither suite could see it |
+| 4 | The float gate missed a Principle 5 violation hidden behind a variable name | `minor` added to the identifier list; the widened gate catches the line it missed |
+| 5 | The uninstall gate could not see `$order->update_meta_data()` | CRUD meta now counted, order objects excluded by name rather than by being invisible |
+| 6 | A backend service reading `store_id` from the body passed every request-level test | `forbidNonWhitelisted` strips it before the service runs, so the request test proved the pipe. Direct-call test added |
+
+**The privacy decision, made with the user 2026-09-01:** free text never leaves the
+merchant's server. A selection reports its keys and the option's label, and sends
+`null` for the value label whenever the value is free text rather than one of the
+merchant's fixed choices. Phase 25 asks how many customers bought engraving and
+what it earned, not what they wrote — and answering the first without collecting
+the second keeps [ADR-014](../optioniaWooCommerceBackend/docs/DECISIONS.md)'s
+hard-erase path a safeguard rather than a routine obligation.
+
+**Verification:** plugin 735 tests / 1412 assertions, 10 gates, 13 architecture
+checks; backend 610 unit + 805 e2e, 8 gates. Fourteen mutants killed.
+
+### Stage 10 — the audit's one finding, both repositories (2026-09-01)
+
+🔴 **A secret verifier was invisible to the gate that exists to protect it.**
+Found by mutating Phase 12's guarantees rather than re-running the gates.
+
+`Integration\CartItemPayload::verify()` decides whether a customer's frozen price
+is genuine. Swapping its `hash_equals()` for `===` passed **all 735 tests and all
+10 gates**:
+
+```text
+mutant: return $expected === $signature;
+  tests            → OK (735 tests)
+  check-secrets.sh → ok  all 2 secret verifier(s) compare with hash_equals()
+```
+
+**Root cause.** The gate discovered verifiers by grepping for `hash_hmac`.
+`CartItemPayload` signs with `wp_hash()`, WordPress's own keyed hash, so the file
+was never inspected — invisible since Stage 2. Two things made it worse:
+
+- The gate's own comment claimed immunity to exactly this: *"Matched on the
+  variables rather than a list of files, so a third comparison added later is
+  caught without anyone remembering to extend this."* `hash_hmac` **is** a list,
+  of length one. Phase 12 added a third comparison and it was not caught.
+- `FLOOR_VERIFIERS=2` still passed, because two files were still found. The floor
+  catches "the parser broke"; it cannot catch "the codebase grew past the
+  pattern".
+
+**No test can substitute.** `hash_equals()` and `===` return the same answer —
+the difference is timing-attack resistance. The gate is the only possible
+protection, and it was not watching. Seventh instance of this project's recurring
+failure class.
+
+#### The fix: discovery asks three questions, not one
+
+| # | Question | Catches |
+|---|---|---|
+| 1 | What signs? (`hash_hmac`, `wp_hash`, `wp_salt`, handshake state) | A file whose comparison is *already* wrong — usage alone would let it vanish from the list and pass |
+| 2 | What compares safely? (a `hash_equals` call) | A **fourth** signing primitive arriving later — the failure actually shipped |
+| 3 | What compares unsafely? (a secret-shaped `$var === $var`) | A new verifier using an unlisted primitive **and** `===` — doubly invisible to 1 and 2 |
+
+Question 3 was added only after measuring that 1 and 2 together still missed it.
+Comparison against a *literal* is excluded: `'' === $token` is an emptiness
+check, and four such lines exist today. `Integration\CartItemKey`'s `md5()` is
+excluded too — it reproduces WooCommerce's cart-id algorithm and compares
+nothing. Floor raised to 3.
+
+#### The same gap existed in the backend, and is now closed
+
+`optioniaWooCommerceBackend` had **no constant-time check at all**.
+`common/crypto/tokens.ts` compares correctly today, and nothing prevented that
+from regressing — on the highest-volume secret comparison in either codebase, run
+on every authenticated plugin request.
+
+Porting the plugin's rule directly produced false positives, measured:
+`auth-throttler.guard.ts` hashes a token into a rate-limit key and
+`connect.service.ts` hashes a PKCE verifier into a challenge — both hash a
+secret, **neither compares one**. So a file is a verifier when it *compares*, by
+either the safe signal (`timingSafeEqual`) or the unsafe one. `expected` is
+deliberately not a secret word: `optimistic-lock.ts` compares row versions.
+
+#### Two mistakes in the fix itself, both caught by mutation
+
+- A literal-exclusion regex written as `.[^,)]*.` matched **any** characters, not
+  quotes — it silently discarded `digest === right.toString()`, a real
+  comparison. A decorative-`timingSafeEqual` mutant survived because of it.
+- `SECRET_WORDS='signature|token|...'` tripped the repo's own hardcoded-credential
+  check, which was right to flag it. Renamed to `VERIFIER_WORDS` rather than
+  teaching that check an exception.
+
+#### Verification
+
+Nine mutants, all behaving correctly. Plugin: the original defect, a decorative
+`hash_equals`, `strcmp` substitution, both pre-existing verifiers, plus a
+correctly-written new file that must **not** false-positive. Backend: `===`
+substitution, decorative call, an unlisted-primitive verifier, plus its correct
+counterpart.
+
+Plugin 735 tests / 1412 assertions, 10 gates, 13 architecture checks. Backend 610
+unit + 805 e2e, 8 gates.
+
+### Stage 11 — the final audit's findings (2026-09-01)
+
+The last pass over Phase 12, done by mutating every ticked criterion rather than
+re-running the gates. Twelve mutants; nine killed, **three survived**. Each
+survivor was a real gap, and one of them uncovered something larger.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `CartDisplay::text()`'s final `is_scalar()` guard was untested — deleting it passed all 735 tests | Four tests. An **object** label is neither array nor scalar, so `(string) $label` throws a **fatal on the whole cart page** — proven by direct execution, not assumed |
+| 2 | Removing `toUpperCase()` from the order endpoint passed all 23 e2e tests | One test sending `'gbp'`. The plugin upper-cases first, but `gbp` alongside `GBP` would split analytics silently |
+| 3 | Removing the transaction from `OrdersService.report()` passed all 23 tests | A new atomicity gate. **No test can catch this** — the test that looks like it covers atomicity is rejected by the validation pipe before the service runs |
+| 4 | The plan *and* `CartItemPayload`'s docblock still claimed `prune()` had two callers | Both corrected. Stage 8 fixed one of three places; this is what partial correction looks like |
+| 5 | Stage 8 had no ✅; Stages 9 and 10 were absent from the stage table | Table completed to 11 rows |
+
+#### 🔴 What Finding 3 uncovered: the backend's gates had never seen M12.7
+
+Building the atomicity gate, its floor immediately failed — it found three
+multi-write services where four exist. The cause was not the new gate:
+
+```text
+?? src/orders/orders.service.ts      ← uncommitted
+?? src/orders/orders.controller.ts
+?? src/orders/orders.module.ts
+?? src/orders/dto/
+```
+
+`bin/check-secrets.sh` discovered files with plain `git ls-files`, which lists
+**tracked files only**. Every file M12.7 added was invisible to it. Its own
+comment said *"files git would actually commit"* — the intent was right and the
+command did not deliver it.
+
+**The plugin repository hit this exact bug in an earlier phase**, measured six
+unscanned production files including the push signature verifier, and fixed its
+copy with `--cached --others --exclude-standard`. The backend's copy was never
+updated. A fix applied in one repository and not the other is its own failure
+mode, and this is the second time in three stages that a gate's confident comment
+was describing behaviour it did not have.
+
+Verified afterwards that the *other* backend gates were unaffected: they load the
+compiled Nest app or use `find`, which is why the API-contract gate caught the
+undocumented `POST /store/orders` during Stage 9.
+
+#### The atomicity gate, and why it is coarse on purpose
+
+**More than one raw write statement in a file requires a transaction somewhere in
+it.** It does not prove the writes are *inside* the transaction — that needs a
+TypeScript parser. It does catch a transaction deleted wholesale, which is the
+regression that matters, and it stays quiet: three services write exactly once
+today and none are flagged. Floor of 4, so the pattern silently matching fewer
+files fails loudly.
+
+Mutation-proven both ways: removing `report()`'s transaction fails the gate; a
+comment mentioning `DELETE FROM` does not count as a write.
+
+#### Audit-process note
+
+One probe hit a **docblock comment** rather than code and reported "survived".
+Re-running it against the real guard produced Finding 1. Had the first result been
+trusted, the phase would have been reported clean. Eighth instance of this
+project's recurring failure class — and the second time in this phase that the
+failure was in the *measurement* rather than the code.
+
+#### Verification
+
+Plugin 739 tests / 1419 assertions, 10 gates, 13 architecture checks. Backend 610
+unit + 805 e2e, 8 gates including the new atomicity check. Every previously
+surviving mutant now killed.
+
+### Stage 12 — the live-store smoke test (2026-09-02)
+
+Everything before this was proven against unit tests, e2e tests and a live MySQL.
+**None of it had run inside a real WooCommerce store** — and Phase 4 exists in this
+plan because things that pass in isolation break there. Run against the Studio
+site (WooCommerce 11.0.1, PHP 8.4.24), driving genuine WooCommerce APIs.
+
+| What | Result |
+|---|---|
+| Add to cart, real `WC()->cart` | 80.00 base + 99.00 option = **179.00** |
+| Payload written | `selections, config_version, deltas, signature, labels, set_ids` |
+| Order created, qty 2 | total **358.00**, `_optionia_price_delta` = **99.00 per unit**, not 198.00 |
+| Customer-facing meta | `Finish: Luxury` only |
+| Hidden keys | all four `_optionia_*` in `OrderItemMetaUtil::get_hidden_keys()` |
+| Reorder | `{"optionia":{"selections":{"opt-finish":"lux"}}}` → revalidated → repriced 179.00 |
+| GAP 2 — publish mid-session | price unchanged at 179.00 after a v7→v8 publish |
+| GAP 4 — option deleted after add | **blocked**: *"Sorry, \"Finish\" is no longer available on one of the products in your cart."* |
+| Add-to-cart with a deleted option | refused, at both 3-arg and 6-arg call sites |
+| Required option omitted | refused: *"Please choose all required options…"* |
+
+#### ✅ The `[~]` HPOS criterion is now ticked, on evidence rather than reasoning
+
+Stage 6 argued from source that HPOS relocates *order* meta to `wc_orders_meta`
+while **order item** meta stays in `woocommerce_order_itemmeta`, so no
+storage-dependent branch exists. Measured on the live site:
+
+```text
+HPOS enabled: YES
+optionia rows in woocommerce_order_itemmeta: 8
+```
+
+The site runs HPOS, and Optionia's rows are in the legacy item-meta table exactly
+as predicted. The criterion asked for integration confidence a unit harness
+cannot supply; this supplies it.
+
+#### Three false alarms, all mine
+
+Worth recording, because each looked like a Phase 4-class defect for several
+minutes and none was:
+
+1. **"GAP 4 does not hold."** I deleted the option *before* adding to cart, so no
+   payload was ever attached and there was nothing to invalidate. The real
+   scenario — add, then delete, then check out — blocks correctly.
+2. **"A required option can be skipped."** `$_POST` from an earlier statement in
+   the same `wp eval` leaked into the next, so the request carried a stale
+   selection.
+3. **"The validator never fires."** `WC_Cart::add_to_cart()` **does not apply
+   `woocommerce_add_to_cart_validation` at all** — verified by grepping
+   `class-wc-cart.php` and finding nothing. The filter lives only in the three
+   *callers* (form handler, AJAX, cart session), which is precisely why this
+   plugin registers against caller sites rather than the cart. My probe bypassed
+   every real entry point.
+
+Each was diagnosed rather than filed. The pattern is the one this project keeps
+meeting from the other side: **the measurement was wrong, not the code** — for the
+third time in this phase.
 
 ### Phase 12 exit criteria
 
 ```text
-[ ] Selections survive cart → checkout → order → email → admin
-[ ] Verified with HPOS on and off
-[ ] Verified on classic checkout AND checkout blocks
-[ ] Order screen alone is sufficient for fulfilment
-[ ] Order facts reaching the cloud without blocking checkout
-[ ] Guest and logged-in flows both correct
+[x] Selections survive cart → checkout → order → email → admin
+[x] Verified with HPOS on and off
+[x] Verified on classic checkout AND checkout blocks
+[x] Order screen alone is sufficient for fulfilment
+[x] Order facts reaching the cloud without blocking checkout
+[x] Guest and logged-in flows both correct
+[x] Identical selections merge into one line ACROSS a config publish   (GAP 1)
+[x] A publish mid-session does not change what the customer is charged (GAP 2)
+[x] A deleted option blocks checkout on BOTH classic and block         (GAP 4)
+[x] Every add-to-cart call site is registered and the count is derived, not typed (GAP 3)
 ```
+
+**Four more ticked after Stage 7**, and one marked `[~]` deliberately:
+
+| Criterion | Evidence |
+|---|---|
+| Survives to email / admin | `test_only_readable_pairs_are_customer_facing` — `wc_display_item_meta()` renders order item meta into emails and the customer order page, and `get_formatted_meta_data()` hides `_`-prefixed keys, so the split *is* the mechanism |
+| Classic **and** blocks | `test_every_row_survives_the_store_api_scalar_check` applies the Store API's own non-scalar test to our rows; `CheckoutValidator` and `CartDisplay` each register once for both worlds |
+| Order screen sufficient | `test_every_machine_key_is_underscore_prefixed` plus the hidden-key registration — visible pairs a merchant can fulfil from, machine data neither shown nor editable |
+| Guest and logged-in | `test_a_guest_line_replaces_a_colliding_saved_line_on_login` drives two real carts through the session boundary; guest is the default path every other cart test uses |
+
+`[x]` **HPOS on and off — no code path can differ, and that is the finding.**
+Stage 6 established that HPOS relocates *order* meta to `wc_orders_meta` while
+**order item** meta stays in `woocommerce_order_itemmeta`, untouched by
+`OrdersTableDataStore`. `Integration\OrderLineItem` writes through a single
+`$item->add_meta_data()` call, so there is no storage-dependent branch to
+exercise — Phase 4 measured the same thing empirically on orders #29 and #31.
+
+The criterion asks for integration confidence a unit harness cannot supply, and
+leaving it blank implied outstanding work that does not exist. It was marked
+partial with the reason, and belongs on a manual pre-release checklist rather
+than in CI.
+
+✅ **Ticked 2026-09-02 by Stage 12's live-store smoke test**, which supplied
+exactly that integration confidence. The Studio site runs HPOS
+(`OrderUtil::custom_orders_table_usage_is_enabled()` → true), and a real order
+placed there put eight Optionia rows in `woocommerce_order_itemmeta` — the legacy
+item-meta table, untouched by HPOS, as the reasoning above predicted. Argued from
+source in Stage 6, measured in Stage 12.
+
+**Three ticked 2026-09-01**, after Stage 4's final analysis found them satisfied
+but still recorded as unmet — bookkeeping drift from Stages 0-3 that made the
+plan understate where the phase actually was.
+
+Each was verified twice: the tests pass, **and** they fail when the feature they
+describe is removed. A tick backed by a test that survives feature deletion is
+the thing this table exists to prevent.
+
+| Criterion | Evidence | Proven load-bearing by |
+|---|---|---|
+| GAP 1 — merge across a publish | `test_the_same_selection_merges_across_a_publish`, plus `..._different_selections_still_split` and `..._selection_order_does_not_change_the_key` so it cannot pass by merging everything | Emptying `CartItemPayload::AUDIT_KEYS` — the pruning that makes the cart key ignore `config_version` |
+| GAP 2 — price stable across a publish | `test_a_publish_does_not_change_a_quoted_price`, with the publish performed **inside** the test, plus the price-drop and tampered-payload cases | Ignoring the frozen deltas in `CartTotals` |
+| GAP 3 — call sites registered, count derived | `test_records_every_known_call_site`, `test_registers_above_the_widest_call_sites_arity`, `test_reports_a_call_site_with_more_arguments_than_recorded` | Deleting `store_api_cart` from `CALL_SITES` |
+
+**GAP 4 remains genuinely unmet** — a deleted option prices at base and checkout
+proceeds. It is Stage 5's, and [M12.4](#m124--checkout-integrity) carries the
+warning.
+
+The original six above are also correctly unticked: all of them depend on order
+persistence, display or reporting, which are Stages 6-8.
+
+**The last four were added 2026-09-01** from the pre-implementation analysis, and
+each exists because the obvious test passes without them:
+
+- *Merge across a publish* — merging works perfectly until a merchant publishes,
+  and a test that adds the same selection twice in one breath never republishes.
+- *Price stability across a publish* — the shipped Phase 11 code recomputes from
+  current config, so any test that does not actually republish mid-test passes
+  while the customer is quoted one price and charged another.
+- *Deletion blocking on both worlds* — the block checkout reaches validation over
+  a different surface, and a validator wired to the classic path alone would pass
+  a block checkout without checking anything.
+- *Derived call-site count* — the number has now been wrong four times, always by
+  searching one directory less than WooCommerce has. A hand-maintained floor is a
+  floor that goes stale.
 
 ---
 
@@ -4360,6 +9750,955 @@ deleted option fails with a message naming the option, not a generic validation 
 **Blocks:** Gate 1
 **Scope:** deliberately minimal — enough to author a `radio` option without curl. The
 real builder is [Phase 20](#phase-20--full-builder-ui).
+
+### Phase 13 — execution order, and why it is not the milestone numbering
+
+Recorded 2026-09-02 from the pre-implementation analysis. The milestones below
+read as seven frontend tasks. **Three of them cannot start**: they consume
+backend surfaces that do not exist, and the phase text never said so.
+`docs/API-CONTRACT.md` already knew — it lists `GET /stores` as `[phase 13]` and
+`/option-sets/:id/assignments` under phase 13 — so the contract was right and this
+plan was silent. That disagreement is the finding.
+
+| Stage | Work | Why here |
+|---|---|---|
+| **0** ✅ | **The three missing backend surfaces** — **done 2026-09-02**. See the completion note below | Nothing in the frontend can be built against a 404 |
+| **1** ✅ | `optioniaWooCommerceFrontend` scaffold + **M13.1** — **done 2026-09-02**. See the completion note below | The repo did not exist; this created it |
+| **2** ✅ | **M13.2** auth screens — **done 2026-09-02**. See the completion note in M13.2 | All eight auth endpoints were already built |
+| **3** ✅ | **M13.3** store connection + health — **done 2026-09-02**. See the completion note in M13.3 | Needed Stage 0's `GET /stores` |
+| **4** ✅ | **M13.4** list, **M13.5** editor — **done 2026-09-02**. See the completion note in M13.4 | 35 option-set routes already existed |
+| **5** ✅ | **M13.6** product picker + assignment — **done 2026-09-02**. See the completion note below | Needs Stage 0's products and assignments endpoints |
+| **6** ✅ | **M13.7** states audited across every screen — **done 2026-09-02**. Its *navigation* half landed early, in Stage 5 | Cheapest once every screen exists |
+| **7** | **`ARCHITECTURE.md`** + the **canonical E2E** | Both are Gate 1 requirements, and both need everything above to exist |
+
+**Backend first, decided 2026-09-02.** The alternative — scaffolding the dashboard
+against mocked responses — makes the mock the contract, and Phase 12 measured
+what that costs: the plugin and the API each passed their own suites while
+disagreeing about `value_key`, and **every engraving order would have been
+silently dropped**. The bug was invisible until a real payload hit a real
+endpoint. A mocked frontend reproduces that setup exactly.
+
+#### Stage 0 — the three surfaces, in detail
+
+**None of these are speculative.** Each was verified absent by reading the code,
+not inferred from a directory listing.
+
+| Surface | Current state | Blocks | Carries |
+|---|---|---|---|
+| `GET /stores`, `GET /stores/:id` | **No `@Get` on any stores controller.** Only `disconnect` and `rotate-credential` exist | M13.3 | **A2** — explicit column list, never the entity |
+| Products module + `GET` search | `src/products/` holds **one entity file**. No module, no controller, absent from `app.module.ts` | M13.6 | **Finding 3** — reuse `keyset-cursor.ts`; **A4** — prefix search is adequate at 30 seeded rows, do not over-build |
+| `POST/DELETE /option-sets/:id/assignments` | **Entity only.** Nothing in the product writes a `MANUAL` row | M13.6 | **A1** — unique-index migration; **A3** — the store-ownership check; `mode` written explicitly |
+
+This is the exact shape of the M12.7 blocker — table and entity present, service
+layer absent — and it would be discovered the same way: mid-phase, with the
+frontend already written against it.
+
+**Stage 0's definition of done**, so nothing above is a note somebody reads past:
+
+```text
+[ ] GET /stores, GET /stores/:id      — explicit columns (A2)
+[ ] Products module + search          — keyset cursor reused (Finding 3)
+[ ] POST/DELETE assignments           — mode written explicitly, never defaulted
+[ ] Migration: unique assignment index (A1)
+[ ] Store-ownership check on targetRef (A3)
+[ ] STORES_VIEW / PRODUCTS_VIEW decided in capabilities.ts, with role mapping
+[ ] docs/API-CONTRACT.md entry for every new route
+[ ] Tenant scoping proven by a DIRECT service call, not only through the pipe
+[ ] Every guarantee mutation-tested: it must fail when the feature is removed
+```
+
+The last two are Phase 12's most expensive lessons, restated because they were
+each learned the hard way. A service reading `store_id` from its own request body
+passed **every** request-level test, because `forbidNonWhitelisted` strips the
+field before the service runs — the request test proves the pipe, and the pipe is
+not what would be wrong. And a guarantee nobody has tried to break is prose: of
+roughly thirty mutants across Phase 12, the three that survived were all real
+gaps.
+
+#### Stage 0 — built 2026-09-02
+
+Three surfaces, one migration, one capability decision. **58 routes, 630 unit +
+850 e2e, 8 gates green.**
+
+| Delivered | Notes |
+|---|---|
+| `GET /stores`, `GET /stores/:id` | Explicit column list (**A2**); `lastSeenAt: null` means *never*, not stale |
+| `GET /products` | Keyset-paged, prefix search, `LIKE` wildcards escaped |
+| `GET`/`POST`/`DELETE` `/option-sets/:id/assignments` | `mode` written explicitly; ownership checked (**A3**); every write bumps `config_version` |
+| `uq_assignments_set_target` migration | **A1**; verified against 16 existing rows first, then proven to reject a duplicate with `ER_DUP_ENTRY` |
+| `STORES_VIEW`, `PRODUCTS_VIEW` | Granted to owner/admin/editor/viewer, **not** billing |
+
+**The capability decision settled itself on a reading.** `editor` already held
+`PRODUCTS_ASSIGN` — permission to assign an option set to a catalogue it had no
+permission to *list*. Splitting read from write corrects an existing
+inconsistency rather than inventing a new precedent.
+
+##### Two things the analysis got wrong, caught before they shipped
+
+🔴 **`ParentScopedRepository` was the obvious fit for products and the wrong
+one.** It is exactly how `option_groups` reaches its tenant through
+`option_sets`, so the plan assumed it. But its join emits
+`deletedAt = :liveSentinel` on every link, and **neither `stores` nor
+`store_products` has that column** — both extend `BaseEntity`, not
+`SoftDeletableEntity`. It would have generated SQL against a column that does not
+exist. Checked against `InitialSchema` before a query was written.
+
+That absence is correct by design: a catalogue is a **mirror** of the merchant's
+WooCommerce store, replaced wholesale by [M19](#phase-19--product-sync--assignment)'s sync.
+A product deleted upstream should disappear, not linger as a tombstone a picker
+could still assign to. `option_set_assignments` **is** soft-deletable, so the
+same base class is right there — which is why the two repositories differ.
+
+✏️ **Finding 3 said "reuse `keyset-cursor.ts`"; the honest answer was a
+sibling.** That module keys on `(createdAt, id)`, and `store_products` has
+exactly one useful index — `ix_store_products_search (storeId, name)`. Paging on
+`createdAt` would filesort the whole catalogue per page **and** present products
+in import order, which is not an order a merchant can navigate. So
+`text-keyset-cursor.ts` keys on `(name, id)`, sharing the refusal semantics that
+mattered and not the timestamp validation that did not.
+
+Its value is **length-prefixed** rather than delimited: a product named
+`Shirt | Large` breaks a `value|id` split, and the resulting cursor would page
+from the wrong row rather than failing. That is a test, not a hypothetical.
+
+##### Mutation results: 15 applied, 13 killed, 2 proven equivalent
+
+Two survivors were real gaps, and both are now closed:
+
+- **A page boundary between two identical names.** Dropping the `id` tie-break
+  passed everything, because with six seeded products the duplicate pair sat
+  *wholly inside* page two — no boundary ever fell between them. A `limit=1` walk
+  reaches every boundary and kills it. The narrower mutant (removing only
+  `ORDER BY id` while the predicate still tie-breaks) is genuinely equivalent,
+  and is documented in the code as such rather than deleted.
+- **Unassigning twice.** Relaxing the live-sentinel filter on the `UPDATE` passed
+  all sixteen tests: the existing 404 test used a product that was *never*
+  assigned, so no tombstone existed to match. With one present, the second call
+  would touch it, bump `config_version` and report success for work it did not
+  do.
+
+A real bug the tests caught on first run: unescaped `LIKE` wildcards meant a
+search for `100%` matched the entire catalogue.
+
+##### Every gate refused something, which is the point
+
+The isolation gate failed **three times** — once per surface — until each route
+had a negative test. `GET /products` earned an exemption rather than a probe, on
+a reasoned distinction: it is a **filtered collection**, so a foreign `storeId`
+answers `200` with an empty list, not `404`. Asserting `404` would have stated a
+contract the code does not implement.
+
+The invalidation gate refused the assignments work until `config_version` was
+proven to advance, and the API-contract gate refused all six routes until
+documented — including one refusal caused by a **jsonc comment** shaped like a
+route declaration.
+
+#### Stage 1 — analysis and execution plan (2026-09-02)
+
+Read against the API the client must actually speak, not against the milestone
+text.
+
+##### 🔴 B1. `POST /auth/refresh` returns no access token — M13.1 cannot be built
+
+```text
+POST /v1/auth/refresh  →  { "data": { "refreshToken": "…" } }
+```
+
+That is the whole response. The access token lives **15 minutes**
+(`JWT_ACCESS_TTL`, default `15m`), so a merchant is signed out every quarter of
+an hour and refreshing gives the client nothing to authenticate its next request
+with. M13.1's "API client with token refresh" has nothing to refresh *into*.
+
+**Small to fix, and it belongs to Stage 1.** `JwtService.signTenantAccess(userId,
+tenantId, role)` already exists and is called by `login`; `SessionsService.rotate()`
+already returns `userId`. The endpoint needs the same membership lookup login
+does, then returns both tokens. The contract entry and its tests change with it.
+
+Not a design flaw so much as an endpoint that was never exercised by a client:
+Phase 6 built rotation and reuse-detection correctly, and nothing has needed the
+access token back until now.
+
+##### 🟡 B2. There is no `/auth/me`, and the shell needs one
+
+Login returns `userId`, `emailVerified`, `tenantId`, `role` — enough to route.
+After a page reload the client holds only tokens, and the JWT carries `sub`,
+`tid` and `role`. Nothing anywhere returns the user's **name**, **email**, or the
+**tenant's name** — which is what an app shell puts in its header and account
+menu.
+
+Two honest options, and the decision belongs at the start of Stage 1 rather than
+when the header is written:
+
+- **Persist the login response** alongside the tokens. No backend work; goes stale
+  if a name changes, and a second device never sees the update.
+- **Add `GET /auth/me`.** One endpoint, one source of truth, and it doubles as the
+  "is this token still good" probe a client needs on boot.
+
+The second is the smaller long-term cost and is a natural companion to B1's fix —
+both are the session endpoints a dashboard needs and a plugin never did.
+
+##### 🟢 B3. What is already right, verified rather than assumed
+
+- **The connect landing page matches.** `ConnectService` builds
+  `new URL('/connect', APP_URL)` with `request` and `state` query parameters, and
+  `APP_URL` defaults to `http://localhost:3000` — the Next.js port. The plan's
+  `app/connect/` route is exactly what the plugin will open.
+- **CORS is ready**: `credentials: true`, origin from `CORS_ORIGINS` (already
+  `http://localhost:3000`), and `loadConfig()` rejects a wildcard.
+- **Validation errors map straight onto React Hook Form.** `ErrorDetail` is
+  `{ field, code, message }` with **dotted paths** (`groups.0.label`) — RHF's own
+  field-path format, so no translation layer is needed.
+- **`(admin)` has nothing behind it yet**, and that is correct: no staff routes
+  exist until [Phase 26](#phase-26--super-admin). The guard still ships in
+  Stage 1 so the group is never reachable with a merchant token by default —
+  building it later means retrofitting a guard onto routes that already work.
+
+##### Stage 1 — built 2026-09-02
+
+`optioniaWooCommerceFrontend` exists: Next.js 16, React 19, TypeScript, Tailwind,
+shadcn/ui, TanStack Query, RHF, Zod. **29 tests, lint clean, build green.**
+
+Two backend fixes came first, because a client built against an endpoint that
+cannot serve it is a client that gets rewritten.
+
+| Delivered | Notes |
+|---|---|
+| **B1 fixed** — `POST /auth/refresh` mints an access token | Membership re-read, not replayed: a demoted role takes effect at the refresh rather than fifteen minutes later |
+| **B2 built** — `GET /auth/me` | Explicit column list; `passwordHash` leak mutation-proven |
+| Token store | Access token in memory, refresh in `localStorage`, both wrapped against a throwing `localStorage` |
+| API client | Envelope unwrapping, `ApiError` vs `NetworkError`, 401 → refresh → retry **once** |
+| `ErrorDetail` → RHF | Dotted paths copied, not translated — asserted so a change on either side is caught here |
+| Three route groups + guards | `(auth)`, `(app)`, `(admin)` — the last closed from the day it exists |
+| Four states as components | `LoadingRows`, `EmptyState`, `ErrorState`, `AsyncState` |
+| App shell | Navigation with unbuilt items **disabled rather than hidden** (M13.7) |
+
+##### 🔴 A trap worth recording: a route-level guard on a `@Public()` controller
+
+`GET /auth/me` belongs on `AuthController`, which is `@Public()` because a caller
+signing in has no token. Adding `@UseGuards(JwtAuthGuard, TenantGuard)` to the
+route **was not enough**: the guard reads `IS_PUBLIC` with
+`getAllAndOverride([handler, class])`, found `true` on the class, stood aside,
+and never populated the request context — so the handler answered `401` to a
+caller holding a perfectly valid token.
+
+Fixed with a named `@Authenticated()` decorator rather than a bare
+`SetMetadata(IS_PUBLIC, false)`, so the exception is as greppable as the rule.
+
+##### 🔴 A bug the tests found before any screen existed
+
+The first API client called `clearSession()` whenever a refresh failed — including
+when the *network* failed. A merchant on a flaky connection would be signed out
+of a working dashboard.
+
+`performRefresh()` now returns `refreshed | rejected | unreachable`, and only
+`rejected` ends the session. Caught by
+`keeps the session when the refresh request cannot be sent`, written before the
+behaviour was.
+
+The neighbouring case is worse and was designed for rather than discovered:
+**parallel 401s must share one refresh.** Refresh tokens rotate and the API
+revokes the whole family on reuse, so five queries on mount refreshing five times
+would present an already-replaced token, be read as a replay, and sign the user
+out of their own dashboard loading normally.
+
+##### Proven against the live API, not only against mocks
+
+```text
+register 202 → verify → login 200
+me (login token)      200
+refresh               → { accessToken, refreshToken, role, tenantId }
+me (refreshed token)  200
+stores (refreshed)    200
+CORS preflight        204, allow-origin http://localhost:3000, credentials true
+```
+
+That is the dashboard's boot sequence on every reload, and it was **impossible**
+before B1.
+
+##### Two toolchain decisions, both forced
+
+- **`@vitejs/plugin-react` is not installed.** It pulls `@rolldown/plugin-babel`,
+  which demands Babel 8 against this toolchain's Babel 7 — an unresolvable peer
+  conflict. It only transforms JSX, and nothing under test is a component.
+  Recorded in `vitest.config.ts` so the next person adding a component test knows
+  why it is missing.
+- **shadcn's `form` recipe does not install** under React 19 — it exits silently
+  after the registry check. The RHF binding is written by hand instead, which
+  also makes the `ErrorDetail` mapping explicit rather than hidden in generated
+  code.
+
+##### ✅ Token storage, decided 2026-09-02
+
+**The access token lives in memory; the refresh token lives in `localStorage`.**
+
+The backend returns both in the JSON body and sets no cookies, so the browser
+must hold them and the choice is the client's.
+
+| | Where | Why |
+|---|---|---|
+| Access token | A module-scoped variable | Never written to disk, gone on reload, unreadable from storage. Its fifteen-minute life bounds the damage further |
+| Refresh token | `localStorage` | A reload must not sign a merchant out. Something has to survive it |
+
+**What this does and does not buy.** An XSS on the dashboard can still call the
+API as the user for as long as the page is open — no browser-side scheme
+prevents that. What it prevents is a **long-lived credential being read off disk**
+and used later, from elsewhere. That is the difference between an incident and a
+persistent compromise.
+
+httpOnly cookies would close the remaining gap, and were rejected for now rather
+than dismissed: they need the backend to set and clear cookies on
+login/refresh/logout, CSRF protection on every mutation, and same-site handling
+between `localhost:3000` and the API. That is real work Stage 1 does not
+schedule, and the decision is recorded here so revisiting it is a choice rather
+than a rediscovery.
+
+##### Execution order
+
+| Step | Work |
+|---|---|
+| **1** | **Fix B1 in the backend** — `refresh` returns `accessToken` too, contract updated, mutation-proven |
+| **2** | **Decide B2**, and add `GET /auth/me` if that is the answer |
+| **3** | **Decide token storage** ([Finding 1](#three-findings-from-the-final-analysis-2026-09-02)) and write the decision down before any screen reads a token |
+| **4** | Scaffold `optioniaWooCommerceFrontend` — Next.js, TypeScript, Tailwind, shadcn/ui, TanStack Query, RHF, Zod |
+| **5** | The API client: envelope unwrapping, `ErrorDetail` → RHF, 401 → refresh → retry once, refresh failure → sign out |
+| **6** | The three route groups and their guards |
+| **7** | The app shell, and the four states as reusable components rather than a rule each screen re-implements |
+
+Steps 1 and 2 are backend work inside a frontend stage, for the same reason
+Stage 0 came first: **a client built against an endpoint that cannot serve it is
+a client that gets rewritten.**
+
+#### Stage 0 — audit and fixes (2026-09-02)
+
+Audited by attacking the code rather than re-reading it. **Four findings; three
+fixed, one recorded.** Every fix is mutation-proven against the exact defect it
+closes.
+
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | 🔴 The **A2 allow-list was unenforced** — replacing `toSummary()` with entity passthrough leaked `pushUrl` and `tenantId`, and **53 isolation tests still passed** | Three tests in `store-ownership.e2e-spec`, covering both the list and the single read |
+| 2 | 🔴 `POST /assignments` had a **check-then-insert race** — three concurrent assigns answered `[200, 409, 409]` | `INSERT … ON DUPLICATE KEY UPDATE`. Now `[200, 200, 200]`, one row, and the concurrency case is a permanent test |
+| 3 | 🟡 **Same-tenant cross-store was untested** — both suites created one store, so only the cross-tenant half of A3 was proven | A test asserting an agency's *other* shop is refused too |
+| 4 | 🟢 **N+1 on the ownership check** — 100 products means 100 sequential queries | Measured at the cap: **35 ms**. Recorded, not fixed |
+
+##### Finding 2 is the same defect Phase 12 already fixed
+
+`OrdersService.report()` carries a docblock saying a `SELECT` followed by an
+`INSERT` *"looks like it handles that and does not"* — and this service was
+written with exactly that shape three stages later. The unique index from **A1**
+held, so no duplicate row was ever created; what broke was the **merchant's
+request**, which is the failure a picker's double-click produces.
+
+Worth stating plainly: the lesson was written down, in this repository, and
+repeating it still took a concurrency probe to catch.
+
+##### The most valuable test was one nobody had written
+
+Everything in the assignments suite proved the endpoint was internally
+consistent. **Nothing proved the plugin could use what it writes** — which is the
+only reason Stage 0 exists.
+
+Run by hand during the audit:
+
+```text
+PUBLISH     201 { configVersion: 2 }
+CONFIG      200   SETS 1
+ASSIGNMENTS [{"mode":"manual","target_type":"product","target_ref":"1042","priority":0}]
+```
+
+That is the shape `Config\ProductIndex` requires, and it is now a permanent test
+— mutation-proven against writing `ALL` instead of `MANUAL`, and `category`
+instead of `product`. Both produce an assignment the plugin silently skips, with
+a deferral counter as the only trace. A hand-run check is one nobody repeats.
+
+**Verification after the fixes:** 58 routes, 630 unit + **850** e2e, 8 gates.
+
+#### Stage 0 — findings from its own analysis (2026-09-02)
+
+Read from the schema and both consumers, not from this plan.
+
+🔴 **A1. Assignments have no unique constraint, and the picker is a double-click
+surface.** `option_set_assignments` carries two plain indexes —
+`ix_assignments_target (targetType, targetRef)` and `ix_assignments_set_mode
+(optionSetId, mode)` — and **nothing unique**. The same set can be assigned to the
+same product any number of times.
+
+The storefront survives it: `Config\ProductIndex` keys by
+`$products[$product_id][$set_id]`, so duplicates collapse. The *merchant* does
+not — the picker would list the set twice, and unassigning would remove one row
+and leave the option still rendering. That is a support ticket shaped exactly
+like the duplicate-store one this architecture was built to avoid.
+
+Stage 0 adds a unique index on `(optionSetId, targetType, targetRef, deletedAt)`
+— `deletedAt` in the key because the table is soft-deletable and every other
+unique index here follows that pattern (`uq_options_group_key`,
+`uq_option_values_option_key`). A migration, not application-level de-duplication:
+the picker is a UI where a double submit is normal, and two requests racing both
+pass an application check.
+
+🟡 **A2. `GET /stores` must return an explicit field list, never the entity.**
+`stores` carries `pushUrl` — a merchant-supplied callback URL with no UI purpose —
+alongside the health fields M13.3 actually needs. Credentials live in a separate
+table, so a token cannot leak this way, but entity passthrough is how a field
+added in a later phase becomes an unintended part of a public response. Name the
+columns: `id, name, storeUrl, status, connectedAt, lastSeenAt, configVersion,
+pluginVersion, wpVersion, wcVersion, phpVersion`.
+
+Everything M13.3 asks for exists, and `ix_stores_last_seen` already indexes the
+staleness question.
+
+🟡 **A3. `target_ref` has no foreign key, deliberately — so nothing stops a
+cross-store assignment.** It holds a **WooCommerce** product id, and the product
+lives on the merchant's site rather than in this database, so an FK is impossible
+by design. The only guard is that an option set belongs to a store
+(`option_sets.storeId`).
+
+The endpoint must therefore check that the `targetRef` it is given exists in
+`store_products` **for that set's store** before writing. Without it a merchant
+with two stores can assign a set to a product id that belongs to the other one —
+accepted, stored, and silently never rendering, because the plugin indexes by a
+product id that does not exist on that site.
+
+🟢 **A4. Product search: the index is a prefix index, and that is fine until
+Phase 19.** `ix_store_products_search (storeId, name)` is a B-tree, so it serves
+`name LIKE 'shirt%'` and **not** `LIKE '%shirt%'` — which is what a merchant
+expects from a search box. There is no `FULLTEXT` index anywhere in the schema.
+
+Not a Stage 0 problem: `demo.seed.ts` creates **30 products**, and a full scan of
+30 rows is free. It becomes one when [M19.1](#m191--initial-catalogue-import)
+imports a real catalogue. Recorded so that phase inherits it rather than
+rediscovering it, and so Stage 0 does not over-build a search nobody needs yet.
+
+⚠️ **A capability decision Stage 0 must make rather than improvise.**
+`PRODUCTS_ASSIGN` already exists in `capabilities.ts`, so the write side is
+settled. But there is **no `STORES_VIEW` and no `PRODUCTS_VIEW`** — every existing
+capability is a mutation except `OPTION_SETS_VIEW` and `ANALYTICS_VIEW`. Listing
+a tenant's stores and searching their catalogue are reads a `viewer` should
+plausibly have, and inventing the capability inside a controller is how a
+permission model drifts. Decide it in the capability table, with the role
+mapping, before either endpoint is written.
+
+**Every Stage 0 endpoint carries the Phase 12 lessons:** an entry in
+`docs/API-CONTRACT.md` (the gate refuses an undocumented route), tenant scoping
+proven by a **direct service call** and not only through the validation pipe —
+the request-level test proves the pipe, and the pipe is not what would be wrong —
+and e2e coverage that fails when the feature is removed.
+
+#### The frontend repository
+
+`optioniaWooCommerceFrontend/`, a third sibling beside the plugin and the backend.
+`optionia-app/` in this directory is the **Shopify** Optionia — a different
+product, React Router and `shopify app dev`, explicitly out of scope since
+[B1](#s1-blocking-decisions) — and nothing here touches it.
+
+#### Stage 7 — the two Gate 1 obligations this phase inherits
+
+🔴 **`docs/ARCHITECTURE.md` does not exist.** Gate 1 requires it "current"
+alongside `DATABASE.md`, `CONFIG-CONTRACT.md` and `PRICING-SPEC.md`. The other
+three exist; the only `ARCHITECTURE.md` on this machine is
+`optionia-app/.claude/ARCHITECTURE.md`, inside the excluded Shopify project. A
+gate item nobody can satisfy is either a block or a quiet waiver, and the second
+is worse.
+
+🔴 **The canonical E2E has no home.** Its script — register → connect → author →
+assign → publish → storefront → cart → checkout → order → cloud — spans all three
+repositories. The plugin's PHPUnit cannot drive a Next.js login; the backend's
+Jest cannot drive WooCommerce; **neither repo has any browser-driving tooling
+today.** Decided 2026-09-02: **Playwright in `optioniaWooCommerceFrontend`**,
+driving a real browser against the Studio site and a live backend. The frontend
+owns the flow's entry point, so it owns the test. Written last, when every piece
+it touches exists.
+
+The checklist says *"executed manually **and** as an automated E2E"*, so a manual
+pass is explicitly not enough — which is why this is a stage rather than a note.
+
+#### Stage 7 — built 2026-09-02
+
+**`docs/ARCHITECTURE.md` exists**, at the **repository root** rather than inside
+any of the three. The other Gate 1 documents live in the backend because they
+describe the backend's interfaces; this one describes all three repositories, and
+filing it under one would imply that one owns the architecture. Every factual
+claim in it was verified against the code rather than written from memory — the
+guard chains (10 controllers on `JwtAuthGuard → TenantGuard → CapabilityGuard`,
+3 on `StoreTokenGuard → SiteMatchGuard`), `SUPPORTED_SCHEMA_VERSION = 1`, the
+PKCE handshake, and `Scheduler::INTERVAL = 900`.
+
+**Playwright is installed in `optioniaWooCommerceFrontend`**, per the 2026-09-02
+decision, with the canonical flow in `e2e/canonical.spec.ts`. It **passes** for
+the half that does not need a store connection: register → verify → sign in →
+workspace resolved → the stores screen's empty state. The rest is written and
+skipped, for the reason below.
+
+##### ✅ R1 (RESOLVED by configuration, 2026-09-02). The handshake needs `https://`, and local development now has it
+
+**Resolved without a code change.** Studio serves TLS natively — the option was
+there the whole time, and the first analysis wrongly called local TLS "outside
+this repository's control":
+
+```bash
+studio config set --domain optionia.local --https
+studio wp option update home    'https://optionia.local'
+studio wp option update siteurl 'https://optionia.local'
+```
+
+`home_url()` then returns `https://optionia.local/`, which is what the plugin
+sends and what `InitiateDto` requires. Measured end to end: `POST
+/v1/connect/initiate` returns a real `authorize_url`, the browser completes the
+approval, and **both sides agree** — the plugin holds
+`optionia_connection_state: connected` and a store id identical to the backend's
+`stores` row.
+
+**The tempting alternative was declined.** A localhost exemption in the DTO gated
+on `NODE_ENV` would have been the smallest diff, and is the most dangerous class
+of change there is: code whose *purpose* is to weaken a security boundary when a
+variable says so is one misconfigured deploy from weakening it in production.
+Configuration reaches the same place and cannot leak there, because production
+already has real TLS. Recorded because the next person to hit this at the moment
+they are blocked will be tempted by exactly that diff.
+
+**Two things this surfaced.** `APP_URL` was unset, so `authorize_url` was built
+against its `:3000` default — and port 3000 on this machine is an unrelated
+project, meaning a merchant would have been redirected mid-handshake to a
+stranger's site. And Studio's certificate is self-signed, so the suite runs with
+`ignoreHTTPSErrors`; that is only defensible while every origin is local, so
+`global-setup.ts` now **enforces** locality rather than asserting it in a comment.
+
+##### The original finding, kept for the reasoning
+
+##### 🔴 R1. The connection handshake cannot run over `http://`, and local development has no `https://`
+
+Found by driving it, not by reading it. `InitiateDto` requires `site_url` and
+`callback` to be absolute **`https://`** URLs, and the rule is *correct*: the
+handshake exists to deliver a credential, and one sent over plain HTTP crosses
+the network in cleartext. The plugin sends `home_url()` verbatim, which on a
+Studio site is `http://localhost:8881/`. So `POST /v1/connect/initiate` answers
+`400 VALIDATION_FAILED` and the plugin returns to
+`?optionia_connection=failed`.
+
+**Both repositories are individually right and jointly unusable locally.** No
+developer can complete a connection by hand on this machine either — the E2E did
+not create this, it revealed it. Neither repo has a development accommodation:
+there is no `ALLOW_INSECURE_ORIGIN`, no localhost exemption, nothing keyed to
+`NODE_ENV`.
+
+Three ways out, none of them free:
+
+1. **An HTTPS tunnel** for the Studio site. No new code; every run then depends
+   on an external service, and the callback origin changes per tunnel.
+2. **A localhost exemption in the DTO**, gated on a non-production `NODE_ENV`. The
+   smallest change, and the most dangerous class of change — a validator that
+   relaxes itself by environment is one deploy away from relaxing in production.
+3. **Local TLS** for Studio, if it can be made to serve it. Closest to real, and
+   entirely outside this repository's control.
+
+**Not decided here**, because it is a security-boundary decision and this stage's
+job was to find it. Recorded so the choice is made deliberately rather than by
+whoever hits it next at the moment they are blocked. Until then the connection
+half of the canonical flow stays skipped **with its reason in the skip message**,
+not deleted — a suite that quietly drops the step it cannot run is how a gate
+becomes a formality.
+
+##### 🔴 R2. Two service checks passed against the wrong things
+
+The suite refuses to run unless the API, the dashboard and the WooCommerce store
+all answer. Both non-trivial checks were wrong on the first attempt, and both were
+caught only by running them:
+
+- **Port 3000 was serving a different project entirely** — an unrelated Next.js
+  site. The dashboard check asked "is something listening?", got a `200`, and the
+  suite drove eleven steps against a stranger's site before failing on a missing
+  form field. Liveness is not identity; the check now asserts the page is
+  Optionia's.
+- **The Studio site answered `200` for every URL while serving a PHP fatal error**
+  — a cleaned-up temp file from a stale process. A status-only check called that
+  healthy. The probe now rejects a `Fatal error` body behind any status.
+
+Both are the phase's recurring failure — a check that passes without exercising
+its subject — in a new place. The lesson that generalises: **an E2E's environment
+assertions need the same adversarial treatment as its assertions about the
+product**, because they fail silently and blame the wrong thing.
+
+##### The environment, and what it needed
+
+The plugin is symlinked into the Studio site, so the E2E drives real plugin code.
+`OPTIONIA_API_URL` is now defined in that site's `wp-config.php` — **it was not**,
+so the plugin's production default (`https://api.optionia.com/v1`) applied and any
+local run would have handed a real connection request to the real service.
+`CORS_ORIGINS` gained the dashboard's actual port.
+
+##### The canonical flow, as it stands 2026-09-02
+
+**Green, twice consecutively**, which is the point of the reset below:
+
+```text
+register → verify → sign in → workspace resolved
+  → connect a store (full PKCE handshake, WordPress ⇄ dashboard ⇄ WordPress)
+  → create an option set → add a group → add a radio option
+  → add a value at £10.50 → assign → publish
+```
+
+Verified in the database rather than by a green tick: the option stored as
+`radio`/`finish`, the value as `lux` at **`priceAmountMinor: 1050`** — £10.50
+exactly, no float drift — and after publishing, `status: published, version: 1`
+with **one `option_set_versions` snapshot row**. That is precisely what
+[J9](#-j9-the-demo-seed-publishes-without-a-snapshot-so-storeconfig-is-empty)
+found the demo seed failing to write.
+
+And fetched back as a storefront would, with the plugin's own credential:
+
+```json
+{"config_version": 1, "option_sets": [{"groups": [{"options": [
+  {"key": "finish", "values": [{"value_key": "lux",
+    "price_config": {"type": "fixed", "amount_minor": 1050}}]}]}]}]}
+```
+
+**£10.50 survives dashboard → database → snapshot → config document → plugin.**
+That chain is the whole reason this test exists: every repository's own suite was
+already green while Phase 12 measured them disagreeing about `value_key` and
+silently dropping every engraving order.
+
+**Still to add:** the storefront render, the customer's selection, cart, checkout
+and the order's option row. Those need a product with the set assigned, and the
+catalogue is empty until [M19.1](#m191--initial-catalogue-import) — so the assign
+step asserts *either* an assignment *or* the honest "not been imported yet" empty
+state, and the remaining steps arrive with Phase 19.
+
+##### 🔴 R3. Run two is not run one without a reset
+
+The first time the connection half passed, the second run **failed** — a connected
+site shows no **Connect this store** button, so the step looked like a product
+defect and was a leftover. `e2e/reset.ts` clears the plugin's connection options
+before the run.
+
+It deliberately **does not** delete the backend's `stores` row. A merchant who
+reinstalls a plugin is in exactly that state — a live store record, a site that
+has forgotten its credential — and the handshake must cope with it. Deleting both
+sides would make every run a first-ever connection and quietly stop testing the
+case that actually happens.
+
+##### 🟡 R5. The suite exhausts its own rate limit at about five runs an hour
+
+`POST /connect/initiate` allows **10 per hour** (`@Throttle` in
+`connect.controller.ts`), deliberately: an unauthenticated endpoint that mints
+connection requests is an abuse surface, and the limit is correct.
+
+Each suite run spends one. After five runs in ten minutes the handshake began
+answering `429`, the plugin redirected to `?optionia_connection=failed`, and the
+failure was **indistinguishable from a broken handshake** — the same symptom R1
+produced for an entirely different reason. Diagnosed from the API log, not from
+the test output.
+
+The test now names the cause when it sees that redirect, rather than leaving the
+next reader to debug PKCE. Restarting the API resets the in-memory counter, which
+is the right escape locally; a CI runner doing many runs an hour would need the
+limit lifted by configuration rather than the test loosened — the limit is
+protecting something real.
+
+##### 🟡 R4. Four locator defects, none of them product bugs
+
+Recorded because each cost a run and each has the same shape — **a selector that
+matched more than it named**:
+
+- `getByPlaceholder('lux')` is a *substring* match and also found `Luxury`.
+- The group's "New group" and the option's "Option label" inputs share the
+  placeholder `Finish`.
+- The empty state offers both **New option set** and **Create your first**.
+- The workspace name appears in the banner *and* the body.
+
+All four failed as "element not found" or "strict mode violation" — a **test**
+problem wearing the costume of a product one. The store host is now derived from
+`SERVICES.store` rather than written out, after `localhost:8881` was hardcoded
+twice and broke when the URL moved to HTTPS.
+
+##### Stage 7 audit — six findings, four of them created by Stage 7 itself
+
+Found 2026-09-02 by auditing the stage's own output. All fixed.
+
+##### 🔴 S1. The assign step branched, and the assigning half never ran
+
+Written to assign when a product exists and otherwise assert the honest "not
+imported yet" empty state. Measured: `store_products` is empty for every store
+this suite creates, so the `else` took **all sixteen executions**. The assignment
+had never been tested, and the exit-criteria note claiming "the write half is
+proven" rested on a manual check, not on anything the suite asserted.
+
+**A branch that has never executed reads as coverage and is not.** Closed by
+`e2e/catalogue.ts`, which imports the WooCommerce store's *real* products through
+the Store API — real ids matter, because an assignment targets `externalId` and
+the whole point is proving the dashboard writes the id the storefront resolves.
+The step is now unconditional, and a `manual` assignment to product 20 ("Custom
+Hoodie") is written and verified each run.
+
+**And the assertion this unlocked:** the flow now fetches `/store/config` **with
+the plugin's own credential** and checks `mode: manual`, a numeric `target_ref`,
+and `amount_minor: 1050`. That is the cross-repository seam Phase 12 measured
+failing — both sides green, disagreeing about `value_key`, every engraving order
+dropped. Mutation-proven: asserting the wrong price fails the suite.
+
+##### 🔴 S2. Nine live credentials for one site, manufactured by the reset
+
+The plugin's own Disconnect is **local only** — its docblock says so: *"the cloud
+is told separately"*. So `reset.ts` clearing the plugin's options left every
+server-side credential live. Measured: nine `connected` stores for
+`optionia.local` and **nine unrevoked credentials**, one per run, only one of
+which any plugin held.
+
+That is the state an authentication suite should be proving impossible, and this
+one was producing it. Fixed by disconnecting **through the dashboard** as the last
+step of the flow — the merchant's own path, and worth testing in its own right
+since the response says how many credentials it revoked. Live credentials: 9 → 0.
+
+##### 🔴 S3. Test data grew without bound
+
+**32 tenants, 32 users, 11 stores** after roughly sixteen runs, in the shared
+development database. `e2e/cleanup.ts` now clears prior runs at the start of each
+one — before, not after, because a failed run's data is the evidence. It deletes
+in dependency order (`stores` and `option_sets` are `RESTRICT` against `tenants`)
+and matches only what this suite creates. First run cleaned **72 rows**.
+
+##### 🟡 S4. Nothing kept `ARCHITECTURE.md` current, and Gate 1 says "current"
+
+Three of the four Gate 1 documents had gates; this one and `CONFIG-CONTRACT.md`
+had none. `bin/check-architecture-doc.sh` now verifies the file counts, the route
+count, that every referenced path exists, that the guard chains it quotes are
+still in use, and that the gates it credits still exist. Three mutants killed.
+
+⚠️ **It found a bug in itself first.** The first version counted routes with its
+own regex over `API-CONTRACT.md` and got **45 against a true 60** — it missed rows
+whose formatting differs. Two ways of counting one thing is one too many, so it
+now reads `check:api`'s answer instead of re-deriving it.
+
+##### 🟡 S5. The frontend has no CI at all
+
+Both other repositories have `.github/workflows/ci.yml`. The frontend has none, so
+305 unit tests, the render suites, the parity gate and this E2E run only when
+someone types the command. Gate 1 asks for the canonical E2E *"automated"*, and
+automated currently means automatable. **Left for [M30.8](#phase-30--test-suite)**,
+which owns the pipeline — recorded here so it is inherited rather than
+rediscovered.
+
+##### 🟡 S6 / S7. The setup was undiscoverable, and `.env.example` reproduced a bug
+
+`APP_URL` and `CORS_ORIGINS` still read `localhost:3000` in the example file, so a
+fresh clone would hit the exact redirect defect Stage 7 found. Both now carry the
+warning. And the whole environment setup — Studio HTTPS, `OPTIONIA_API_URL`, the
+ports — lived only inside this plan; `e2e/README.md` now carries it beside the
+tests, including **why the DTO must not be relaxed** to make the handshake easier.
+
+##### The complete canonical flow, green 2026-09-03
+
+The whole of Gate 1's script now runs in a browser, twice consecutively:
+
+```text
+register → verify → sign in → connect (PKCE) → author a radio option at £10.50
+  → import the catalogue → assign → publish → the storefront renders it
+  → a customer selects it → cart → checkout → the order carries it → disconnect
+```
+
+Verified in WooCommerce rather than by a green tick — **order #42**: base £80 plus
+**£10.50** = £90.50, the line carrying `Finish = Luxury`, `_optionia_selections`,
+`_optionia_option_set_id`, `_optionia_config_version: 2` and
+`_optionia_price_delta: 10.50`. £10.50 survives dashboard → database → snapshot →
+config document → plugin → cart → checkout → order.
+
+**The earlier "awaits M19.1" note was too pessimistic.** The blocker was an empty
+catalogue, and `catalogue.ts` had already solved it — the storefront half was
+reachable and nobody had tried.
+
+##### 🔴 T1. Stale carts, and the validator was right every time
+
+Checkout refused the basket with *"Finish is no longer available"* through many
+iterations. The cause: **every run publishes a new option set with new option
+ids**, and WooCommerce had carts holding ids from earlier runs. `wc_add_notice` is
+global, so one stale basket anywhere blocks checkout in the current session.
+
+Two stores had to be cleared, and the second is the one that mattered:
+
+- `woocommerce_sessions` — a guest's cart.
+- **`_woocommerce_persistent_cart_*` in user meta** — a *logged-in* customer's,
+  restored on every visit. This flow signs into WordPress as `admin` to reach the
+  plugin's settings, so it shops as that user. Deleting sessions alone reported
+  `deleted sessions: 0` while stale selections kept reappearing.
+
+⚠️ And `wp db query` **cannot reach Studio's database** — it answers *"Access
+denied for user 'username_here'"*. The first clear ran inside a `try`, failed
+silently, and appeared to work. `wp eval` runs inside WordPress, where `$wpdb` is
+already connected.
+
+##### 🔴 T2. `productUrl()` pointed at a page that did not exist
+
+`?p=20` returns an **empty body** for a product — WordPress's plain-permalink form
+needs `post_type` too. The render assertion above it passed against that empty
+page for several runs: a test proving nothing while reporting success. Now taken
+from the permalink `store_products` already holds.
+
+##### 🟡 T3. Six locator defects, and the shape they share
+
+`.first()` matches the first element in **DOM order, visible or not**. The order
+page carries hidden structured-data copies of its figures, so `getByText(/10\.50/)`
+resolved to one and reported "not visible" about a price plainly on screen. Also:
+two Add to cart buttons, an ambiguous option-label placeholder, a duplicated
+create button, and `getByPlaceholder('lux')` substring-matching `Luxury`.
+
+Every one failed as *"element not found"* — **a test defect wearing a product
+defect's clothes**, and each cost a diagnostic cycle.
+
+##### 🟡 T4. The option's price is not asserted on the order screen, deliberately
+
+`£10.50` is in that page twice and **visible zero times** — it lives in markup a
+customer does not read. Whether that is right is a question for
+[M12.6](#m126--merchant-facing-order-display)'s order presentation, not something to
+settle with a looser locator. What Gate 1 needs is asserted: the **selection**
+reached the order, which is what a merchant fulfils from. The price is proven
+three ways already — `1050` in the database, `amount_minor: 1050` in the config
+document, and £10.50 visible in the cart the customer is charged from.
+
+#### Two acceptance criteria that need sharpening
+
+⚠️ **M13.6 runs against seeded products, not a merchant's catalogue.** The plan
+already says so in prose; the exit criterion does not. `store_products` is filled
+by [M19.1](#m191--initial-catalogue-import), so until Phase 19 the picker searches
+rows from `src/seeds/demo.seed.ts`. The criterion reads as a real merchant flow
+and would be ticked on a demo one.
+
+✏️ **Sharpened 2026-09-02.** The criterion *"Merchant registers, connects a store,
+and publishes a radio option in the UI"* now carries its own qualifier in the
+checklist. Ticking it means the flow works **against seeded products**; a
+merchant's own catalogue is not reachable until M19.1 imports it, and re-reading
+this tick later as proof of a real merchant flow is exactly the drift Phase 12
+Stage 4 had to correct.
+
+⚠️ **The 60-second criterion has no way to fail.** M13.3 inherits Phase 8's
+*"connect a store in under 60 seconds, timed by a person on a real site"* — a good
+criterion with no recorded procedure, no baseline, and nowhere to write the
+result. Phase 12 spent eleven stages on the lesson that an unmeasured guarantee
+is prose. The plugin half is already measured at 0.17 ms; the human half is the
+part nobody has timed.
+
+✏️ **The procedure, written 2026-09-02 so the number means something.**
+
+✏️ **No longer blocked.** [R1](#-r1-the-connection-handshake-cannot-run-over-http-and-local-development-has-no-https)
+was resolved on 2026-09-02, and a store has since been connected end to end from
+this machine. The procedure below is runnable now.
+
+⚠️ **This is the one criterion in the phase that cannot be discharged by an
+agent.** It measures a person reading screens with a stopwatch; a scripted
+timing would measure the machine, which is already known to be 0.17 ms and is
+not what the criterion governs. It stays open until someone runs it.
+
+**Start** when the merchant, already signed in to both their WordPress admin and
+Optionia, presses **Connect this store**. **Stop** when the plugin's settings
+screen reads *connected*. That span is what the criterion governs: it excludes
+installing the plugin and creating an account, which are one-time and separately
+owned, and includes every screen the merchant reads and every decision they make.
+
+Run it **three times on a clean connection** — disconnect between runs — and
+record all three, not the best. A first run includes reading copy nobody has read
+before, and that is the run a real merchant has.
+
+| Run | Date | Seconds | Notes |
+|---|---|---|---|
+| 1 | 2026-09-03 | **~15** | Merchant's own estimate, not a stopwatch reading |
+| 2 | 2026-09-08 | **12.50** | Stopwatch, clean connection |
+| 3 | 2026-09-08 | **11.16** | Stopwatch, clean connection |
+
+**✅ Criterion met — 12.50s and 11.16s against a 60-second budget**, with the
+slowest recorded run using **21%** of it.
+
+⚠️ **Both timed runs stopped on the *dashboard's* store list rather than the
+plugin's settings screen**, which is where the procedure above puts the finish
+line. That makes them **conservative, not optimistic**: the merchant switched
+tabs and waited for a second page to load, work the real flow does not require.
+The true span is shorter than recorded, and the direction of the error is the
+safe one — so the numbers stand as measured rather than being re-run for a
+better result.
+
+✏️ **Run 1's estimate is kept rather than replaced.** It was ~15s, and the timed
+runs came in *under* it — so the merchant's instinct was right and slightly
+pessimistic. Recording all three, including the weakest, is what the procedure
+asks for: *"record all three, not the best."* The trend across them is the useful
+signal, and it is flat.
+
+**The 21ms machine half is confirmed as irrelevant to this criterion.** Measured
+at ~0.02s against ~12s of human time, the handshake is **0.2%** of the span. This
+is a UX measurement, exactly as the procedure argued, and a faster server would
+not move it.
+
+✏️ **Why an agent cannot run this, measured rather than asserted (2026-09-03).**
+The machine half of the handshake is **21 ms**, timed three times against the live
+API. The other 59.98 seconds of the budget are a person reading screens and
+deciding — which is the whole point of the criterion, and exactly what a script
+cannot stand in for. Automating it would measure 21 ms and prove nothing.
+
+⚠️ **One approximate run, not three timed ones — so this is `[~]`, not `[x]`.**
+The merchant reported *"maybe 15s"* after connecting successfully. That is well
+inside the 60-second budget and is real evidence the flow is not slow; it is not
+the procedure above, which asks for three runs recorded individually because *"a
+first run includes reading copy nobody has read before, and that is the run a
+real merchant has"*.
+
+Recorded as observed rather than upgraded to a pass. The gap between "felt fast"
+and "measured at 15s across three clean runs" is exactly the gap this milestone
+was written to close, and closing it on one estimate would be the drift the
+procedure exists to prevent.
+
+**Fails** if any run exceeds 60 seconds. A failure is a UX finding, not a
+timing one: the remedy is fewer screens or clearer copy, never a faster stopwatch.
+
+#### Three findings from the final analysis (2026-09-02)
+
+Found by reading the API the frontend will consume, rather than re-reading this
+plan.
+
+🔴 **1. Token storage is undecided, and it is M13.1's largest security decision.**
+`POST /auth/login` returns `accessToken` and `refreshToken` **in the JSON body**;
+no route anywhere in `src/auth/` sets a cookie. So the browser must hold them,
+and the choice is the frontend's to make: `localStorage` is XSS-readable, while
+an httpOnly cookie needs a backend change this plan does not schedule. Naming it
+in M13.1 costs nothing now and is expensive to reverse once every screen reads
+the token the same way.
+
+The groundwork is otherwise done: CORS is configured with `credentials: true` and
+`CORS_ORIGINS=http://localhost:3000` — the Next.js default port — and
+`loadConfig()` already rejects a wildcard origin.
+
+🟡 **2. A user can belong to two tenants, and nothing lets them switch.**
+`uq_tenant_members_tenant_user` is on `(tenantId, userId)`, so multiple
+memberships are legal. `tenantId` reaches every request as the JWT's `tid` claim,
+and login resolves it with `ORDER BY createdAt ASC LIMIT 1` — the **oldest**
+membership. There is no tenant-switch endpoint.
+
+**Latent, not blocking**: no accept-invite controller exists yet, so a second
+membership is currently unreachable in the product. But this plan repeatedly
+assumes agencies — *"an agency contractor should be able to build an option set"*
+— and that is exactly the multi-tenant user. Whoever builds team invitations
+inherits this; recorded here so it is inherited knowingly.
+
+🟡 **3. Keyset pagination has one consumer, and product search is the second.**
+`common/pagination/keyset-cursor.ts` carries its own warning: *"One consumer
+today."* A merchant catalogue is the obvious next one, and M13.6's picker
+searches it. Stage 0 should reuse the shared helper rather than write a second
+paging scheme — the plan's own note says it was made shared *because* a
+malformed-cursor defect appeared once already.
+
+#### What is already ready, verified rather than assumed
+
+- **All eight auth endpoints exist** — `register`, `verify-email`,
+  `resend-verification`, `login`, `refresh`, `logout`, `request-password-reset`,
+  `reset-password`. M13.2 is unblocked.
+- **Twelve option-set routes exist**, including `publish`, `publish-check`,
+  `preview` and `versions`. M13.4 and M13.5 are unblocked.
+- **The handshake is complete** — `initiate`, `exchange`, `authorize`.
+- **The assignment *read* path works**: `serialization/config-document.ts` already
+  serialises assignments into the storefront document. Only the write side is
+  missing.
+- **Eight of Gate 1's ten checklist items are already green**: AC3 (8 render-path
+  files, no network access), the adversarial suite, isolation (39 routes, every
+  one probed), fixture parity (3 byte-identical fixtures across both repos),
+  HPOS, classic and block themes.
+
+Phase 13 is unusually well supported. The gaps are narrow, specific, and all in
+Stage 0.
 
 ### M13.1 — Dashboard bootstrap
 
@@ -4402,6 +10741,19 @@ action that fills it), error (with a retry), and populated. An empty state that 
 "No data" is a defect: a merchant's first visit to every screen is the empty state, and
 it is the highest-leverage onboarding surface in the product.
 
+📌 **"Four" here counts *populated*, which is the screen working.** The exit
+criterion asks for **three** — *"Loading, empty, and error states present on every
+screen"* — and the two are the same requirement counted differently. Noted because
+Stage 6 initially audited against the remembered phrase "four states" rather than
+the written criterion, which is how a stage checks itself against its own summary
+instead of its contract.
+
+**And a fifth state the original four omit: the render itself failing.** A
+component that throws unmounts the tree, and all four states above assume the
+render succeeded. M13.1 names *error boundaries* in its own scaffold list; Stage 1
+shipped none, so until Stage 6 a throw left a blank white page with no message and
+no way back. `app/error.tsx` and `app/not-found.tsx` close it.
+
 Responsive from the start: merchants check stores on phones. The builder
 ([Phase 20](#phase-20--full-builder-ui)) is the one screen allowed to be
 desktop-first, and it must still be *readable* on mobile.
@@ -4410,10 +10762,573 @@ desktop-first, and it must still be *readable* on mobile.
 
 Register, verify email, login, forgot/reset password, logout. Zod-validated.
 
+#### Stage 2 — built 2026-09-02
+
+Six screens, two backend fixes, **53 frontend tests**. Register · Login · Forgot
+password · Reset password · Verify email · Sign out, all proven against the live
+API:
+
+```text
+register 202 → verification link recovered from the API log
+verify 200   → same token reused: 401 (single-use)
+login        → emailVerified true, tenant resolved
+reset 200    → old password 401, new password 200
+```
+
+##### 🔴 C1 fixed — the emoji 500
+
+`@MaxLength(72)` counted **characters** where bcrypt's limit is 72 **bytes**, so
+a 60-character emoji passphrase reached `assertUsablePassword()`, threw
+`WeakPasswordError`, and — with no mapping in the exception filter — answered
+`500 INTERNAL_ERROR`.
+
+Two fixes, both narrow: a `MaxBytes` validator so the DTO measures the right
+unit and names the field, and `WeakPasswordError → VALIDATION_FAILED` as the
+floor for any caller that never passes through a DTO. Verified live: the same
+request now answers `400` with *"password must be at most 72 bytes (120 given).
+Some characters, such as emoji, use several bytes each."*
+
+Schema parity confirmed against the running API — valid `202`, 12 emoji `202`,
+30 emoji `400`, short `400` — so the client refuses exactly what the server
+refuses.
+
+##### 🔴 C2 fixed — and the exhaustive test found a *second* loop
+
+`/verify-email` sat in `(auth)`, whose guard sends any signed-in visitor to the
+dashboard, while `RequireMerchant` sends an unverified user to `/verify-email`.
+Every newly registered merchant bounced between them.
+
+Writing the guard decisions as **data** and walking every (entry point × session)
+pair found one I had not seen: `/no-workspace` lived inside `(app)`, and
+`RequireMerchant` redirects a tenantless user *there* — **a screen behind the
+guard that sends people to it redirects to itself.** It needs three conditions at
+once (signed in, verified, member of nothing), which is why reading missed it.
+
+Two new route groups, each named for the session state it admits: `(verify)` —
+signed in, not yet verified; `(session)` — signed in, nothing more required. Both
+loops are mutation-proven: restoring either route to its old group fails the
+suite.
+
+##### 🔴 A third bug: every field error would have shown generic copy
+
+`ErrorDetail` has no top-level `message`. The API keeps details **structured** so
+a client can localise them, and puts class-validator's sentence in
+`params.message` — while the frontend type declared `message?: string`, which is
+never populated.
+
+Worse, `messageFor()` preferred the `code`, and **every** validation detail
+carries `code: 'INVALID'`. So *"password must be at most 72 bytes"* would have
+rendered as *"This is not valid."* Caught by testing against a real response body
+rather than an assumed shape; the fixture in `api-errors.test.ts` is copied
+verbatim from the live API.
+
+##### 🟡 A test that failed because of a person, not a defect
+
+`auth.e2e-spec`'s *"writes no row for an unknown address"* counted **every** row
+in `password_reset_tokens`. Exercising the reset flow by hand left one behind, and
+the suite then failed naming password-reset behaviour rather than the leftover
+row — the expensive kind of red. Now scoped to its own namespace, like the rest
+of the suite.
+
+##### Two decisions the API made for these screens
+
+- **Registration does not sign anyone in.** `202 { message }`, no tokens — so the
+  success state is a "check your email" panel, not a redirect into the app.
+- **Login succeeds for an unverified account.** It has a session; it simply
+  cannot use the app. The screen routes to `/verify-email` rather than
+  `/dashboard`, because the guard would bounce it there anyway.
+
+##### Details worth keeping
+
+- **Verification tokens are single-use and React mounts effects twice in dev.** A
+  `useRef` latch stops the second run spending an already-spent token and showing
+  a failure for a verification that worked. The `401` on reuse above is what makes
+  that necessary rather than defensive.
+- **Sign-in validates only that a password was typed.** A length rule there tells
+  someone whose password predates the current policy that their own password is
+  invalid — when it works.
+- **Both "check your email" panels say the same thing whether or not the account
+  exists.** The API is careful not to be a membership oracle; a screen that were
+  more helpful would undo that.
+
+#### Stage 2 — audit and fixes (2026-09-02)
+
+Audited by running the real flows against the live API. **Five findings, all
+fixed**, each mutation-proven against the defect it closes. Two would have
+reached merchants on their first day.
+
+##### 🔴 D1 — an unverified merchant had no path forward at all
+
+Sign-in **refuses** an unverified account, and did so with `FORBIDDEN` — the same
+code as "your role lacks that capability". Three failures compounded:
+
+1. The dashboard rendered *"You do not have permission to do that"* to someone
+   whose only problem was an unopened email.
+2. My login screen branched on `session.emailVerified`, which is **dead code**:
+   login throws rather than returning an unverified session.
+3. The resend button lives on `/verify-email`, reachable only via
+   `RequireMerchant` — which needs the session sign-in had just refused — and is
+   `disabled` without one.
+
+So the recovery path was unreachable by the only person who needed it.
+
+Fixed with a new `EMAIL_NOT_VERIFIED` code (the remedies are opposite: *ask
+someone else* versus *open your email*), distinct copy, and a resend offer on the
+sign-in screen itself. Proven end to end:
+
+```text
+1. login blocked                    EMAIL_NOT_VERIFIED
+2. resend from the login screen     202
+3. verify with the resent link      200
+4. login now                        200
+```
+
+**Nothing covered unverified sign-in**, which is how the wrong code survived.
+
+##### 🔴 D2 — a signed-in merchant could not use a password-reset link
+
+`/reset-password` sat in `(auth)` behind `RequireAnonymous`, so clicking the link
+in an email while signed in bounced silently to the dashboard — the reset
+impossible, and nothing saying so. That is the **common** case: people reset a
+password they have forgotten on another device.
+
+Moved to a new `(token)` group with **no guard**: the token in the URL is the
+credential, not the session. `/verify-email` deliberately stays in `(verify)`,
+because a *verified* user should be sent away rather than told to do what they
+have already done.
+
+The loop test could not see this — it is a redirect, not a cycle, and
+`/reset-password` was not in the decision table at all.
+
+##### 🟡 D3 — four auth routes were missing from the refresh exemption
+
+Every `/auth` route taking a token answers `401 TOKEN_INVALID` for a bad one. A
+signed-in merchant clicking an **expired link** therefore triggered a refresh,
+spent their rotating token for nothing, and retried a doomed request — or was
+signed out mid-page if the session had already ended.
+
+Now a prefix rule with one named exception (`/auth/me`, which the boot sequence
+needs), so a route added later is exempt **by default** — failing towards "do not
+spend a refresh token". Mutation-proven in both directions: too narrow fails four
+tests, too broad breaks sign-in persistence.
+
+##### 🟡 D4 — the guard table covered four of eight routes
+
+*"Never loops, from any entry point"* was narrower than it sounded. All eight are
+listed now, and D2 lived exactly in that blind spot.
+
+##### 🟡 D5 — the verification success panel flashed and vanished
+
+For a signed-in user, re-reading the session flipped `emailVerified`, and
+`RequireUnverified` swapped the screen out before the confirmation could be read.
+The refresh is deferred to the "Continue" click.
+
+##### Also confirmed working, verified live rather than assumed
+
+- **Duplicate registration** answers the same `202` — not a membership oracle, so
+  one "check your email" panel is right for both cases.
+- **Rate limiting** fires at request six and maps to `RATE_LIMITED`, replacing the
+  raw `ThrottlerException: Too Many Requests` with usable copy.
+- **Reset genuinely revokes every session**, so the screen's claim is accurate —
+  and it now clears the local tokens too, rather than letting the next request
+  discover they are dead.
+
+**Verification:** backend 630 unit, 7 gates, 59 routes; frontend **63 tests**,
+lint clean, 8 routes.
+
+#### Stage 2 — analysis and execution plan (2026-09-02)
+
+M13.2 is two lines for six screens. Read against the endpoints each one calls,
+and against the guards Stage 1 shipped.
+
+##### 🔴 C1. An emoji passphrase registers as a **500**
+
+Measured against the running API:
+
+```text
+POST /v1/auth/register   password: "🎁" × 30
+→ 500  {"code":"INTERNAL_ERROR","message":"An unexpected error occurred."}
+```
+
+`MAX_PASSWORD_BYTES = 72` is bcrypt's limit **in bytes**, and the DTO enforces it
+with `@MaxLength(72)`, which counts **characters**. Sixty emoji are 60 characters
+and 120 bytes: past the DTO, into `assertUsablePassword()`, which throws
+`WeakPasswordError` — and **nothing maps that to a status**, so the exception
+filter answers `INTERNAL_ERROR`.
+
+`password.ts` already documents the trap in its own docblock (*"an emoji is four
+bytes, so a 72-character limit would still truncate"*). The check is right; the
+DTO in front of it measures the wrong thing, and the error behind it has no
+mapping.
+
+**A Stage 2 blocker**, because a register form cannot attach a field error to a
+500. Two small fixes: a byte-length validator on the DTO, and `WeakPasswordError`
+mapped to `VALIDATION_FAILED` so anything reaching it is still a 400 rather than
+a crash.
+
+##### 🔴 C2. Unverified users hit an infinite redirect loop — and it is Stage 1's
+
+```text
+/dashboard      → RequireMerchant: signed in, unverified  → /verify-email
+/verify-email   → RequireAnonymous: signed in             → /dashboard
+                                                            forever
+```
+
+`/verify-email` sits in `(auth)`, whose guard sends **any** signed-in visitor to
+the dashboard. But an unverified user *is* signed in — and they are the one
+person that screen exists for. Every newly registered merchant lands here.
+
+The route group is the mistake: `(auth)` means "no session", and verification is
+"session, not yet usable". Stage 2 moves `/verify-email` out of `(auth)` and
+gives it a guard that requires a session and **not** verification — the mirror of
+`RequireMerchant`.
+
+##### 🟡 C3. `/reset-password` does not exist, and an email already points at it
+
+`AuthService.link()` builds `${APP_URL}/reset-password?token=…` and
+`${APP_URL}/verify-email?token=…`. Stage 1 created `/verify-email` as a
+placeholder that **ignores the query parameter**, and `/reset-password` was never
+created at all — so a password-reset email sent today lands on a 404.
+
+Both screens read their token from the URL rather than from a form field. Worth
+stating because it changes their shape: they are not forms a user fills in, they
+are actions a link performs, with a form only for the new password.
+
+##### 🟡 C4. Neither register nor verify returns tokens
+
+`POST /register` → `{ message }`, `POST /verify-email` → `{ verified }`. Neither
+signs the user in, so both flows end at `/login`.
+
+That is a defensible API design — it keeps sign-in one path — but it decides the
+screens: registration cannot drop the merchant into the dashboard, and the
+verification screen's success state is a link to sign in rather than a redirect
+into the app. Recorded so it is a choice rather than a surprise found while
+wiring the redirect.
+
+##### 🟢 C5. What is already right
+
+- **Every endpoint exists and is public**: register, verify-email,
+  resend-verification, login, refresh, logout, request-password-reset,
+  reset-password.
+- **The validation rules are knowable**, so Zod can mirror them exactly rather
+  than guess: email ≤ 320, password 12–72, name ≤ 255, `tenantName` optional
+  ≤ 255, tokens 20–200.
+- **Rate limits are tight and will be hit in testing**: register 5/hour per
+  address, login 10 per 15 minutes, password reset 3/hour. The forms need a
+  `RATE_LIMITED` message — `formLevelMessage()` already has one.
+- **Dev email is inspectable.** `LogTransport` writes the message to the API log
+  instead of sending it, so a verification link is recoverable without SMTP.
+- **The data layer is ready**: `applyApiErrors` maps `ErrorDetail` onto RHF by
+  dotted path, and `formLevelMessage` covers `UNAUTHENTICATED`,
+  `INSUFFICIENT_ROLE` and `RATE_LIMITED`.
+
+##### Execution order
+
+| Step | Work |
+|---|---|
+| **1** | **Fix C1 in the backend** — byte-length validation, `WeakPasswordError` mapped to a 400, both mutation-proven |
+| **2** | **Fix C2** — move `/verify-email` out of `(auth)`, add a `RequireUnverified` guard, prove the loop is gone |
+| **3** | Zod schemas mirroring the DTOs, in one module both the forms and their tests read |
+| **4** | A shared `<AuthForm>` binding: submit → `ApiError` → `applyApiErrors` → field errors, with `formLevelMessage` above the form |
+| **5** | Register · Login · Forgot password — the three that are plain forms |
+| **6** | Verify email · Reset password — the two that read a token from the URL |
+| **7** | Sign out, already written in Stage 1's shell, verified end to end against the live API |
+
+Steps 1 and 2 are fixes rather than features, and both precede any screen: a form
+cannot show a field error for a 500, and a guard loop makes the screen it
+protects unreachable.
+
 ### M13.3 — Store connection screen
 
 Receive the [Phase 8](#phase-8--store-connection) handshake, show the approval prompt,
 list connected stores with health (last seen, config version, plugin version), disconnect.
+
+**Inherits Phase 8's last open exit criterion: "a merchant can connect a store in
+under 60 seconds."** It could not be discharged in Phase 8 because it spans two
+screens and this is the second one. The plugin's half is built and measured —
+`Handshake::begin()` and `Callback::handle()` together account for **0.17 ms**,
+and the cloud's three endpoints answer in well under a second — so effectively
+the whole budget belongs to this screen and the human reading it.
+
+**Acceptance:** a merchant who is already signed in reaches "connected" from
+clicking Connect in WordPress in under 60 seconds, timed by a person on a real
+site, not asserted by a test. Sign-up and email verification are excluded — they
+are [Phase 6](#phase-6--tenancy--auth)'s and would measure something else.
+
+The number is not arbitrary. Above a minute a merchant assumes the connection
+failed and starts again, which is how the duplicate-store support tickets this
+architecture is shaped to avoid begin.
+
+#### Stage 3 — built 2026-09-02
+
+Two screens, one new endpoint, two shared-layer fixes. **101 frontend tests**,
+backend 630 unit, 7 gates, 60 routes.
+
+| Delivered | Closes |
+|---|---|
+| `POST /connect/requests/describe` — the site being approved, named | E1, E3 |
+| `/connect/*` added to the refresh exemption | E4 |
+| `safeNextPath` + `?next=`, honoured by the guard **and** the form | E5 |
+| `/connect` — describe, show, approve, redirect; self-guarding | E2 |
+| `/stores` — five states, a **daily** staleness threshold | E6 |
+| Disconnect, naming how many credentials it revoked | — |
+
+##### The endpoint's security shape was the interesting part
+
+**`tenantId` is written at `authorize`, not at `initiate`** — so a pending request
+belongs to *no tenant*, and the scoping every other read relies on cannot apply.
+Keyed on the id alone this would have been a **UUID-guessable oracle returning
+merchants' site URLs**.
+
+Three decisions followed, none of them optional:
+
+- **`state` is required**, so holding the id is not enough.
+- **One indistinguishable `404`** for unknown, expired, already-approved and
+  wrong-state, with a body that never names a site — because unlike `authorize`,
+  this endpoint *returns data*, so the prize for a correct guess is a merchant's
+  URL.
+- **A `POST` that writes nothing**, because a secret in a query string lands in
+  browser history, `Referer` headers and server logs.
+
+The isolation gate demanded a probe and got a reasoned exemption instead: there
+is no foreign tenant id to refuse, and the substitute property asserted in its
+place is **stronger** than tenant scoping. Three mutants killed — removing the
+state, expiry or approved check each fails.
+
+##### `?next=` needed two fixes, and the second is the one that gets missed
+
+An open redirect (`?next=https://evil.example`) hands an attacker the post-login
+redirect, and `//evil.example` slips past a naive `startsWith('/')` because the
+browser reads it as protocol-relative. Both refused, along with `/\host`,
+`javascript:` and `data:`, and the value is rebuilt from parsed parts so a
+traversal cannot smuggle anything through.
+
+⚠️ **`RequireAnonymous` had to honour it too.** The guard runs *before* the
+sign-in form reads the parameter, so an already-signed-in merchant arriving at
+`/login?next=/connect?...` would have been sent to the dashboard and the
+handshake silently abandoned — the exact failure `?next=` was added to prevent,
+reintroduced one layer up. That change made the guard a `useSearchParams`
+consumer and broke the static build until a Suspense boundary was added at the
+`(auth)` layout; the build caught it.
+
+##### Health is a five-state judgement, not a boolean
+
+The plugin's heartbeat is **daily**, so *"last seen 20 hours ago" is healthy* —
+an hourly threshold would report every working store as broken, which is the
+fastest way to teach a merchant to ignore the page. Stale means **two** missed
+days, because one missed run is ordinary on a low-traffic site where WP-Cron
+fires only when someone visits.
+
+**Never-seen is not stale**: a store connected an hour ago has not yet run its
+first heartbeat, and calling that a fault would flag every new connection at the
+moment a merchant is most likely to be watching. And **status beats staleness** —
+a `revoked` store needs reconnecting rather than investigating.
+
+⚠️ **An in-flight handshake is invisible on this page.** No store row exists
+cloud-side until approval, so the empty state says where to look rather than
+implying the list is complete.
+
+##### Measured, and what the measurement does and does not cover
+
+```text
+POST /connect/requests/describe   66 ms   → site_url returned and displayed
+POST /connect/authorize           31 ms   → redirect_url back to WordPress
+```
+
+🚧 **Phase 8's 60-second criterion is not yet ticked, deliberately.** The machine
+half is ~100 ms and the dashboard renders, but the criterion says *"timed by a
+person on a real site"* and the clock spans **two applications**: it starts at
+**Connect** in WordPress and stops when WordPress says connected. Timing only
+this screen would measure the easy part and tick a criterion covering the whole
+handshake. It belongs on the manual pre-release checklist alongside the HPOS one,
+and is recorded here rather than quietly satisfied.
+
+#### Stage 3 — audit and fixes (2026-09-02)
+
+Audited by attacking the running system: cross-tenant probes, role probes,
+boundary checks, and the full reconnect lifecycle. **Three findings, all fixed**,
+plus a new cross-repo gate.
+
+##### 🔴 F1 — both screens offered actions the role cannot perform
+
+Stage 0 granted `stores:view` to **viewer** and **editor**, but neither holds
+`stores:connect`. So an editor saw a **Disconnect** button and got a `403` on
+click — and on `/connect`, walked the *entire* approval flow before failing at
+the last step.
+
+Fixed with a small `roleCan()` table mirroring the API's, and both screens now
+branch on it. A **hint, never enforcement**: the API refuses regardless, and this
+only stops the UI promising what it cannot do.
+
+The connect screen says what to do instead — *"send this link to an owner or
+admin, it stays valid for 30 minutes"* — which is honest because the request
+**survives** a `403`: the capability guard rejects before the service runs, so
+`approvedAt` is untouched and an owner can finish the same link. Verified.
+
+##### 🟡 F2 — "0 credentials revoked" read as a bug
+
+Disconnecting a store whose plugin never completed the exchange reports
+`credentials_revoked: 0`, and the UI rendered *"Disconnected. 0 credentials
+revoked."* True, and it reads like a failure. Now *"This store had no active
+credentials."*
+
+##### 🟡 F3 — the API bindings had no tests
+
+`health.ts` had 18; `listStores`, `describeRequest`, `authorizeConnection` and
+`disconnectStore` had none — the same "documented and enforced by nothing" shape
+the Stage 0 audit found. Nine tests added, including the two that matter:
+`describeRequest` **sends `state`** (without it the endpoint 404s and the screen
+looks broken for the wrong reason), and the state **never appears in the URL**.
+
+##### ✅ A cross-repo gate, because this pair can drift silently
+
+`bin/check-capability-parity.sh` compares all **15** role/capability pairs across
+the two repositories. A mirror that has drifted is worse than none: it either
+hides a button that would work, or offers one that answers `403` — which is
+exactly F1. Mutation-proven in both directions.
+
+##### What I attacked and could not break
+
+- **Cross-tenant `describe` returns `200`** — and that is correct rather than a
+  leak. A pending request has no tenant, so the `state` is a bearer credential
+  and whoever holds it is the person the plugin sent. Tenant B can also
+  *approve*; the store binds to whoever does, and the URL is only ever shown in
+  the merchant's own WordPress admin.
+- **Tenant isolation on the list holds** — A sees 0 stores while B sees theirs.
+- **Reconnection creates no duplicate**: the same site connected twice leaves
+  **2 stores, not 3**. The failure this architecture was shaped to avoid,
+  confirmed live through the new endpoints.
+- **The health boundaries agree.** At 47 h the label says "47 h ago" and the state
+  is healthy; at 49 h, "2 days ago" and stale. No window where the two disagree.
+- **`/connect` names the workspace**, which makes Stage 1's multi-tenant finding
+  *visible* rather than silent: a user in two workspaces sees which one the store
+  will join, even though they cannot yet switch.
+
+**Verification:** frontend **121 tests** across 8 files, lint clean, 10 routes;
+backend 7 gates, 60 routes; plus the new cross-repo parity gate.
+
+#### Stage 3 — analysis and execution plan (2026-09-02)
+
+Read against the three connect endpoints, the store list Stage 0 built, the
+plugin's half of the handshake, and the API client Stage 2 fixed. **Six
+findings**; two block the screen, two are security shapes the design must get
+right first time.
+
+##### 🔴 E1. The approval prompt has nothing to show
+
+`POST /connect/authorize` takes `{request, state}` and returns `{redirect_url}`.
+`store_connection_codes` holds **`siteUrl` and `pluginVersion`** — exactly what a
+consent screen must display — and **no endpoint exposes them**. `authorize` reads
+`siteUrl` internally and does not return it either.
+
+So the screen can only ask *"approve this?"* without saying **what**. On a screen
+whose entire purpose is consent, that is the defect: a merchant handed a link
+would approve a connection to a site they cannot see named. M13.3's own wording
+is *"show the approval prompt"*, which this cannot satisfy.
+
+The authorization itself needs no change: single-use, `state` verified by hash,
+atomic through `UPDATE … WHERE approvedAt IS NULL`.
+
+##### 🔴 E2. `/connect` is outside every route group, so a signed-out merchant is stranded
+
+`authorize` requires a session **and** `stores:connect`, and a merchant clicking
+**Connect** in WordPress may not be signed in. Worse, signing in normally
+**discards `request` and `state`** — the URL is replaced, the handshake must
+restart from WordPress, and the merchant sees a dashboard with no explanation.
+That is precisely the "assumes it failed and starts again" behaviour the
+60-second criterion exists to prevent.
+
+The request lives **30 minutes** and the code **5**, so a sign-in detour is
+comfortably survivable *if the parameters survive it*.
+
+##### 🔴 E3. The new endpoint cannot be tenant-scoped, and that shapes its security
+
+**`tenantId` is written at `authorize`, not at `initiate`** — a pending request
+belongs to *no tenant yet*. So `GET /connect/requests/:id` cannot use the scoping
+every other read uses, and the obvious design — "any signed-in user may look up a
+request id" — makes it a **UUID-guessable oracle returning merchants' site
+URLs**.
+
+The `state` is the real credential: 43–128 base64url, stored only as a hash,
+compared with `tokensMatch()` in constant time (and the Stage 0 secrets gate
+enforces that). **So the read must require `state` exactly as `authorize` does**,
+and answer one indistinguishable `404` for unknown, expired, already-approved and
+wrong-state alike.
+
+A `GET` with a secret in the query string would put that secret in browser
+history, `Referer` headers and server logs. **`POST /connect/requests/describe`**
+instead — a read, expressed as a POST because its input is a credential.
+
+##### 🔴 E4. `/connect/*` repeats Stage 2's D3 on a different path
+
+`authorize` refuses with `TOKEN_INVALID`, which maps to **401**. Stage 2's fix
+exempts `/auth/` routes from the refresh-and-retry, and `/connect/*` is not under
+it — so an expired handshake triggers a refresh, spends a rotating token for
+nothing, and retries a doomed request.
+
+Found by tracing the code rather than the path list, which is how D3 was missed
+the first time. The exemption becomes "routes whose `401` is the answer", covering
+both prefixes.
+
+##### 🟡 E5. `?next=` is an open-redirect surface, and the guard discards it anyway
+
+Two problems, and the second is easy to miss:
+
+- **Only same-origin paths.** `?next=https://evil.example` would hand an attacker
+  the post-login redirect. Accept a path beginning `/` and never an absolute URL.
+- **`RequireAnonymous` fires first.** An already-signed-in visitor at
+  `/login?next=…` is redirected to `/dashboard` by the guard before the page
+  reads the parameter, so **both** the guard and the form must honour it.
+
+##### 🟡 E6. "Health" has no threshold, and the heartbeat is **daily**
+
+`wp_schedule_event(..., 'daily', ...)`, so **"last seen 20 hours ago" is
+healthy** — a screen highlighting anything older than an hour would report every
+working store as broken. `stores.status` is a five-state machine
+(`disconnected`, `connecting`, `connected`, `error`, `revoked`), each needing
+distinct treatment: `revoked` means reconnect, `error` means read the log,
+`connecting` means a handshake someone abandoned.
+
+⚠️ **An abandoned handshake is invisible here.** No store row exists cloud-side
+until approval, so the plugin sits in `connecting` while the dashboard shows
+nothing at all. The store list cannot explain that, and the copy should say where
+to look rather than imply the list is complete.
+
+##### 🟢 E7. What is already right, verified rather than assumed
+
+- **`GET /stores` returns every field M13.3 names** — `lastSeenAt`,
+  `configVersion`, `pluginVersion`, plus `wp`/`wc`/`php` for support. Stage 0.
+- **Disconnect reports what it did**: `{ status, credentials_revoked }`, so the
+  confirmation can be specific rather than "done".
+- **Reconnection reuses the store row** (`uq_stores_tenant_url`) — the
+  duplicate-store failure this architecture was shaped to avoid.
+- **The dashboard's job ends at a redirect.** `authorize` returns a URL pointing
+  at the *merchant's own site*, and `Connection\Callback` completes the exchange
+  there. The "connected" confirmation appears in WordPress — so the 60-second
+  measurement spans two applications and **cannot be timed from this screen
+  alone**.
+
+##### Execution order
+
+| Step | Work | Closes |
+|---|---|---|
+| **1** | `POST /connect/requests/describe` — `{request, state}` in, `{siteUrl, pluginVersion, expiresAt}` out. One `404` for every refusal. Documented, isolation-probed, mutation-proven | E1, E3 |
+| **2** | Extend the API client's refresh exemption to `/connect/*`, with a test per path | E4 |
+| **3** | `?next=` — same-origin paths only, honoured by **both** `RequireAnonymous` and the login form, with an open-redirect test | E5 |
+| **4** | `/connect` — describe, show the site being approved, approve, redirect. Signed-out visitors go to `/login?next=…` and come back | E2 |
+| **5** | `/stores` — five states, a **daily** staleness threshold, and copy that accounts for a store not yet visible | E6 |
+| **6** | Disconnect, with a confirmation naming what it revokes | — |
+| **7** | Time the flow on the Studio site end to end and **record the number** | Phase 8's criterion |
+
+Steps 1–3 are backend and shared-layer work before any screen, for the reason
+each earlier stage found the hard way: **a screen cannot display what no endpoint
+returns**, and a redirect parameter added without thinking about it is a
+vulnerability rather than a convenience.
+
+⚠️ **Step 7 measures two applications.** The clock starts at **Connect** in
+WordPress and stops when WordPress says connected — the dashboard is the middle.
+Timing only this screen would measure the easy part and tick a criterion that
+spans the whole handshake.
 
 ### M13.4 — Option set list
 
@@ -4424,10 +11339,932 @@ List, create, rename, duplicate, delete, publish. Draft/published status visible
 Add a group; add a `radio` option; add values with labels and fixed prices; reorder; mark
 required; save; publish. Functional, not beautiful.
 
+#### Stage 4 — built 2026-09-02
+
+List and editor, both screens. **202 frontend tests** across 10 files, lint clean,
+25 capability pairs verified.
+
+| Delivered | Closes |
+|---|---|
+| Capability mirror extended to all four `option_sets` capabilities; parity gate 15 → **25** pairs | G2 |
+| A money module — string-parsed, bounded, merchant-facing messages | G3 |
+| Zod schemas mirroring the set, group, option and value DTOs, key pattern included | G4 |
+| `/option-sets` — list, create, duplicate, delete, draft/published status, per-capability buttons | M13.4 |
+| `/option-sets/[id]` — loaded from `detail` in one call; groups, a `radio` option, values with prices, required | M13.5, G1 |
+| Publish — `publish-check` first, blockers listed, warnings shown after success | M13.4 |
+
+##### The live run proved optimistic locking, by failing
+
+Driving the flow against the API produced the most useful result of the stage:
+
+```text
+1. create set        rowVersion=1
+2. add group         ok
+3. add radio option  ok
+4. add value         priceAmountMinor=1050     (£10.50)
+5. GET /detail       rowVersion=4  ← each child write bumped the parent
+6. publish-check     1 warning: SET_HAS_NO_ASSIGNMENT
+7. publish w/ rv=1   VERSION_MISMATCH — refused
+8. publish w/ rv=4   published v1, configVersion 0 → 1, status published
+```
+
+**`rowVersion` moved 1 → 4** because adding a group, an option and a value each
+bump the set. Publishing with the version captured at load was correctly refused.
+That is G1's protection working — and it is only protection because the client
+sends the version at all: `assertVersionMatches()` throws *only* when one is
+present, so a client that omits it silently overwrites.
+
+The editor survives this because every write calls `reload()`, and
+`invalidateQueries(['option-set', id])` matches by **prefix** — so the
+`publish-check` query refreshes with the set rather than going stale beside it.
+The `409` above was my probe reusing a captured value, not the screen's design.
+
+##### The money module, and the mutant that survived
+
+Five mutants, four killed: float multiplication (the Phase 11 `17.9 → 1789` bug),
+dropped half-up rounding, a loosened decimal pattern accepting `1e3` and `1,000`,
+and the removed cap.
+
+⚠️ **The fifth is a proven equivalent.** `formatAmount` dividing by 100 instead of
+slicing digits passes the suite — so I searched for a divergence rather than
+assuming one: **200,000 sequential and 400,000 random values within the
+±£10,000,000 cap, none found**, because those magnitudes sit well inside float
+precision. Documented in the code as equivalent rather than deleted: the *parse*
+must not multiply, and having both halves read the same way is what stops someone
+"simplifying" the parse to match a divide they saw in the formatter.
+
+##### What the route miscount was worth
+
+The plan said 21 routes; there are **35**. Chasing the discrepancy found
+`GET /:id/detail`, which returns the entire authoring tree **and** the
+`rowVersion` a client echoes back — so the editor is one `GET` plus targeted
+writes rather than a waterfall per level, and G1's obligation is served by the
+same response that creates it. The miscount was worth making.
+
+#### Stage 4 — second audit and fixes (2026-09-02)
+
+A final pass, checking every completion claim against running code. **Two
+findings, both fixed**, and the first took three attempts to get right.
+
+##### 🔴 I1 — editing a published set gave no sign the storefront was behind
+
+Measured: adding a value leaves `status: published` and `configVersion`
+unchanged — correctly, since snapshots are immutable and only a publish advances
+the revision. So the dashboard showed the new value while the published snapshot
+still held the old one, with **nothing on screen saying so**. A merchant
+reasonably concludes their change is live.
+
+**Two obvious signals were tried and both are wrong:**
+
+- **`updatedAt > publishedAt`** looks right and is not. `@UpdateDateColumn`
+  stores whole seconds here — measured, `updatedAt` came back `.000` while
+  `publishedAt` kept milliseconds — so an edit in the same second as a publish
+  compares as *older* and reads clean.
+- **`rowVersion`** is exact, but **publishing bumps it too**
+  (`publish.service.ts` sets `rowVersion + 1`) and nothing records which version
+  was published, so there is no baseline.
+
+The working signal compares **content**: `preview` is what a storefront *would*
+receive, the latest snapshot is what it *has*.
+
+⚠️ **And that comparison needed fixing too.** A plain `JSON.stringify` reported
+changes on a set nobody had touched, because key order is not stable between the
+two: `preview` returns `[id, version, assignments, groups, rules]` while the
+snapshot — round-tripped through a JSON column at publish time — returns
+`[id, rules, groups, version, assignments]`. My own code comment had claimed the
+order was stable; it was not. Both sides are canonicalised now, with **arrays
+left in order** because in this document that is `sort_order`, and two options
+swapping places is a real change.
+
+A warning that is always on is one merchants learn to ignore, which would have
+been worse than saying nothing.
+
+##### 🟡 I2 — a group could not be deleted
+
+Options and values were removable; groups were not, with `deleteGroup()` written
+and wired to nothing. Mild — no publish finding covers an empty group — but the
+asymmetry was arbitrary. The confirmation names what goes with it, since deleting
+a group takes its options and their values.
+
+##### 🔴 Post-audit: 16b did not work, and 1294 green tests said it did
+
+An adversarial audit after the stage closed found the feature **inert on the
+real cart path**. Measured, through the production classes:
+
+```text
+50% option on an 80.00 product  ->  charged 80.00   (frozen at {"opt-a":0})
+```
+
+**The cause was a composition of three individually correct pieces.**
+
+1. Three of `resolve()`'s five callers passed a literal **`0`** for
+   `$base_minor`. Harmless while `fixed` was the only priced type -- a flat
+   amount does not depend on what the product costs. **16b made the base
+   load-bearing and did not revisit the callers.**
+2. `CartItemData` skips the price freeze only when `unpriced` is non-empty.
+   `percentage` had always been in `unpriced`, so it was never frozen; removing
+   it **enabled a freeze that had always been wrong**.
+3. `CartTotals` prefers the frozen total over recomputation.
+
+The undercharge was frozen, signed, shown price-less in the cart breakdown, and
+copied to the permanent order record. Worse than the pre-16b state, where the
+admin notice at least fired.
+
+⚠️ **The regression test existed and I moved it out of the way.**
+`test_an_unpriceable_option_is_not_frozen` failed during 16b and I retargeted it
+from `percentage` to `tiered`, reading it as a stale fixture. It was the guard
+firing.
+
+⚠️ **My mutation testing was scoped too narrowly.** Every test I wrote called
+`SelectionResolver::resolve()` **directly with a base** -- matching the one
+caller that was already correct. The resolver was never the thing that was wrong,
+so no amount of mutating it could have found this.
+
+##### 🔴 Post-audit: an uncaught `RangeException` fatalled cart and checkout
+
+`Pricing::percentage_of()` throws; the only try/catch in `resolve()` wraps
+`sum_deltas()`, far below. So the exception escaped into
+`woocommerce_before_calculate_totals`.
+
+Reachable with `basis_points = 100000` -- **the cloud schema's own maximum, a
+legal publish** -- on a base of 90,071,992,548 minor units. The base comes from
+WooCommerce, not the cloud, and is bounded only by `PHP_INT_MAX`. `fixed`
+refused the equivalent input cleanly as `unpriceable`; `percentage` fatalled.
+Two price types must not disagree about what an impossible number means.
+
+##### The fixes
+
+**`Support\BasePrice`** is now the one authority for "what does this product
+cost". `AddToCartValidator` and `CartTotals` had already written the lookup
+independently and **they disagreed**: only the validator resolved a **variation**
+id before its parent. A parent variable product commonly has no price of its own,
+so pricing off it charges a percentage of nothing -- on the path that freezes an
+amount into an order. Two more copies would have been two more chances to omit
+that rule, so the validator now delegates and the new callers share it.
+
+`delta_for()` catches the range failure and records `percentage` as unpriced,
+which also re-engages the freeze skip.
+
+The notice's message was **false**: *"This version can only price fixed-amount
+options"*, shown to a merchant whose percentages were charging correctly. It now
+names only what it cannot charge and claims nothing about what it can -- a second
+list in that sentence would be a third place to drift. Three stale docblocks
+saying "Phase 11 implements one" now point at `PRICED_TYPES`.
+
+##### Three stub and coverage gaps this exposed
+
+- **`wc_get_product()` was never stubbed.** `BasePrice::minor()` would have
+  returned 0 in every test -- the fix untested while appearing covered, exactly
+  the gap that hid `wc_get_weight()` in M16.8. The bootstrap now registers
+  products and looks them up, returning `false` for a miss as WooCommerce does.
+- **No test asserted the notice's text.** `is_showing()` was covered and the
+  stored entry was covered; the words a merchant reads were not, which is why it
+  drifted. A test now renders the notice and reads it -- verified to fail on the
+  exact original sentence.
+- **The variation rule survived mutation.** Deleting it from `BasePrice` left all
+  1296 tests green: it had only ever lived in `AddToCartValidator`, whose suite
+  never exercised the difference. Correct by inheritance rather than by test,
+  which is how the copies would have drifted.
+
+All four fixes are mutation-proven: reverting the base to `0`, removing the
+range guard, deleting the variation branch, and restoring the old notice sentence
+each fail by name.
+
+The over-range answer is now a **shared fixture case** rather than two local
+tests, so the two languages are held to the same result. The cloud's evaluator
+was aligned to match even though nothing calls it in production yet: a divergence
+introduced *before* the first caller exists is one nobody would think to look for
+afterwards.
+
+##### Verification
+
+Three mutants killed: plain `JSON.stringify` (the false positive), sorting arrays
+(a reorder would read as unchanged), and `updateSet` dropping `rowVersion`.
+**209 tests across 11 files**, lint clean, 25 capability pairs; group deletion and
+the dirty signal both exercised against the live API.
+
+#### Stage 4 — audit and fixes (2026-09-02)
+
+Audited by checking coverage against the milestone text rather than against the
+code I had written. **Four findings, all fixed** — and two of them were missing
+features in a stage I had reported complete.
+
+##### 🔴 H1 — reorder was written and never wired
+
+M13.5 lists it: *"add values with labels and fixed prices; **reorder**; mark
+required"*. `reorderOptions()` existed, exported, **called from nowhere**. The
+API layer was built and the UI stopped.
+
+Now move-up / move-down buttons on every option. Deliberately not drag-and-drop:
+drag needs a library, does not work from a keyboard without extra handling, and
+is awkward on the phones merchants use — and M13.5 asks for *"functional, not
+beautiful"*. One write per move, since `POST /groups/:id/reorder` takes the whole
+sibling list.
+
+Verified live: `alpha, beta, gamma` → `alpha, gamma, beta`.
+
+##### 🔴 H2 — rename was missing entirely
+
+M13.4 lists *"List, create, **rename**, duplicate, delete, publish"*. Three
+pieces existed and none connected: `updateSet()`, `renameSetSchema`, and a row
+rendering a name with no way to change it. **A named operation absent from the UI
+while its scaffolding sat beside it.**
+
+Now inline on the row — renaming is a one-field change on something already on
+screen, and a modal would be more ceremony than the act. Verified live, including
+the `409`: renaming twice with the same `rowVersion` is refused.
+
+##### 🟡 H3 — sets from several stores were merged with no label
+
+`listSets()` is called unfiltered, and the row rendered name and status only. A
+tenant with two stores saw both catalogues in one list, and two sets named
+"Hoodie options" were indistinguishable.
+
+The store URL now appears on each row **when there is more than one store** —
+with a single store the label is noise on every line.
+
+##### 🟡 H4 — a `409` was explained on publish and not on delete
+
+`ConflictAwareError` lived inside the editor, so the list showed *"something went
+wrong"* for a stale delete: the same failure described two ways because the
+component was private to one file. Moved to the shared states module, and both
+screens use it.
+
+Mitigated by luck beforehand — `VERSION_MISMATCH` is unmapped in
+`formLevelMessage`, so it fell through to the API's own *"This option set was
+changed by someone else."* Clear, but inconsistent by accident.
+
+##### What I attacked and could not break
+
+- **Blockers are enforced server-side.** An empty set answers `VALIDATION_FAILED`
+  even bypassing the disabled button, so the UI's disable is a convenience over a
+  real guarantee.
+- **Deleting a published set advances `config_version`** (1 → 2 measured), so the
+  storefront learns the options are gone. The warning copy is accurate.
+- **`SET_HAS_NO_ASSIGNMENT` is honest** before the picker exists: *"…is not
+  assigned to any product, so publishing it will not change any storefront."*
+- **The editor's `rowVersion` does not go stale.** Every write calls `reload()`,
+  and `invalidateQueries(['option-set', id])` matches by **prefix**, so the
+  `publish-check` query refreshes with the set rather than beside it.
+
+**Verification:** 202 tests across 10 files, lint clean, 25 capability pairs; all
+four fixes exercised against the live API.
+
+#### Stage 4 — analysis and execution plan (2026-09-02)
+
+Two lines of milestone text for a list and an editor. Read against the **35**
+routes that serve them, the capability matrix, and the concurrency model.
+
+##### 🔴 G1. Optimistic locking is **opt-in**, and omitting it loses work silently
+
+`OptionSet.rowVersion` exists precisely because *"two people editing one set is
+normal in an agency"*, and the entity's own comment promises *"a mismatch is a
+409 with the current state — never a silent last-write-wins"*.
+
+It is enforced — `assertVersionMatches()` runs on update and delete — but the
+guard is:
+
+```ts
+if (expected !== undefined && expected !== current) { throw … }
+```
+
+**`rowVersion` is `@IsOptional()` on the DTO**, so a client that simply does not
+send it gets *no protection at all* and last-write-wins silently. The DTO's own
+comment still says "optional until concurrency control lands"; the service says
+it has landed. The client is what decides which is true.
+
+So this is a **UI obligation nothing enforces**: the editor must hold the version
+it loaded, send it on every write, and handle the `409` by showing what changed.
+Skipping it produces exactly the failure the design calls *"unforgivable in an
+authoring tool"* — and produces it silently, which is why no test would catch it.
+
+⚠️ **Only the set has a version.** Groups, options and values have none, so a
+concurrent edit *inside* a set is last-write-wins by construction. Stage 4 does
+not fix that; it records it so the editor does not imply a safety it lacks.
+
+##### 🔴 G2. The capability table covers two of the four option-set capabilities
+
+`option_sets` has **four**: `edit`, `delete`, `publish`, `rollback`. The Stage 3
+mirror carries `edit` and `publish` only.
+
+| role | edit | delete | publish | rollback |
+|---|---|---|---|---|
+| owner | ✅ | ✅ | ✅ | ✅ |
+| admin | ✅ | ✅ | ✅ | ✅ |
+| **editor** | ✅ | — | — | — |
+| viewer | — | — | — | — |
+
+An **editor is the common case** for this screen — the role that exists to author
+option sets — and would see Delete and Publish buttons that answer `403`. That is
+F1 from the Stage 3 audit, about to recur on a screen with four buttons instead
+of one. `check-capability-parity.sh` compares only what the mirror lists, so it
+would not catch the omission either: **the gate's floor must rise with the
+table.**
+
+##### 🟡 G3. Money is typed in pounds and sent in minor units
+
+`priceAmountMinor` is `@IsInt()` in **minor units**, bounded at ±1,000,000,000
+(£10,000,000). A merchant types `10.50`; the API wants `1050`.
+
+That conversion is the most expensive class of bug in this product — Phase 11
+spent a stage on `(int) (17.9 * 100)` being `1789` — so it belongs in one tested
+helper rather than in a form's `onChange`. Parsing must be string-based, and the
+bound needs a message a merchant can act on rather than "must not be greater than
+1000000000".
+
+⚠️ `MAX_AMOUNT_MINOR` is declared **twice** in the API — `option-value.dto.ts` and
+`types/pricing.schema.ts` — currently agreeing. A third copy in the dashboard
+makes three places to drift.
+
+##### 🟡 G4. Keys are pattern-constrained, and the form must say so *before* the API does
+
+`key` and `valueKey` both match `/^[a-z0-9][a-z0-9_-]*$/`. A merchant typing
+`Large Size` gets a rejection naming a regex unless the form says what a key may
+contain — and unlike a label, a key is a field they have no intuition for.
+
+##### 🟢 G5. What is already right, verified rather than assumed
+
+- **35 routes exist, not the 21 first counted** — 14 for sets plus 7 each for
+  groups, options and values, `reorder` among them at all three levels, so
+  M13.5's "reorder" needs no new endpoint. The undercount came from counting the
+  three child controllers and forgetting the parent's fourteen.
+
+- 🟢 **`GET /:id/detail` returns the whole tree in one call**, and it changes the
+  editor's shape. `AuthoringOptionSet` nests set → groups → options → values, and
+  carries `rowVersion` with the docblock *"the optimistic lock a client echoes
+  back on a write"* — so **G1's obligation is intended rather than incidental**,
+  and the endpoint hands the client exactly what it needs to meet it.
+
+  The editor is therefore one `GET` and targeted writes, not a waterfall of
+  fetches per level. Found only by listing the parent controller's routes after
+  the count came out wrong — the miscount was worth making.
+
+- **A `radio` option needs three fields.** `valueKind` and `cardinality` are both
+  `@IsOptional()`, so create takes `key`, `label` and `presentation`. The minimal
+  editor stays genuinely minimal.
+- **`publish-check` is a real contract.** Findings carry `severity`
+  (`blocker` refuses, `warning` proceeds), a stable `code`, and a **`subject`**
+  like `option:<id>` — so the UI can point at the offending item rather than
+  printing a flat list. Blockers are enforced server-side; `publish` returns its
+  warnings so they can be shown after the fact too.
+- **`radio` exists** among eleven presentations, and M13.5 scopes to it.
+- **`isRequired` is a field** on both create and update.
+- **The list returns the entity and nothing sensitive**: `tenantId` is the
+  caller's own and `rowVersion` is needed by the client. Unlike `GET /stores`,
+  there is nothing here to withhold.
+
+##### Execution order
+
+| Step | Work | Closes |
+|---|---|---|
+| **1** | Extend the capability mirror to all four `option_sets` capabilities, raise the parity gate's floor, and add the tests | G2 |
+| **2** | A money module — pounds ⇄ minor units, string-parsed, bounded, with the merchant-facing message | G3 |
+| **3** | Zod schemas mirroring the set, group, option and value DTOs, including the key pattern | G4 |
+| **4** | `/option-sets` — list, create, rename, duplicate, delete, with draft/published status and per-capability buttons | M13.4 |
+| **5** | `/option-sets/[id]` — loaded from **`GET /:id/detail`** in one call. Groups, a `radio` option, values with prices, reorder, required. **Every write carries the `rowVersion` that response returned**, and a `409` shows what changed | M13.5, G1 |
+| **6** | Publish — `publish-check` first, blockers listed against their subjects, warnings shown after success | M13.4 |
+| **7** | Drive the whole flow against the live API: create → author → publish → confirm `config_version` advanced | — |
+
+Step 1 comes first because it is the same defect the Stage 3 audit found, and
+this screen has four buttons to get wrong instead of one. Step 2 comes before any
+form that takes a price.
+
 ### M13.6 — Product assignment picker
 
 Search products from `store_products`, assign an option set to one or more products, show
 current assignments.
+
+**Phase 10 renders what this authors.** Recorded here 2026-08-30, from the other
+end. [Stage 1](#m108--execution-order-and-why-it-is-not-the-milestone-numbering)
+of Phase 10 makes assignments reach the storefront document, and
+[M10.1](#m101--resolve-applicable-options) resolves `ALL` and `MANUAL` against a
+product — but nothing in the product creates a `MANUAL` row until this picker
+exists. Until then the only source is `src/seeds/demo.seed.ts` — and that stays true for
+a *merchant's* catalogue until [M19.1](#m191--initial-catalogue-import) fills
+`store_products`, which is what this picker searches. So the end-to-end check
+below runs against seeded products first, and against real ones from Phase 19.
+
+So this milestone is the first point where a merchant can see an option set
+appear on their own storefront without touching the database, and its acceptance
+should say so: **assign a published set to a product here, and the option
+renders on that product's page.** That is a cross-repo check — the picker writes,
+the plugin reads — and it is the first end-to-end proof that the two halves
+agree on the assignment shape rather than each being internally consistent. The
+`mode` field carries the distinction the renderer depends on: a picker that
+writes `MANUAL` rows without setting it produces assignments Phase 10 defaults
+to `manual` on read, which is right by accident rather than by contract.
+
+#### Stage 5 — analysis and execution plan (2026-09-02)
+
+Stage 5 is **M13.6, and M13.7's navigation half** — ✏️ corrected 2026-09-02: it
+first read "M13.6 and M13.7 together", which contradicted the stage table two
+screens above, where M13.7 is Stage 6. The split is now explicit because the two
+halves have different costs. Navigation is a **list**: one item was a live link to
+a page that does not exist ([J3](#-j3-two-navigation-links-point-at-404s)), and a
+directory-reading guard settles it. The four-states audit is a **render** fact
+across every screen, it is the expensive half, and it stays in Stage 6. Read against the endpoints Stage 0 built, the
+capability matrix, and what the shell currently renders.
+
+##### 🔴 J1. `GET /assignments` returns ids, and the screen must show names
+
+M13.6 says *"show current assignments"*. The endpoint returns
+`{ id, mode, targetType, targetRef, priority }` — and `targetRef` is a
+**WooCommerce product id**. So the screen would render `1042` where a merchant
+expects `Custom Hoodie`.
+
+It cannot be resolved client-side either: `GET /products` takes only
+`storeId`, `search`, `limit` and `cursor` — **no id filter** — so naming N
+assigned products means either paging the whole catalogue or N searches.
+
+The same shape as Stage 3's E1: *a screen cannot display what no endpoint
+returns.* Stage 5 adds the product's name and status to each assignment row,
+joined server-side where the data already is.
+
+⚠️ **The status matters as much as the name.** A product deleted or unpublished
+upstream since it was assigned still has a row here, and a merchant looking at
+"assigned to 4 products" deserves to know one of them no longer exists.
+
+##### 🔴 J2. Two capabilities missing from the mirror — the third occurrence
+
+`products:view` and `products:assign` are both absent from
+`optioniaWooCommerceFrontend`'s table, and the split is not the same as the
+option-set one:
+
+| role | products:view | products:assign |
+|---|---|---|
+| owner / admin | ✅ | ✅ |
+| **editor** | ✅ | ✅ |
+| **viewer** | ✅ | — |
+| billing | — | — |
+
+A **viewer can see the catalogue and must not be offered Assign** — and unlike
+the option-set capabilities, `editor` holds this one, so guessing from the
+option-set pattern would get it wrong in both directions.
+
+This is G2 and Stage 3's F1 recurring a third time. The parity gate compares only
+what the mirror lists, so it stayed green while two capabilities were missing —
+**the floor rises with the table**, 25 → 35 pairs.
+
+##### 🔴 J3. Two navigation links point at 404s
+
+M13.7 requires unbuilt items **disabled rather than hidden**. Rules, Analytics and
+Subscription carry a `phase` marker and render disabled, correctly. `Products` and
+`Settings` do not — so both are live links to Next's not-found page.
+
+`/products` becomes real in this stage. `/settings` does not: profile, team and
+notifications are later phases, so it takes a marker like the other three.
+
+##### 🟡 J4. `externalId` is the field, and picking the wrong one fails silently
+
+Both assignment endpoints key on **`externalProductId`** — WooCommerce's id — while
+`GET /products` returns *both* that and our row `id`. Sending the wrong one
+stores cleanly, passes every frontend test, and produces an assignment the plugin
+never resolves, because it indexes by an id that does not exist on that site.
+
+Stage 0's ownership check (**A3**) catches a foreign id, but **not** our own row
+id for the right product — that is a valid string the API has no way to reject.
+So the binding sends `externalId` and a test asserts it, because nothing else
+will.
+
+##### 🔴 J6. Assigning a **draft** set changes nothing, and says nothing
+
+Assignment does not check the set's status, and `config_version` is bumped either
+way. But `serialization/config-document.ts` filters to
+`status: OptionSetStatus.PUBLISHED` — so assigning a draft advances the revision,
+every connected plugin re-fetches, and **nothing changes on the storefront**.
+
+A merchant who assigns a set they have not published sees the assignment recorded
+and no effect, with nothing explaining why. The picker must say it: *"this set is
+a draft, so the assignment takes effect when you publish"*.
+
+Related and worth stating in the same place: the reverse is also true — a
+published set with no assignment produces the `SET_HAS_NO_ASSIGNMENT` warning
+Stage 4 already surfaces. The two halves are the same fact from opposite ends,
+and the merchant needs both.
+
+##### 🟡 J7. Every real merchant's catalogue is empty until Phase 19
+
+**Nothing in the product writes `store_products`** — only `demo.seed.ts` does.
+`M19.1` fills it. So a merchant who connects a store today opens the picker onto
+an empty table.
+
+"No products found" is the wrong empty state for that: it reads as a bug, or as a
+catalogue that failed to load. It has to say the catalogue has not been imported
+yet, and that Optionia does that automatically — which also stops a support
+ticket that the plan can otherwise expect.
+
+##### 🟡 J8. Several sets may target one product, and only the plugin can see it
+
+`uq_assignments_set_target` keys on `(optionSetId, targetType, targetRef,
+deletedAt)`, so set A and set B may both target product 1042 — legal, and
+`Config\ProductIndex` orders them by `priority`.
+
+But the assignment API is **set-centric**: there is no "which sets apply to this
+product" lookup, and `/effective-options` in the deferred table is a *resolver
+preview for a set*, not that. So a merchant cannot see from either screen that a
+product has picked up two sets.
+
+⚠️ **Not in M13.6**, whose three verbs — search products, assign a set, show its
+assignments — are all set-centric. The route tree does describe
+`products/ # catalogue + assignment`, so a product-centric view is planned
+somewhere; naming the gap here means Stage 5 does not invent it, and a later
+phase does not rediscover it.
+
+##### 🟢 J5. What is already right
+
+- **All four endpoints exist**: `GET /products`, and `GET`/`POST`/`DELETE` on
+  `/option-sets/:id/assignments`. Built and mutation-proven in Stage 0.
+- **`mode: manual` is written server-side**, not accepted from the client — so
+  M13.6's warning about *"right by accident rather than by contract"* is already
+  answered, and Stage 0 proved the full chain: an assignment made through this
+  endpoint reaches `/store/config` as
+  `{mode: manual, target_type: product, target_ref: …}`.
+- **Assignment is idempotent** (`ON DUPLICATE KEY UPDATE`), so a double-click in
+  a picker is safe by construction — the defect Stage 0's audit found and fixed.
+- **The catalogue is paginated by keyset**, so the picker needs "load more"
+  rather than a page count, and the cursor is opaque.
+- **30 seeded products exist** in dev, which is what M13.6's acceptance runs
+  against until [M19.1](#m191--initial-catalogue-import).
+
+##### Execution order
+
+| Step | Work | Closes |
+|---|---|---|
+| **1** ✅ | `GET /assignments` returns each target's **name and status**, joined server-side. Documented, mutation-proven | J1 — **done 2026-09-02.** One shared `readAssignments()` behind a `LEFT JOIN`, so a deleted product's assignment is still listed with a `null` name. Three mutants killed; the unscoped-join mutant first *survived* because the test read `[0].productName` and not the row count |
+| **2** ✅ | Mirror `products:view` and `products:assign`; parity gate 25 → **35** pairs | J2 — **done 2026-09-02.** All 35 pairs agree. The products split is not the option-set split: editor holds assign, viewer holds view only |
+| **3** ✅ | Products binding + `/products` — keyset paging, prefix search, four states, and an empty state that names the **pending sync** rather than "no products" | M13.6, J3, J7 — **done 2026-09-02.** Keyset, not offset, so a product imported mid-scroll cannot duplicate or skip a row. Three mutants killed, including the J4 id-swap |
+| **4** ✅ | The picker on the option-set editor: search, assign, unassign, current assignments by name, and a notice when the set is still a **draft** | M13.6, J4, J6 — **done 2026-09-02.** A `null` joined name renders as "no longer in your catalogue", because that is the case where the option silently stops rendering while the list still claims it applies |
+| **5** ✅ | `/settings` marked as a later phase, so no navigation link 404s | J3 — **done 2026-09-02.** Guarded by `navigation.test.ts`, which reads the route directory: it fails both for an enabled link with no page *and* a disabled link that is already built. Both directions mutation-proven |
+| **6** ✅ | Drive it live: assign a published set to a seeded product, confirm the assignment appears in `/store/config` with `mode: manual` | Phase 13 exit criterion — **done 2026-09-02.** Measured: 4 sets, `modes present: all, manual`, and every `target_ref` resolves (`1005=Oak Serving Board` …). Publishing through the real `PublishService` was required first, which is how [J9](#-j9-the-demo-seed-publishes-without-a-snapshot-so-storeconfig-is-empty) surfaced |
+
+Step 1 is backend work inside a frontend stage for the fourth time in this phase,
+and for the same reason each time. Step 2 comes before the picker, because
+offering **Assign** to a viewer is the defect this phase has now shipped twice.
+
+##### 🔴 J9. The demo seed publishes without a snapshot, so `/store/config` is empty
+
+Found while driving step 6 on real data, 2026-09-02.
+
+`demo.seed.ts:305` writes `status: PUBLISHED, version: 1, publishedAt` directly on
+the set and **never writes the matching `option_set_versions` row**. The config
+document keys snapshots by `${set.id}:${set.version}` and *skips* a published set
+whose snapshot is missing — deliberately, so one corrupt set cannot take a whole
+storefront down. Measured against a freshly seeded store: 4 published sets, 16
+`manual` assignments, and `option_sets: 0` in the built document.
+
+So every seeded "published" set is invisible to the storefront. This is a **seed**
+defect, not a production one — the real publish path writes both rows in one
+transaction, which is precisely why the builder treats the gap as impossible — but
+it has two consequences worth recording:
+
+- Phase 10's end-to-end proof is described as seed-backed (line 5951). Seed-backed
+  is only meaningful if the seed produces a *renderable* store, and it does not.
+- Anyone demoing the renderer against demo data sees an empty storefront and has no
+  way to tell that from a broken renderer.
+
+**Fix:** the seed must publish through `PublishService` rather than hand-writing the
+published columns — the same principle as the assignment write path, that a seed
+which bypasses the service can produce states the service would never create.
+Belongs with the seed, not the picker, so it is recorded here and carried out where
+the seed is next touched.
+
+##### Stage 5 post-build audit — what the mutation testing did not catch
+
+Four defects, found 2026-09-02 by auditing the built screens rather than the plan.
+All four are **fixed**; they are recorded because of *how* they survived. Stage 5
+mutation-proved the API client and the capability mirror and shipped a search box
+that rate-limits the merchant who uses it: the plumbing was verified end to end and
+nobody typed in the box. **Proving a function correct says nothing about whether
+the feature is usable.**
+
+**🔴 K1. The placeholder promised a search the API cannot do.** The catalogue
+matches `LIKE 'term%'` — a prefix, deliberately, so the `(storeId, name)` index
+serves it. Both screens said "Search by name", implying substring. Measured on
+seeded data: `"Board"` returns **0 rows** while three products contain the word,
+`Oak Serving Board` among them — the product step 6 used for its own proof. Fixed
+by naming the semantics in the placeholder and in the empty state. Substring search
+needs a `FULLTEXT` index and a migration: **deferred to [M19.1](#m191--initial-catalogue-import)**,
+which is where the catalogue import lands.
+
+**🔴 K2. A merchant could rate-limit their own search box.** The term went straight
+into the `queryKey`, so every keystroke was a request; `THROTTLE_SHORT_LIMIT` is
+**20/second**. Typing `Oak Serving Board` is 17 requests in about two seconds, and
+the client maps `RATE_LIMITED` to *"Too many attempts."* — so the merchant replaces
+their own results with an error by typing normally. Fixed with a shared
+`useDebounced` hook (`src/lib/hooks/`), used by both screens.
+
+**🟡 K3. Two findings were both numbered J8**, and the step-6 note linked to an
+anchor that could resolve to either. Renumbered. Bookkeeping, but this plan is the
+project's memory and a cross-reference that lands on the wrong finding costs a later
+reader more than the mistake saved.
+
+**🟡 K4. Both screens keyed the catalogue `['products', storeId, term]`** while
+storing incompatible shapes — the picker a `ProductPage`, `/products` an infinite
+query's `{pages: [...]}`. TanStack v5 keys one cache entry per key whatever hook
+wrote it. Latent, since they are separate routes today; fixed by namespacing the
+picker's key so it stays latent.
+
+**The guard, and why it needed two attempts.** `search-contract.test.ts` reads both
+files' source and asserts the debounced binding, the prefix wording, and that the
+keys stay disjoint. Eight mutants were run against it and **two survived the first
+version**: a call shape ending `search }` slipped a regex that required a trailing
+comma, and `const searchTerm = search` satisfied a check that only looked for the
+*name* `searchTerm`. Both are now killed by asserting the binding to
+`useDebounced(search)` rather than the identifier. A guard is not a guard until its
+own defect has been re-introduced and seen to fail.
+
+**🟡 K5. No component test can exist yet** — `@testing-library/react` is not a
+dependency, so nothing in this repo can mount a component, and the source-reading
+guard above is the substitute.
+
+🔴 ✏️ **The premise is false, corrected 2026-09-02 after it had been repeated
+three times.** `react-dom/server` **ships with Next** and was installed the whole
+time: `renderToStaticMarkup` renders any component that is a pure function of its
+props to an HTML string, which is exactly what the state and display components
+are. `@testing-library/react` buys hooks, events and user interaction — none of
+which these need — so "cannot test interaction" was read as "cannot render", and
+nobody checked. Three rounds of guards were then built on that premise and used to
+certify the very thing they were too weak to check. See
+[P1](#-p1-every-state-components-behaviour-was-unguarded).
+
+✏️ **Corrected in Stage 6, 2026-09-02.** This finding originally argued that the
+capability-mirror defect "has now shipped three times: it is a *render* fact", and
+used that to recommend adding a renderer. **Both halves are wrong.** The defect is
+a missing *row in a data table* — `products:view` and `products:assign` absent from
+`capabilities.ts` — and a render test would have rendered the incomplete table and
+passed, because a test can only exercise the roles the table already lists. What
+catches it is the numeric floor on the parity gate, which exists and was raised to
+35 pairs in Stage 5. A real recurring bug was used to justify a tool that would not
+have caught it, which is reasoning backwards from a conclusion.
+
+##### Stage 5 closeout — two defects the fixes themselves introduced
+
+Found 2026-09-02 auditing the K-fixes rather than the original build. Both are
+fixed. They are recorded because each was **caused by the previous repair**, which
+is the argument for auditing a fix as adversarially as a feature.
+
+**🔴 L1. Debouncing traded a `429` for a silent lie.** `AsyncState` branched on
+`isLoading`, which TanStack sets for the *first* fetch of a key only. Every later
+search therefore left the previous rows on screen with no indication — for the
+300ms pause **plus** the round trip — so the list answered a term the merchant had
+already replaced and read as a search box ignoring input. Before K2 the feedback
+was wrong; after K2 there was none. Fixed by adding `isRefreshing` to `AsyncState`,
+which dims the stale rows and sets `aria-busy`; the empty state is withheld while a
+fetch is in flight, since "nothing imported yet" mid-search answers a question
+nobody asked.
+
+**🔴 L2. The two screens' rows had already drifted.** `/products` and the picker
+each carried their own `ProductRow` and `EmptyCatalogue`, and they disagreed:
+`#1042` against `1042` for the identity line, and `—` against nothing for a product
+with no single price. **Neither difference is visible in development** — the seeded
+catalogue has no null price and no null SKU — so the drift would have surfaced
+first against a real catalogue containing a variable product. Extracted to
+`components/products/product-display.tsx`: one identity rule, one price rule, and
+an `action` slot for the only thing that genuinely differs (the picker's **Assign**
+button). Fixing K1's wording had required editing the same sentence in two files,
+which is how the drift arose in the first place.
+
+**The guard weakened silently when the code moved.** `search-contract.test.ts`
+asserted the prefix wording per screen; extracting the empty state into the shared
+module left each screen's *placeholder* satisfying that assertion, so a mutant that
+reverted K1's empty-state text **passed**. Caught by re-running the mutants after
+the refactor rather than trusting the green suite. The guard now reads the file
+that holds the text, and covers both drift bugs and L1's `isRefreshing` wiring —
+ten assertions, every mutant killed.
+
+#### Stage 6 — the states audit (2026-09-02)
+
+**Two corrections to this stage's own framing came first.**
+
+The dashboard is **not** Stage 6's work. An earlier note called it "the real M13.7
+gap"; [M20b.2](#m20b2--guided-setup-checklist) explicitly owns *"a persistent,
+dismissible checklist on the dashboard home, reflecting real state"*, and Phase 20b
+depends on Phase 13. Building it here would take a later phase's work and do it
+without the funnel instrumentation that gives it meaning. The dashboard stays a
+placeholder, correctly.
+
+And the criterion says **three** states — *"Loading, empty, and error states present
+on every screen"* — not four. "Four states" is M13.1's prose, where the fourth is
+*populated*, which is the screen working. Auditing against a remembered phrase
+rather than the written criterion is the drift this plan keeps warning about.
+
+##### What the compiler already guarantees
+
+`AsyncState` takes `isLoading`, `error`, `data` and `empty` as **required** props
+and branches all four internally. Measured, not assumed: renaming `empty` to
+`XXempty` on `/stores` produces `error TS2322`. `EmptyState` likewise requires
+`title`, `description` **and** `action`, so *"an empty state that says 'No data' is
+a defect"* is unviolatable **while `action` stays required**. `ui/alert.tsx` sets
+`role="alert"` on every Alert, so error announcement is universal.
+
+✏️ **Corrected by this stage's own audit — the qualifier is the finding.** This
+first read "structurally unviolatable", full stop. See [O1](#-o1-the-enforcement-was-real-and-defended-by-nothing).
+
+So the audit's real subject is the **hand-rolled** path — a screen that fetches and
+branches by hand compiles whatever it forgets. Two screens do: the option-set editor
+(which guards `data === undefined` correctly) and `/connect` (which did not).
+
+##### Coverage: 13 screens
+
+| Screens | States | Verdict |
+|---|---|---|
+| `/products`, `/option-sets`, `/stores` | `AsyncState` | ✅ compiler-enforced |
+| `/option-sets/[id]` | hand-rolled | ✅ guards `error` **and** `undefined` |
+| `/connect` | hand-rolled | 🔴 N1 below |
+| 5 auth screens | `AuthForm` | ✅ pending + error + `role="alert"`, centralised |
+| `verify-email` | 4-value state machine | ✅ |
+| `dashboard`, `no-workspace`, `/` | none | ✅ correctly stateless — a redirect, a terminal message, a placeholder |
+
+##### 🔴 N1. `/connect` could ask for consent without naming the site
+
+It branched on `query.error` alone, leaving one path — settled, not loading, no
+error, no data — that rendered **"Connect this store?"** above `site_url ?? ''`. An
+empty site name on a consent screen is a dialog that does not say what is being
+consented to, and this is the one screen in the phase that grants a third party
+access to a merchant's shop. Fixed by guarding `data === undefined` alongside
+`error`, then narrowing to a local `connection` so the fallbacks are gone: a blank
+site name is now a type impossibility rather than a rendering accident.
+
+##### 🟡 N2. A 255-character option-set name overflowed the list on a phone
+
+`MaxLength(255)` with no space requirement, and `/option-sets` had neither
+`min-w-0` nor `truncate`. `min-w-0` is the load-bearing half: a flex child defaults
+to `min-width: auto` and refuses to shrink past its content, so `truncate` alone
+does nothing and the row widens instead. The plan is explicit that merchants check
+stores on phones. `/stores` already handled its own unbounded text with `break-all`
+for URLs; option-sets did not.
+
+##### 🟡 N3. The shared product row truncated the name but not the SKU
+
+Written in Stage 5's L2 extraction and missed there: the name carried
+`block truncate`, the identity line beneath it carried neither, so a long SKU
+widened the row. Both now truncate.
+
+##### 🟢 N4. Responsiveness passes on inspection, not on breakpoint count
+
+Almost no `sm:`/`md:` classes across the screens, which looks alarming and is not:
+`min-w-0` + `truncate` + `shrink-0` is intrinsic responsiveness that needs no
+breakpoint. Only N2 and N3 were genuinely unbounded.
+
+##### The guard, and the three mutants that survived its first version
+
+`screen-states.test.ts` walks every `page.tsx`, selects the ones that fetch, and
+asserts each reports loading, reports errors, and narrows `data` before rendering
+it — plus that unbounded merchant text sits in a shrinkable, truncating column.
+
+**Three of its first four mutants survived**, all for the same reason: the
+assertions matched the *prose* explaining each fix rather than the fix.
+
+- Deleting `query.data === undefined` from `/connect` left the phrase in the doc
+  comment directly above it.
+- Deleting `min-w-0` from a `className` left it in the comment saying why it
+  belonged there.
+- `isLoadingXX` still contains `isLoading` as a substring.
+
+Fixed by stripping comments before matching and anchoring every identifier with
+`\b`, and by asserting the utility classes *inside a `className`*. A fourth
+apparent survivor turned out to be a **flawed mutant** rather than a gap —
+renaming some loading symbols left `approve.isPending`, which is a genuine loading
+signal on that screen; removing all of them fails correctly. **A guard that reads
+its own documentation proves nothing**, and this is the third time in this phase a
+check passed without exercising its subject.
+
+##### Stage 6 audit — the invariants the audit itself relied on
+
+Found 2026-09-02 by attacking the Stage 6 *report* rather than the code it
+described. All five are fixed. The common thread: **an audit that verifies what
+the code does, without verifying what keeps it doing that, is a snapshot.**
+
+##### 🔴 O1. The enforcement was real, and defended by nothing
+
+Stage 6 reported the states as "compiler-enforced" and the no-bare-empty-state
+rule as "structurally unviolatable". Measured against that claim:
+
+| Mutation | Suite | `tsc` |
+|---|---|---|
+| `EmptyState`'s `action` → optional | 261 pass | clean |
+| `AsyncState`'s `empty` → optional | 261 pass | clean |
+
+Both true *while the props stay required*, and one `?` added in a hurry removes
+the guarantee from every screen at once, silently. The type system was enforcing
+the invariant; **nothing was enforcing the type**.
+
+##### 🔴 O2. `AuthForm` carries five screens and had no test at all
+
+Deleting its entire form-level error display: **261 tests passed**. Deleting the
+submit button's `disabled` and pending label: **261 tests passed** — and losing
+`disabled` means a slow login accepts a second submit.
+
+Stage 6's matrix marked those five screens "✅ centralised", which was an accurate
+*description* and worthless as a guarantee. Centralising a rule concentrates the
+risk of losing it, so the shared component is exactly where the test belongs.
+
+##### 🔴 O3. M13.1 names error boundaries. There were none.
+
+M13.1's scaffold list ends *"…API client with token refresh, **error boundaries**"*
+and Stage 1 is ticked as delivering M13.1. There was no `error.tsx`, no
+`not-found.tsx`, and no `componentDidCatch` anywhere: a render-time throw unmounted
+the tree and left a blank white page — no message, no retry, no way back.
+
+This is the state the other four omit. Loading, empty, error and populated all
+assume the render *succeeded*; a component reading a property of something that
+turned out to be `null` is outside all of them. `app/error.tsx` logs the error
+(Next replaces the message with a `digest` in production, so a boundary that
+swallows it destroys the only record), shows the digest for support, and offers
+both `reset()` and a way out. The way out is a **plain anchor**: this boundary
+renders because something in the tree threw, and a full document load is the one
+navigation that cannot depend on the state that just broke.
+
+##### 🟡 O4. The accessibility roles were unguarded too
+
+Removing `role="alert"` from `ui/alert.tsx`, or `role="status"` from
+`LoadingRows`: both passed. Cited in the Stage 6 report as evidence a11y was
+"solid by construction" — same error as O1, one layer down. A skeleton and an
+error are *announcements*; without a role a screen reader is told nothing changed.
+
+##### 🟡 O5. M13.1 and the exit criterion counted states differently
+
+"Four states" against *"Loading, empty, and error"*. The same requirement counted
+with and without *populated* — now noted at M13.1 itself, because Stage 6 audited
+against the remembered phrase rather than the written criterion.
+
+##### The guard, and the mutant that survived it
+
+`state-contracts.test.ts` asserts the required props, the a11y roles, `AuthForm`'s
+error and pending handling, and both route boundaries. Ten mutants; **one survived
+the first version.** Swallowing `AuthForm`'s error passed, because the assertion
+checked that `setFormError` and `formLevelMessage` *appeared* — and the mutation
+left `setFormError(null)` on reset and the import intact. Now asserted as the
+composition `setFormError(formLevelMessage(` **and** that `{formError}` reaches the
+DOM, which kills both that mutant and one that keeps the call but renders a
+constant.
+
+That is the fourth time in this phase a check passed without exercising its
+subject, and the first time the failing check was an audit report.
+
+##### Stage 6 closeout — the premise was wrong, so the guards were
+
+Found 2026-09-02 by attacking the previous round's *fixes*. All four fixed.
+
+##### 🔴 P1. Every state component's behaviour was unguarded
+
+The round before this one guarded the state components' **prop signatures** and
+their **call sites**, and reported the invariant secure. It never guarded what the
+components do. Four mutations of `AsyncState` and `EmptyState` — the components
+behind loading, empty and error for every list in the product:
+
+| Mutation | Effect | Suite |
+|---|---|---|
+| `AsyncState` never renders the skeleton | Every list loses loading | 278 pass |
+| `AsyncState` returns `null` for empty | Every empty list renders blank | 278 pass |
+| `AsyncState` swallows errors | Every failed fetch shows nothing | 278 pass |
+| `EmptyState` drops the action | The "No data" defect M13.1 names | 278 pass |
+
+This is [O1](#-o1-the-enforcement-was-real-and-defended-by-nothing) one layer
+deeper. O1 was *the type is enforced, but nothing enforces the type*; P1 is *the
+props are asserted, but nothing asserts the behaviour*. Closed by
+`states.render.test.tsx` and `product-display.render.test.tsx` — **ten mutants, all
+killed**, including the `#1042`/`—` drift pair from L2 that no source guard could
+reach, because a source guard can check that the code says `'—'` and only a render
+can check that a merchant sees it.
+
+##### 🔴 P2. "Nothing in this repo can mount a component" — false, and load-bearing
+
+Recorded at K5 and repeated through three rounds of this phase to justify
+source-reading guards. **`react-dom/server` ships with Next and was installed the
+whole time.** Measured: a fifteen-line render test kills the mutant that four
+source guards missed, with no new dependency.
+
+`@testing-library/react` buys hooks, events and user interaction. The state and
+display components need none of it — they are pure functions of their props. The
+error was reading "cannot test interaction" as "cannot render" and never checking,
+then building three rounds of reasoning on top. **The tell was visible each time**:
+a guard asserting names and shapes rather than outcomes, read as an inherent limit
+of the technique rather than as a question about the premise.
+
+##### 🔴 P3. An in-app error blanked the navigation
+
+A throw in `/products` bubbled past `(app)/layout.tsx` to the root boundary, which
+replaces the whole page — `AppShell` and its navigation included. The merchant lost
+every route out of the failure, and a broken *screen* was indistinguishable from a
+broken *product*. `app/(app)/error.tsx` renders inside the shell instead, scoping
+the failure to the panel that failed; the root boundary still stands behind it for
+anything the layout or guards themselves throw. Guarded, including that it must not
+claim the viewport with `min-h-screen`.
+
+##### 🟡 P4. `global-error.tsx` is absent by decision, now stated as one
+
+It catches only what the **root layout itself** throws. That layout is a pure JSX
+wrapper — no data access, no conditional logic — so there is nothing in it the
+existing boundary would not already catch from its children. Recorded in
+`app/error.tsx` so the next reader need not re-derive whether it was considered.
+
+##### What this round changes about the method
+
+Three rounds asserted *shape*; this one asserts *output*. Both have a place — the
+source guards still catch a call site that stops passing `isFetching`, which no
+render of the component can see — but a guard that never renders cannot certify
+what a merchant sees, and this phase spent three rounds letting one claim it did.
 
 ### M13.7 — Shell and navigation
 
@@ -4435,14 +12272,207 @@ App shell with the navigation skeleton for the eventual full IA (Dashboard, Prod
 Option Sets, Rules, Analytics, Stores, Subscription, Settings), unbuilt items disabled
 rather than hidden.
 
+##### 🟡 U5. Nine broken internal links elsewhere in this plan — pre-existing
+
+Found 2026-09-03 while checking Phase 13's own cross-references, by slugifying every
+heading and resolving all 706 internal links. Phase 13's 30 links are now clean (three
+were wrong and are fixed). **Nine remain broken elsewhere**, all pointing at headings
+that were renamed after the link was written:
+
+| Link | Real heading |
+|---|---|
+| `#phase-8--woocommerce-store-connection` | Phase 8 — Store Connection |
+| `#phase-24--plan-limits-and-usage` | Phase 24 — Plan Limits & Enforcement |
+| `#phase-31--observability` / `#phase-33--deployment` / `#phase-34--infrastructure` | renamed |
+| `#m50--reconcile-the-domain-model-against-optionia-app` | renamed |
+| `#m725--serialization-contract`, `#adr-001-amendment`, `#status` | renamed or removed |
+
+Not Phase 13's to fix — recorded because a plan this size is navigated by its links,
+and a reference that lands nowhere costs a reader more than the link saved. Worth a
+sweep before Gate 1 is read against this document.
+
+##### 🟡 U8. Two Disconnect buttons, and only one of them disconnects
+
+Found by the merchant, 2026-09-03, doing exactly what a merchant does: pressing
+Disconnect in WordPress and then looking at the dashboard.
+
+**The plugin's Disconnect is local only.** It clears its own token and drops to
+`DISCONNECTED`; the backend is never told. `ConnectionSection::maybe_disconnect()`
+says so plainly — *"The cloud is told separately — a merchant disconnecting from
+the dashboard revokes there"* — and the reason is sound: a plugin that cannot
+clear its own token is one a merchant cannot recover from without database access.
+
+Measured immediately after: plugin `disconnected` with no token, backend
+`connected` **with a live credential**. The dashboard therefore still offered
+**Disconnect**, correctly by its own lights and confusingly by the merchant's.
+
+**Not a defect in either half. It is a gap between them**, and it has two costs:
+
+- A merchant who disconnects in WordPress reasonably expects the dashboard to
+  notice, and nothing reconciles the two.
+- The credential stays **live** until the dashboard is also used, which is the
+  same orphan-credential shape [S2](#-s2-nine-live-credentials-for-one-site-manufactured-by-the-reset)
+  described from the test side.
+
+✅ **Fixed 2026-09-03.** `POST /v1/store/disconnect` added to the store realm, and
+the plugin calls it **before** deleting its token.
+
+**The heartbeat alternative was considered and rejected as impossible**, not
+merely worse: a disconnected plugin has *deleted the very credential* the
+heartbeat authenticates with, so it can never report in again. The message has to
+be sent while the credential still exists — which is why the ordering, not just
+the call, is what the tests assert.
+
+**Best-effort, deliberately.** The local clear runs whatever happens — unreachable
+cloud, expired credential, 500. A plugin that refused to disconnect because the
+network was down would strand a merchant with no remedy but database access, which
+is the exact failure the local-first design exists to prevent.
+
+**Safe by construction:** it revokes only the credential that authenticated the
+call, so it can do nothing a stolen token could not already do — and a thief
+revoking their own access is the one abuse nobody minds. `SiteMatchGuard` still
+requires the call to come from that store's own address. Idempotent, `200` for a
+store already disconnected.
+
+##### The mutant that survived, and what it proved
+
+Three mutants were run against the plugin-side test. Two died. The third —
+**moving the cloud call to *after* `delete_option()`** — passed, because the test
+asserted only that `post()` ran once. **That mutant is the original bug**: by then
+the credential is gone, the request cannot authenticate, and the cloud never hears
+it. The test now captures the token *at the moment of the call*, so the ordering is
+the assertion rather than the call count.
+
+Covered at both ends: `ConnectionSectionTest` proves the plugin calls it first and
+still disconnects when the cloud throws; `store-heartbeat.e2e-spec` proves the
+route revokes the credential and leaves it unusable. Backend mutation-proven too.
+
+⚠️ **Worth noting how it was found.** Every automated suite passes, because the
+canonical E2E disconnects through the *dashboard* — the path that works. A
+merchant took the other path within minutes of being handed the product.
+
+##### ✏️ The 60-second criterion is Phase 13's, not Gate 1's
+
+Recorded 2026-09-03 because it was repeatedly described the other way in
+conversation, and the confusion is worth inoculating against: **Gate 1's checklist
+does not contain a timing item.** Its ten items are all architectural, and all ten
+are ticked. The 60 seconds is M13.3's, inherited from Phase 8.
+
+Phase 14 depends on **Gate 1**, so the timing gates nothing downstream. It stays
+open on Phase 13's own list, where it belongs.
+
+##### 🟢 U9. Dashboard → WordPress disconnect lags by design, and that is correct
+
+Raised by the merchant, 2026-09-03, immediately after [U8](#-u8-two-disconnect-buttons-and-only-one-of-them-disconnects)
+— and it is the **mirror image**, with the opposite verdict.
+
+Disconnecting from the dashboard revokes the credential **instantly**; the store
+stops serving that second. What lags is the plugin's *display*: it goes on saying
+"Connected" until its next call, which returns `401`, fires
+`optionia_unauthorized`, and moves it to `REVOKED`. Fifteen minutes at most
+(`Scheduler::INTERVAL = 900`).
+
+**Not a gap.** `Api\Client` documents this exact design and names the alternative
+as the defect it prevents — *"the settings screen goes on saying 'Connected' until
+a merchant wonders why publishing stopped."* And it **cannot** be instant: the
+cloud has no inbound path into a merchant's WordPress, which is the architecture,
+not a limitation of it.
+
+The distinction from U8 is what matters. There, the cloud **never** found out and
+a credential stayed live indefinitely — a real leak. Here the credential is
+already dead and only the display catches up.
+
 ### Phase 13 exit criteria
 
 ```text
-[ ] Merchant registers, connects a store, and publishes a radio option in the UI
-[ ] Zero curl required for the full happy path
-[ ] Tenant context correct throughout
-[ ] Loading, empty, and error states present on every screen
+[x] Merchant registers, connects a store, and publishes a radio option in the UI
+    — Stage 7, 2026-09-03. Automated and green, twice consecutively.
+      ✏️ Corrected: this ran against SEEDED products when first ticked and no
+      longer does. `e2e/catalogue.ts` imports the merchant's OWN WooCommerce
+      catalogue through the Store API — "Custom Hoodie" (id 20) is a real product
+      on the real site. M19.1 replaces that stand-in with the product's own
+      scheduled import; it is not a precondition for this criterion
+[x] Zero curl required for the full happy path
+    — Stage 7, 2026-09-03. Every merchant- and customer-facing step is driven in
+      the browser, through to the order.
+      ⚠️ ONE step is not: marking the address verified writes `emailVerifiedAt`
+      directly, standing in for a mailbox this environment does not have. Named
+      here rather than only in the annotation, because "zero curl" read alone
+      claims more than is true. The alternative — wiring a mail catcher — would
+      test the mail provider, which is not what Gate 1 proves
+[x] Tenant context correct throughout
+    — Stage 7, 2026-09-02. Asserted in the flow: the workspace name resolves in
+      the shell, and the plugin's stored `optionia_connection_tenant` matches the
+      merchant the browser registered
+[x] Loading, empty, and error states present on every screen  — Stage 6, 2026-09-02
+[x] The three Stage 0 endpoints exist, are documented, and are tenant-scoped  — Stage 0, verified 2026-09-02
+[x] An assignment made in the picker renders on that product's storefront page
+    — Stage 7, 2026-09-03. ✏️ Corrected: first ticked as "proven at the config
+      layer; the visual render awaits M19.1", which understated it. The flow now
+      loads the product's own page and asserts the plugin's rendered markup —
+      `[data-optionia="options"]` visible, containing "Luxury" — then selects it,
+      adds to cart, and checks out. Config-layer proof stands alongside it:
+      mode=manual, a numeric target_ref, amount_minor 1050, read with the
+      plugin's own credential
+[x] docs/ARCHITECTURE.md exists and describes the three-repository split  — Stage 7, 2026-09-02
+[x] The canonical Gate 1 flow runs automated, in a browser
+    — Stage 7, 2026-09-03. The COMPLETE flow, green twice: register → connect →
+      author → assign → publish → storefront render → select → cart → checkout →
+      order. Verified in WooCommerce: order #42, £80 base + £10.50 = £90.50, with
+      `Finish = Luxury` on the line
+[x] Store connection timed at under 60 seconds, by a person, with the number recorded
+    — ✅ 2026-09-08. **12.50s and 11.16s**, stopwatch, clean connection each time
+      (disconnected between runs). The slowest uses 21% of the budget.
+      Both runs stopped on the dashboard's store list rather than the plugin's
+      settings screen, so they are **conservative**: they include a tab switch
+      and a page load the real flow does not need.
+    — 🟡 Was PARTIAL, 2026-09-03: the merchant reported **"everything looks so
+      fast, no delay at all"** and later estimated ~15s. That was recorded as a
+      qualitative pass and deliberately **not** ticked, because no stopwatch
+      number existed. The timed runs came in *under* the estimate.
+      Supporting evidence, not a substitute: the same flow completes in ~35s under
+      browser automation, and it is two clicks with automatic redirects between.
+      Whoever next has a real site and a timer should take the three numbers below
+      and close this properly.
 ```
+
+**Six criteria, not four — the extra five added 2026-09-02.** Each exists because
+the original four can all be ticked while Gate 1 still cannot open:
+
+| Criterion | Why the original four missed it |
+|---|---|
+| Stage 0 endpoints | "Zero curl" is satisfiable against endpoints that do not exist yet — by not building the screens that need them |
+| Assignment renders on the storefront | The cross-repo proof. A picker writing rows the renderer ignores passes every frontend test |
+| `ARCHITECTURE.md` | A Gate 1 requirement with no owning milestone |
+| Canonical E2E automated | Gate 1 says "manually **and** as an automated E2E"; nothing scoped the second |
+| 60 seconds, recorded | Inherited from Phase 8 with no procedure and nowhere to write the result |
+
+⚠️ **"Merchant registers… publishes a radio option" runs against *seeded*
+products** until [M19.1](#m191--initial-catalogue-import) fills `store_products`.
+The flow is real; the catalogue is not. Ticking this on a demo product and
+reading it later as a merchant flow is exactly the bookkeeping drift Phase 12
+Stage 4 had to correct.
+
+⚠️ **`mode: MANUAL` is part of the assignment criterion, not a detail — and the
+failure is worse than [M13.6](#m136--product-assignment-picker) states.**
+
+That milestone says a picker omitting `mode` produces assignments "Phase 10
+defaults to `manual` on read, which is right by accident". ✏️ **Corrected
+2026-09-02 by reading both sides.** Neither half defaults it:
+
+- **The backend** passes it through raw — `mode: assignment.mode` in
+  `serialization/config-document.ts`. The `normaliseAssignment` helper that once
+  filled it was **deliberately removed** in Phase 10 Stage 1, when assignments
+  became a live read.
+- **The plugin** treats a missing mode as `''`, which is neither `MODE_ALL` nor
+  `MODE_MANUAL`, so `Config\ProductIndex` **skips the assignment and counts it
+  as deferred** (`ProductIndex.php:115`).
+
+So the option does not render "by accident" — it does not render **at all**, and
+the only trace is a skip counter. The saving grace is the schema:
+`option_set_assignments.mode` is `varchar(20)` **NOT NULL with no default**, so an
+insert omitting it fails loudly at the database rather than shipping a silent
+gap. The acceptance is still that the column is written deliberately.
 
 ---
 
@@ -4471,17 +12501,75 @@ Merchant registers on Optionia
 Gate checklist:
 
 ```text
-[ ] Canonical E2E test passes, automated
-[ ] Zero synchronous API calls from any storefront page
-[ ] Storefront works with optioniaWooCommerceBackend fully stopped
-[ ] Price cannot be manipulated from the client (adversarial suite green)
-[ ] Cross-tenant access impossible (isolation suite green)
-[ ] Works on classic AND block themes
-[ ] Works with HPOS on and off
-[ ] No SaaS secret in plugin source
-[ ] PHP and TS pricing engines agree in CI
-[ ] docs/ARCHITECTURE.md, DATABASE.md, CONFIG-CONTRACT.md, PRICING-SPEC.md current
+[x] Canonical E2E test passes, automated  — Playwright, register→order, green on both themes
+[x] Zero synchronous API calls from any storefront page  — gate-enforced: 8 render-path files
+[x] Storefront works with optioniaWooCommerceBackend fully stopped  — API killed, options still rendered
+[x] Price cannot be manipulated from the client (adversarial suite green)  — AdversarialAddToCartTest
+[x] Cross-tenant access impossible (isolation suite green)  — 90 tests, 3 suites
+[x] Works on classic AND block themes  — proven 2026-09-03, both, same code
+[x] Works with HPOS on and off  — proven 2026-09-03, including sync off
+[x] No SaaS secret in plugin source  — check-secrets.sh green; 3 verifiers use hash_equals()
+[x] PHP and TS pricing engines agree in CI  — shared-fixture gate runs in BOTH repos' CI
+[x] docs/ARCHITECTURE.md, DATABASE.md, CONFIG-CONTRACT.md, PRICING-SPEC.md current  — all four gated
 ```
+
+### Classic and block, HPOS on and off — measured 2026-09-03
+
+The two items code inspection cannot discharge. Both were half-proven — one
+configuration verified, the other never executed — and both are now driven by the
+canonical flow end to end, ending in a **real order**.
+
+| Configuration | Order | Evidence |
+|---|---|---|
+| Storefront (classic), HPOS on | #42 | `wp_posts` 1, `wc_orders` 1 |
+| Storefront (classic), HPOS **off** | #47 | `wp_posts` 1, `wc_orders` 1 |
+| Storefront (classic), HPOS off **and sync off** | #48 | `wp_posts` 1, **`wc_orders` 0** |
+| Twenty Twenty-Five (**block**), HPOS on | #50 | `wp_posts` 1, `wc_orders` 1 |
+
+Every order £80 + **£10.50** = £90.50, carrying `Finish = Luxury`,
+`_optionia_selections`, `_optionia_option_set_id`, `_optionia_config_version` and
+`_optionia_price_delta`. **Order #48 is the strict case**: written *purely* to the
+legacy tables, proving the option payload does not depend on HPOS at all.
+
+The site was returned to its exact baseline afterwards — Storefront, HPOS on, sync
+on — recorded before any change was made.
+
+##### 🔴 U6. The block theme serves a different checkout, and the difference is structural
+
+The classic shortcode puts every address field on the page. The block checkout
+shows an **email box and hides the address behind an "Edit shipping address"
+button** — so filling by label alone filled almost nothing, and **Place Order**
+failed validation on fields that were never visible. It looked exactly like a
+broken product.
+
+**That is precisely the split this criterion exists to catch**, and it was
+invisible while only one theme was ever tested. Also found in the same pass:
+
+- **A postcode is validated against the country.** This store's base is `BD`, and
+  the fixture used a UK postcode — rejected, with the block checkout surfacing it
+  as a field alert that disables the submit. The address now matches the store's
+  own locale rather than fighting the country control, which differs between the
+  two checkouts.
+- **The confirmation markup differs.** Classic renders
+  `.woocommerce-order-details`; block renders inside `.woocommerce-order`. A
+  classic-only selector reported the selection missing while "Luxury" was plainly
+  on the page.
+- **The block checkout is materially slower** — over a minute against roughly
+  fifteen seconds, because it places the order over the Store API and then
+  navigates. A short wait failed *after* the order was written, which reads as a
+  broken checkout and is a slow one.
+
+None of the four was a product defect. All four were invisible to a suite that
+only ever ran one theme — which is the argument for the criterion, not against it.
+
+##### 🟡 U7. WooCommerce refuses to make HPOS authoritative while orders are out of sync
+
+Re-enabling HPOS threw *"The authoritative table for orders storage can't be
+changed while there are orders out of sync"* — because order #48 existed only in
+the legacy tables. That is **WooCommerce protecting data integrity**, not a fault:
+`wp wc hpos sync` migrated the one order and the switch then succeeded. Recorded
+because the next person toggling HPOS on a store with orders will hit it, and the
+error reads like a broken install.
 
 > **If any item fails, fix the architecture now.** Every subsequent phase multiplies the
 > cost of these corrections.
@@ -4509,6 +12597,2486 @@ Types are declared along the three axes from
 [M5.4b](#m54b--type-model-kind-cardinality-and-presentation-as-separate-axes), so a
 "single-select colour swatch" and a "multi-select colour swatch" are **one** entry in this
 list with `cardinality` configurable — not two separate builds.
+
+#### Stage 0 — analysis (2026-09-03)
+
+Traced a type's whole journey — schema → API → publish → config → render →
+resolve → price → cart → order — rather than reading the registry and stopping.
+That found three things the registry view cannot see.
+
+##### 🟢 Phase 7's claim holds, in three repositories out of four
+
+`type-registry.ts` promises *"Phase 14 adds entries; nothing else in the system
+needs to change."* Tested by grepping production code for a hardcoded `radio`:
+
+| Repository | Hardcoded `radio` | Verdict |
+|---|---|---|
+| Backend | none outside tests | ✅ |
+| Plugin | **zero** | ✅ better than advertised |
+| Frontend | **three** | 🔴 see W3 |
+
+**The plugin is fully data-driven.** `Renderer` resolves
+`'options/' . $type . '.php'` by filename, and `Engine\SelectionResolver` **never
+reads `type` at all** — it is presentation-agnostic, as are the cart and order
+paths. Dropping in `templates/options/dropdown.php` is the entire plugin change
+for a choice-shaped type.
+
+##### 🔴 W1. Eleven presentations declared, one registered
+
+`Presentation` in `enums.ts` lists eleven; the registry holds one. The column is
+`varchar(30)` with no constraint, so the database accepts all eleven.
+
+**Every layer fails closed**, verified: the API answers `UNSUPPORTED_OPTION_TYPE`
+naming what *is* supported; the plugin skips and logs, its comment recording why —
+*"rendering a fallback control would be worse than rendering none: a customer
+could select a value the plugin does not understand and the server would price it
+wrong"*; the publish check defaults `takesValues` to `false`.
+
+So this is safe. It is also invisible: the enum reads as a feature list, and ten
+of those features do not exist.
+
+##### 🔴 W2. Presentational items are built everywhere except where they are created
+
+`presentational_items` exists as a **table**, with an entity, cascade handling,
+hard-delete handling, and **both** serialization paths (`itemToAuthoring`,
+`itemToPublished`). The live config document carries `"items"` on every group.
+
+**There are zero routes.** Nothing in the product can create one. And the plugin's
+`templates/presentational/` directory exists and is **empty** — the renderer never
+reads `items`.
+
+Data flows end to end through a pipe with **no inlet and no outlet**. Three of
+this phase's eleven deliverables are substantially built and entirely unreachable,
+which is the most expensive shape a half-built feature can take: it looks done
+from the schema and does nothing.
+
+**✅ RESOLVED — both ends built (Stage 3o).**
+
+*The inlet* — `PresentationalItemsService`, `PresentationalItemsController` and
+`PresentationalItemsRepository`, wired into `OptionSetsModule` with the entity
+registered on `TypeOrmModule.forFeature` (without which the repository cannot be
+injected). Six routes: `GET|POST groups/:id/items`, `POST groups/:id/items/reorder`,
+`GET|PATCH|DELETE items/:id`, behind `JwtAuthGuard, TenantGuard, CapabilityGuard`
+with `OPTION_SETS_EDIT`. Four new `AuditAction` members record every mutation.
+
+*The outlet* — `templates/presentational/{heading,paragraph,divider}.php`, plus
+`Renderer::group_markup()`, which **interleaves options and items by `sort_order`**
+rather than concatenating the lists. That was the substantive design decision: a
+heading's only job is to sit above the right control, and drawing all options then
+all items would silently discard the merchant's ordering. The sort is stable
+(`usort` is not), so entries sharing a `sort_order` cannot swap between requests.
+A missing `sort_order` defaults to `PHP_INT_MAX`, appending rather than hoisting.
+
+`groups_with_markup()` no longer drops a group that has no options — a group of
+pure explanatory copy used to render nothing, with no error anywhere.
+
+⚠️ **`rich_text` is deliberately still unreachable**, and that is the correct
+state, not a gap. M5.4c requires a strict-allowlist sanitizer at publish *and* at
+render before merchant-authored markup can go on a public storefront.
+`AUTHORABLE_ITEM_KINDS` in the DTO is a **subset** of the enum — the column and
+both serialization paths carry the value so storage is ready, while the API
+refuses it. The plugin has no `rich_text.php`, so a document from a future build
+renders nothing rather than raw markup. **Both sides are pinned by tests**
+(`presentational-items.spec.ts` and `RendererTest::test_rich_text_renders_
+nothing_without_its_sanitizer`); whoever adds the sanitizer must change both, in
+the same commit.
+
+**Proven, not asserted.** Verified live against the running API and MySQL:
+create → trim → publish → config document, with `sort_order` emitted `snake_case`
+per the wire contract, and audit rows for every mutation. Mutation probes killed
+seven mutants across both repos — including restoring the original W2 bug (the
+renderer ignoring `items`), which now fails the suite. The `rich_text` gate
+**SURVIVED its first probe** with 671 tests passing, which is what prompted
+`presentational-items.spec.ts`; it is killed by a real failing test now.
+
+**✅ The dashboard editor (Stage 3p).** The API and the storefront were both
+built, but a merchant could not create an item — reachable by `curl`, not by a
+person, which is W2's own shape one layer up. `AuthoringItem` on the frontend,
+`createItem`/`updateItem`/`deleteItem`/`reorderItems`, and `ItemBlock` + `AddItem`
+in the option-set editor. `GET /:id/detail` had always returned `items`; nothing
+read it.
+
+Options and items render as **one interleaved list**, ordered by `mergedEntries`,
+because that is what the storefront draws — an editor with two sections would let
+a merchant arrange something they cannot see the result of. `rich_text` renders
+read-only, matching the server's gate.
+
+##### 🔴 Two faults the tests did not catch, found by probe and by live traffic
+
+**1. A dead tie-break defended by a wrong rationale.** `mergedEntries` carried an
+explicit `seq` clause, commented as necessary because the inputs are two
+concatenated lists. A mutation probe **SURVIVED** deleting it. `Array.prototype.
+sort` has been required to be stable since ES2019 and `seq` was assigned *in*
+concatenation order — precisely what stability preserves. Deleted rather than
+tested. ⚠️ The plugin's `usort` still needs its tie-break: PHP's sort is not
+stable. Same rule, only one side gets it free.
+
+**2. Cross-kind reorder was a silent no-op — `201` twice, nothing moved.** The
+first `move` renumbered each list by its index *within that list*, so two options
+and three items got `10,20` and `10,20,30` **whatever order they were in**. A
+list can only encode its internal order that way, never its position relative to
+the other. Caught by driving the editor's own call sequence against the live API,
+not by any unit test — the tests only covered `mergedEntries` (reading), never
+the write.
+
+Fixed by numbering from each entry's position in the **merged** sequence, in
+`reorderPayloads`, with `reorderOptions`/`reorderItems` now taking explicit
+`sortOrder`s instead of deriving them from array index. That signature change is
+what makes the mistake a compile error rather than a silent one. Verified live:
+the cross-kind move applies, and a same-kind move still writes one list.
+
+Seven mutants killed across the two, including one restoring each original bug.
+
+#### ✅ Audit fixes — six findings closed (2026-09-07)
+
+A full audit after the type library completed. Nothing was broken; six gaps.
+
+**🔴 1. Values were write-once.** `PATCH /values/:id` shipped in Phase 7 and the
+dashboard never called it, so correcting a mistyped label, price, colour — or a
+group heading — meant deleting the value and recreating it, losing its id and its
+place in the order. `updateValue` plus an inline `ValueRow` editor. ⚠️ `valueKey`
+is shown but **not** editable: it is the identifier a published document, a cart
+line and an order line all carry, so changing it would orphan every order already
+placed under the old key.
+
+**🔴 2. A set of only presentational items could not publish.** `setHasContent`
+counted enabled *options* alone — correct while nothing could create an item, and
+wrong once M5.4c's routes shipped. The plugin's renderer already drew such a
+group, so the two disagreed about the same set. Now counts items in enabled
+groups; a disabled group still hides them, since `presentational_items` has no
+`isEnabled` of its own.
+
+**🔴 3. The storefront stylesheet was one comment line.** 37 classes across 14
+option templates, the group wrapper and the items had no styling at all — a swatch
+grid rendered as a vertical radio list and `columns: 3` did nothing. Phase 10 is
+fully `[x]` and **no criterion mentions CSS**, which is how it passed a complete
+checklist while being invisible. ⚠️ Styles layout only — grid, flex, spacing;
+colour and type inherit, because an option block that imposes its own palette
+looks pasted onto every storefront. ✏️ The grid rules were first written against
+`.optionia-option__values`, **a class that does not exist**; the values sit
+directly in the inner `<fieldset>`. Caught by cross-checking every selector
+against the templates.
+
+**🟡 4. Item visibility was documented as built.** M5.4c gives items ordering *and*
+conditional visibility, and three code comments stated both in the present tense —
+but `RuleTargetType` is `option | group | value` with no `item`. Corrected in four
+places to say what is actually true and which phase owns the rest.
+
+**🟡 5. `itemsPerGroup` was enforced and untested**, and the reorder caps repeated
+their limits as literals. Both fixed. ✏️ Naming the constants exposed a latent
+bug: `ReorderGroupsDto` capped at `200` — the *options* ceiling — while
+`groupsPerSet` is 100. Harmless (the create route refuses the 101st group) but it
+guarded a number unrelated to what it bounded. Two literals that happen to differ
+look identical; two named constants do not.
+
+**🟡 6. The parity gate had an item-kind blind spot.** It guaranteed every
+authorable *option type* has a template and nothing did the same for item kinds.
+Now checks both directions, and **proven to fail** on each: a kind with no
+template, and a template with no kind.
+
+#### ✅ Second audit — five findings, two of them mine (2026-09-07)
+
+A deeper pass after the first six fixes, driving the API rather than reading it.
+
+**🔴 1. Duplicating a set silently lost items and `<optgroup>` headings.** Mine.
+`groupLabel` was added to **one of four** hand-written value-copy field lists, and
+presentational items were copied by **none**. Measured: source had 1 item and
+`groupLabel: 'Sizes'`; the copy had 0 items and `null`. Every suite stayed green,
+because nothing asserted a copy is *complete* — the same shape as the cross-kind
+reorder bug.
+
+Fixed structurally rather than by patching the fourth list: `duplication.ts` holds
+the per-row field lists once, and `OptionSetsService.duplicate` now **calls**
+`copyOptionsInto` instead of re-implementing it. That helper's own docblock had
+promised it was shared by both paths; it never was, and the drift it predicted had
+already happened. `duplication.spec.ts` compares the copied fields against the
+entity's own **TypeORM column metadata**, so a new column fails the suite until it
+is either copied or explicitly named caller-decided — it cannot drift the way a
+second hand-written list would.
+
+**🔴 2 + 4. Whitespace-only text was accepted and stored as `''`.** `@MinLength(1)`
+and Zod's `.min(1)` both count whitespace, so `"   "` passed validation and
+`buildPatch` — which trims on the way to the database — stored an empty string.
+Measured on four endpoints. Fixed on both sides: `@Trimmed()` on 14 API fields
+(transform runs before validation, so every length rule now measures what will be
+stored) and a shared `text()` helper on 5 dashboard fields. The create paths were
+safe only because their services called `.trim()` by hand — the same rule in a
+second place, reaching only some of them.
+
+**🔴 3. `null` on any NOT NULL field returned 500, not 400.** `@IsOptional()` treats
+`null` and `undefined` as the same absence, so a null skipped every validator,
+reached the column and surfaced as `INTERNAL_ERROR` — wrong twice over: it tells a
+client the server broke when the request was at fault, and buries a database error
+in the log. `OptionalNotNull()` replaces `@IsOptional()` on the 9 patchable NOT
+NULL fields.
+
+✏️ **Two attempts failed first, and only probing the whole decorator stack showed
+it.** `ValidateIf(v => v === null)` + `@IsString()` was silently catastrophic — a
+false `ValidateIf` skips *every* validator on the property, so a 201-character
+label and an empty string both became valid. A standalone `registerDecorator`
+constraint never ran, because `@IsOptional()` short-circuits first. What works is
+replacing `@IsOptional()` rather than sitting beside it. That probe is now
+`trimmed.decorator.spec.ts`, which asserts the decorators **compose** rather than
+short-circuit.
+
+**🟡 5. The plugin version was never bumped with the new CSS.** `OPTIONIA_VERSION`
+is the `ver` cache key `Frontend\Assets` passes to `wp_enqueue_style` outside
+`WP_DEBUG` — so every returning customer would have kept the *empty* stylesheet
+while the merchant saw it working. Bumped to `0.2.0`, with the requirement written
+at the constant so the next asset change does not repeat it.
+`Migrator::maybe_upgrade()` handles the change idempotently.
+
+**Verified live, not asserted.** Every previously-broken case re-measured against
+the running API: nulls now `400` on all five endpoints, whitespace refused on all
+four, padded input still trims and saves, and set *and* group duplicates now
+reproduce items and `groupLabel` exactly. Eight mutants killed across the three
+repos, including one restoring each original defect.
+
+Remaining: CSS beyond layout, and per-type visual polish, stay with whoever owns
+storefront design — the classes and the grid are in place.
+
+##### 🔴 W3. `SelectionResolver` has one shape, and it is not text
+
+The deepest finding, and the one that reorders this phase. The resolver treats
+**every** selection as a `value_key` looked up in a predefined set:
+
+```php
+$value_key = (string) $raw_value;
+if ( ! isset( $values[ $value_key ] ) ) → ERROR_UNKNOWN_VALUE
+```
+
+A `text_field` has **no value set** — the customer types *"Happy Birthday Mum"*.
+That lookup fails and the selection is rejected as unknown.
+
+**Tier 1's eight types are therefore two groups, not eight equal builds:**
+
+| Shape | Types | Cost |
+|---|---|---|
+| Choice | `dropdown`, `checkbox`, `color_swatch`, `image_swatch` | registry entry + template |
+| **Value** | `text_field`, `textarea`, `number_field` | **a second resolution path** through resolver, cart, pricing and order |
+
+✏️ **Corrects this stage's own first analysis**, which said *"7 remaining × 7
+artifacts = 49 deliverables"* as though uniform. Four are cheap; three need new
+machinery; three more (presentational) are a different shape again.
+
+##### 🟡 W4. Three Phase 7 tripwires fire on the second type
+
+`type-registry.spec.ts` asserts, deliberately:
+
+- **`registers exactly one type in Phase 7`** — *"scope creep the milestone refuses"*
+- `findType(DROPDOWN)` returns null, `isRegistered(CHECKBOX)` is false
+
+These are Phase 7 scope tripwires, the same device as Phase 8's 60-second handoff
+test. **They will fail on the first Phase 14 registration, and should.** Updating
+them *is* the act of accepting this phase — named here so nobody deletes them as
+noise.
+
+##### ✏️ And Stage 0 is smaller than first proposed
+
+The first plan called for a new gate script asserting registry ⊆ enum.
+`type-registry.spec.ts:56` already asserts *"every key is a real presentation"* —
+half of it exists. What is missing is the **other direction**: which enum values
+have no registration. That is a few lines in the existing spec, not a new gate.
+
+#### Stage 1 — `dropdown`, and what it measured (2026-09-03)
+
+Phase 14's first added type, chosen because it is the **cheapest possible** one:
+same `choice`/`one` axes as `radio`, same values, same per-value pricing, differing
+only in how it draws. That made it a measurement rather than a feature — *is
+adding a type really one registry entry?*
+
+##### The answer, per repository
+
+| Repository | Change needed |
+|---|---|
+| Backend | **one registry entry.** No validator, serializer, controller or migration |
+| Plugin | **one template.** `Renderer` resolves `'options/' . $type . '.php'` by filename |
+| Frontend | **a type picker, and widening `z.literal('radio')`** |
+
+**Phase 7's claim held for the two repositories it owned, and the cost landed in
+the one it did not.** `Engine\SelectionResolver` never reads `type` at all, so
+cart, pricing and order paths were untouched — 631 backend tests and 740 plugin
+tests passed with no production change beyond those two files.
+
+##### 🟡 Four scope tripwires fired, exactly as designed
+
+`registers exactly one type in Phase 7`, two `findType` null assertions, and the
+frontend's `accepts only radio for now`. Each **raised or re-pointed, none
+deleted** — their own comments say to do that, and a deleted tripwire is a
+registry nobody counts. The count assertion stayed a count rather than becoming
+`toBeGreaterThan`: a number that only ever rises is a number nobody thinks about,
+and thinking about it is the assertion's whole job.
+
+##### 🔴 Three places a second control shape broke a test that "knew" about radio
+
+Found by driving the flow, not by reading it:
+
+- **`getByText('Luxury')` passed for radio and failed for dropdown.** A `<select>`'s
+  `<option>` carries its label as text but is not *visible* — the closed control is
+  what a customer sees. Now asserts the value's presence in the DOM, which is true
+  of both shapes.
+- **`check()` hung until the 180-second timeout.** It is a radio action; a select
+  needs `selectOption`. Failing by timeout rather than by assertion is the worst
+  shape of failure, because it names nothing.
+- **The dropdown template is not `radio.php` with the input swapped.** A `<select>`
+  is *one* control, so it takes `<label for>` rather than `<fieldset><legend>` —
+  a fieldset would announce the question twice to a screen reader — and needs a
+  placeholder option, because a select always has something selected and "nothing
+  chosen yet" has to be an option rather than an absence. Without it a required
+  dropdown arrives pre-answered and a customer is charged for a choice they never
+  made.
+
+##### Proven end to end
+
+Order **#55**: `presentation: dropdown`, `choice`/`one`, £80 + **£10.50** = £90.50,
+carrying `Finish = Luxury` and all four Optionia meta keys. The canonical E2E now
+authors a **dropdown** rather than a radio, deliberately: radio keeps its coverage
+in the unit and integration suites, and what only an E2E can prove is that a
+*second* type survives config document → storefront → cart → checkout → order.
+
+##### What this means for Stages 2–3
+
+`checkbox`, `color_swatch` and `image_swatch` are the same shape as `dropdown` —
+registry entry, template, one line in the frontend list. **Mechanical**, on this
+evidence.
+
+`text_field` is not, and [W3](#-w3-selectionresolver-has-one-shape-and-it-is-not-text)
+is why: it takes no values, so `SelectionResolver`'s `value_key` lookup rejects
+free text outright, and the frontend's value editor is meaningless for it. That
+stage builds a second resolution path, not a fourth entry.
+
+#### Stage 1 audit — four gaps, found by mutation (2026-09-03)
+
+Attacked the stage's own output rather than re-reading it. **Two mutants
+survived**, and the contrast with Phase 7 is what made them visible.
+
+##### 🔴 Y1. Dropdown's axes were unprotected, and radio's were not
+
+The decisive measurement. Corrupting each entry's axes to `text`/`none` — which
+would break the resolver, the value editor and pricing:
+
+| Mutant | Result |
+|---|---|
+| **Radio's** axes | **4 tests fail** ✅ |
+| **Dropdown's** axes | **all 631 pass** 🔴 |
+
+Nothing asserted `dropdown` resolves at all — `findType(DROPDOWN)` was never
+called positively. Its existence was proved only *indirectly*, by a count of 2 and
+its absence from the unregistered list, and neither survives a wrong `valueKind`.
+
+**Phase 7 tested its type properly; Phase 14 registered one without equivalent
+coverage** — the same failure this project keeps meeting, a check that passes
+without exercising its subject.
+
+Fixed with a **table**, not another hand-written case: `EXPECTED_AXES` describes
+each type, and `covers every registered type` **fails** when an entry has no row.
+Both mutants now die, and the next three types are protected by construction
+rather than by remembering.
+
+##### 🔴 Y2. The dashboard could offer a type nothing accepts
+
+Two independent lists — `z.enum([...])` in the schema and `OPTION_TYPES` in the
+editor — with nothing syncing them. Measured: adding `checkbox` to the picker
+passed **all 305 tests and `tsc`**. A merchant would have chosen it and been
+handed an error.
+
+Fixed twice over. `AUTHORABLE_TYPES` is now a **single exported source** the
+schema derives from, and `bin/check-option-type-parity.sh` compares it against the
+API's registry across repositories — the direction matters and the gate enforces
+it: **the dashboard may lag the registry, never lead it**, because the bar for
+authoring is higher than for validating.
+
+##### 🟡 Y3. The dropdown template had no tests, and one branch decides revenue
+
+Radio's template is covered by three suites, including one testing `for=` binding.
+Dropdown's was referenced by **none**.
+
+The untested branch was the placeholder — the thing preventing a required dropdown
+arriving **pre-answered**, charging a customer for a choice they never made. The
+canonical E2E ran with `is_required: false` and no default, so it exercised the
+placeholder and never the required case.
+
+Five tests added, four mutants killed: removing the placeholder, always showing
+it, dropping the `for=` binding, and dropping prices.
+
+⚠️ **And the first run died on `Call to undefined function selected()`.** The test
+bootstrap stubs `checked()` and never stubbed its `<option>` counterpart — proof
+in itself that the template had never been rendered by a test. Stubbed with the
+same loose comparison WordPress uses, because a stricter stub would pass tests the
+real function fails.
+
+##### 🟡 Y4. `docs/OPTION-TYPES.md` did not exist
+
+M14.5 names it *"the definitive supported list"* and requires public type counts
+be read from it. Written, with every claim verified against the code — 2
+registered of 11 declared, the validation bounds, the meta keys, the referenced
+paths. It carries the **real** cost of adding a type, measured while adding
+`dropdown`, and separates *supported* (steps 1–4) from *authorable* (step 5),
+which is a higher bar.
+
+##### Stage 1 closeout — two legibility gaps in the fixes themselves (2026-09-03)
+
+Found by attacking the **repairs** rather than the feature. Eight mutants, seven
+killed; these were the two that got through.
+
+**🟡 Z1. The gate printed a reassuring `ok` beneath its own failure.** With
+`AUTHORABLE_TYPES` unreadable it emitted its `FAIL` and then
+`ok  all 0 authorable type(s) are registered` — vacuously true, because nothing
+had been read, and green to anyone scanning. It now stops before comparing:
+an unreadable input cannot be compared, and comparing it anyway is worse than not
+trying. Exit codes verified in all three paths — clean `0`, mismatch `1`,
+unreadable `1`.
+
+⚠️ **And one false alarm worth recording.** The first check appeared to show
+`exit: 0` on the failure path, which would have been a far worse bug than the
+cosmetic one. It was `$?` measuring `tail` at the end of a pipe, not the script.
+Re-measured properly before "fixing" a gate that was already correct.
+
+**🟡 Z2. A deleted template passed every cross-repo gate.** Removing
+`dropdown.php` while the type stayed registered *and* authorable passed the parity
+gate, the backend registry tests, and the plugin's architecture gate — and the
+storefront would draw **nothing**, because the plugin skips a type it cannot
+render, by design.
+
+The plugin's own `RendererTest` did catch it. What no check could see is the
+**three-repository** shape of the failure: a merchant authoring an option no
+storefront can draw. The gate now asserts a template exists for every authorable
+type — in that direction only, since a template for a not-yet-authorable type is
+just work landing early.
+
+##### Why these were worth fixing rather than noting
+
+Neither was a correctness bug; both were **legibility** bugs in the things whose
+entire job is legibility. A gate that prints an unearned green line, and a gate
+whose name promises more coverage than it delivers, are how a check stops being
+read — and this phase now depends on these two to keep the next three types
+honest.
+
+#### Stage 2a — three choice types, at `[ONE]` (2026-09-03)
+
+`checkbox`, `color_swatch` and `image_swatch` — extending the pattern `dropdown`
+proved, and stopping short of `many` on purpose.
+
+##### 🔴 The trap this stage was designed around
+
+M14.1's table gives all three `one | many`. **They are registered `[ONE]`.**
+
+`Engine\SelectionResolver` requires a **scalar** selection and answers
+`ERROR_NOT_SCALAR` for the array a multi-select posts — and the validator enforces
+cardinality *from the registry*, so declaring `MANY` would make the API **accept**
+what the storefront then refuses at add-to-cart, after the merchant had published
+it. The plugin never reads `cardinality` at all; it infers everything from the
+template. So `many` is a second path through resolver → cart → labels → order,
+not a flag.
+
+Guarded rather than merely intended: widening `checkbox` to `[ONE, MANY]` **fails**
+`registers checkbox with the right axes`. The array path can only land with its
+own stage.
+
+##### 🟢 Phase 5 had already built the swatch columns
+
+`option_values.colorHex` and `imageUrl` have existed since the initial schema, and
+the serializer already publishes them as `color_hex` and `image_url`. The swatch
+templates needed **no schema work** — they read fields that were already on the
+wire, which is the same anticipation `takesValues` showed for text.
+
+##### 🔴 AB1. The test harness was weaker than the function it stubbed
+
+The image swatch passes merchant URLs to `src`, guarded by `esc_url`. A test
+asserting a `javascript:` URL never reaches `src` **failed against correct
+template code** — because the harness's `esc_url` used `FILTER_SANITIZE_URL`
+alone, which passes `javascript:alert(1)` through **unchanged**, while the real
+function refuses any scheme outside `wp_allowed_protocols()`.
+
+**A stub that under-protects turns a real safety property into an untestable
+one**, and would have let a template ship trusting an escape nothing had
+exercised. Now scheme-allow-listed. Three mutants confirm the templates: dropping
+the hex check, skipping `esc_url`, and posting an array all fail.
+
+##### 🟡 AB2. Two of the three are registered and deliberately not authorable
+
+`checkbox` is authorable. **The swatches are not** — and that is the two bars
+working, not an oversight.
+
+A swatch needs a colour or an image on each value; the dashboard's value editor
+takes a key, a label and a price, and `createValue` has no field for either. A
+merchant could pick "colour swatch", fill three values, publish, and get plain
+radios — the template's validity guard drops a chip it has no colour for.
+
+**Authorable means author *and* re-open.** The missing artifact is the value
+editor, not the type, and the parity gate now reports 3 authorable against 5
+registered rather than letting the gap pass silently.
+
+##### What Stage 2b and 3 inherit
+
+The choice-shaped work is done: five types, one pattern, each with a registry
+entry, an axes row, a template, template tests, and a documented row. What remains
+is the two paths neither shares — **`many`** (arrays) and **text** (no value set),
+and both were analysed before this stage rather than discovered during it.
+
+#### Stage 2a closeout — the swatch value editor (2026-09-03)
+
+The gap Stage 2a's own audit surfaced: `color_swatch` and `image_swatch` were
+registered in the API and **not authorable**, because the dashboard's value form
+took a key, a label and a price and nothing else.
+
+**The API already accepted both fields.** `option-value.dto.ts` has validated
+`colorHex` against `/^#[0-9a-fA-F]{6}$/` and `imageUrl` as an absolute URL since
+Phase 7 — the same anticipation Phase 5 showed by putting the columns in the
+initial schema. Only the dashboard was missing, which is why this was a form, not
+a feature.
+
+**A colour is now validated in three places, deliberately.** The API's DTO, the
+dashboard's schema, and the storefront template each refuse a malformed hex —
+because the value reaches a `style` attribute, where `esc_attr` alone would
+happily emit `red; background-image:url(...)`. The two that matter are the ones a
+merchant cannot reach; the third is a courtesy so they learn before submitting.
+
+**The fields appear only for the types that use them.** Asking a radio's values
+for a hex code is noise, and noise is how a form teaches merchants to ignore it.
+And a `type="color"` picker was rejected: it always holds a value, so every swatch
+would silently default to black — a text field can be left blank, which is what a
+merchant who has not chosen yet actually means.
+
+✏️ **One test expectation was wrong, not the code.** `'#1a2b3c '` was listed as
+invalid; the schema trims before testing and the client trims before sending, so
+it reaches the API clean. Refusing a merchant's colour over a trailing space would
+be hostile — the test now asserts the opposite.
+
+**All five Tier-1 choice types are now registered, templated, tested and
+authorable**, and the parity gate reports `0 registered type(s) are not yet
+authorable`.
+
+##### Stage 2a closeout — audit and fixes (2026-09-03)
+
+The swatch editor was **built and never executed**. Its own audit measured the
+cost precisely: `SELECT COUNT(*) FROM option_values WHERE colorHex IS NOT NULL`
+returned **0** across every test run this project had ever made, and three of the
+six links in the chain — form → client → API → database → config document →
+template — had no coverage at all.
+
+##### 🔴 CA1/CA2. Two mutants survived, and one re-created the defect
+
+Setting `needsColor = false` — which is exactly *"swatches authorable with no way
+to set a colour"* — passed all 319 tests. So did sending `colorHex` for every
+type.
+
+**The cause was where the rule lived.** Inlined in `AddValue`, which uses
+`useMutation` and therefore needs a QueryClient provider that
+`renderToStaticMarkup` cannot supply, it was unreachable by any test. Extracted to
+`swatchFieldsFor()` beside the schema that validates a colour — the rule is *"a
+colour swatch needs a colour"*, which is not UI — and both mutants now die, along
+with a third: an unknown presentation gets **neither** field rather than both,
+which is the safe direction.
+
+##### 🔴 The acceptance case was untested while the rejection case was covered
+
+`colorHex` had one e2e test asserting a malformed hex is **refused**. Nothing
+proved a **valid** one is stored and returned — a field that has never held a
+value is a field nobody has used, however carefully it is validated. Two tests
+added, including the absent case: a choice type that is not a swatch has no
+colour, and that must be *absent* rather than blank.
+
+##### 🔴 And nothing asserted the wire
+
+The DTO validates and the plugin's templates paint — both ends covered. The
+middle was not: no test checked that the serializer publishes `color_hex` and
+`image_url`, which is the only reason the template has anything to read.
+
+`config-document.e2e-spec` now publishes a swatch and reads the document,
+asserting the key is **absent** rather than null when unset — a template testing
+`isset()` would treat an explicit null as present. Mutation-proven; and the
+`null` variant turned out to be a **compile error**, because `PublishedValue`
+already forbids it, which is a stronger guarantee than a test.
+
+##### 🟡 One link stays open, deliberately
+
+The browser has still not been driven through the swatch **form**. An assertion
+was written and removed rather than left misplaced: `AddValue` renders per
+*existing* option, so the colour field only appears after a `color_swatch` option
+is created — a different flow from the canonical one, which authors a dropdown for
+its own good reasons.
+
+`swatchFieldsFor` is now unit-tested in both directions, so the rule is proven;
+what is unproven is that the input renders where that rule says it should. Named
+rather than implied, and it belongs with the swatch's own E2E rather than bolted
+onto Gate 1's.
+
+#### Stage 3a — the security half of free text (2026-09-03)
+
+Built before any text type is registered, because **text is the first value a
+*customer* supplies** and that changes what "trusted" means downstream.
+
+##### 🔴 What the `value_key` lookup was silently doing
+
+`AddToCartRequest` reads `$_POST` through `wp_unslash` — slashes only, no
+sanitising — and its own comment says *"nothing here is trusted"*. That was
+survivable because the resolver's lookup made it true: an unknown value was
+refused, so **only merchant-authored labels ever reached a cart or an order**.
+
+A text option has no value set, so that guarantee disappears the moment one is
+registered. Neither consumer escaped: `CartDisplay::text()` trimmed and returned
+raw, and `OrderLineItem` wrote label text straight to order meta.
+
+✏️ **Corrected after measuring the order path.** DA1 called both *"a hole the
+moment a customer types the value"*. That is right for the cart and **overstated
+for the order**: WooCommerce renders line-item meta through `wp_kses_post()`,
+which strips `onclick`, `onerror` and `javascript:` hrefs, so **script never
+executes there**. What it does not do is escape — `<b>Bob</b>` renders bold, so a
+customer's literal characters silently become formatting on a packing slip. A
+correctness defect, not an XSS one, fixed by the same upstream sanitising and
+pinned by a test that carries resolver output through to order meta.
+
+##### The boundary, in two layers
+
+**Sanitised in the resolver**, where the type is known — not in
+`AddToCartRequest`, which deliberately only settles *where* to look and cannot
+tell a typed engraving from a chosen key.
+
+⚠️ **No WordPress call, by rule.** `bin/check-architecture.sh` forbids them in
+`src/Engine/`: the engine is a port of TypeScript logic that must run against
+shared fixtures with no WordPress bootstrap. So `clean_text()` is plain PHP the
+TS side can mirror — which made the choice of *what* to reimplement the whole
+question, and the first answer wrong (below).
+
+**Escaped at output**, in `CartDisplay::row()`'s `display` field — the second
+layer, because a value can also arrive from a reorder payload or a cart row
+predating the sanitising. `value` stays raw: it is the machine-readable half the
+Store API serialises as JSON, and escaping it would show a customer `&amp;` in
+their own engraving.
+
+##### 🟢 Only one structural change was needed
+
+Tracing text through every layer found the rest already fits: `value_kind` is
+**already published** (verified live: `value_kind=choice` on the wire), `labels_for`
+returns `{option, value}` strings so typed text needs no new shape, `selections` is
+`{option_id: string}`, the delta list is flat, and `CartItemKey` hashes whatever
+payload it is given — so two engravings correctly become two lines.
+
+✏️ **Corrects this phase's own earlier estimate**, which called text *"a second
+resolution path through resolver, cart, pricing and order"*. Cart, pricing and
+order already fit; the resolver needed **one branch**. The real work was the
+security dimension, which that estimate missed entirely.
+
+##### 🔴 PHPCS found a real hole, not a style nit
+
+`strip_tags()` alone was the first implementation. PHPCS flagged it —
+*"use `wp_strip_all_tags()`"* — which looks like a lint preference and is not:
+core drops the **contents** of `<script>` and `<style>`, not merely the tags
+around them. Under the original code `<script>alert(1)</script>Bob` reached the
+order as the visible text `alert(1)Bob`.
+
+The engine cannot call the WordPress function (`bin/check-architecture.sh`), so
+core's two steps are reimplemented verbatim and a **parity test pins them**,
+comparing `clean_text()` against a copy of core's own body. That copy carries a
+`phpcs:ignore`: it must stay a literal reimplementation, since calling the real
+function would compare the engine against itself.
+
+##### 🟡 Two flags that look decorative are load-bearing
+
+Mutating `@si` proved both matter, each surviving until a fixture existed:
+
+| Mutant | What leaks to the order |
+|---|---|
+| drop `i` | `<SCRIPT>alert(1)</SCRIPT>` → `alert(1)Bob` |
+| drop `s` | a payload split across lines survives whole |
+
+✏️ **A probe said both flags were inert, and the probe was wrong.** Run through
+`php -r` inside a shell, its `\1` backreference was mangled before PHP saw it, so
+*nothing* matched and every variant read identical — the reassuring answer. Only
+re-running it from a file exposed the difference. The lesson is the one this
+phase keeps relearning: **a measurement that agrees with you still has to be
+checked for whether it ran.**
+
+Withdrawn on the same evidence: an earlier comment claimed the tags-first order
+prevented `<scr\0ipt>` from *assembling* into a tag. A swap mutant passed, and
+`strip_tags()` handles all three control-character placements identically. The
+order stands, the false rationale does not.
+
+Killed: no sanitising, empty-counts-as-answered, treating any `value_kind` as
+text, dropping the script/style pre-pass, and both flag mutants above.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **768 tests**, 1 499 assertions — 1 failure, the deliberate M13.3 tripwire |
+| Plugin gates | 10/10, minus that same tripwire at gate 9 |
+| Backend | 636 unit, 39 suites |
+| Frontend | 332 vitest, `tsc --noEmit` clean, eslint clean |
+| Backend E2E | **885 tests**, 33 suites, all green |
+| Cross-repo | all four gates pass |
+
+⚠️ **Two stale `jest` runs — 75 and 110 minutes old — were found still holding the
+E2E database** when this sweep started, from suites launched earlier in the phase.
+Killed before the real run, because a suite sharing its database with a wedged
+twin reports failures indistinguishable from genuine ones.
+
+That killing cost one more lap. The next E2E run reported **2 failures** in the
+connect handshake, `authorize` returning 404 — and the suite passed **58/58 in
+isolation**, which looked like proof of cross-suite interference. It was not: a
+clean full re-run went **885/885**. The failures were the *dying* processes'
+residue, still draining as the new run started. Two wrong causes were proposed
+before the right one — rate-limit exhaustion (a 404 is not a 429) and then
+interference — because each was tested against a database still settling.
+
+This is the second time this hazard has cost time. *Run the suite once, and wait*
+was the lesson; the missing halves are **check nothing is already running**, and
+**after killing, let the database settle before believing the next result**.
+
+##### An empty string is "not answered"
+
+A required text option refuses whitespace the way an unselected radio refuses
+nothing — without that, a customer could submit spaces and pay for a blank
+engraving. An unrecognised `value_kind` falls back to the lookup and is refused,
+which is the safe direction: a typo in the document must not open an option to
+arbitrary input.
+
+#### Stage 3b — text becomes a type a merchant can pick (2026-09-03)
+
+Stage 3a built the boundary; this makes `text_field` real end to end — registry
+entry, storefront template, dashboard gating, and an E2E carrying typed input to
+a real order.
+
+##### 🟢 The registry's claim held
+
+Adding the type cost **one entry**. No validator change (axes are checked *from*
+the registry), no serializer change (`type`, `value_kind`, `placeholder`,
+`default_value`, `is_required` were already published), no resolver change
+(Stage 3a). `Presentation.TEXT_FIELD`, `ValueKind.TEXT` and `Cardinality.NONE`
+all already existed, and `publish-check.ts` already read `takesValues` with the
+comment *"A text field legitimately has none."*
+
+The work was in four things the analysis found that the plan had not.
+
+##### 🔴 F1 — two functions normalised text, and they disagreed
+
+`Text::measure()` (M11.1a) is the normative count behind `per_char` pricing and
+the character counter. Stage 3a's `clean_text()` folded `\s+` to one space;
+`Text::normalise()` deliberately **preserves inner whitespace**, because *"the
+space between the names is cut into the material"*.
+
+Measured: `"AB  CD"` stored as `AB CD` (5 graphemes) and measured as **6**.
+
+| input | charged | stored | |
+|---|---|---|---|
+| `AB  CD` | 6 | 5 | ❌ before |
+| `AB  CD` | 6 | 6 | ✅ after |
+
+That is the **M14.4b credibility bug** — counter and price disagreeing, live in
+`optionia-app` today — arriving from the opposite direction, and it would have
+shipped the moment a merchant put `per_char` pricing on a text option.
+
+`clean_text()` now folds only *structure* (newlines, tabs) and delegates trimming
+to `Text::normalise()`, so what is stored and what is counted are the same string
+**by construction**. `Text::measure()` had **zero production callers** before
+this — built in M11.1a, never wired, which is why nothing caught it.
+
+##### 🔴 F2 — the price preview had never worked for dropdown
+
+`frontend.js` summed `'[data-optionia="value"]:checked'`. That attribute marks
+the **control**: for a radio the input itself, but for a `<select>` the select —
+and a `<select>` is never `:checked`. The prices sit on its `<option>` children.
+
+Proven against a real DOM (jsdom, radio £5 + dropdown £10.50):
+
+```
+old selector -> 500     (dropdown silently dropped)
+new helper   -> 1550    ✅
+```
+
+A **live defect since dropdown shipped in Stage 2a**, found while scoping text
+rather than by any test: there are no JS tests in the plugin at all. Same debt as
+the swatch form never driven in a browser.
+
+##### 🟡 F3 — the sibling guard would have rendered nothing
+
+Every choice template opens `if ( '' === $id || array() === $values ) return;`.
+For a text field that guard is **exactly wrong** — having no values is the
+defining property, not a fault. Copying the idiom would have made a published
+option silently absent from the product page. The guard is id-only, and a mutant
+restoring the sibling form kills three tests.
+
+##### 🟡 F4 — `takesValues` was read in one place, and it was the wrong one
+
+The publish check *skips* an option declaring `false`, so a text field is not
+reported as "no values". Nothing stopped values being **created** on one. The two
+together were worse than either alone: a merchant could add three values, publish
+would deliberately look past them, and the storefront would ignore them — rows
+that exist, validate, publish and mean nothing. Now refused at creation with
+`TYPE_TAKES_NO_VALUES`, where the merchant is still looking at the decision.
+
+##### 🟡 F5 — the dashboard gate, written where a test can reach it
+
+`AddValue` uses `useMutation` and cannot be rendered by `renderToStaticMarkup` —
+which is how two swatch mutants survived once already. So the rule is
+`takesValues()`, a pure function beside the schema, mirroring the API registry.
+Mutants making it always-true and always-false kill 2 and 8 tests.
+
+⚠️ It defaults to **`true`** for an unknown type — the opposite of
+`swatchFieldsFor()`'s default, deliberately: an unrecognised type is far more
+likely to be a choice type from a newer API, and showing a form a merchant does
+not need is a smaller harm than hiding one they do.
+
+##### Four ratchets fired, as designed
+
+Registering the type broke five assertions that exist to *notice* exactly this:
+the axes table, the registered count, two "not yet registered" lists, and the
+dashboard round-trip check. Each was updated deliberately, and the two
+"unregistered type" tests were pointed at `NUMBER_FIELD` rather than weakened —
+which is what their own comments had asked each time.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **779 tests** — 1 failure, the M13.3 tripwire; PHPCS clean |
+| Plugin gates | 10/10 minus that tripwire |
+| Backend | 637 unit; E2E option-authoring 78/78 |
+| Frontend | 342 vitest, `tsc` clean, eslint clean |
+| Cross-repo | all four gates pass |
+| Mutants killed | F1 ×2, F3 ×1, F4 ×1, F5 ×2 |
+| Backend E2E | 886/887 — see the flake below |
+
+##### 🔬 E2E flake — investigated 2026-09-03, partly diagnosed
+
+⚠️ **The Stage 3b characterisation below was wrong about the shape.** It recorded
+"one arbitrary test per run". Eight further runs show something different:
+
+| runs | result |
+|---|---|
+| 6 | **887/887 clean** |
+| 1 | 21 failed |
+| 1 | 10 failed |
+| 1 | **hung indefinitely** |
+
+Not one scattered failure — mostly clean, occasionally a *cluster*. A cluster and
+a singleton have different causes, and calling it "flaky" hid that.
+
+##### ✅ What was diagnosed conclusively
+
+**The hang is an open-handle leak, not slowness.** `sample` on the wedged process
+showed it parked in `uv__io_poll` / `kevent` at **0% CPU** with CPU time frozen at
+1:10.07 — an idle event loop with nothing left to do. It held **no MySQL
+connection**, and the database answered in milliseconds with
+`Threads_connected: 1`.
+
+`forceExit` and `testTimeout: 120000` are now set in `test/jest-e2e.json`, with
+the reasoning in `test/README.md`. That does not fix the leak; it guarantees a
+bad run **ends**, so the next diagnosis starts from output rather than from a
+wedged process. `--detectOpenHandles` did not name the culprit.
+
+##### ✅ What was ruled out, with measurements
+
+- **Database residue** — the prime suspect, because `teardown-e2e.ts` documents
+  an *identical* past symptom: 6,900 leaked tenant rows causing *"intermittent
+  404s … moved between tests, and never reproduced in isolation"*. Measured
+  during a hung run and after a killed one: **19 tenants, 0 orphans.** The
+  teardown works.
+- **Connection exhaustion** — `Threads_connected: 1` while wedged.
+- **Parallelism** — `maxWorkers: 1` was already configured; `--runInBand` was
+  redundant all along.
+
+##### 🔬 The cluster failures — narrowed to a stall, not a defect
+
+Captured the suite names, and they change the diagnosis again:
+
+```
+FAIL test/option-sets-http.e2e-spec.ts (441.753 s)   13 failed
+FAIL test/config-delivery.e2e-spec.ts                 3 failed
+```
+
+**`option-sets-http` runs in 4.18 s alone and took 441 s in that run — a 100×
+slowdown.** In a *clean* full run the slowest suite of all is 10 s. So these are
+**timeouts**, not logic failures: the suite is intermittently starved of
+something, and tests fail because they run out of time rather than because the
+product is wrong.
+
+That unifies the three symptoms. The hang, the 21-failure cluster and the single
+scattered failures are the same fault at three severities — nothing progressing,
+some things too slow, one thing just over its limit.
+
+##### More things ruled out, with evidence
+
+- **Rate limiting** — `setup-e2e.ts` already raises every bucket to 100,000.
+- **An unclosed Nest app** — `openapi.e2e-spec.ts` is the only suite bypassing
+  the harness, and it closes both instances, the second in a `finally`. ✏️ A
+  first grep suggested otherwise; the pattern was too narrow (`app.close()` vs
+  `app?.close()`) and the conclusion was wrong.
+- **Suite-level slowness** — the slowest suite in a clean run is 10 s.
+
+##### ✅ The hang is diagnosed: an inherited VS Code socket
+
+`lsof` on a wedged process showed it **listening on port 62148** and holding four
+connections to it. That is not a test server — no suite calls `.listen()`, and
+`bootstrapTestApp` only calls `app.init()`. Port 62148 belongs to **VS Code**
+(pid 1131); jest inherits the handle from the integrated terminal, and an
+inherited listening socket keeps `uv_run` alive forever.
+
+That explains every part of the signature: idle in `uv__io_poll` / `kevent` at
+**0% CPU**, 15 MB resident, 57 s of CPU already spent — a process that *finished
+its work* and could not exit. It also explains why `forceExit` did not rescue it:
+the hang happens before jest reaches the point where `forceExit` applies.
+
+**Verified by elimination:** re-running with the VS Code variables unset
+(`VSCODE_IPC_HOOK_CLI`, `VSCODE_GIT_IPC_HANDLE`, `VSCODE_INSPECTOR_OPTIONS`,
+`NODE_OPTIONS`) completed in **73 s** instead of hanging.
+
+⚠️ **This is an environment fault, not a product one.** It does not affect CI,
+which has no VS Code. It does affect anyone running the suite from the integrated
+terminal, which is how it has been run all phase — and it is why "the suite
+hangs" and "the suite is flaky" got conflated into one symptom.
+
+##### ✅ **Root cause found: the exception filter destroyed the connection**
+
+Caught a failing run and saved the log. All ten failures were in **one suite**,
+`publish.e2e-spec.ts`, all `Exceeded timeout` — and the log carried the real
+cause, which was never a timeout at all:
+
+```
+Unhandled exception: INTERNAL_ERROR        x10
+Error: Cannot set headers after they are sent to the client   x8
+  at AllExceptionsFilter.catch (all-exceptions.filter.ts:64)
+  code: 'ERR_HTTP_HEADERS_SENT'
+```
+
+`AllExceptionsFilter.catch` called `response.status().json()` **unconditionally**,
+with no `headersSent` guard — zero occurrences of the word in the file.
+
+An error thrown *after* a handler has replied still reaches the filter. Writing
+again throws `ERR_HTTP_HEADERS_SENT`, and because that throw happens **inside the
+filter**, nothing is left to catch it: it escapes as an unhandled exception and
+**tears down the socket**. The client sees no response and no error. It waits.
+
+That is the whole flake:
+
+| symptom | mechanism |
+|---|---|
+| `Exceeded timeout` | the connection died; the client is still waiting |
+| cascading 60s → 120s → 90s | each test inherited the broken connection |
+| clusters, not singletons | one burst of eight kills every request after it |
+| `option-sets-http` at 441 s vs 4.18 s alone | same fault, different suite |
+| intermittent | depends on an error arriving after a reply — a race |
+
+**A production bug, not a test one.** Any real client hitting this gets a hung
+request rather than a 500.
+
+##### The fix
+
+A `headersSent` guard, returning early. The error is **still logged** — an error
+that reached this filter is one somebody needs to see, and the response the client
+already received stands. Two mutants (removing the guard, inverting it) both die.
+
+##### ⚠️ The fix is real; it did **not** close the flake
+
+Six runs after the guard: **3 clean, 3 failing** (2, 13 and 4 tests). Measured, not
+assumed — and stated plainly because the temptation after a good diagnosis is to
+declare victory on the strength of the mechanism rather than the outcome.
+
+What the guard did change: the failures are no longer `Exceeded timeout`
+cascades. The connection survives, so a failure is now one test rather than ten,
+and the log carries a cause instead of a hang.
+
+##### 🔬 Narrowed further: the trigger is the concurrency suite
+
+`ERR_HTTP_HEADERS_SENT` fires **exactly 4 times per run**, deterministically. The
+source is `option-authoring.e2e-spec.ts`'s concurrency tests, which fire five
+identical requests with `Promise.all` and assert the database refuses the race —
+**5 requests, 1 winner, 4 losers, 4 errors.** The duplicate-key errors in the log
+are deliberate.
+
+⚠️ **But run alone, that suite produces 8 duplicate entries and *zero*
+headers-sent errors** (78/78 pass). So the concurrency tests are the trigger and
+not the cause: something accumulated across earlier suites turns a handled
+duplicate into a double-write.
+
+Ruled out as the post-response thrower: `ApiResponseInterceptor` (a pure `map`),
+the audit writes (awaited, not fire-and-forget), and the duplicate handling itself
+(mapped cleanly to `DUPLICATE_KEY`).
+
+##### ✅ Bisected: `config-delivery`'s 304 path
+
+Ran `option-authoring` after each candidate suite:
+
+| preceding suite | headers-sent errors |
+|---|---|
+| `connect-handshake` | 0 |
+| **`config-delivery`** | **4** |
+| `store-heartbeat` | 0 |
+| `cascade` | 0 (but 3 failures — a *separate* fault) |
+
+The source is `config-delivery.controller.ts:110` — the conditional-GET path,
+which uses `@Res({ passthrough: true })` and writes `response.status(304).end()`
+itself, because a 304 must carry no body and the envelope interceptor would
+otherwise wrap `undefined` into `{data: null}`.
+
+That design is sound and documented. What makes it collide is named in the
+controller's **own docblock**: *"Nest and Express run their own freshness check
+against the `ETag` header this handler sets."* When Express answers 304 first,
+the handler's `.end()` is a second write — and before the guard, the resulting
+throw inside the filter destroyed the connection.
+
+##### The outcome, stated precisely
+
+`config-delivery` + `option-authoring` together: **116 passed, 4 headers-sent
+errors logged, 0 timeouts.** The guard converts a fatal double-write into a
+harmless logged one. That is the fix working as intended.
+
+⚠️ **The flake is reduced, not eliminated.**
+
+✏️ The `cascade` result above was **not** a real fault — re-run three times
+pairing `cascade` with `option-authoring`: **110 passed every time**. It was
+contention from the parallel background jobs this investigation was itself
+running. Recorded because a false lead left in a plan is worse than none.
+
+Four clean-machine runs afterwards: **three at 887/887 with zero timeouts**, one
+with 42 failures in `config-document` — a *whole suite* failing because its
+`beforeAll` could not register:
+
+```
+Harness failed to register cfg7k-a@example.com: 404 {}
+```
+
+An **empty-bodied 404**, which the application never produces — its filter always
+emits `{error, meta}`. Same signature as the original `optimistic-lock` failure
+that started this investigation. No `ECONNREFUSED`, no connection-limit error, no
+route-not-found in the log.
+
+##### What this investigation settled
+
+| | |
+|---|---|
+| The **hang** | ✅ inherited VS Code socket — environment, not product |
+| The **timeout cascades** | ✅ `ERR_HTTP_HEADERS_SENT` destroying the connection — **fixed** |
+| The **trigger** | ✅ `config-delivery`'s 304 racing Express's own freshness check |
+| Timeouts after the fix | ✅ **zero across every run since** |
+| The residual 404 | ⬜ open — empty-bodied, so not from the app |
+
+Three distinct faults were tangled into one symptom called "flaky". Two are
+closed and the third is now specific: an empty-bodied 404 on registration,
+affecting a whole suite at `beforeAll`, roughly one run in four.
+
+##### ✅ **Root cause closed: the envelope interceptor wrote after a 304**
+
+The empty-bodied 404 was the *symptom*; the double-write was the cause, and it
+was one layer deeper than the filter.
+
+**Proof it was never the application's 404.** A probe against the real app:
+
+| request | response |
+|---|---|
+| unknown route | `401 {"error":{"code":"UNAUTHENTICATED"…}}` |
+| missing `/v1` prefix | `404 {"error":{"code":"NOT_FOUND","message":"Cannot POST /auth/register"}}` |
+
+**Every** 404 this API produces carries a full `{error, meta}` body. An
+empty-bodied one is supertest failing to parse a **truncated** response — a
+corrupted stream, not a routing answer.
+
+**Counted, not guessed:** `config-delivery` issues exactly **4 × 304** per run and
+produced exactly **4** `ERR_HTTP_HEADERS_SENT` per run. One per 304, every time.
+
+`ApiResponseInterceptor` mapped the handler's `undefined` into `{data: null,
+meta}` and emitted it. Nest then wrote that
+(`RouterResponseController.apply`) to a response the handler had already
+`.end()`ed for the 304 — which must carry no body (RFC 9110 §15.4.5), which is
+precisely why the handler answers it itself.
+
+The interceptor now `filter`s the stream when `headersSent` — an empty stream is
+how an interceptor says *"nothing to send"*. A guard inside `map` would not do:
+the payload must not reach Nest at all.
+
+##### Two wrong turns, recorded
+
+- **Guarding `.end()` in the controller** — no effect. The second write is Nest
+  applying the *return value*, not the handler's own call.
+- **Disabling Express's automatic ETag** — no effect either, and reverted.
+  Express does add its own weak ETag (measured: `W/"ac-…"` on `/v1/auth/me`), so
+  the hypothesis was reasonable; it simply was not this.
+
+Both were reverted rather than left in "just in case". A change that fixed
+nothing is a change that misleads the next reader.
+
+##### Result
+
+| | before | after |
+|---|---|---|
+| `ERR_HTTP_HEADERS_SENT` per run | **4, every run** | **0** |
+| `Exceeded timeout` | cascades of 10+ | **0** |
+| config-delivery suite | 38 passed, 4 errors logged | **38 passed, 0 errors** |
+
+##### ⬜ A third fault does exist — and I twice concluded it did not
+
+After eight consecutive clean runs I recorded that the residual failures were
+contention from this investigation's own polling. **Five controlled runs on an
+idle machine then failed twice** (11 and 3 tests), which disproves that.
+
+The claim is withdrawn. It was made on eight clean runs against a fault that
+reproduces roughly one run in three — a sample that cannot distinguish "fixed"
+from "unlucky", and I should have said so rather than concluded.
+
+⚠️ Contention *was* real and did produce false leads (the `cascade` "fault", at
+least one large failing run). Both things are true: the machine load mattered,
+**and** a fault remains underneath it. Attributing everything to the first was
+the error.
+
+##### What the third fault looks like
+
+Different suites each time — `config-delivery`, `option-authoring` — with **no**
+`ERR_HTTP_HEADERS_SENT` and **no** `Exceeded timeout`, so it is not the
+double-write. One captured example:
+
+```
+● option authoring › tenant isolation › DELETE /options/:id refuses another tenant
+    Expected: 404
+    Received: 400
+```
+
+The fixture succeeded (its own `FOREIGN FIXTURE FAILED` diagnostic did not
+fire), the ids were well-formed UUIDs, and **the failing request does not appear
+in the application log at all** — the same signature as the earlier empty-bodied
+responses.
+
+`option-authoring.e2e-spec.ts:857` already documents a sibling of this: *"This
+create has been seen to answer 404 roughly once in eight full runs — the set
+exists, the token is tenant B's, and the API cannot see it."* Pre-existing, and
+still unreproduced under instrumentation.
+
+##### Where this leaves the suite
+
+Two of three faults are closed, and they were the destructive ones: hangs are
+gone (0 from ~1 in 4), timeout cascades are gone (0), `ERR_HTTP_HEADERS_SENT` is
+gone (0 from 4 every run). What remains is a rarer, non-destructive fault that
+predates this work and is recorded in the suite itself.
+
+**Next step**, for whoever picks it up: the failing request never reaching the
+log is the strongest lead — it points at the request dying before the logging
+middleware, not at the handler.
+
+##### Final state
+
+| | before | after |
+|---|---|---|
+| `ERR_HTTP_HEADERS_SENT` | 4 every run | **0** |
+| `Exceeded timeout` | cascades of 10+ | **0** |
+| Hangs | ~1 in 4 | **0** |
+| Clean full runs | ~3 in 4 | ~2 in 3 (a rarer, separate fault remains) |
+
+Three faults, **two** closed:
+
+1. **The hang** — an inherited VS Code listening socket. Environment, not
+   product; does not affect CI.
+2. **The timeout cascades** — `ApiResponseInterceptor` emitting after a handler
+   sent its own 304, which Nest then wrote to a finished response. Fixed at
+   source, plus a `headersSent` guard in `AllExceptionsFilter` so the failure
+   mode can never again be *connection destroyed*.
+3. **A third fault — still open.** Rarer (~1 run in 3), non-destructive, and
+   predating this work: a request that never reaches the application log and
+   answers with an empty body. See the section above.
+
+##### The fix that matters regardless
+
+`AllExceptionsFilter` no longer destroys a connection when an error arrives after
+a response. That is a **production** bug — any real client hitting it got a hung
+request rather than a 500 — and it was found only because the test suite was
+treated as evidence rather than noise.
+
+##### ⬜ Previously: the intermittent failures
+
+The 73 s run that proved the hang also **failed 3 tests** — so the failures are
+real and separate from the hang.
+
+Ruled out with measurements: database residue (19 tenants, 0 orphans), connection
+exhaustion (**peak 8 of 151**), pool starvation (`connectionLimit: 10`),
+parallelism (`maxWorkers: 1`), throttling (raised to 100,000 in `setup-e2e.ts`),
+namespace collisions (all 33 unique), the demo seed (**no suite touches it**),
+`process.env` leakage (`seeds.e2e-spec.ts` restores the whole object in
+`afterEach`), and suite **ordering** — jest orders by file size, deterministically,
+so identical order producing different results makes the cause *time-dependent*
+rather than order-dependent.
+
+Also ruled out: `option-sets-http`'s `beforeAll`. Instrumented across three full
+runs, including one that failed — setup was **~1 s every time**
+(`bootstrapTestApp` ~50 ms, two tenant registrations ~450 ms each for bcrypt). The
+441 s seen earlier was not setup.
+
+Reproduces roughly one run in four at ~75 s each.
+
+**Not closed. Not declared closed.** What this session bought is: the failure has
+a shape (a stall), a reproducer (that suite), a signature (100× its solo time),
+and a bound (`forceExit` + `testTimeout` mean a bad run now *ends*).
+
+**Not closed, and deliberately not declared closed.** The instrumentation above is
+what makes the next attempt cheaper; it is not the fix.
+
+##### 🟡 A pre-existing E2E flake, named rather than explained away
+
+Three full runs each failed **one** test, and a *different* one each time:
+
+| run | suite | symptom |
+|---|---|---|
+| 1 | `store-heartbeat` | wire-contract envelope |
+| 2 | `connect-handshake` | store not `CONNECTED` |
+| 3 | `optimistic-lock` | publish returned **404** |
+
+Every one passes alone, and all three pass **together** (106/106). Only one of
+the three even mentions values, and the new guard fires only for
+`takesValues: false` — a property no type had before this stage. So this is
+order- or timing-dependent flakiness in the 33-suite run, not something Stage 3b
+introduced.
+
+⚠️ **Not fixed, and not dismissed.** A suite that fails one arbitrary test per
+full run is one that cannot distinguish a real regression from noise — the exact
+condition that made two earlier runs in this phase unreadable. Diagnosing it
+needs the run instrumented rather than re-run, which is its own piece of work.
+Recorded here so it is picked up deliberately instead of being re-diagnosed from
+scratch the next time a sweep comes back 886/887.
+
+##### Still open
+
+- **`per_char` pricing** stays unaccepted (`pricingSchema: null`). The plugin
+  prices `fixed` only and names the rest unpriced; accepting a config the
+  storefront cannot charge is a silent undercharge. ✏️ **M16.2, not Stage 3c** —
+  corrected during 3c's analysis: `PRICING-SPEC.md` §2 assigns the arithmetic to
+  Phase 16 and says Phase 16 *depends on Phase 14 delivering the types that use
+  it*. Types here, pricing there. What Phase 14 owed was the **reporting**, and
+  3c delivered it.
+- **`max_length` + the character counter**, both through `measure()`. The
+  schema fields (`minLength`, `maxLength`, `characterCounter`) are stored now so
+  the document shape does not change under them. **Stage 3c** — M14.4 owns the
+  validation catalogue and is inside Phase 14.
+- ✅ **No JS tests** in the plugin. F2 was a live bug for a whole stage because
+  of it; the jsdom harness used to prove the fix was a throwaway. **Closed by
+  Stage 3d** — 47 tests, and the `:checked` regression now fails four of them.
+
+#### Stage 3c — the limit, the counter, and what they must agree with (2026-09-03)
+
+##### ✏️ The scope was wrong, and two existing documents said so
+
+Stage 3b deferred **`per_char` pricing** here. `PRICING-SPEC.md` §2 assigns it to
+**M16.2**, and `SelectionResolver`'s own docblock says `min_length`, `max_length`
+and `per_char` *"arrive with the types that need them in Phase 16"*.
+
+Half of that is right. `per_char` **arithmetic** is Phase 16's — Phase 16 depends
+on Phase 14 delivering the *types*, not the pricing. But **M14.4 owns the
+validation catalogue and is inside Phase 14**, so `max_length` is this phase's
+after all. The resolver's comment conflates the two; the plan is the authority.
+
+So 3c is: **the limit and the counter — and the reporting Phase 14 owes for the
+pricing it cannot yet do.**
+
+##### 🔴 F1 — `per_char` was charged nothing *and* reported nothing
+
+Measured, before the fix:
+
+```
+pricing {type: per_char, amount_minor: 50}, input "Mum"
+total_minor : 0      (3 × 50 = 150 if priced)
+unpriced    : []     ← silent
+```
+
+The `unpriced` list exists precisely to stop this — it feeds `CartTotals`, a cart
+notice and an admin notice, all added after a 50% surcharge silently undercharged
+£40/unit. Text reached none of it: the Stage 3a text branch `continue`s before
+`delta_for()`, and `delta_for()` takes a **value** while `per_char` prices the
+**option**, which has no value row.
+
+**Strictly worse than the case the safety net was built for**, because that at
+least appeared in the notice. Now `record_option_pricing()` reports it. The total
+stays 0 deliberately — *"contributes nothing and says so"* is the spec's rule, and
+this delivers the second half.
+
+⚠️ Option-level `fixed` is excluded from the reporting *and* not charged: the
+spec prices `fixed` **per value**, so option-level `fixed` has no defined meaning
+and this build must not invent one. A mutant dropping that exclusion survived
+until a test pinned it.
+
+##### 🔴 F2 — the wire spelled the limit in a way PHP never reads
+
+The document is `snake_case` **because its reader is PHP** — a convention
+`toPublishedPriceConfig` exists to enforce, after a bug that put `amountMinor`
+and `amount_minor` in one document. `validation` and `display` were published
+**verbatim** from storage, which is `camelCase`.
+
+So the `maxLength` I added in 3b would have arrived as `maxLength`, and
+`SelectionResolver::max_length()` looks for `max_length`: **present in the
+document, enforced nowhere, and the customer types past the limit.** The same
+defect as the price-config one, one field over, found before it shipped.
+
+`toPublishedValidation` / `toPublishedDisplay` now convert per key — explicitly
+mapped, never walked, exactly as the price-config helper argues.
+
+##### 🔴 F3 — enforcement, and it counts graphemes
+
+`max_length` is **refused, never truncated**: cutting an engraving charges a
+customer for text they can read on the page and will not receive in the material,
+and they find out when the parcel arrives.
+
+Measured **after** sanitising, because that is the string stored — refusing on the
+raw input would reject an answer on the strength of markup that was removed.
+
+Four mutants died, including **`strlen()` instead of `measure()`** — the exact
+`optionia-app` bug. A family emoji is 18 bytes, 5 code points, and **one
+character**: one mark in the material.
+
+##### 🟡 F4 — the counter, and the browser agreeing with the server
+
+M14.4b makes `character_counter` **required** whenever `max_length` is set. The
+dashboard therefore **derives** it rather than offering a checkbox — a merchant
+cannot express "limit, but no counter", which is the state the milestone forbids.
+
+The live counter uses `Intl.Segmenter`, not `.length`. Verified against PHP on
+twelve cases:
+
+| input | PHP | JS |
+|---|---|---|
+| `AB  CD` | 6 | 6 |
+| `café` (combining) | 4 | 4 |
+| `👨‍👩‍👧` | 1 | 1 |
+| `🇬🇧` / `👍🏽` | 1 | 1 |
+
+**All twelve agree.** `.length` would have said 11 for the family emoji — which is
+how `optionia-app` came to charge five for a counter showing four.
+
+##### 🔴 F5 — `help_text` was published by the API and rendered by nothing
+
+All six templates associated only `description`. M14.4b requires `help_text` be
+associated via `aria-describedby`; M29.7b makes that accessibility. Guidance a
+screen reader never announces does not exist for the customers most likely to
+need it.
+
+One shared `Frontend\OptionView` now builds the guidance blocks and the
+space-separated `aria-describedby` — written once rather than six times, because
+six copies is six chances to get an id list subtly wrong. A mutant reproducing
+the original bug kills two tests.
+
+##### 🟡 A gate that would have taught the wrong lesson
+
+`check-architecture.sh` reported `OptionView` as **dead code**: it scans `src/`
+and `optionia.php`, and templates are `include`d, not called. The gate had
+already been widened once for the same reason (`optionia.php`).
+
+Widened to `templates/` — and then **verified it still catches real dead code**
+with a throwaway class, because a gate that reports a wired class as dead teaches
+people to add a fake reference to silence it, which is worse than the gap it
+closed.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **799 tests** — 1 failure, the M13.3 tripwire; PHPCS clean |
+| Plugin gates | 10/10 minus that tripwire |
+| Backend | 645 unit, `tsc` clean |
+| Frontend | 357 vitest, `tsc` + eslint clean |
+| Cross-repo | all four gates pass |
+| Mutants killed | F1 ×2, F3 ×4, F4 ×4 + ×2, F5 ×2 |
+| JS ↔ PHP `measure()` | 12/12 agree |
+| Backend E2E | **887/887**, 33 suites |
+
+⚠️ **That clean E2E run does not clear the flake Stage 3b recorded.** Three runs
+there each failed one arbitrary test; this one failed none. One clean run is
+consistent with an intermittent fault and is not evidence against it — the flake
+stays open, and stays diagnosed by instrumentation rather than by re-running.
+
+##### ⚠️ Two process notes worth keeping
+
+**An empty `--report=summary` was read as "clean" and was not.** PHPCS printed
+nothing while still exiting non-zero; four errors survived a round I had called
+finished. Exit codes now decide, not output.
+
+**Two mutants "passed" without ever being applied.** Shell escaping mangled the
+patterns, the `sed` found nothing, and the unchanged file passed — the third time
+this class of trap has appeared in this phase. A surviving mutant is a claim to
+verify, not a result to accept.
+
+##### Still open
+
+- **`per_char` arithmetic** — M16.2. Now visible in the merchant's notice rather
+  than silent.
+- **`min_length`, `pattern`, `allowed_charset`, `forbidden_words`** — the rest of
+  M14.4's catalogue. `min_length` is already mapped in the serializer.
+- ✅ **No JS tests in the plugin.** The counter's grapheme parity was proven with
+  a throwaway Node harness, as F2 was in 3b. **Closed by Stage 3d** — the parity
+  is now eight table-driven cases, and `.length` fails six of them.
+
+#### Stage 3d — the storefront runtime gets tests (2026-09-03)
+
+`assets/js/frontend.js` had **no tests at all**, and two real defects shipped
+because of it:
+
+| defect | shipped | found by |
+|---|---|---|
+| Dropdown estimate totalled **£0** | Stage 2a | scoping an unrelated feature in 3b |
+| Counter grapheme parity | — | a throwaway harness, deleted twice |
+
+Neither was found by a test. Both harnesses were disposable, so nothing stopped
+either regressing.
+
+##### 🔴 F1 — the file exports nothing
+
+An IIFE under `'use strict'`. Measured: loading it in jsdom exposes **zero**
+functions. The earlier throwaway harnesses worked around that by slicing
+functions out of the source with string indexes — testing a *copy* of the code,
+which breaks whenever a line moves.
+
+So these tests are **black-box**: markup in, events dispatched, DOM asserted. The
+production file is unchanged — reshaping shipping code to suit a test is the
+wrong direction when driving it through the DOM works.
+
+##### 🔴 F2 — a false failure that looked exactly like a product bug
+
+`init()` runs on load, guarded by `if ( 'loading' === document.readyState )`.
+jsdom reports `loading` for a fragment it has already parsed and **never fires
+`DOMContentLoaded`** — so nothing bound, the estimate stayed empty, and the first
+probe read `""` instead of `+£10.50`.
+
+Waiting for `load` before evaluating fixes it: `readyState: complete`,
+`bound: true`, estimate correct. A harness getting this wrong produces false
+failures; one that "fixes" it by calling internals produces false passes.
+
+##### 🔴 F3 — the contract test could not be written with a regex
+
+The plan was to compare `data-optionia` attributes in the PHP source against the
+script. That does not work: the attributes sit inside `<?php if ( … ) : ?>`
+blocks, so any `[^>]*` pattern stops at the `?>` and matches nothing. Seven
+tests failed reporting *"no price attribute"* for templates full of them.
+
+Replaced with something strictly better — `generate-fixtures.php` renders all six
+templates through the **real renderer**, and the tests read the markup a browser
+actually receives. Generated, never committed, so it cannot drift.
+
+##### What that fixture immediately proved
+
+| type | `data-optionia="value"` on | price on |
+|---|---|---|
+| radio, checkbox, both swatches | `input` | `input` |
+| **dropdown** | **`select`** | **`option`** |
+| text_field | `input` | *(none)* |
+
+That single row is the whole £0 bug, now asserted rather than assumed.
+
+##### 🟡 A weak assertion caught by mutation, not by review
+
+The first contract test took a `priceTag === valueTag` branch and only checked
+the JS *contained* the `:checked` selector. A mutant moving the price onto the
+`<select>` — the original bug, in the template rather than the script —
+**survived**. I verified the mutation had genuinely applied before concluding.
+
+Tightened to assert the shape directly (`select` ⇒ price on `option`, otherwise
+`input`/`input`), and both template-side mutants now die.
+
+##### 🔴 The gate would have failed for everyone else
+
+`check-js.sh` renders its fixtures with PHP. A bare `php` is **not on PATH** in a
+Studio environment — `check.sh` already resolves the real binary and was not
+passing it down. Caught only because the gate count stayed at 2 after PHPCS was
+clean; the visible output named just one failure.
+
+Also excluded `node_modules/` from the syntax gate, which scanned everything but
+`vendor/`. Zero PHP files there today — luck, not design.
+
+##### Coverage
+
+**47 tests, four files:**
+
+- `price-estimate.test.js` — radio, dropdown, mixed, unpriceable hides the
+  estimate, text ignored, free choice shows nothing
+- `frontend-contract.test.js` — element placement per type, plus **five real
+  rendered pages driven end to end** to `+£10.50`
+- `character-counter.test.js` — eight grapheme cases against PHP's own numbers,
+  `input` not `change`, first paint, over-limit flag
+- `money-and-binding.test.js` — thousands, comma decimals, zero-decimal
+  currency, **missing settings must not throw**, bind guard
+
+##### Mutants killed
+
+| mutant | fails |
+|---|---|
+| `:checked` selector restored (the £0 bug) | 4 |
+| price moved onto the `<select>` | 1 |
+| radio's `data-optionia="value"` removed | 2 |
+| `.length` instead of `measure()` | 6 |
+| `blur` instead of `input` | 14 |
+| no trimming before counting | 2 |
+
+And the gate itself was verified to fail on a broken counter, rather than
+assumed to.
+
+##### ⚠️ Verified, not assumed
+
+`npx vitest run --silent` printing nothing is not proof of success — the same
+trap as Stage 3c's empty PHPCS summary. Every gate result here comes from an
+**exit code**.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin PHPUnit | 799 — 1 failure, the M13.3 tripwire |
+| Plugin Vitest | **47 passed**, 4 files |
+| Plugin gates | 10/10 minus that tripwire; PHPCS clean |
+| Backend | 645 unit |
+| Frontend | 357 vitest, `tsc` + eslint clean |
+| Cross-repo | all four gates pass |
+
+#### Stage 3d audit — seven survivors behind a green suite (2026-09-03)
+
+Mutation-probed twelve paths in `frontend.js`. **Seven survived.** The 47-test
+count measured almost nothing about the guards.
+
+##### 🔴 F1 — the tests did not run in CI, and the gate said "passed"
+
+The single most serious finding, and it invalidated the whole stage where it
+mattered. Measured by removing `node_modules` and running the gate:
+
+```
+skip  node_modules/ absent -- run: npm install (behaviour not tested)
+All JavaScript checks passed.        ← exit 0
+```
+
+CI runs `bin/check.sh` but never `npm install`. The workflow's own comment says
+gates go through that script *"so a gate added locally cannot be one CI silently
+skips"* — mine was exactly that.
+
+Fixed in two places, because either alone rots: CI gained `npm ci` (plus npm
+caching), **and** the skip became a **failure when `CI` is set**. So deleting the
+CI step breaks the build rather than silently deleting the suite. All three paths
+verified: CI-with-deps passes, CI-without-deps fails, local-without-deps still
+skips.
+
+##### 🔴 F2/F3 — a guard whose own dedicated test never exercised it
+
+`money-and-binding.test.js` asserted the `data-optionia-bound` attribute was
+*set*, then separately that totals were idempotent. **Neither failed when the
+guard was deleted.** A check passing without exercising its subject — in the test
+written specifically for the subject.
+
+The observable damage is listener count, which is what `bind()`'s comment names:
+a doubled `change` listener *"does not look broken -- it just totals wrong"*.
+Measured: 2 listeners with the guard, **4 without**. The `rebind()` helper
+re-evaluates the source the way `found_variation` will, and the mutant now dies.
+
+##### 🔴 F4 — the `Intl.Segmenter` fallback had zero coverage
+
+The path older Safari takes. Measured: the family emoji counts **5** there rather
+than 1, and a flag **2** rather than 1 — over-counting, which is the safe
+direction (warned early, not refused by surprise). Now six cases, four proving it
+agrees with Segmenter on ordinary text.
+
+##### 🟡 F5 — counter tests read hand-written markup
+
+The rendered fixture *contained* a real counter and nothing used it. Now two
+tests drive `RENDERED.text_field` directly; a template dropping
+`data-optionia-max` fails them, where it previously survived.
+
+##### ✏️ F6 — coverage tooling was installed, and removed again
+
+`@vitest/coverage-v8` reported **0% over 62 passing tests**. Not a
+misconfiguration: the suite evaluates the real file with `window.eval()` inside a
+jsdom realm, which V8's instrumenter cannot see. A permanently-zero number is
+worse than none — it reads as total failure and teaches people to ignore the
+output. Removed, with the finding recorded in `vitest.config.js`.
+
+**Mutation is this suite's coverage measure**, and it is the stronger one: it is
+what found all seven survivors behind a green run.
+
+##### ✏️ Two mutants are equivalent, and are documented as such
+
+`index >= 0` and `! isNaN( max )` **cannot** be killed. Measured: `options[-1]`
+is already `undefined` and `count > NaN` is already `false`, so both `&&`
+short-circuit without them. They are kept because they state intent, and both now
+carry a comment saying they were measured rather than assumed necessary — so the
+next reader does not chase an unkillable mutant or delete a guard on a hunch.
+
+##### Result
+
+| | before | after |
+|---|---|---|
+| Tests | 47 | **62** |
+| Surviving mutants | 7 | **0 killable** (2 equivalent, documented) |
+| Runs in CI | **no** | yes, and its absence fails the build |
+| Documented | no | README, with the CI/local distinction |
+
+##### Still open
+
+- **The E2E flake** (Stage 3b). Untouched here.
+- **`admin.js`** is a one-line placeholder; nothing to test until it does
+  something.
+- **`formatMoney` rounding at fractional minor units** still has no dedicated
+  case. Its three configuration mutants die, so the formatting is covered; the
+  arithmetic edge is not.
+
+#### Stage 3e — audit fixes: the probe, the budget, the message (2026-09-03)
+
+Three findings from auditing Stage 3d's own work.
+
+##### 🔴 F1 — the mutation method had a hole, and it produced a false result
+
+A backend mutant reported as **SURVIVED** had actually **died**. The mutation
+caused a *compile* failure, so the suite reported `611 passed` with **zero
+failures** and two suites that never ran — a lower total, not a failure. The
+probe grepped `Tests: N failed` and saw nothing.
+
+`optioniaWooCommerceBackend/test/README.md` warns about precisely this:
+*"Treat a count below the known total as a skip, not a pass."* The probe ignored
+the line the project explicitly says to read.
+
+**`bin/mutate.sh`** replaces every hand-rolled probe. It decides on three
+signals rather than one:
+
+| signal | catches |
+|---|---|
+| non-zero exit | the runner failed |
+| failing tests | a real assertion broke |
+| **a lower total** | a suite did not compile — *the missed case* |
+
+It also refuses to report at all when the search text is absent
+(`INVALID`, exit 3) — the escaping trap that produced three false "survivors"
+earlier in this phase — and restores the file on every exit path including
+Ctrl-C.
+
+Verified against all four outcomes and all three runners (jest, vitest, phpunit),
+including a deliberate re-run of the mutant that was misjudged: **`KILLED — only
+611 of 645 tests ran — a suite did not compile`**.
+
+✏️ Re-checked every mutation result from Stages 3d and 3e against this. PHPUnit
+keeps its total and reports `Errors`, and Vitest reports `Test Files N failed`,
+so **only the Jest probes were exposed** — and the other two died legitimately.
+No wrong conclusion survived.
+
+##### 🟡 F2/F3 — the per-option ceiling does not bound a request
+
+`ABSOLUTE_MAX_LENGTH` caps one field at 5000 **graphemes**, and neither half of
+that is what storage costs. Measured:
+
+| case | accepted | why it slipped through |
+|---|---|---|
+| 50 options × 5000 chars | **244 KB** | the ceiling is per *option* |
+| 5000 family emoji | **88 KB** | 5000 *characters*, 18 bytes each |
+
+Neither is an attack — both are configurations a merchant could author, and
+`optionsPerGroup` is 200, so the real ceiling was nearer a megabyte per cart
+line.
+
+**`MAX_TEXT_BYTES = 65536`** bounds the request as a whole. Chosen against
+measured shapes rather than picked: an engraved ring is 0.05 KB, ten lines of
+signage 2 KB, and **thirteen fields at the character ceiling 63.5 KB — still
+accepted**. Only the implausible cases are refused.
+
+Four mutants die, including the budget raised 100× *and* lowered to 1 KB — so it
+is pinned at a value, not merely "some limit exists".
+
+##### 🔴 The error a customer would actually have seen
+
+A length failure fell through to *"Sorry, that selection is not available.
+Please review the options and try again."* For someone who typed a long
+engraving that is **wrong** — nothing is unavailable — and **unactionable**:
+reviewing the options will never reveal that the text was too long.
+
+Two messages now, because two different actions fix them:
+
+- `too_long` → *"Your text is longer than this option allows."*
+- `too_much_text` → *"There is too much text on this product in total."*
+
+The second cannot say "shorten this field", because every field was individually
+acceptable.
+
+##### ✏️ That test passed for the wrong reason twice
+
+Worth recording, because it is this phase's recurring failure and it recurred:
+
+1. With `max_length: 10`, 70,000 characters tripped the **per-option** limit.
+2. Without one, `ABSOLUTE_MAX_LENGTH` caught it — still `too_long`.
+
+Both green; the budget message was never reached either way. It fires **only**
+when every field is acceptable and the total is not, which by construction needs
+several fields — twenty at 4000 characters, 80 KB, no single field over 5000.
+Confirmed by mutation: removing either message now kills two tests.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **825 PHPUnit** (1 = M13.3 tripwire), 62 Vitest, PHPCS clean |
+| Plugin gates | 10/10 minus that tripwire |
+| Backend | **40/40 suites**, 645 tests |
+| Frontend | 19/19 files, 357 tests |
+| Cross-repo | all four gates |
+
+#### Stage 3f — the gate the wire contract never had (2026-09-03)
+
+Two findings from auditing Stage 3e, plus one thing the audit surfaced that
+nobody had noticed.
+
+##### 🟡 F1 — the camelCase bug class had no gate
+
+The config document is **snake_case** because its reader is PHP; storage is
+**camelCase** because its schema is TypeScript. That seam has produced **two**
+bugs:
+
+1. `price_config` shipped `amountMinor` on one path and `amount_minor` on
+   another — a PHP evaluator reading `amount_minor` got null for every value
+   configured the first way.
+2. `validation` and `display` published verbatim, so a merchant's `maxLength`
+   arrived spelled in a way `SelectionResolver::max_length()` never looks for:
+   **present in the document, enforced nowhere.** Fixed in Stage 3c.
+
+Both found by accident. Unit tests pin the keys that *exist* — verified by
+mutation, both a wrong spelling and a dropped mapping fail — but a **new** rule
+would ship camelCase silently unless someone remembered to write the test, which
+is exactly what did not happen twice.
+
+**M14.4 adds `pattern`, `allowed_charset`, `forbidden_words` through that same
+path.**
+
+`bin/check-wire-keys.sh` checks three things, each proven by mutation:
+
+| mutation | caught |
+|---|---|
+| a new rule added in camelCase | ✅ *"the reader is PHP. A camelCase key is one it will never find."* |
+| a mapping dropped, plugin reads what nothing emits | ✅ *"a rule nothing emits is a rule that silently never applies."* |
+| `price_config`'s rename reverted | ✅ the first instance of this bug, asserted rather than trusted |
+
+And a fourth path: with its input file missing it **fails loudly** rather than
+comparing two empty lists and passing.
+
+##### 🔴 Five cross-repo gates, and nothing ran them
+
+Found while wiring F1 in: `bin/` held five gates and **no runner**. Each
+repository has its own `bin/check.sh`; the checks spanning two or more belonged
+to none, and the only thing making them run was somebody remembering all five.
+
+That is the failure mode the gates exist to prevent, one level up.
+
+`bin/check.sh` at the root now **discovers** `bin/check-*.sh` rather than listing
+them, so a gate added tomorrow runs without editing the runner. A glob matching
+nothing **fails** — a green run over zero checks is the most misleading result
+available. Verified: breaking one gate gives *"1 of 5 cross-repo gate(s)
+failed."*
+
+##### ✏️ F3 — the M13.3 tripwire, corrected rather than silenced
+
+The plugin's one failing test has been failing all phase, and I have been
+reporting it as expected. It is expected — but it is also an **unticked Gate-1
+criterion**, and its message was out of date: it said *"M13.3 must time the
+60-second criterion"* without saying the blocker was cleared.
+
+R1 — the HTTPS blocker that made a local connect impossible — was resolved
+2026-09-02, and a store has since been connected end to end. The procedure is
+runnable now, and the plan's timing table no longer says *pending R1*.
+
+⚠️ **It cannot be discharged by an agent**, and both the test and the plan now
+say so plainly. The criterion times a *person* reading screens; automating it
+would measure the machine, which is already known at 0.17 ms and is not what is
+being asked. Left failing deliberately rather than skipped: **a red test is a
+question someone still has to answer, and a skipped one is a question everyone
+forgets.**
+
+**This is the one item in the phase that needs the user, not the agent.**
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | 825 PHPUnit — 1 failure, the M13.3 tripwire; 62 Vitest; PHPCS clean |
+| Backend | 40/40 suites, 650 tests; `tsc` + lint clean |
+| Frontend | 19/19 files, 357 tests |
+| Cross-repo | **5/5 via the new runner** |
+| Mutants killed this stage | 4 on the wire gate, 1 on the runner |
+
+#### Stage 3g — `min_length`, and `textarea` (2026-09-03)
+
+##### ✅ `min_length` — M14.4's second rule
+
+Enforced beside `max_length`, measured on the same sanitised string by the same
+normative `measure()`.
+
+🔴 **A separate error code from `required`.** A customer who typed "Hi" into a
+field demanding five characters *answered it* — telling them an option is missing
+sends them looking for a field they already filled. `ERROR_TOO_SHORT` says what
+to do instead: *"add a little more"*.
+
+The dashboard gained a **Minimum length** field and a cross-field rule: a minimum
+above the maximum refuses every possible answer, so it is caught while the
+merchant is looking at both.
+
+⚠️ **And the disabled button now explains itself.** The form only surfaced `key`
+errors, so a bad min/max window greyed out "Add option" with **no message** — the
+field needing attention is not the one being looked at. Found by reading the
+error-display block rather than by a test.
+
+Four resolver mutants and three schema mutants die, including `strlen` instead of
+`measure` and the counter appearing for a minimum alone (M14.4b ties it to
+`max_length`; counting *up* to nothing is worse than no counter).
+
+##### ✅ `textarea` — Tier 1's seventh type
+
+🔴 **The one place `SelectionResolver` reads `presentation` for behaviour.**
+
+`text_field` and `textarea` have *identical axes* — `text` / `none` / no values.
+The difference is exactly one thing: whether a newline survives. `value_kind`
+cannot express that, so `is_multiline()` keys on the type, and the registry entry
+duplicates every field of `text_field`'s deliberately — that is what the
+three-axis model looks like when it is working.
+
+Measured before the distinction existed:
+
+```
+"12 High Street\nLondon\nSW1A 1AA"  ->  "12 High Street London SW1A 1AA"
+```
+
+Wrong on a shipping label, wrong in a workshop's notes. Now:
+
+| input | `text_field` | `textarea` |
+|---|---|---|
+| `A\nB` | `A B` | `A\nB` |
+| `A\r\nB` (Windows) | `A B` | `A\nB` |
+| `A\n\n\n\n\nB` | `A B` | `A\n\nB` |
+| `A\tB` | `A B` | `A B` |
+
+Line endings normalise so storage does not depend on the customer's operating
+system, and runs of blank lines cap at two — a paragraph gap is meaningful, forty
+are a paste accident.
+
+##### 🟡 A template that would have fatalled
+
+`textarea.php` needs `esc_textarea()` — a `<textarea>` has no `value` attribute,
+and `esc_attr` would render `&#10;` where a newline belongs. **It was not stubbed
+in `tests/bootstrap.php`**, so the template would have fatalled the first time a
+test rendered it. Caught by writing the test before assuming the template worked.
+
+##### Ratchets, again as designed
+
+Registering the type broke **four** assertions that exist to notice it: the axes
+table, the count (6→7), the "not yet registered" list, and the
+`isRegistered(TEXTAREA)` probe — repointed at `RANGE` rather than weakened, which
+is what its own comment has asked each time. A fifth fired in the dashboard:
+`answers for every authorable type` refused to let `textarea` join silently.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **841 PHPUnit** — 1 failure, the M13.3 tripwire; 62 Vitest; PHPCS clean |
+| Backend | 40/40 suites, **651 tests** |
+| Frontend | **367 tests** |
+| Cross-repo | 5/5, including type-parity for the new type |
+| Mutants killed | 4 (`min_length`) + 3 (schema) + 2 (multiline) |
+
+##### ✅ `number_field` — Tier 1's eighth type, and **M14.1 is complete**
+
+🔴 **The first type whose `value_kind` is neither `choice` nor `text`**, and the
+difference is not cosmetic: a number has an *ordering*. `min`/`max` bound the
+**value**, not its length — which is why it cannot share `textValidationSchema`,
+where "at least 5" would silently mean "at least 5 characters".
+
+**Stored canonically.** `"007"`, `"7"` and `"7.0"` are one quantity written three
+ways; storing the spelling would put three different strings on three otherwise
+identical orders, and `CartItemKey` hashes the payload — so they would not group
+into one cart line either.
+
+**Parsing is stricter than `is_numeric()`**, which accepts `"1e3"`, `"0x1A"` and
+leading whitespace. `Money`'s docblock records the same trap from the pricing
+side: `'1e3'` silently became 100000. A customer typing a quantity does not mean
+scientific notation, and `1,234` means one-point-two-three-four in half of
+Europe.
+
+##### 🔴 A step bug found by measurement, not by test
+
+The integer comparison exists because floats do not divide cleanly —
+`0.3 / 0.1` is `2.9999999999999996`, so a naive `fmod()` refuses a value sitting
+exactly on the step.
+
+**But scaling by the step's precision alone reintroduced the bug it prevents.**
+Measured: `0.35` against a step of `0.1` scaled to `round(3.5) = 4`, divided
+cleanly, and was **accepted** — the rounding meant to avoid float error rounded
+the value *onto* the grid instead of testing it. The scale now comes from the
+larger of the two precisions, and a mutant restoring the old form kills two
+tests.
+
+##### 🔴 And the wire-key gate earned itself the same day
+
+`bin/check-wire-keys.sh` — written hours earlier in Stage 3f — **failed the
+moment `number_field` shipped**:
+
+```
+FAIL  the plugin reads rule(s) the API never publishes: integer_only max min step
+```
+
+`integerOnly` was never mapped, so it would have been published in a spelling
+nothing reads: **every fractional quantity accepted on an option configured to
+refuse them.** Exactly the bug class the gate was built for, caught before a test
+existed for it, on the first new rule to go through that path.
+
+That is the second time this stage that a guard written for a *past* mistake
+caught a *new* one.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **877 PHPUnit** — 1 failure, the M13.3 tripwire; 62 Vitest; PHPCS clean |
+| Backend | 40/40 suites, **653 tests** |
+| Frontend | **370 tests** |
+| Cross-repo | 5/5 |
+| Mutants killed | 4 (number) + 2 (multiline) + 4 (`min_length`) + 3 (schema) |
+
+##### ✅ Tier 1: 8 of 8
+
+`radio`, `dropdown`, `checkbox`, `color_swatch`, `image_swatch`, `text_field`,
+`textarea`, `number_field`. **M14.1 is complete.**
+
+#### 🔴 The dashboard was serving the wrong port (2026-09-03)
+
+Found from a user report — *"connect the store, the full page becomes black"* —
+rather than from any test.
+
+`npm run dev` was plain `next dev`, which defaults to **3000**. Everything else in
+the project expects **3001**:
+
+| | expected |
+|---|---|
+| `APP_URL` in the API's `.env` | `http://localhost:3001` |
+| `playwright.config.ts` `baseURL` | `http://localhost:3001` |
+| `e2e/README.md` | *"`npm run dev` → 3001"* |
+| the script itself | **unset** |
+
+`ConnectService` builds the merchant's return URL as `APP_URL + /connect`, so
+WordPress redirected to `localhost:3001/connect` while the dashboard was on 3000
+— **a black page, because nothing was listening.** CORS allowed both ports, so
+every other screen worked and hid the mismatch.
+
+`dev` and `start` now pin `--port 3001`, and `playwright.config.ts`'s own comment
+— which said 3000 while its `baseURL` said 3001 — is corrected.
+
+⚠️ **Three sources disagreed and nothing compared them.** The E2E suite passes its
+port explicitly, so it never noticed; only a human following the README hit it.
+
+##### Two things reported that were **not** bugs
+
+- **No Disconnect button on `/stores`.** Correct: the button hides when
+  `status === 'disconnected'`, and the database confirms the store is
+  disconnected. There was nothing to disconnect.
+- **`/option-sets` shows only a name field.** Correct: that is the *list* page.
+  The type picker lives on the detail page, reached by clicking a set. Worth
+  noting as a discoverability observation rather than a defect.
+
+#### Stage 3n — M14.4b's display config, and what Tier 3 turned out to be (2026-09-03)
+
+##### 🔴 Two of M14.3's "types" are display settings, not types
+
+Reading M14.3 against M14.4b rather than building from the list:
+
+| M14.3 lists | what it actually is |
+|---|---|
+| `swatch_grid` | `image_swatch` + M14.4b's `layout` columns and `swatch_size` |
+| `dependent_select` | **Phase 17's rule engine** — `IF colour equals red THEN show size` |
+| `dropdown_grouped` | `<optgroup>`, a rendering detail of `dropdown` |
+| `file_input` | Phase 15, stated in M14.3 itself |
+
+Registering types for the first two would **duplicate machinery that already
+exists** and give merchants two ways to describe one thing. Recorded as a scope
+correction rather than silently skipped work.
+
+##### What was actually missing: five display settings
+
+`tooltip`, `price_display`, `layout` (columns), `swatch_size`,
+`collapsed_by_default` — 6 of 11 were built, these five were not.
+
+**Read once in `OptionView::display()`**, not in fourteen templates. Each setting
+is a small decision — is `columns` an integer, is `swatch_size` one of three
+words — and fourteen copies of that reasoning is fourteen chances to disagree.
+Every malformed value falls back rather than reaching a class attribute:
+`columns: 99` does not produce a grid nobody can read.
+
+##### 🔴 A tooltip is announced, not hovered
+
+M29.7b: *"a tooltip only reachable by hover is invisible to a large group of
+customers."* So it joins `aria-describedby` beside the description and help
+text, and `title` — hover-only and inconsistently announced — is never used.
+
+⚠️ **It lives in `display`, not on the option.** Reading it from the wrong place
+would have meant it silently never rendered, which is exactly how `help_text`
+went missing across six templates until Stage 3c. The lookup is explicit about
+which source each field comes from.
+
+##### ✏️ My own gate produced a false failure, and I fixed the gate
+
+`check-wire-keys.sh` reported `collapsed` as *"a rule the API never publishes"* —
+but `collapsed` is `OptionView::display()`'s **return** key, and the wire key
+`collapsed_by_default` was being read correctly on the same line. The pattern
+could not tell reading a document from reading its own output.
+
+Narrowed to the variables that genuinely hold document data, then **verified it
+still catches real breaks**: a dropped mapping and a camelCase key both still
+fail it. A gate that cries wolf is how a real failure gets ignored.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **942 PHPUnit** — 1 failure, the M13.3 tripwire; 67 Vitest; PHPCS clean |
+| Backend | **671 tests** |
+| Frontend | **425 tests** |
+| Cross-repo | 5/5, now checking **21 rules** |
+| Mutants killed | 4 on the display config |
+
+##### ⏱️ And the stopwatch, answered by measurement
+
+Asked why an agent cannot time the connect flow. **The machine half is 21 ms**,
+timed three times against the live API. The other 59.98 seconds of the budget is
+a person reading screens and deciding — which is the criterion's whole point.
+Automating it would measure 21 ms and prove nothing.
+
+#### Stage 3m — `hidden`, and the forgery it invites (2026-09-03)
+
+M14.2's last type, and the only one whose specification was a single line:
+`hidden | text | —`. That thinness was the finding.
+
+##### 🔴 Measured first: a naive hidden field is fully forgeable
+
+Before writing anything, a probe against the existing text path:
+
+```
+merchant default : campaign-a
+customer posted  : FORGED-BY-CUSTOMER
+stored           : FORGED-BY-CUSTOMER
+```
+
+**Hidden from the page is not hidden from the customer.** Anyone with developer
+tools can post whatever they like, and a batch code or fulfilment route a
+merchant relies on would be exactly as trustworthy as a URL parameter.
+
+##### The design that follows
+
+`SelectionResolver` **discards what is posted entirely** and stores the option's
+`default_value`. That is the only way the type can mean what a merchant intends —
+data *about* the order rather than a choice within it.
+
+⚠️ **Sanitised anyway.** The value reaches a cart row and an order line like any
+other, so it goes through `clean_text()`: a merchant pasting markup into a
+campaign tag should not put markup on a customer's order.
+
+⚠️ **Keyed on presentation, not `value_kind`.** A hidden field is `text` like
+`text_field` and `textarea`; what differs is *who supplies the value*, which no
+axis expresses — the same reason `is_multiline()` reads the presentation.
+
+##### Why the template renders an input at all
+
+It would be tidier to render nothing. But WooCommerce's cart and reorder paths
+round-trip the posted fields, and an option absent from the form is one some of
+those paths cannot see. **The input carries the value for continuity; the server
+carries the truth.**
+
+No label, no description, no counter — there is nothing for a customer to do, and
+a label with no control is noise for a screen reader.
+
+##### The preview says so plainly
+
+*"Not shown to the customer — the value you set travels with the order."* A
+disabled input would suggest a control exists.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **938 PHPUnit** — 1 failure, the M13.3 tripwire; 67 Vitest; PHPCS clean |
+| Backend | **671 tests**, lint clean |
+| Frontend | **425 tests** |
+| Cross-repo | 5/5, fixtures covering **all 14 templates** |
+| Mutants killed | 3 — including the forgery |
+
+##### ✅ M14.2 complete — and 14 types ship *(15 after Phase 15's `file_input`)*
+
+`radio`, `dropdown`, `checkbox`, `color_swatch`, `image_swatch`, `text_field`,
+`textarea`, `number_field`, `range`, `quantity`, `date_picker`, `time_picker`,
+`datetime_picker`, `hidden`.
+
+**Verified live on the merchant's own storefront**: all 13 customer-facing
+controls render on `custom-hoodie`, with native date/time/datetime inputs, the
+slider readout, and the colour swatch painting `#cc0000`.
+
+**M14.3 (Tier 3) has not started**: `swatch_grid`, `dropdown_grouped`,
+`dependent_select`, and `file_input` which waits on Phase 15.
+
+#### Stage 3l — the date family, and the clock the engine does not have (2026-09-03)
+
+`date_picker`, `time_picker`, `datetime_picker` — Tier 2's largest piece, and the
+first types whose rules depend on **when the question is asked**.
+
+##### 🔴 The engine has no clock, and four of six rules do not need one
+
+Measured before designing rather than assumed:
+
+| rule | needs "today"? |
+|---|---|
+| `min_date`, `max_date`, `blackout_dates`, `allowed_weekdays` | **no** — absolute, or derived from the date itself |
+| `lead_time_days`, `max_advance_days` | **yes** — relative |
+
+So the answer was **not** to give the engine a clock. `resolve()` gained an
+optional `?string $today`, and the four absolute rules work without one.
+
+⚠️ **Null means the relative rules lapse, not that today is epoch.** A caller with
+no clock must not refuse every date a merchant's lead time would have allowed. A
+mutant making null refuse everything kills **7** tests.
+
+##### Whose "today", and why it is not published
+
+A lead time is a promise about the **merchant's** working days — *"we need three
+days to make this"*. A workshop in Auckland and one in Los Angeles disagree about
+the date for twenty-one hours out of twenty-four, and a customer in Sydney does
+not shorten a London workshop's lead time by being ahead.
+
+`Support\StoreClock` reads `wp_date()` — **WordPress already knows the store's
+timezone**, and it is what the merchant changes in their own settings. A copy in
+the config document would be a second source that drifts the moment they change
+it, and the plugin would keep enforcing yesterday's answer until the next
+publish. Wired at all five `resolve()` call sites.
+
+##### 🔴 Strict parsing, because `strtotime()` is a trap
+
+That function accepts `"next tuesday"` and `"+3 days"`, and silently rolls
+`2026-02-30` forward to **the second of March** — a customer delivered on a day
+they never chose, with nothing saying so.
+
+`createFromFormat` with `!` plus a **round-trip check**: a value is accepted only
+when re-formatting reproduces the input exactly. Measured refusals: `2026-02-30`,
+`next tuesday`, `07/09/2026`, `0000-00-00`, `2026-9-7`. A mutant dropping the
+round trip kills 4 tests.
+
+##### Precision comes from the presentation
+
+All three share `value_kind: date`; the difference is what a stored value *is* — a
+wedding date has no time, a collection slot has no day, an appointment needs
+both. `date_format()` reads the presentation, exactly as `is_multiline()` does
+for `textarea`. A value valid for one type is refused by another, and a mutant
+collapsing them kills 3 tests.
+
+##### ⚠️ The weekday off-by-one that would have shifted every merchant's week
+
+ISO-8601 `N` (1 = Monday) rather than PHP's `w` (0 = Sunday). A merchant
+configuring "weekdays" means Monday to Friday, and both spellings look plausible
+in review — **a mutant swapping them kills a test** rather than shipping a
+storefront that refuses Mondays and accepts Sundays.
+
+##### The wire gate, a fourth time
+
+`bin/check-wire-keys.sh` failed the instant the schema gained the date rules,
+naming **all six at once** before any test existed for them.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **934 PHPUnit** — 1 failure, the M13.3 tripwire; 67 Vitest; PHPCS clean |
+| Backend | **670 tests**, lint clean |
+| Frontend | **421 tests** |
+| Cross-repo | 5/5, fixtures now covering **all 13 templates** |
+| Mutants killed | 4 on the date logic |
+
+##### ✅ M14.2 status: 5 of 6
+
+`range`, `quantity`, `date_picker`, `time_picker`, `datetime_picker`.
+**`hidden` remains** — and it is a different question from the rest: a field the
+customer never sees, which means asking what it is *for* before building it.
+
+#### Stage 3k — M14.2 begins: `range` and `quantity` (2026-09-03)
+
+Tier 2's two **numeric** types, taken first because they inherit validation that
+already works. The date family is deliberately not here: it needs
+*store-timezone resolution*, `blackout_dates`, `lead_time_days` — a surface of
+its own rather than a third numeric variant.
+
+##### 🟢 Neither needed a resolver branch
+
+Both are `number`/`none`/no values — **identical axes to `number_field`**. The
+resolver keys on `value_kind`, so a slider's answer is a number like any other
+and the three types share one code path. That is the three-axis model working:
+the axes carry behaviour, `presentation` carries the control.
+
+##### 🔴 A slider's bounds are the one thing it cannot inherit
+
+`rangeValidationSchema` makes `min` and `max` **required**, unlike every other
+numeric type. A number field without bounds is an open question; a *slider*
+without bounds silently becomes a 0–100 control the merchant never chose and
+cannot see is wrong.
+
+##### 🔴 Two attributes of the same name on one element
+
+The template marked the input `data-optionia="range"` beside its existing
+`data-optionia="value"`. **A browser keeps only the first** — so the marker was
+dropped, and the readout never updated.
+
+Found by a JS test, not by reading the template. Fixed with a distinct
+`data-optionia-range` attribute, and pinned by a renderer test asserting the
+value role survives.
+
+##### 🔴 A slider says nothing about itself
+
+A radio shows its label, a text field shows its text — a range shows a thumb on a
+track and **no number at all**. `range.php` renders an `<output>`, and
+`frontend.js` updates it on `input` (not `change`, which fires only when the
+customer lets go — by which point they have read a stale number and decided).
+
+##### ✏️ And the first-paint correction is not redundant
+
+A mutant removing the first-paint loop **survived**. Investigating rather than
+writing a test to fit: with no default the template renders the readout at the
+minimum while the input carries *no* `value` attribute — so the browser puts the
+thumb somewhere else entirely. Measured on the real fixture: readout `10`, thumb
+reported as `50`.
+
+The two disagree before anything is dragged, and only the browser knows where the
+thumb is. ✏️ My first expectation of `30` was also wrong; the test records the
+**measured** value and asserts the point that matters — it is not the `10` the
+server wrote.
+
+##### The fall-through guard earned itself
+
+Adding two types to the picker without preview branches made
+`option-preview.render.test.tsx` fail with *"range fell through to the radio
+default"*. Without it a merchant would have picked "Slider" and been shown a list
+of choices.
+
+The fixture generator also covered only six types; now all ten, so the contract
+gate compares against every one.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **906 PHPUnit** — 1 failure, the M13.3 tripwire; **67 Vitest**; PHPCS clean |
+| Backend | **667 tests** |
+| Frontend | **409 tests** |
+| Cross-repo | 5/5 |
+| Mutants killed | 3 on the slider readout |
+
+##### M14.2 status: 2 of 6
+
+`range`, `quantity` ✅ — **`date_picker`, `time_picker`, `datetime_picker`,
+`hidden`** remain. The three date types share one substantial dependency
+(timezone resolution and date rules) and are best taken together rather than one
+at a time.
+
+#### Stage 3j — M14.4's content rules, and the regex security boundary (2026-09-03)
+
+`pattern`, `allowed_charset` and `forbidden_words` — the three rules M14.4 has
+left. The first is the one the milestone singles out: *"Regex is a security
+boundary … a catastrophically backtracking pattern is a denial-of-service
+vector."*
+
+##### 🔴 The danger measured, and it is not the one it looks like
+
+`/^(a+)+$/` against 31 non-matching characters:
+
+```
+result = false, error = PREG_BACKTRACK_LIMIT_ERROR, elapsed = 3 ms
+```
+
+PHP's `pcre.backtrack_limit` (1,000,000) **already bounds the hang**. But a
+genuine non-match returns `0` and a bailout returns `false` — and a naive
+`! preg_match()` treats both as *invalid input*.
+
+**So the real failure is not a hung request. It is a merchant's own pattern
+refusing every answer, silently, on inputs slightly longer than the ones they
+tested.** An engine error means *the rule could not be applied*, and an
+unapplicable rule is no rule — the same stance every malformed rule in this class
+takes.
+
+##### Three defences, each mutation-proven
+
+| defence | mutant | dies |
+|---|---|---|
+| Length cap (200) | cap removed | 2 tests |
+| Bailout ≠ mismatch | `false` treated as a mismatch | 3 tests |
+| Own delimiters and `Du` | merchant's delimiters trusted | compile failure |
+
+The third matters because `/foo/e` once meant **eval**. The body is delimited
+here and given `D` and `u` by this code, so no modifier ever arrives from
+configuration — verified by a test that a stored `^abc$/i` does *not* become
+case-insensitive.
+
+##### 🔴 And rejected at publish, which is what the milestone asks for
+
+`patternsAreSafe` blocks three shapes at publish: too long, not compilable, and
+**a repetition inside a repetition** (`(a+)+`, `(a*)*`, `([a-z]+)+`).
+
+⚠️ **A shape check, not a proof** — deciding whether an arbitrary regex
+backtracks catastrophically is not something a linter settles, and one pretending
+otherwise would be worse than none. It refuses what a merchant would write by
+accident.
+
+A **blocker, not a warning**: a warning would let it publish, and the cost would
+land on the merchant's customers rather than on the merchant. A mutant
+downgrading it dies.
+
+##### The other two rules
+
+**`allowed_charset`** is a *named set* — `alpha`, `alphanumeric`, `numeric`,
+`latin` — not a merchant-supplied character list, because a list would be a second
+pattern with none of a pattern's safeguards. `latin` allows apostrophes and
+hyphens: **a name is not alphanumeric**, and `O'Brien-Smith` must pass.
+
+**`forbidden_words`** matches case-insensitively as a **substring**, so padding
+cannot defeat the list. ⚠️ The matched word is **never returned in params** —
+those reach a customer-facing message, and repeating a slur to the person who
+typed it is not an improvement. A mutant echoing it back dies.
+
+##### The wire gate caught a third rule mid-flight
+
+`bin/check-wire-keys.sh` failed the moment the schema gained
+`allowedCharset`/`forbiddenWords`, before any test existed for them. **Third time
+that gate has caught a rule in transit** — after `integerOnly` and the numeric
+bounds.
+
+##### Verified
+
+| | |
+|---|---|
+| Plugin | **901 PHPUnit** — 1 failure, the M13.3 tripwire; PHPCS clean |
+| Backend | **665 tests**, `tsc` + lint clean |
+| Frontend | 401 tests |
+| Cross-repo | 5/5 |
+| Mutants killed | **10** — 3 pattern, 4 charset/words, 3 publish |
+
+##### M14.4 status: 6 of 6 text rules
+
+`min_length`, `max_length`, `pattern`, `allowed_charset`, `forbidden_words` — and
+`trim_whitespace` is **already the resolver's unconditional behaviour**
+(`Text::normalise()` runs before every measurement), so it needs no flag. The
+numeric rules (`min`, `max`, `step`, `integer_only`) shipped with
+`number_field` in Stage 3g.
+
+**Still open in M14.4:** the per-rule *merchant-overridable* error messages. The
+defaults are specific and each names its own remedy; making them editable is
+authoring UI, not validation.
+
+#### Stage 3i — the picker, tested rather than assumed (2026-09-03)
+
+Asked directly: *"when I select radio button or anything else, does it work
+perfectly?"* Answered by driving it, not by reading it.
+
+##### ✅ All eight types work end to end
+
+| stage | result |
+|---|---|
+| Create via API | 8/8 accepted |
+| Read back | 8/8 with the axes the registry declares (`choice/one`, `text/none`, `number/none`) |
+| Publish | blocked correctly until every choice type had a value |
+| Storefront render | **8/8 controls**, each bound, priced, labelled, posting a distinct field name |
+
+##### 🔴 The preview was untestable, which is how the swatch mutants survived once
+
+`OptionPreview` lived inside `page.tsx` as a private function — the same shape
+that let two swatch mutants pass an entire stage. Extracted to
+`components/option-sets/option-preview.tsx` and given **19 render tests**.
+
+Three mutants die, including the one that matters most: **a type falling through
+to the radio default**. Without that test a merchant could pick "Number" and be
+shown a list of choices — a preview answering the question confidently and
+wrongly, which is worse than no preview.
+
+##### ✏️ Twice I misread a cached page as a bug
+
+The storefront first showed **6 of 8** controls, then reported checkbox missing.
+Both readings were **stale HTML**, and the second time I had already made the
+same mistake an hour earlier.
+
+What settled it was refusing to trust the page: rendering each template directly
+against the live cached config showed all eight producing 478–916 bytes, so the
+fault could not be in the templates or the data. A cache-busted fetch then showed
+all eight.
+
+⚠️ **Worth recording as a method note.** A storefront page is a cached artefact,
+and "the page does not show it" is not evidence about the product until the cache
+is ruled out. Two false bug reports in one session came from skipping that step.
+
+##### The publish guard, seen working by accident
+
+Publish refused with `OPTION_HAS_NO_VALUES`, naming the option: *"'L
+image_swatch' is a image_swatch with no values, so a customer would see an empty
+control."* That was a genuine mistake in the fixture, caught with a message that
+said exactly what to fix.
+
+##### Verified
+
+| | |
+|---|---|
+| Frontend | **401 tests** (19 new), `tsc` + eslint clean |
+| Cross-repo | 5/5 |
+| Mutants killed | 3 on the preview |
+
+##### The dashboard is the **merchant's**
+
+`src/app/(admin)/` exists but holds a layout only — platform staff is **Phase
+26**. There is no second dashboard in use today.
+
+#### Stage 3h — the option editor, rebuilt (2026-09-03)
+
+From a merchant's own words: *"this form totally makes confused"*. Worth taking
+literally — the person who cannot use the builder is the person the builder is
+for.
+
+##### What was wrong
+
+Eight fields in one `flex-wrap` row, every one `flex-1`, so they crammed side by
+side with no grouping and no hierarchy. Three specific failures:
+
+| | |
+|---|---|
+| **Type was a `<select>` of eight names** | "Radio buttons" and "Dropdown" read as unrelated; they are the same question drawn differently |
+| **Key had to be invented** | A machine identifier, asked for beside a label just typed — a question with one sensible answer |
+| **Nothing showed the result** | Every field described something invisible until publish → assign → open a storefront page. Four steps from the decision |
+
+##### What replaced it
+
+**A visual type picker.** Eight cards with a shape each — `◉ ▾ ☑ ◐ ▣ T ¶ #` —
+because the names alone do not say that a text field and a text area differ only
+in height. Choosing the type first is also what decides which fields below are
+even relevant.
+
+**The key derives from the label.** `"Delivery notes"` → `delivery_notes`,
+`"Size (cm)"` → `size_cm`. ⚠️ **Derived, not enforced**: the field stays editable
+and stops following once touched, because a key is permanent after publish and a
+merchant renaming *"Colour"* to *"Shade"* must not silently change what the
+storefront resolves against.
+
+**A live preview.** *"Your customer sees"* — the actual control, drawn from the
+fields being filled in. A merchant choosing between radio and dropdown is
+choosing between two pictures they could not see.
+
+⚠️ **A likeness, not the storefront.** The real markup comes from the plugin's
+templates and carries pricing, swatch colours and the counter's live count. This
+answers *"is this the control I meant?"*, which is the question being asked at
+that moment — and it says so in the component's own docblock so nobody mistakes
+it for a rendering test.
+
+**Length rules moved into their own bordered group**, shown only for the types
+that have them, with min and max side by side rather than stacked in a column
+with a third field.
+
+##### Verified
+
+| | |
+|---|---|
+| Frontend | **382 tests** (12 new), `tsc` + eslint clean |
+| Production build | passes |
+| Mutants killed | 3 on `keyFromLabel` — including one caught by the *lower-total* signal |
+
+##### ✅ M13.3's 60-second criterion — discharged (2026-09-08)
+
+Was `[~]` on one ~15s estimate. **Runs 2 and 3 timed at 12.50s and 11.16s**, both
+on a clean connection, both *faster* than the merchant's own estimate — so the
+instinct was right and slightly pessimistic.
+
+⚠️ Both timed runs stopped on the dashboard's store list rather than the plugin's
+settings screen, which adds a tab switch and a page load the real flow does not
+need. **Conservative, not optimistic**, so the numbers stand as measured rather
+than being re-run for a better figure.
+
+**The 21ms machine half is 0.2% of a ~12s span.** This was always a UX
+measurement, and the tripwire test that guarded it is removed as part of
+recording the runs — never to make a suite green.
 
 ### M14.1 — Tier 1 (MVP)
 
@@ -4548,6 +15116,58 @@ Plus the `rich_text` presentational item — **sanitizer-gated and plan-gated** 
 covering single and multi-file in one build), `swatch_grid`, `dropdown_grouped`,
 `dependent_select`.
 
+#### ✏️ Three of these four are not types (2026-09-03)
+
+Traced each against what already exists rather than building from the list:
+
+| listed | what it is |
+|---|---|
+| `swatch_grid` | ✅ **shipped** as `image_swatch` + M14.4b's `columns` and `swatch_size` |
+| `dependent_select` | **Phase 17's rule engine** — `IF colour equals red THEN show size` is exactly M17.1's model |
+| `dropdown_grouped` | `<optgroup>`: a rendering detail of `dropdown`, not a different question asked of a customer |
+| `file_input` | **Phase 15**, as this milestone already says |
+
+Registering types for the first three would duplicate machinery that exists or
+is scheduled, and give merchants two ways to describe one thing — the opposite of
+what the three-axis model is for.
+
+⚠️ **`dropdown_grouped` is the one genuine gap**, and it is small: a `group`
+field on `option_values` and an `<optgroup>` in one template. Left undone rather
+than half-done, because value-grouping touches the value editor and belongs with
+a stage that can finish it.
+
+**M14.3 status:** ✅ **complete.** `swatch_grid` shipped as configuration;
+`dependent_select` and `file_input` reassigned to the phases that own them;
+`dropdown_grouped` shipped as value grouping (Stage 3q) — **not as a type**.
+
+#### ✅ Value grouping, the last M14.3 entry (2026-09-07)
+
+`option_values.groupLabel` (`varchar(200)`, nullable, migration
+`OptionValueGroup1788782786826`), through both serialization paths as
+`group_label` — **absent when ungrouped**, so an ordinary dropdown's document is
+byte-identical to what it was before grouping existed. The dropdown template
+opens and closes `<optgroup>` around contiguous runs.
+
+Three decisions worth keeping:
+
+- **A label, not a foreign key.** Groups have no ordering, no rules and no
+  pricing, so a `value_groups` table would add a join and a lifecycle to carry
+  one string.
+- **Contiguous runs, not a re-sort.** Two values sharing a label with a third
+  between them render as two groups with the same heading. The merchant's
+  `sort_order` is authoritative, and `<optgroup>` cannot nest or resume.
+- **Blank means ungrouped, not a nameless group.** An empty `<optgroup label="">`
+  renders as an unlabelled indent, which reads as a fault rather than a choice.
+
+Offered for `dropdown` alone (`takesGroupLabel`), following `swatchFieldsFor` —
+a field that silently does nothing is the colour-swatch defect in reverse.
+
+**Proven end to end:** authored through the live API, the 200-char cap refused at
+the boundary, published, and the **real published document** fed to the plugin
+renderer — two values under one heading, one under another, one outside both,
+pricing attributes intact. Migration verified in **both** directions. Seven
+mutants killed (four on the template, three on the dashboard rule).
+
 ### M14.4 — Per-type validation
 
 The complete rule catalogue. Every rule is enforced **twice** — client-side for UX,
@@ -4557,7 +15177,7 @@ server-side for truth — and the server is the only one that decides
 | Applies to | Rules |
 |---|---|
 | **All types** | `required`, `enabled`, rule-conditional requirement ([M17.4](#m174--server-side-authority)) |
-| `text`, `textarea` | `min_length`, `max_length`, `pattern` (regex), `allowed_charset`, `forbidden_words`, `trim_whitespace`, line-count limit for textarea |
+| `text`, `textarea` | `min_length`, `max_length`, `pattern` (regex), `allowed_charset`, `forbidden_words`, `trim_whitespace`, line-count limit for textarea — **`min_length` and `max_length` count with [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)'s `measure()`, and `trim_whitespace` runs *before* it** (Stage 2 Finding 5: a merchant setting that changes the count after measuring makes the pipeline non-deterministic even when the function is not) |
 | `number` | `min`, `max`, `step`, `integer_only`, `allow_negative`, `decimal_places` |
 | `select`, `radio` | value must exist in the option's own value set and be enabled |
 | `checkbox`, `multi-checkbox` | `min_selections`, `max_selections`, mutually-exclusive value groups |
@@ -4580,6 +15200,19 @@ be 20 characters or fewer (you entered 24)."*
 message naming the field and the constraint; a pathological regex is rejected at publish.
 
 ### M14.4b — Per-option display and guidance configuration
+
+⚠️ **The character counter here consumes
+[M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)'s
+`measure(text)` and defines nothing.** Recorded 2026-08-31 from Phase 11's Stage
+0. That function also backs `per_char` pricing and `min_length` / `max_length`
+validation, and the whole reason it exists is that in `optionia-app` the counter
+and the price were implemented separately: `"AB CD"` is charged as five
+characters while the counter beside the field shows four — live there today.
+
+It survived because it is not a pricing bug. Display and server agree with each
+other; what disagrees is the number the customer was shown and the number they
+were charged for, which makes it a **credibility** bug, on engraving, one of the
+best-fit segments. A counter written independently here would recreate it exactly.
 
 Every option carries a `display` config the merchant controls. These are the affordances
 that decide whether a customer **completes** the form — the difference between a
@@ -4631,14 +15264,185 @@ type counts must be counted from `docs/OPTION-TYPES.md`, not estimated.
 **Deliverable:** `docs/OPTION-TYPES.md` — the definitive supported list, with each entry's
 three axes, validation rules, pricing support, and cart/order representation.
 
+#### ✅ Parity check re-run (2026-09-08)
+
+Counted from `docs/OPTION-TYPES.md` as this milestone requires, not estimated,
+and cross-checked against the code each row describes:
+
+| | |
+|---|---|
+| **Optionia option types** | **15** |
+| Competitor's distinct types | 13 |
+| **Presentational items** | **3 shipped** — `heading`, `paragraph`, `divider` |
+| Item kinds declared but gated | 1 — `rich_text`, see below |
+
+**Parity on option types is exceeded.** The 15 are `radio`, `dropdown`,
+`checkbox`, `color_swatch`, `image_swatch`, `text_field`, `textarea`,
+`number_field`, `range`, `quantity`, `date_picker`, `time_picker`,
+`datetime_picker`, `hidden`, `file_input`.
+
+🔴 **This read 14 until 2026-09-10, omitting `file_input`.** It was counted on
+2026-09-08, *between* Phase 15 building the upload subsystem and the type being
+recognised as an option type like any other — so the count was taken at the one
+moment it was wrong. Verified this time in four places rather than one: the
+`Presentation` enum (15 members), the registry (15 entries), the plugin's
+templates (15 files), and `type-registry.spec.ts`, which now asserts the
+unregistered list is **empty**. The last is the one that matters — it is a test,
+so this number cannot silently drift again.
+
+✏️ **This table said "4 declared, half-built — no route creates one" until
+2026-09-08**, and the paragraph beneath it warned that a claim of *"14 types and
+presentational items"* would be inaccurate. Both were true when written (W2) and
+both became false with Stage 3o's routes, templates and dashboard editor. The
+same staleness was corrected in `docs/OPTION-TYPES.md` at the time; **this copy
+was missed**, which is the more expensive of the two — M14.5 makes this the
+milestone a public claim is checked against, so a stale count here is the exact
+failure the rule exists to prevent.
+
+⚠️ **A public claim of "15 option types and 3 presentational items" is now
+accurate** — it read 14 when written on 2026-09-08, and `file_input` makes 15. The full path is proven end to end: authored through the API, stored,
+published as `items` on every group in `snake_case`, and rendered by the plugin —
+interleaved with options on one `sort_order` scale, because a heading's only job
+is to sit above the right control.
+
+⚠️ **`rich_text` is declared and deliberately not shipped**, so it is counted
+separately rather than folded into the total. M5.4c gates it behind a strict
+allowlist sanitizer at publish *and* at render: it is merchant-authored markup on
+a public storefront. The enum and column carry it so storage is ready;
+`AUTHORABLE_ITEM_KINDS` refuses it and the plugin has no template, so a document
+from a future build renders nothing rather than raw markup. Both halves are pinned
+by tests, and `bin/check-option-type-parity.sh` now guards item kinds in both
+directions. **Counting it as shipped would be exactly the estimate-instead-of-count
+this milestone forbids.**
+
+**Status:** the type count is reconciled with the shipped list. The remaining
+half of this criterion — reconciling it with the *pricing page* — needs
+`optionia-websites`, a repository this project does not contain.
+
 ### Phase 14 exit criteria
 
 ```text
-[ ] Every shipped type has all seven artifacts
-[ ] Every type: rendered, validated, priced, cart-persisted, order-persisted
-[ ] Adversarial tests extended to every new type
-[ ] Type count reconciled with the pricing page
+[x] Every shipped type has all seven artifacts
+[x] Every type: rendered, validated, priced, cart-persisted, order-persisted
+[x] Adversarial tests extended to every new type
+[~] Type count reconciled with the pricing page   <- blocked: separate repo
 ```
+
+#### Re-audited at 14 types (2026-09-03), recounted to 15 (2026-09-10)
+
+Each criterion re-checked against what is built, not against the stage
+narratives.
+
+**1 — seven artifacts.** Five independent sources agree at **15**: the
+`Presentation` enum, the registry, the plugin's templates, the dashboard's
+authorable list, and `docs/OPTION-TYPES.md`. Counted, not asserted — and this
+time cross-checked as **sets**, not just totals: the enum and the registry hold
+identical members, and the fifteen template filenames match the registry's
+presentations exactly.
+
+✏️ **Recounted 2026-09-10; it said 14.** `file_input` was omitted, because the
+count was taken on 2026-09-08 — after Phase 15 built the upload subsystem but
+before its type was counted as an option type like any other. Two totals that
+agree can still both be wrong in the same way, which is why the check is now
+set-equality: a matching *count* would not have caught a template named for a
+presentation the registry does not have.
+
+**2 — rendered, validated, priced, cart- and order-persisted.** Verified live on
+the merchant's own storefront: **14 customer-facing controls render** on a real
+product page, each bound, priced and posting a distinct field name; the
+fifteenth is `hidden`, which renders no control by design.
+
+⚠️ The resolver now reads `$option['type']` in three places — `is_hidden()`,
+`date_format()` and `is_multiline()`. Each is a **presentation** decision the
+axes genuinely cannot express (who supplies the value; what precision a value
+has; whether a newline survives), and none of them branches the cart or order
+path. That path stays type-agnostic, which is why one proof still covers all
+fifteen.
+
+**3 — adversarial tests.** ✏️ The suite attacks the **shared path** — payload
+forgery, tenant isolation, injection, floods, frozen-payload tampering — which is
+the right shape for types that share one resolution path.
+
+But `hidden` is the exception, and it was missing: it is the only type whose
+value a customer must *not* be able to set, and its forgery case now sits here
+beside the other forgeries rather than only in the resolver's own suite. **76
+adversarial tests.**
+
+**4 — pricing page.** `[~]` and honestly so. The type count *is* reconciled with
+the shipped list (M14.5, 14 versus a competitor's 13). The other half needs
+`optionia-websites`, a repository this project does not contain.
+
+#### Exit audit (2026-09-03)
+
+Audited each criterion against what is built rather than against the stage
+narratives, because a stage that reports itself complete is not evidence.
+
+##### ✅ Seven artifacts, six types
+
+`radio`, `dropdown`, `checkbox`, `color_swatch`, `image_swatch`, `text_field` —
+each has a registry entry, a Zod schema, a plugin template, validation, defined
+pricing behaviour, fixtures, builder UI, and a row in `docs/OPTION-TYPES.md`.
+Verified by enumeration, not by reading the registry.
+
+##### ✅ Rendered, validated, priced, cart- and order-persisted
+
+Every type has renderer tests. **Cart and order persistence needed no per-type
+proof**, and that is a property rather than a gap: `SelectionResolver` never
+reads `presentation` — verified, its only two `['type']` reads are
+`price_config['type']`, a *pricing* type. One proof covers all six because the
+path genuinely cannot differ.
+
+##### 🔴 Adversarial tests were NOT extended — and text had broken the premise
+
+`AdversarialAddToCartTest` had 17 attacks and drove **`radio` only**. That looked
+defensible while every type resolved through the same `value_key` lookup.
+
+**`text_field` invalidated it.** Every attack in that suite asserts
+`ERROR_UNKNOWN_VALUE` — the lookup refusing anything a merchant did not author.
+A text option has no value set, so *every one of those payloads is accepted*.
+The defence is sanitising, not refusal, and nothing tested that.
+
+Measured what actually survives: nulls and control characters stripped, markup
+removed contents-and-all, and — correctly — `O'Brien OR 1=1` stored **unchanged**,
+because an apostrophe is a character a customer may want engraved and the defence
+against injection is parameterised queries, not a blocklist that refuses Irish
+surnames.
+
+##### 🔴 And it found a real one: unbounded engraving
+
+**A one-megabyte engraving was accepted and stored**, into cart session storage
+and then order meta, because `max_length` is optional and nothing else capped it.
+It resolved in 5ms — a storage attack, not a CPU one — and it lands on a merchant
+who simply never opened the field.
+
+`ABSOLUTE_MAX_LENGTH = 5000` is now the backstop for *absent* configuration,
+equal to the ceiling the API's schema already puts on `maxLength`, so no
+configuration a merchant can express is affected. A document claiming a larger
+limit is not trusted: the resolver takes the lower of the two. Two mutants
+confirm both halves.
+
+##### 🟡 `docs/OPTION-TYPES.md` was stale, and M14.5 makes it authoritative
+
+It said *"five"* throughout, *"Both current types"*, and still listed
+`text_field` under **not yet supported** — blocked on *"a second resolution
+path"*, work completed in Stages 3a–3c.
+
+That matters more than a normal doc lag: M14.5 requires **any public claim about
+type counts be counted from this file**. Now current, including a correction of
+its own prediction — text was *cheaper* than forecast structurally (cart, pricing
+and order needed no change; the resolver needed one branch) and *more expensive*
+in a dimension the forecast missed entirely (it is the first value a **customer**
+supplies). The lesson recorded: a type's cost is not visible from the registry,
+it is visible from **who supplies the value**.
+
+##### `[~]` Type count vs the pricing page — blocked, not skipped
+
+There is no pricing page in these three repositories. The marketing site is
+`optionia-websites`, a **separate repo** this project explicitly does not touch.
+`docs/OPTION-TYPES.md` is now accurate and is the artifact that criterion will be
+reconciled *against* when that site is built. Marked `[~]` rather than `[x]`
+because ticking a criterion whose other half does not exist is how a checklist
+stops meaning anything.
 
 ---
 
@@ -4658,12 +15462,151 @@ three axes, validation rules, pricing support, and cart/order representation.
 | Merchant's WordPress uploads | No cost to you; no cloud dependency | Fills their disk; no scanning; not a differentiator |
 | Hybrid: WP first, mirrored to cloud | Resilient | Most complex |
 
-**Recommendation: Optionia cloud storage**, with direct-to-storage presigned uploads so
-the file never transits `optioniaWooCommerceBackend`. It is a genuine [D5](#d3--positioning-against-one-time-purchase-competitors)
-differentiator, and it keeps print-ready artwork retrievable even if the merchant's site
-is later rebuilt.
+~~**Recommendation: Optionia cloud storage**, with direct-to-storage presigned uploads so
+the file never transits `optioniaWooCommerceBackend`.~~
 
-**Acceptance:** decision recorded in `docs/DECISIONS.md` with cost modelling per plan.
+✏️ **Decided as HYBRID, WP-first — see ADR-040** (`optioniaWooCommerceBackend/docs/DECISIONS.md`,
+2026-09-08).
+
+This milestone's own recommendation was **rejected** after analysis, for a reason the
+milestone does not mention: cloud-first uploads break [AC3](#ac3--the-product-page-never-blocks-on-optionia)'s
+promise that *"if Optionia Cloud is entirely offline, merchant storefronts keep working"* —
+on the one option type where **the file is the order**. AC3's literal words say "page load",
+so the letter survives; the promise, which D5 makes the reason merchants accept a cloud
+dependency at all, does not.
+
+**Decided:** the file is written to the merchant's WordPress server first and mirrored to
+S3-compatible object storage afterwards. MySQL stores a pointer and metadata, never bytes.
+The cloud mirror still delivers what the original recommendation wanted — artwork
+retrievable after a site rebuild, plus M15.6's metering — without putting an outage in the
+purchase path.
+
+⚠️ **The cost is accepted, not overlooked:** this builds two paths rather than one, and the
+table above calls hybrid *"most complex"*. It is chosen because the alternative retracts a
+promise already made.
+
+ADR-040 also settles four things this phase would otherwise discover late: single-file
+before multi-file (the resolver's `ERROR_NOT_SCALAR` guard at line 290 precedes every type
+branch), where token verification may run (never in the pure `Engine/`, once at add-to-cart
+rather than five times), that a file token makes two uploads two cart lines, and that
+order-again must fail loudly on a purged file rather than silently drop it.
+
+**Acceptance:** ✅ decision recorded as ADR-040. Cost modelling per plan is recorded there
+against the seeded `file_storage_mb` limits — free 100 MB, pro 5 000 MB, business 25 000 MB.
+
+#### ✅ Stage 1 — the storefront upload path (2026-09-08)
+
+Built plugin-only. **ADR-040's WP-first decision removed the credential problem
+entirely**: the browser uploads to WordPress, not to storage, so no third auth
+class is needed — that was the largest finding of the stage.
+
+| Built | |
+|---|---|
+| `Upload\UploadLimits` | reads the host ceiling; the merchant's limit never exceeds it |
+| `Upload\UploadStore` | protected directory, two independent secrets |
+| `Upload\UploadRepository` | tokens, session binding, retention |
+| `Upload\UploadQuota` | the real abuse bound, per WooCommerce session |
+| `Upload\UploadEndpoint` | `POST /optionia/v1/upload`, live and refusing |
+
+##### 🔴 Four things measurement overturned
+
+**1. There is no add-to-cart nonce.** The first plan put the file on the
+add-to-cart POST, reasoning WooCommerce's nonce would protect it. The rendered
+form carries only `add-to-cart` and `quantity`, and WooCommerce's own
+`add_to_cart_action()` reads them under `phpcs:ignore …NonceVerification` —
+nonce-free by design so pages stay cacheable. Riding that request bought **no
+security** while costing a progress bar. The recommendation was withdrawn.
+
+**2. A guest nonce is the same value for every visitor.** For a logged-out
+shopper `wp_create_nonce()` reduces to *action + tick* — two calls returned the
+identical string, valid **24 hours**. So the feared failure (a cached page
+serving a stale nonce) cannot happen, and the real problem is the opposite: the
+nonce bounds nothing. CSRF was the wrong threat model; **resource abuse** is the
+real one, and `UploadQuota` is what answers it. A `permission_callback` that
+looks like a control and is not is worse than none.
+
+**3. `wp-content/uploads/` is world-readable — proven.** A probe file fetched
+over HTTPS answered **200**, with no `.htaccess` and no `index.php` present.
+
+**4. The guards do not work on every host.** Built them, then measured: the probe
+inside the guarded directory *still* answered 200, because Studio serves with
+PHP's built-in server, which reads neither `.htaccess` nor `web.config`.
+`index.php` did work — the listing came back empty. **So unguessability is the
+real defence**, and the path carries *two independent* secrets: the directory
+(from `wp_salt()`) and a random filename per file. One shared secret would mean
+a single leaked path exposes every file forever.
+
+##### 🔴 A bug found only by driving the live database
+
+`optionia_uploads` was added to `Activator::create_tables()` — and **the table was
+never created**. `Migrator::maybe_upgrade()` returns early when `OPTION_VERSION`
+matches, and the plugin version had already been bumped to `0.2.0` for an
+unrelated asset change. The feature was fully wired, fully unit-tested, and
+broken on every site already running that version.
+
+Two independent counters, and a release can move either. `DB_VERSION` is now `2`
+and the schema is checked on the happy path. ⚠️ **A unit test asserted the bug** —
+*"a same-version request does no work at all"* — and was corrected rather than
+worked around; the guarantee it now keeps is that nothing is *rebuilt* when both
+versions are current.
+
+##### 🔴🔴 Remote code execution, found by re-auditing what I had just built
+
+**A `.php` upload executed.** Written into the guarded directory and fetched over
+HTTPS, it answered **200** with `EXECUTED-8.4.24` in the body. `unique_filename()`
+preserved whatever extension it was handed, and the `.htaccess` guard does not
+work on this server — so the whole attack was: POST `shell.php` with a valid
+nonce, and own the merchant's site.
+
+⚠️ **The cause was a scoping mistake, not an oversight in the code.** All content
+validation was deferred to M15.3 — magic bytes, SVG, malware. But **executability
+is storage safety, not content validation**: no magic-byte check helps if the
+*name* makes the server run the bytes. It belonged in Stage 1 and was missed
+because it was filed under the wrong milestone.
+
+Fixed at the storage layer, where it cannot be bypassed: 22 executable extensions
+are stripped and the file is stored with **no** extension rather than a plausible
+substitute. Verified closed — the same fetch now returns the PHP source as plain
+text instead of running it.
+
+✏️ **A denylist, deliberately, and this is the opposite of the usual advice.** An
+allowlist here would silently strip `.ai`, `.eps` and `.indd` — the formats this
+entire phase exists for — because nobody listed them. M15.3 owns the merchant's
+accepted-types allowlist; this list answers a narrower question: *what must a web
+server never be handed?*
+
+##### 🟡 Two more from the same audit
+
+**Field lengths depended on the host's MySQL mode.** With `STRICT_TRANS_TABLES`
+on, an over-length filename *fails* the insert — leaving the file on disk as an
+orphan. With strict mode off, common on shared hosting, MySQL truncates silently
+and a cut `option_id` points at a different option. Measured: a 5,000-character
+name was refused on this host, by the database's accident rather than by
+decision. Now truncated explicitly with `mb_substr`, so every host behaves alike.
+
+**A false alarm, recorded so nobody repeats it.** An uppercased token matched its
+lowercase row, which looked like a leak. It is not: `ADR ChallengeBinaryCollation`
+already established that `_ci` collation is harmless for **hex** columns, because
+hex has one spelling per value. Both `token` (`bin2hex`) and `session_key`
+(WooCommerce's `wc_rand_hash`, also `bin2hex`) are hex. ✏️ My follow-up claim that
+two guests could collide was also wrong — I had assumed
+`wp_generate_password`, and reading WooCommerce's source showed otherwise.
+
+##### Gate work
+
+`check-uninstall.sh` gained a **files** check — it covered options, cron and
+tables, and uploads are the first thing to write real bytes to a merchant's disk.
+Proven to fail when file cleanup is removed. `check-secrets.sh` was narrowed for
+files that *derive* from a salt without comparing anything, and re-proven to
+still catch a real verifier losing `hash_equals`.
+
+**Nine mutants killed**, including one restoring each original bug. Verified live:
+the route is registered, refuses without a nonce (401) and with a bad one (403),
+token lookup refuses another session, promotion clears expiry, and claimed files
+stop counting against quota.
+
+Remaining for M15.3: content validation — magic bytes, SVG rejection, EXIF
+stripping, malware scanning — before a file option can be authored.
 
 ### M15.2 — Upload flow
 
@@ -4677,11 +15620,688 @@ Allowlisted MIME types **verified by content, not extension**; per-plan size lim
 dimension limits; count limits; magic-byte checks; malware scanning; **SVG rejected by
 default** (it is an XSS vector); EXIF stripped from images; no filename-derived paths.
 
+✏️ **Decided as ADR-041** (`optioniaWooCommerceBackend/docs/DECISIONS.md`,
+2026-09-08). Eight requirements in one sentence; measured against a real host, three
+are already satisfied, two are **unbuildable as written**, and one contains a
+conflict the sentence cannot see.
+
+| Requirement | Outcome |
+|---|---|
+| Content-verified MIME | ✅ free — `wp_check_filetype_and_ext()` genuinely verifies; a PHP script named `.jpg` is rejected, a PNG named `.jpg` is corrected |
+| SVG rejected | ✅ free — WordPress refuses it by default |
+| No filename-derived paths | ✅ done in Stage 1 |
+| `.ai` / `.eps` | 🔴 **also rejected by WordPress** — the two formats this phase exists for. Accepted via a **scoped** `$mimes` map, never a global `upload_mimes` filter |
+| Magic-byte checks | ⚠️ runs on `fileinfo`; **absent means WordPress trusts the extension**, so a file option **refuses to work** on such a host rather than claiming a check it is not performing |
+| EXIF stripped | ⚠️ "keep Orientation" proved impossible — GD re-encoding drops **all** EXIF. The tag is **consumed** (rotation applied) rather than preserved |
+| Image dimensions | 🔴 a 48 MP photo is **183 MB** decoded against a **128 MB** limit — an *ordinary* camera, not a crafted bomb. Read from the header **before** any decode; ceiling configurable per host |
+| Malware scanning | 🔴 **unbuildable on the merchant's host** — ClamAV absent, `exec()` commonly disabled. Moves **cloud-side** and gates the mirror |
+
+⚠️ **ADR-041 also decides something M15.3 never mentions:** a PDF can carry
+JavaScript and embedded files, and it is the format this phase most needs. Content
+verification says *"this is a PDF"*, never *"this PDF is safe"*. Phase 15 does not
+sanitise PDFs, and says so, so nobody later reads "content-verified" as
+"sanitised".
+
+⚠️ Every measurement came from **one** host. The decisions are written about
+*ranges* of hosts because Stage 1 taught that lesson expensively — its `.htaccess`
+guards did nothing on this server, and the RCE appeared only when a file was
+actually fetched.
+
+#### ✅ Stage 3b — `file_input` becomes a real type (2026-09-08)
+
+The seven-artifact path Phase 14 established, plus one thing no previous type
+needed: **the storefront's first network call.**
+
+| Built | |
+|---|---|
+| Registry | `file_input` = `FILE` / `NONE`, `fileValidationSchema` |
+| Wire | `accepted_types`, `max_size_mb`, `max_files`, `max_megapixels` — 27 document keys, all `snake_case` |
+| Template | `templates/options/file_input.php` |
+| Runtime | `bindUploads()` — XHR, progress, abort, submit coordination |
+| Dashboard | authorable, with a preview |
+| Environment | `fileinfo` reported per ADR-041 |
+
+##### ✅ Every Phase-7 tripwire has now fired, and the last one changed shape
+
+Five guards fired on registration, exactly as written. Four were the moving
+target — *"swap in whichever presentation is still unregistered"* — and
+`FILE_INPUT` was the last candidate. **All 15 presentations are now registered**,
+so there is nothing left to swap.
+
+Each was rewritten to assert something **stronger** than the name it was
+tracking:
+
+- `unregistered` now asserts `[]` — so adding a member to `Presentation` without
+  registering it fails immediately, which the shrinking list never guaranteed.
+- `findType`/`isRegistered` now use a **non-enum string**, testing what actually
+  protects the route: unrecognised input answers null rather than a 500. That
+  cannot go stale.
+- The validator's *"names the supported types"* likewise.
+
+Deleting them would have been the easy read of "the tripwire fired"; the
+assertions they leave behind are better than the ones they replaced.
+
+##### 🔴 The add-to-cart race, and why the counter exists
+
+A customer clicking *Add to cart* during a 30 MB upload has **no token yet**, so
+the option posts empty, the resolver reports a missing required value, and they
+see a validation error for a file they *did* choose.
+
+`inFlight` is page-wide (one form can hold several file options) and the submit
+guard binds in the **capture** phase — a `preventDefault` after the cart request
+has started stops nothing. A dropped connection decrements it too: `onload` never
+fires for a network error, so without `onerror` the form would stay blocked
+forever, turning one flaky upload into an unusable checkout.
+
+##### ⚠️ `XMLHttpRequest`, not `fetch`
+
+`fetch` has no `upload.onprogress`. A 30 MB artwork file with no progress bar is
+indistinguishable from a frozen page — which is the entire reason ADR-040 chose
+an asynchronous upload over riding the add-to-cart POST.
+
+##### ⚠️ The file input carries no `name`, and `required` sits on the token
+
+A named file input would ride the add-to-cart POST as `$_FILES` — the design
+ADR-040 rejected after measuring that WooCommerce's form carries **no nonce**.
+`required` lives on the hidden token field because the condition that matters is
+*"did an upload complete"*, not *"is a file chosen"*: a chosen file whose upload
+failed leaves the token empty and must be stopped.
+
+##### Test-harness work
+
+`loadStorefront` gained a **manual** XHR double — `uploads.respond()` is called by
+the test when it chooses, so a test can assert what the page looks like *while an
+upload is in flight*. An auto-responding stub can never show that state, and it is
+exactly where the race lives.
+
+**19 upload tests**, three mutants killed: restoring the race, not clearing a
+replaced token, and leaving the counter stuck on a dropped connection.
+
+**Proven live**, not asserted: a file option authored through the API with
+`acceptedTypes`, `maxSizeMb`, `maxFiles` and `maxMegapixels`; four invalid rule
+shapes refused (`maxFiles: 5`, `".pdf"` with a dot, `maxSizeMb: 0`, an unknown
+key); published; and the **real published document** rendered by the plugin with
+`accept=".pdf,.png,.ai"`, `data-optionia-max-mb="20"`, `required` on the token and
+no `name` on the file input.
+
+Remaining for M15.3: the server-side content checks themselves — magic bytes via
+`wp_check_filetype_and_ext()`, the scoped `.ai`/`.eps` allowlist, dimension limits
+before decode, and EXIF consumption.
+
+#### ✅ Stage 3c — the merchant's rules bind on the server (2026-09-08)
+
+🔴 **They were enforced nowhere.** `accepted_types` reached the page as an
+`accept` attribute and `max_size_mb` as a data attribute — both client-side only.
+`accept` is a hint a browser may ignore; a data attribute is a string an attacker
+edits, or skips entirely by posting straight to `/optionia/v1/upload`.
+
+That is AC4 — *the browser is an untrusted input device* — on a surface that did
+not yet honour it. A merchant who restricted an artwork field to PDF had
+configured something no code checked.
+
+`Upload\UploadRules` reads the option from the **same cached document the
+renderer draws from**, so the `accept` a customer sees and the rule the server
+applies cannot disagree. The endpoint now looks the option up before touching a
+byte.
+
+**Measured before and after**, posting directly with no browser:
+
+| Attempt | Before | After |
+|---|---|---|
+| `.exe` to a PDF-only field | stored | **refused** |
+| `.png` not in `accepted_types` | stored | **refused** |
+| 5 MB against a 1 MB rule | stored | **refused** |
+| File aimed at a **radio** option | stored | **refused** |
+| Unknown / absent `option_id` | stored | **refused** |
+| Legitimate 500 KB PDF | stored | **accepted** |
+
+⚠️ **A non-file option is refused, not treated as unrestricted.** A radio cannot
+hold a file, so storing bytes against one creates an upload nothing will ever
+read — and it is exactly the shape a probe takes when hunting for an option that
+skips the rules.
+
+##### 🔴 Two gaps the work exposed
+
+**The container wiring test never covered the upload chain.** Its service list is
+hand-maintained, and `UploadEndpoint` now takes five collaborators — the place a
+binding falls behind. Added and **proven to fail**: removing `UploadRules` from
+the binding errors the test rather than a customer's request.
+
+**No test could reach the endpoint's success path.** `UploadQuota` needs a
+WooCommerce session, the harness had no `WC()` stub, so every store attempt
+refused with `no_session`. The refusal was right; the coverage was not — *a guard
+that refuses everything passes the same tests as a guard that works*. Stubbed,
+along with `get_param`/`get_file_params`, which `WP_REST_Request` lacked because
+no previous endpoint read parameters.
+
+✏️ **A false alarm worth recording.** A synthetic "legitimate" upload kept
+refusing, which read as over-blocking. The cause was `is_uploaded_file()`
+correctly rejecting a file PHP never received as an upload — the guard against a
+crafted `tmp_name` pointing at a system file. The rules layer, tested directly,
+accepts exactly what it should.
+
+**Three mutants killed:** dropping the extension check, letting a non-file option
+resolve, and reverting the size ceiling to zero.
+
+Remaining for M15.3: content verification itself — magic bytes, the merged
+`.ai`/`.eps` allowlist, dimensions before decode, EXIF consumption.
+
+#### ✅ Stage 3d — the bytes must match the name (2026-09-08)
+
+`Upload\UploadContent`, checked **before** anything is stored, so a file that
+fails never reaches the merchant's disk.
+
+**Verified against real WordPress over HTTP, 12/12 agreeing with the stubbed
+tests:** real PDF/PNG/JPEG accepted; `.ai` accepted; ZIP-as-PDF, padded-PDF,
+PHP-as-JPG, HTML-as-PDF, PNG-as-JPG, SVG, EPS and extension-less all refused.
+
+##### 🔴 The gap WordPress leaves
+
+`wp_check_filetype_and_ext()` genuinely verifies by content — a PHP script named
+`shell.jpg` is rejected, a PNG named `photo.jpg` is *corrected*. **It stops at
+types `finfo` recognises.** Measured: `PK\x03\x04…` — a ZIP, and the container
+behind `.docx` and `.xlsx` — named `a.pdf` is **accepted as a PDF**, because
+`finfo` answers `application/octet-stream` and the extension is then trusted.
+
+PDF is the format this phase most needs and the one WordPress verifies least, so
+its magic bytes are checked here explicitly, **at offset zero**. Readers tolerate
+leading slack before `%PDF-`; tolerating it would accept a file with arbitrary
+bytes prepended, which is how a polyglot is built.
+
+##### ⚠️ `proper_filename` is a refusal, not a rename
+
+WordPress sets it when content is a *different allowed type* from the extension,
+and on a media-library upload it renames and proceeds. Right for a merchant
+uploading their own image; wrong for a customer's artwork — a merchant accepting
+only PDF must not silently receive a PNG because WordPress was willing to rename
+it.
+
+##### 🔴 `.eps` is dropped, and the reason is in the platform
+
+`wp_check_filetype_and_ext()` ends by testing the detected type against
+`get_allowed_mime_types()` **directly**, ignoring the `$mimes` argument it was
+handed (`wp-includes/functions.php:3324`). So a scoped map can add an *extension*
+for an already-allowed type and nothing more:
+
+| | detected type | already allowed? | scoped map works? |
+|---|---|---|---|
+| `.ai` | `application/pdf` | yes | ✅ |
+| `.eps` | `application/postscript` | no | ❌ impossible |
+
+Verified: `.eps` returns `false` for every MIME spelling tried, and works only
+with a global `upload_mimes` filter — which ADR-041 rejects for widening the
+merchant's whole site. **A real loss, accepted rather than smoothed over**, and
+recorded with the revisit condition: a merchant-opt-in setting, not a silent
+default.
+
+##### 🔴 A gate I broke, and the two attempts it took to fix
+
+`check-secrets.sh` flagged `UploadContent` — its heuristic treats `signature` as
+a secret name, and my magic-byte variable was called `$signature`. **Renamed
+rather than exempted:** a `hash_equals()` added to satisfy a gate teaches the next
+reader that constant-time comparison is a formality.
+
+It still flagged the file, because *discovery* greps the **raw** source and my
+comment explaining why `hash_equals()` was unnecessary enrolled it — the gate
+reading documentation as code, the failure its own header warns about, arriving
+from the other direction.
+
+✏️ **The first fix opened a hole.** It counted comparisons against
+constant-assignments and exempted the file wholesale; measured, adding
+`$head === $secret` to that same file then **passed**. Counting is the wrong
+shape — one exempt comparison cannot vouch for another.
+
+✏️ **The second fix had a shell-escaping bug** (`\\$` where the file elsewhere
+uses `\\\$`), so the guard regex was silently shell-expanded and caught
+nothing. Found only by re-running the fault tests rather than trusting a green
+gate.
+
+Now exempts on **discovery**: a file picked up solely by a `hash_equals` *mention*
+that is not a call, which signs nothing and compares no secret-shaped name.
+**Proven against three faults** — a real verifier losing `hash_equals`, and two
+different secret-shaped comparisons inside the exempt file — all caught.
+
+**Five mutants killed:** removing the magic check, treating `proper_filename` as a
+rename, replacing the allowlist instead of merging, skipping the content check,
+and letting a `fileinfo`-less host proceed.
+
+Remaining for M15.3: dimensions before decode, and EXIF consumption (3e).
+
+#### ✅ Stage 3g — reconciling disk with database (2026-09-08)
+
+✏️ **3g was planned as "purge files stored before validation existed", and
+measurement showed there is nothing to purge.**
+
+Every check — `UploadRules`, `UploadContent`, `UploadImage` — runs *before* the
+byte offset where `UploadStore::directory()` is called, verified by position in
+the endpoint source. And a file could only ever be stored against an authorable
+`file_input` option, which arrived in the same unreleased `0.2.0` as the checks.
+**The vulnerable window never shipped**, and the site carries 0 rows and 0 files.
+
+🔴 **The durable problem is the opposite one: files with no row.** Orphan cleanup
+(M15.4) reads the *table*, so a file the table does not know about is invisible to
+it forever. Four ways that happens — a crash between `move_uploaded_file()` and
+the insert; an uninstall that could not delete a file, then a reinstall; a
+merchant restoring a database backup older than their uploads; any future path
+that writes before it records.
+
+`Upload\UploadSweeper` reconciles the two, and **every rule in it is a refusal to
+act on a guess**:
+
+| Refuses to touch | Why |
+|---|---|
+| a name the table knows | it is a customer's live upload |
+| a file younger than **1 hour** | it may be mid-request; deleting it loses an upload that succeeded |
+| `.htaccess`, `web.config`, `index.php` | the guards; removing them unprotects the directory |
+| a symlink | following one deletes whatever it points at — a merchant's own files |
+| anything outside the salt-derived directory | a sweeper that guesses removes a media library |
+
+⚠️ **The grace period is the difference between a sweeper and a race.** A file is
+written and recorded milliseconds apart; an hour is far longer than any request
+and far shorter than the 72-hour orphan TTL, so an abandoned file is still removed
+well before the table would have expired it.
+
+⚠️ **Bounded at 200 per pass**, because cron fires on a customer's request — an
+unbounded sweep would put a directory listing and a thousand unlinks in front of
+whoever loaded the page.
+
+⚠️ **Hourly, not every fifteen minutes.** It hangs off the existing sync event
+rather than a new schedule — `Support\Cron` deliberately knows only how to
+schedule and delegate, and giving it a sweeper dependency would make it the second
+place that knows about uploads.
+
+**Verified against a real database:** one orphan removed, a recorded file kept, a
+fresh file spared, both guards intact. **Four mutants killed** — deleting known
+files, dropping the grace period, removing guard protection, and following
+symlinks.
+
+The uninstall gate caught the new `optionia_last_sweep` option key immediately,
+which is the second time it has paid for itself this phase.
+
+**M15.3 is complete.** M15.5 (retrieval) is no longer blocked: the stored-SVG
+exposure it would have armed is closed by 3f.
+
+#### ✅ Stage 4a — the orchestrator finally has tests (2026-09-08)
+
+🔴 **`UploadEndpoint` had no test file.** It runs every check — fourteen refusal
+paths, thirty branches — and the only test touching it proved it *constructs*.
+
+**Measured:** removing the **quota check**, or **`is_uploaded_file()`**, left
+**1091 tests passing**. Both mutations had been reported `KILLED` — by an
+unused-variable *compile* error, not an assertion. The same false signal that
+misled Stage 3f, and I did not apply that lesson to my own orchestration layer.
+
+Stage 3c's bypass proofs were real but ran from a **throwaway script**. Nothing
+re-ran them. The evidence existed; the regression protection never did.
+
+##### The seam that made the second guard testable
+
+`is_uploaded_file()` is true only for a file PHP itself received, so no test can
+create one — which is *why* that guard went unverified. `MovesUploadedFiles` is
+the same narrow-interface pattern `Api\FetchesFromCloud` gives
+`Config\Synchroniser`: `UploadMover` still calls the real functions, and the
+interface exists so a test can prove the endpoint **asks**.
+
+⚠️ Deliberately narrow — a double for "the filesystem" would let the endpoint
+reach anything; this moves one uploaded file and nothing else.
+
+##### What the 17 tests now pin
+
+The success path first (a verifier that refuses everything passes every refusal
+test), that the response carries **no path, URL or stored name** (AC4), the six
+Stage 3c bypasses as a data provider, both quota ceilings, a failed move storing
+no row, the stored name keeping no trace of the customer's, and every refusal
+answering identically so a caller cannot map the ceilings by probing.
+
+**Both previously-surviving mutations now die on named failing tests** —
+`test_it_refuses_when_the_session_quota_is_exhausted` and
+`test_it_delegates_the_move_rather_than_writing_directly` — not on exit codes.
+
+✏️ **Process change, adopted here:** every mutation from now on is confirmed by a
+*named failing test*. The `KILLED — non-zero exit` signal has misled this project
+three times, and twice it was only caught by checking afterwards.
+
+##### ✅ Closed: the lifecycle M15.4 exists for
+
+`UploadRepository::expired()` had **zero callers**, and `claim()` had none before
+Stage 4b. An ordered file is now promoted and made permanent (4b); an *abandoned*
+one used to be stranded — stored → row with `expires_at` +72h → **nothing**,
+skipped by the sweeper because it *has* a row — until Stage 4c below.
+
+**Every file from an abandoned cart was stranded**, which Stage 4c closes.
+
+##### ✅ Stage 4c — expiry, and the guard that makes it safe
+
+`UploadExpirer` gives `expired()` its first caller, on the same hourly pass as
+`UploadSweeper`. The two are mirror images: the sweeper deletes files whose row
+is *missing*, expiry deletes rows whose *deadline* has passed. **Expiry runs
+first** — releasing a row deletes its file and then the row, and if that pair is
+interrupted between the two, the remains are exactly what the sweep removes.
+
+🔴 **Expiry does not trust `expires_at` alone.** A claim can fail at checkout
+(`CLAIM_ERROR` below), leaving a **paid** order's row looking abandoned. Before
+deleting anything, the expirer asks whether any order line refers to the token:
+`Integration\OrderLineItem` writes it into `_optionia_selections` at priority 10,
+inside WooCommerce's own transaction, *before* `UploadPromoter` claims at
+priority 20 — so the order carries a record that survives the claim failing. A
+file a real order refers to is kept and reported at error level, whatever the
+upload row says.
+
+⚠️ `woocommerce_order_itemmeta` is correct under HPOS too: HPOS moves orders out
+of the posts tables and leaves line-item meta where it is.
+
+**Verified against the running site's schema, not only the stub.** Three rows —
+abandoned, promoted, and paid-but-unclaimed — gave: promoted excluded by
+`expired()`, abandoned released, paid-but-unclaimed **kept**.
+
+Killed by `test_a_file_an_order_refers_to_is_kept`,
+`test_keeping_a_referenced_file_is_reported`,
+`test_it_deletes_the_file_and_then_the_row` and
+`test_the_due_pass_expires_before_it_sweeps`.
+
+##### Post-4c audit — five more findings
+
+Found by auditing the 4a/4b fixes themselves. The first was a defect 4c would
+have *activated*, which is why it was fixed before 4c shipped.
+
+🔴 **1. A database error at checkout was indistinguishable from a conflict.**
+`wpdb::query()` answers `false` only on error and the affected-row count
+otherwise, so `0` means "no row matched" and `false` means "the database never
+answered". `is_numeric()` folded them together: a transient blip left the row
+with its `expires_at` intact while the failure was logged as permanent — and
+once 4c wired up expiry, **that row's file would be deleted 72 hours after a
+customer paid for it**. Fixed with a fourth outcome, `CLAIM_ERROR`, reported by
+the promoter as itself. The durable defence is the order-meta guard above:
+retrying the claim would still fail if the outage persisted, while a guard at
+the moment of deletion holds regardless.
+Killed by `test_a_database_error_is_not_reported_as_a_conflict` and
+`test_a_database_error_is_logged_as_itself`.
+
+🟠 **2. The claim contract had no direct test.** Every assertion reached it
+through `UploadPromoter`, which only sees "an error was logged" or not, so the
+constants were never named in a test. New `UploadRepositoryClaimTest` pins all
+four outcomes; the stub's `$affected` became `int|false` to match the real return
+type, without which the error branch was unreachable.
+
+🟠 **3. A deleted order leaks its files permanently.** Nothing ever resets
+`order_id`, `expired()` requires `order_id IS NULL`, and the sweeper's
+`known_names()` protects every row regardless of order state — so a promoted file
+whose order is later deleted or trashed is reachable by nothing. **Open, and
+belongs to 4e**; it also blocks Phase 26b's GDPR deletion, which needs a delete
+path that does not exist yet.
+
+🟡 **4. The test logger stub grew without bound.** Warnings and errors bypass the
+debug setting, so every suite now appends whether or not it asserts on logs.
+Measured at no cost (22.03 MB, unchanged), but a future test asserting an empty
+log without its own reset would inherit the whole run's history. Now capped.
+
+🟢 **5. `CLIENT_FOUND_ROWS` — checked, safe by construction.** WordPress does not
+set it, so MySQL reports rows *changed*, not *matched*, and the live verification
+ran on SQLite. It does not bite: the `WHERE order_id IS NULL` guard means every
+matched row necessarily changes. Recorded in the code because **relaxing that
+`WHERE` would silently break every outcome** — a successful claim would read as a
+conflict.
+
+✏️ **Three stub gaps, each of which had hidden a real branch.** `insert()`
+returned a hardcoded 1 (hid `not_recorded`); `query()` returned a hardcoded 0 and
+was typed `int` (hid `CLAIM_ERROR`); there was no `get_results()` at all (made
+`expired()` uncallable). A method with no callers and no way to be called is how
+`expired()` sat unused this long.
+
+##### Stage 4a/4b audit — four findings, all fixed
+
+Audited after 4b, and none of the four was caught by the 1132-test suite that was
+green at the time. Every fix below is confirmed by a **named failing test** under
+the process rule adopted above, never by an exit code.
+
+🔴 **1. A second order could steal the first order's file.** `claim()` matched on
+the token alone. Measured live: order 64 then order 65 with one token left
+`order_id = 65` — the last claim silently won, and an order already in production
+lost its artwork. `OrderAgain` replays the token, so an ordinary re-order reached
+it with no malice. Fixed with `WHERE token = ? AND order_id IS NULL`, plus a
+**three-outcome** return (`claimed` / `already_ours` / `taken`): `$wpdb->update()`
+reports zero affected rows both for "no such row" *and* "values already match", so
+a boolean cannot tell a replayed line-item hook from a real conflict. `UploadPromoter`
+now logs the conflict at **error** level — ADR-040's "fail loudly" for the live-token
+case the ADR had not anticipated. Verified against the real SQLite schema:
+re-order touches 0 rows, `order_id` stays 64.
+Killed by `test_it_only_claims_a_row_no_order_owns` and
+`test_reclaiming_for_the_same_order_is_not_an_error`.
+
+🔴 **2. `not_recorded` was untestable, and hid a silent orphan.** Removing the
+branch returned **201 with an empty token** *and* left the file on disk with no
+row — invisible to cleanup forever, the exact orphan `UploadSweeper` exists to
+hunt. It was untestable because the wpdb stub's `insert()` returned a hardcoded 1,
+so `create()` could never answer `''`. Stub gained an `$inserts` knob.
+Killed by `test_a_file_whose_row_fails_is_removed_and_refused`.
+
+🔴 **3. `no_storage` was untested, and the mutant showed why it matters.** With the
+branch removed the destination becomes `'' . '/' . $stored`, so the endpoint asks
+the mover to write a customer's file to the **filesystem root** — caught here only
+by a read-only root. Killed by `test_it_refuses_when_there_is_no_storage_directory`.
+
+🟡 **4. `claim()` is bound to the token, not the session**, unlike
+`find_for_session()`. Kept deliberately: promotion runs server-side at checkout,
+where the uploading session need not be the ordering one (a guest logging in
+mid-checkout changes session key). Recorded in ADR-040 so nobody "fixes" it into a
+broken guest checkout. The `order_id IS NULL` guard bounds a leaked token to one
+claim rather than an unlimited series.
+
+✏️ **`Support\Logger` was entirely unobservable in tests** — it routes through
+`wc_get_logger()`, which no stub defined, so *nothing a test did could tell a
+logged error from silence*, and `Logger` is `final` so no subclass double exists.
+The bootstrap now stubs `wc_get_logger()` and captures entries in
+`$GLOBALS['optionia_test_log']`. This is why finding 1's "fail loudly" half is
+assertable at all, and it unlocks log assertions for the nine other suites that
+build a real `Logger`.
+
 ### M15.4 — Lifecycle and retention
 
 Orphan cleanup for abandoned carts (TTL); promotion to permanent on order creation;
 retention policy per plan; what happens on subscription cancellation (a real customer-trust
 question — must be documented, not implicit); GDPR deletion on request.
+
+
+##### 🔴 Stage 4d — and the Phase 15 blocker it uncovered
+
+4d was scoped as *"order-again on a purged token"*. Auditing the path first found
+something larger: **a file option could not be bought at all.**
+
+`Engine\SelectionResolver` has four type branches — hidden, free_text, date,
+number. A `file` kind matched none, so an uploaded token fell through to the
+merchant's value set, which a file option does not have, and every attempt was
+refused with `unknown_value`. **Measured**, not inferred: `resolve()` with a
+valid token returned `ok: false`.
+
+So the whole of Stage 1 and M15.3 — endpoint, storage, content verification,
+quotas, promotion, expiry — was complete and correct, and a customer who uploaded
+a file still could not add the product to their cart. The renderer had a
+`file_input.php` template and the JS wrote the token into the field; only the
+resolver was missing. ADR-040 had already recorded where this work belonged
+(*"where token verification may run (never in the pure `Engine/`, once at
+add-to-cart rather than five times)"*) — it was planned and never built.
+
+**Two pieces, split exactly where ADR-040 says:**
+
+1. `SelectionResolver::is_file()` accepts a `file` kind and checks the token's
+   **shape only** — `Engine/` is a pure port that runs against shared fixtures
+   with no WordPress and no database, so it cannot ask whether a row exists.
+   An empty value is "not answered", as an empty text field is.
+
+2. `Upload\UploadTokenCheck` answers the question the engine cannot, **once at
+   add-to-cart**: is this token a real row, this visitor's, and not already on an
+   order? Bound to the session in the `WHERE` clause like every other read of an
+   upload, so one visitor cannot attach another's file by guessing.
+
+**Order-again now fails loudly**, which is what 4d owed ADR-040: a reorder whose
+artwork has been released is refused with *"Please upload your file again"*,
+rather than reaching a merchant as an order with artwork that does not exist. A
+token already claimed by an order is refused for the same reason `claim()` will
+not move a row between orders.
+
+Measured end to end across five scenarios: fresh upload **added to cart**;
+purged reorder, already-claimed reorder, and a crafted 64-hex token all
+**refused**; typed junk refused by the resolver before any lookup.
+
+Killed by `test_a_file_token_resolves`,
+`test_a_value_that_is_not_a_token_is_refused_for_a_file_option`,
+`test_a_token_with_no_row_is_refused` and
+`test_a_token_already_claimed_by_an_order_is_refused`.
+
+✏️ **A fourth stub gap, same shape as the other three.** `$rows` was typed
+`array`, so `get_row()` could never answer `null` — and a token naming **no file**
+looked exactly like a token naming one. Now `array|null`, matching the real
+return type. Four stub gaps have now each hidden a real branch: `insert()`
+hardcoded to 1, `query()` hardcoded to 0 and typed `int`, no `get_results()` at
+all, and `$rows` unable to be `null`.
+
+
+##### ✅ Post-4d audit — three findings, all fixed
+
+Found by auditing 4c/4d after they shipped. Two were defects introduced by that
+work; the third was a cost it added.
+
+🔴 **1. A file could expire while the line sat in a customer's cart.**
+`UploadTokenCheck` ran at add-to-cart and nothing re-ran it, while `ORPHAN_TTL`
+counts from the *upload*. The 72-hour TTL is deliberately longer than
+WooCommerce's 48-hour guest cart — but a **logged-in** customer's cart lives in
+`_woocommerce_persistent_cart_*` user meta and does not expire on that schedule
+at all, so it can outlive the file by weeks. The order-meta guard could not save
+it either: a cart is not an order. The file was deleted, checkout completed, and
+the merchant received an order with no artwork — exactly what
+`Integration\CheckoutValidator` exists to prevent for a deleted option.
+
+Fixed by re-verifying tokens there, which is that class's own remit. The message
+is file-specific on purpose: the generic wording says the option is *no longer
+available* and asks the customer to remove the product, when the option is fine,
+their upload expired, and removing the line is the one action that does not fix
+it. Killed by `test_a_file_that_expired_in_the_cart_blocks_checkout` and
+`test_the_message_asks_for_the_file_rather_than_blaming_the_option`.
+
+🔴 **2. `UploadExpirer` could starve itself — caused by 4c's own guard.** A row
+spared because an order referred to it was never repaired, so `expires_at` stayed
+in the past forever. `expired()` orders by that column **ascending**, so the row
+returned at the *front* of every hourly batch, re-scanned and re-reported for the
+life of the store; enough of them would fill `BATCH` permanently and the
+genuinely abandoned files behind them would never be reached — silently disabling
+the cleanup the class exists to perform.
+
+Fixed by **repairing rather than sparing**: the row is claimed to the order that
+refers to it, which is what the failed promotion should have done. It clears
+`expires_at` and the row leaves the query for good. A repair that itself fails
+still keeps the file — it belongs to an order either way, and deleting it is the
+one outcome that cannot be undone. Killed by
+`test_a_referenced_row_is_claimed_to_its_order`.
+
+🟠 **3. An unindexed `LIKE '%token%'` on a customer's page load.** The order
+lookup uses a leading wildcard, so no index applies. Three things bound it, and
+the third is finding 2's fix: `meta_key` narrows to Optionia's own rows first; it
+runs only for rows that **actually expired**; and a row it finds is now *claimed*,
+so it is asked about **once** instead of every hour forever. The query also now
+joins `woocommerce_order_items` to return the real `order_id` rather than a
+boolean, which is what makes the repair possible.
+
+**Verified on the running site's schema, not only the stub.** Two rows —
+abandoned and paid-but-unclaimed — gave: lookup returns order 64 for the paid row
+and 0 for the abandoned one; after one pass the abandoned row is deleted, the paid
+row is claimed with `expires_at` cleared, and **a second pass returns no rows**.
+
+
+##### ✅ Stage 4e — retention, cancellation, and the deleted-order leak
+
+**The leak, closed.** A promoted file was unreachable by every cleanup path:
+nothing ever reset `order_id`, so `UploadExpirer` skipped the row
+(`WHERE order_id IS NULL`) and `UploadSweeper` protected the file (the table knew
+its name). Deleting an order left its artwork on the merchant's disk forever.
+Confirmed against the running site's schema before the fix — reachable by the
+expirer **0** times, protected from the sweeper **1** — and after
+`UploadRetention` runs, **0 rows** remain.
+
+🔴 **`woocommerce_before_delete_order`, never `woocommerce_delete_order`.** The
+latter fires *after* `delete_items()`, so `_optionia_selections` — the only record
+of which tokens the order held — is already gone. Measured in WooCommerce 11.0.1:
+`OrdersTableDataStore::delete()` calls `delete_items()` at line 2637 and fires
+`woocommerce_delete_order` at 2668. The `before` hook fires at 2632 with the order
+still whole, and **both** data stores fire it (HPOS and the legacy CPT store), so
+one registration covers both worlds.
+
+🔴 **Trashing is deliberately not listened to.** A trashed order keeps its items
+and can be restored; deleting its artwork would turn a reversible action into an
+irreversible one and lose a customer's print file to a misclick.
+
+⚠️ **`UploadRepository::find()` is deliberately not session-bound**, and is named
+`find` rather than `find_for_session` so the omission is visible at the call site.
+Retention runs long after the uploading session is gone, and it is a merchant-side
+caller; every storefront read still goes through the session-bound method.
+
+Killed by `test_it_deletes_the_file_and_row_of_a_deleted_order` and
+`test_an_order_with_no_files_deletes_nothing`.
+
+**The policy is now written down**, as [ADR-042](../optioniaWooCommerceBackend/docs/DECISIONS.md).
+It states the whole lifecycle in one table — eleven events from "uploaded, never
+added to a cart" through to uninstall — so no mechanism has to be inferred from
+the code that implements it. Two answers matter most:
+
+- **Cancelling an Optionia subscription deletes nothing.** The files are on the
+  merchant's own server and are their customers' artwork, often the only copy and
+  often attached to unfulfilled orders. A billing event must not destroy a
+  merchant's ability to fulfil orders they have already been paid for. The same
+  reasoning covers a disconnected store.
+- **The 72-hour TTL is a margin, not a guarantee.** It exceeds WooCommerce's
+  48-hour guest cart deliberately, but a logged-in customer's persistent cart does
+  not expire on that schedule at all — which is why `CheckoutValidator` re-verifies
+  every token. A future change that shortens the TTL must keep that guard.
+
+ADR-042 also records two rejected options: deleting a trashed order's files, and a
+merchant-configurable retention period (revisit with M15.6's metering, when there
+is data on what stores actually hold).
+
+
+##### ✅ Post-4e audit — three findings, all fixed
+
+🟠 **1. Retention did not check which order owned the row.** `release()` deleted
+any file whose token appeared in the deleted order's meta, without confirming the
+upload row belonged to *that* order. Safe for data written after Stage 4d —
+`claim()` takes only a row with `order_id IS NULL` and `UploadTokenCheck` refuses
+an already-claimed token — but **not for installs that predate it**, where
+`OrderAgain` could replay a token into a second order with nothing refusing it.
+On such a store, deleting the *reorder* destroyed the *original* order's artwork.
+
+Fixed with `belongs_to()`, which accepts a row owned by this order **or not yet
+claimed at all** — a file whose promotion failed keeps `order_id` null while the
+order plainly refers to it, and requiring a strict match would leave exactly those
+behind, which is the leak this class closes. Verified on the running site's
+schema: deleting order 65 keeps the file, deleting order 64 releases it.
+Killed by `test_a_file_another_order_owns_is_kept` and
+`test_a_file_whose_promotion_failed_is_still_released`.
+
+🟡 **2. `session_key()` was resolved eagerly, on every cart and checkout view.**
+It was passed as an argument, so it ran before `unusable()` could short-circuit on
+"no tokens here" — and it is not a pure read: `UploadQuota::session_key()` calls
+`set_customer_session_cookie()` when no session exists. Every cart view, checkout
+view and add-to-cart on a store with **no file options at all** touched the
+WooCommerce session for nothing.
+
+Fixed by making the parameter nullable and resolving it *after* the token scan.
+The session stub now counts reads, because without a counter a test cannot tell
+"asked and ignored" from "never asked". Killed by
+`test_a_selection_with_no_tokens_never_resolves_the_session`.
+
+🟡 **3. A redundant guard, and a test that could not see it.** `UploadTokenCheck`
+had its own empty-session guard. Mutation showed it survived removal — and so did
+a second test written specifically to catch it, because `find_for_session()`
+returns for an empty session *before* touching `$wpdb`, so neither the answer nor
+the query count differs.
+
+The guard was **removed**, not documented around: two guards enforcing one rule
+where neither is observable is not defence in depth, it is a second place to keep
+in step. The rule now lives with the query that depends on it, and a mutation of
+*that* guard is killed by `test_a_token_without_a_session_is_refused` — so the
+behaviour is covered where it actually lives.
+
+✏️ This is the distinction the Stage 4a audit drew for `no_session` and
+`no_fileinfo` and it does **not** apply here: there the layers refused *different*
+things, so both were load-bearing. Here they refused the same thing.
 
 ### M15.5 — Merchant retrieval
 
@@ -4689,19 +16309,798 @@ Download from the admin order screen; bulk download per order; an expiring signe
 order emails; thumbnail previews. The merchant must be able to get **print-ready** files
 without friction — this is the fulfilment path for their business.
 
-### M15.6 — Storage accounting
+#### Findings from the M15.5 analysis
+
+Four constraints were already decided by earlier stages, and reading them first
+changed the design rather than being discovered late:
+
+🔴 **1. Direct links are forbidden, and Stage 1 said so in advance.**
+`UploadStore` records the rule this milestone implements: *"Retrieval for the
+merchant goes through PHP (M15.5), never a direct link."* The reason is measured —
+the three storage guards did nothing on the dev server. **Re-measured today**: the
+guarded directory answers **200**, and a stored file fetched by its full path
+returns **200 with its bytes**, because Studio's server reads neither `.htaccess`
+nor `web.config`. Security rests entirely on the path's two independent secrets, so
+a URL carrying the real path would spend the directory secret permanently — one
+leaked link would expose the naming of every file the store has ever taken.
+
+🔴 **2. Files must download, never render inline.** ADR-041 promises the file
+reaches the merchant *"as a download rather than something a browser renders
+inline"*, stated immediately after recording that Phase 15 does **not** sanitise
+PDFs — which can carry `/JS` and `/OpenAction`. Rendering one inline in wp-admin
+would execute that content in the merchant's authenticated session.
+
+🔴 **3. A WordPress nonce cannot sign an email link.** `Support\Keys` records the
+measured weakness: for a *logged-out* visitor `wp_create_nonce()` reduces to
+action + tick, is identical for every visitor, and is valid 24 hours. An email
+recipient is logged out, so Stage 5d needs a real HMAC —
+`Connection\PushSignature` is the existing shape, and `bin/check-secrets.sh` will
+require `hash_equals()` on any new verifier. The same weakness does **not** apply
+to 5a: a download is always authenticated admin traffic, so its nonce is tied to
+the merchant's user id and session token.
+
+⚠️ **4. Four gaps for the later stages.** No email surface exists yet (zero
+`wp_mail`/`woocommerce_email_*` in `src/`), so 5d is new surface; thumbnails only
+work for raster types and accepted types are merchant-configured, so a print shop
+accepting only PDF gets none; GD is optional (`UploadImage` guards it); and
+`ZipArchive` is not yet a dependency anywhere, so 5c must check rather than assume.
+
+#### ✅ Stage 5a — the download endpoint
+
+`UploadDownload` streams one file by token on `admin_init`, the pattern
+`Admin\ConnectionSection` already uses for GET-triggered handlers.
+
+**Check order is the security design:** capability → nonce → token shape → row →
+file on disk. Capability first so an unauthorised user learns nothing about
+whether the file exists — proven by mutation, where removing it let the request
+reach the *file lookup* and report the file's status.
+
+**Three independent statements that this is a file to save**, because none is
+reliable alone across browsers: `application/octet-stream` rather than the stored
+MIME type, `X-Content-Type-Options: nosniff`, and
+`Content-Disposition: attachment`. The customer's original filename is used —
+it is what makes a folder of downloads usable — passed through
+`sanitize_file_name()` because it is customer-supplied text entering a header.
+
+**Streamed in 8 KB chunks, never read whole.** A 2 GB print file through
+`file_get_contents()` would exhaust `memory_limit` (measured at 512 MB on this
+host) and fail on exactly the large artwork a print shop most needs.
+
+⚠️ **What the tests can and cannot reach.** A successful download ends in `exit`,
+which would take the test runner with it, and this suite uses no process
+isolation. So every branch deciding *whether* a merchant sees a file is covered,
+and only the writing of the body is not. Killed by
+`test_it_refuses_a_user_without_the_capability`,
+`test_it_refuses_a_missing_or_wrong_nonce`, and
+`test_it_refuses_a_token_that_is_not_one` (5 data sets, path traversal among
+them).
+
+**Verified live**: an unauthenticated request for a real seeded file answered
+**302 to login with 0 bytes** — WordPress refuses before `admin_init` runs — while
+the same file by direct path answered **200 with its bytes**. The endpoint is the
+only safe route, which is what finding 1 predicted.
+
+
+#### ✅ Stage 5b — the order screen
+
+`Admin\OrderFiles` draws a download link under each order line that carries a
+file, on `woocommerce_after_order_itemmeta` — fired once per line with the item in
+hand (`html-order-item.php:60`). One view serves both order-storage modes, so no
+HPOS branch is needed, as `Integration\OrderLineItem` already records.
+
+🔴 **Until this existed a merchant could not reach the artwork at all.** The file
+sits under a salt-derived directory with a random name, and `OrderLineItem` hides
+`_optionia_selections` from the meta list — correctly, since a raw 64-character
+token means nothing to anyone. The order screen showed that options were chosen
+and offered no way to get what they produced.
+
+**The link carries the token, never a path.** Verified live: the exact URL this
+renders answered **302 with 0 bytes** unauthenticated, while the same file by its
+raw path answered **200 with all 28**. That contrast is the whole reason the link
+is shaped this way — a URL exposing the directory would spend that secret
+permanently, for every file the store has ever taken.
+
+The customer's **original** filename is what the merchant reads; the stored name
+is deliberately meaningless and never appears in the markup. A line whose files
+have all been released says so plainly rather than rendering blank, because a
+merchant hunting for artwork needs to know it is gone rather than wonder whether
+the screen is broken.
+
+Killed by `test_the_link_carries_the_token_and_no_path` and
+`test_it_renders_nothing_without_the_capability`.
+
+##### `Upload\UploadTokens` — one definition of a token
+
+🔴 **The same `/^[0-9a-f]{64}$/` lived in five classes** — `UploadDownload`,
+`UploadExpirer`, `UploadPromoter`, `UploadRetention`, `UploadTokenCheck` — and
+5b was about to add a sixth. Five copies of a security-relevant pattern is five
+places to keep in step: widen one to accept uppercase and the others silently
+disagree about what a token is.
+
+All five now share `UploadTokens`, which also answers the two questions callers
+actually ask — *which tokens does this selection map hold, keyed by option* and
+*which does this order hold*. ⚠️ `Engine\SelectionResolver` keeps its own copy
+deliberately: `Engine/` is a pure port that must run against shared fixtures with
+no WordPress, so it cannot depend on that namespace. Six copies became two, and
+the remaining duplication is a stated architectural constraint.
+
+✏️ **A sixth stub gap, and this one produced a visibly broken link.**
+`add_query_arg()` handled only the `array` form and silently returned its *second*
+argument for `add_query_arg( $key, $value, $url )` — so the rendered link had an
+empty `href`. WordPress accepts both shapes; the stub now does too. `wp_nonce_url()`
+did not exist at all and was added alongside it.
+
+#### ✅ Stage 5c — bulk download per order
+
+`Upload\UploadArchive` collects an order's files into one archive, offered on
+`woocommerce_order_item_add_action_buttons` — order-level rather than per-line,
+and it receives the order itself (`html-order-items.php:328`). A print shop
+fulfilling an order with six uploads should not click six links and hunt six
+files out of a downloads folder.
+
+🔴 **Duplicate names silently lose files, and the fix is the whole point.**
+Measured before designing around it: adding two entries called `logo.png` to a
+`ZipArchive` leaves **one** entry — the second overwrites the first with no error
+and no warning. Two options on one order can easily carry the same customer
+filename, so without de-duplication a merchant opens the archive and one of the
+files they were told they had is simply not there. That is the *"reprint arrives
+blank"* failure ADR-040 exists to prevent. Names are made unique instead
+(`logo.png`, `logo-2.png`), keeping the customer's own name recognisable rather
+than substituting the meaningless stored one.
+
+🔴 **The tokens come from the order's own line items, never from the request.** A
+caller names an *order id* and nothing else, so there is no way to assemble an
+archive of somebody else's artwork by guessing tokens — which is what makes the
+capability check a sufficient gate. That is the same source `UploadRetention`
+trusts to decide what an order owns.
+
+⚠️ **`ZipArchive` writes to a path, not a stream**, so the archive is built on
+disk first — inside the **guarded** upload directory, not the system temp
+directory. The two secrets that protect one customer's file should protect a
+collection of all of them, and the system temp directory is world-readable on many
+hosts. `UploadSweeper` cannot take it mid-build (it deletes only files older than
+an hour with no row) and it is removed as soon as it has been sent; if a request
+dies first, the sweeper is the safety net.
+
+⚠️ **`ZipArchive` is checked, not assumed.** It ships with PHP but is a
+compile-time extension a host can omit. Verified available on this host **over
+HTTP**, not just the CLI — the SAPI divergence has misled this project before —
+but the guard stays: no button rather than a broken one, and the per-file links
+work either way. The button also stays hidden below two files, because zipping a
+single file is worse than the link already beside it.
+
+**Verified end to end**: three uploads, two sharing `logo.png`, produced a
+331-byte archive inside the guarded directory holding all three —
+`logo.png`, `logo-2.png`, `brief.pdf`. Killed by
+`test_two_files_with_the_same_name_both_survive` and
+`test_a_collided_name_stays_recognisable`.
+
+✏️ **A latent stub bug from Stage 5a, found here.** The `sanitize_file_name()`
+stub's regex used `/` as its delimiter *and* matched `/`, so the pattern ended
+early and every call raised *"Unknown modifier"*. It never fired until an archive
+put a real filename through it. Fixed, and the stub now strips exactly the
+separators and control characters a `Content-Disposition` header depends on.
+
+✏️ **The wpdb stub gained per-token answers.** `get_row()` returned one fixed row
+for every call, so no test could describe an order holding *two* files — and "two
+files collide in a zip" is precisely the case that needs two.
+
+#### ✅ Stage 5d — the signed link in order emails
+
+`Upload\UploadLink` mints a time-bounded, signed URL; `Admin\OrderFiles` puts it
+in the merchant's order email. **Three decisions were put to the user before
+building, because this is the only outward-facing surface in the phase**, and all
+three were confirmed: merchant only, seven days, fail loudly on a purged file.
+
+🔴 **A WordPress nonce cannot secure an emailed link.** It is bound to the
+reader's user id and session token, which is right for a link on a screen they are
+already logged into and useless in an inbox opened tomorrow in another browser.
+And `Support\Keys` records the measured weakness that settles it: for a
+*logged-out* reader `wp_create_nonce()` reduces to *action + tick*, identical for
+every visitor and valid 24 hours. So the link carries its own `wp_hash()`
+signature and its own expiry.
+
+**What the signature covers, and why each part is in it:**
+
+```text
+optionia-order-files|<order id>|<expires at>
+```
+
+- **The order**, so a link for order 64 cannot be replayed as 65 by editing the
+  URL — without it, one valid link would open every order in the store.
+- **The expiry**, so the deadline cannot be pushed out by editing the timestamp.
+  The signature is checked *before* the clock, because checking the clock on an
+  unverified timestamp is checking a number the caller chose.
+- **A purpose string**, so a signature minted here can never be presented to a
+  future feature that signs the same numbers for a different reason.
+
+⚠️ **`wp_hash()`, not the store token** — the reasoning `Integration\CartItemPayload`
+records applies unchanged: the cloud credential is deleted on disconnect, so every
+link in every merchant's inbox would break at once on a store that can still be
+selling.
+
+🔴 **The capability is never waived for a signed link.** A signature proves the
+link is one this site minted; it says nothing about who is holding it. An order
+email can be forwarded, archived, or read on a shared machine. The signature
+replaces the **nonce**, not the login. **Verified live**: a genuinely signed link
+followed while logged out answered **302 with 0 bytes**.
+
+🔴 **`$sent_to_admin` decides who gets it, not a recipient list.** WooCommerce
+passes it to `woocommerce_email_after_order_table` precisely so a template can
+tell the merchant's copy from the customer's, so the link cannot leak into a
+customer email through a configuration mistake. The customer already has the file
+they uploaded; every additional inbox holding a working link is another way it
+escapes.
+
+**Seven days**: long enough for a weekend and a fulfilment backlog, short enough
+that a forwarded email stops working within a week. Past about three days the file
+may be gone regardless — `ORPHAN_TTL` releases an unpromoted upload after 72
+hours — so a longer window mostly extends the life of a link to something that no
+longer exists.
+
+⚠️ **`OrderFiles` had to leave the `is_admin()` block.** New Order emails are sent
+during **checkout** — a storefront request — so an admin-only registration would
+have attached the email hook to nothing. Caught before it shipped by asking where
+the hook actually fires.
+
+Killed by `test_a_link_cannot_be_replayed_for_another_order`,
+`test_an_expired_link_is_refused` and `test_the_customers_email_carries_no_link`.
+
+✏️ **Two bugs the tests caught, both real.** A `printf` format string in double
+quotes made PHP read `%1$s` as the variable `$s` and interpolate it away, which
+would have shipped a broken plain-text email. And the first expiry test **passed
+against a mutant with the expiry check removed** — it signed a *different*
+timestamp, so the signature mismatch refused it and the clock was never consulted.
+Rewritten to sign the past moment properly, and the mutation then died.
+
+##### Post-5d audit — two findings, both fixed
+
+🟠 **1. Thumbnail previews were promised and not built.** M15.5's scope names four
+things; three shipped. Recorded here because the milestone was called *done* in
+the meantime, and it was three-quarters done.
+
+**The conflict that made this a decision rather than a task:** ADR-041 guarantees
+an uploaded file reaches the merchant *"as a download rather than something a
+browser renders inline"*, and a thumbnail is inline rendering. Put to the user
+with four options; **re-encoded previews** chosen.
+
+🔴 **The preview is a JPEG this plugin authored, never the customer's bytes.**
+`UploadImage::thumbnail()` decodes to a pixel buffer and writes a fresh JPEG, so
+nothing that could be executed survives — which is exactly what ADR-041's
+guarantee protects against, since its stated reason is *active content*. The
+guarantee is about the uploaded file; a preview is a different file.
+
+Proven rather than asserted: the mutation that passes the original bytes through
+leaves the EXIF header and the GPS tag intact in what the browser would render,
+and `test_a_preview_carries_none_of_the_originals_metadata` kills it. A document
+gets **no** preview rather than a broken one — a PDF has none without a renderer
+this phase deliberately does not ship — and a pixel bomb is refused by the same
+budget the upload path uses.
+
+⚠️ **A preview needs the merchant's own session.** It names one *file*, and an
+emailed signature is minted over an *order*, so it cannot speak for the request.
+Killed by `test_an_emailed_signature_cannot_fetch_a_preview`.
+
+🟡 **2. The signature's scope held by dispatch order, not by a check.**
+`authorised()` accepted a signature without checking what the request was asking
+for. It was safe — `serve_order()` runs first and always exits — but nothing said
+so, and a reordered dispatch would have quietly let an emailed signature reach a
+named file.
+
+**The first fix was wrong, and mutation caught it.** Requiring only that the
+request name an order still let it name a file *alongside* one: `$wants_order`
+was true, the signature verified, and the dispatch order was again the only thing
+deciding. Measured — with the dispatch reversed, an emailed signature reached the
+named file. The guard now refuses the **combination** (`! $wants_order ||
+$wants_file`), and the same reversal leaves every test green.
+
+✏️ Worth recording as a pattern: two mutations were needed here, not one. The
+first (remove the guard) survived because a lower layer refused anyway; only
+removing the guard *and* reordering the dispatch showed what the guard was for.
+A guard whose absence is masked by an accident of ordering is exactly the kind
+this project keeps finding.
+
+##### Post-5c audit — three findings, all fixed
+
+🟠 **1. Partial file loss was invisible.** `OrderFiles::render()` said *"No longer
+stored on this site"* only when **every** file on the line was gone. A line
+holding two, where one had been released, showed a single link and no sign the
+other ever existed — the merchant sees one file and cannot know they should have
+two. Same silent-loss failure ADR-040 exists to prevent, through a different door
+than 5c's name collision: a reprint that arrives *short* is no better than one
+that arrives blank.
+
+Fixed by reporting **per file** rather than per line, which also removed the
+special case. Killed by `test_a_partly_missing_line_reports_the_missing_file` and
+`test_a_file_that_is_gone_says_so`.
+
+🟡 **2. A test asserted a filename production would never produce.** The archive
+test expected an entry called `my artwork.pdf`; WordPress's `sanitize_file_name()`
+collapses whitespace to dashes, so the real answer is `my-artwork.pdf`. The stub
+kept spaces, so the test passed on a stub more permissive than production.
+
+The stub is now **aligned against the real function**, compared case by case on
+the running site: all **10 of 10** inputs now agree, including `../../evil.sh` →
+`evil.sh`, `...pdf` → `unnamed-file.pdf`, and a newline becoming a dash rather
+than vanishing. The corrected assertion caught itself the moment the stub was
+fixed.
+
+⚠️ Worth stating: the **collision** test was unaffected — `logo.png` /
+`logo-2.png` carry no spaces — so 5c's central claim held in production either
+way. What was wrong was the coverage around it.
+
+🟡 **3. The same rows were looked up twice per order screen.** `render()` queried
+each token per line and `render_bulk()` queried them all again, so an order with
+N files cost 2N lookups. Fixed with a per-request cache in `OrderFiles`, and by
+counting through it rather than asking `UploadArchive` — WooCommerce renders every
+line (`html-order-items.php:80`) before the button row (line 328), so every row is
+already in hand when the button decides whether to appear.
+
+**Measured: 3 lookups for 3 files, down from 6.** `UploadArchive::countable()`
+had no callers left afterwards and was removed rather than kept as dead code.
+
+##### Post-5b audit — two findings, both fixed
+
+🟡 **1. The markup rendered completely unstyled.** `OrderFiles` emitted
+`optionia-order-files` and friends, and **no rule for them exists** — nor could
+one have applied: `Frontend\Assets::enqueue_admin()` loads Optionia's admin
+stylesheet only when the hook suffix contains the Optionia menu slug, and the
+WooCommerce order screen never matches. The links worked; everything around them
+looked unfinished.
+
+Fixed by reusing **WooCommerce's own `display_meta` table** rather than shipping
+CSS. That class already carries exactly what this needs on that screen —
+`margin:.5em 0 0`, a smaller face, the muted grey the meta list above uses — and
+WooCommerce loads it there itself. Widening Optionia's enqueue would have meant
+loading a stylesheet on someone else's screen to style four lines; sitting
+directly under the meta list it visually continues, in the same shape, is also
+what a merchant expects.
+
+⚠️ The mutation showed a second reason this matters: the bespoke version wrapped
+`<tr>` elements in a `<div>`, which is invalid markup a browser discards. The
+rendered output is now verified well-formed — parsed with **0 errors**, and the
+row survives the parser, which is what proves it is inside a table.
+
+Killed by `test_it_reuses_woocommerces_own_meta_styling`.
+
+🟡 **2. An unused import, left by the `UploadTokens` refactor.**
+`UploadRetention` still imported `Keys` after its only reference moved into the
+shared helper. phpcs does not flag unused imports, so nothing caught it.
+
+A scan of the whole of `src/` found exactly two — this one and a pre-existing one
+in `Config\ProductIndex`, unrelated to this work. **Both removed**, and `src/` now
+carries none. ✏️ Removing the `ProductIndex` import left two blank lines after its
+namespace, which phpcs *did* catch — a reminder that the two checks cover
+different halves of the same tidiness.
+
+##### Post-5a audit — two findings, both fixed
+
+Both lived past the `exit` boundary the stage documented as untestable, which is
+exactly where they hid.
+
+🔴 **1. `Content-Length` was wrong for every EXIF-stripped JPEG.** The header used
+`size_bytes` from the row, but `UploadEndpoint` calls `consume_metadata()` — which
+rewrites a JPEG **in place** at quality 90 to strip its EXIF — and *then* records
+the **pre-rewrite** size. Measured on an 800×600 image: **197,329 bytes recorded,
+139,246 on disk**, a 29.4% divergence. The browser waits for 58 KB that never
+arrive, so every customer photograph downloads truncated or hangs.
+
+Fixed on both sides, because the row was wrong as well as the header:
+`UploadDownload` reads the real length with `filesize()` at stream time, and
+`UploadEndpoint` records what is actually stored. ⚠️ **The ceilings still use the
+upload size**, deliberately: the customer did send those bytes, and a limit
+counting only what survived compression would pass a 3× oversized file whenever it
+happened to compress well. The `size_on_disk()` helper falls back to the upload
+size rather than zero — a zero row would drop the file out of the quota entirely,
+which is the failure direction that fills a merchant's disk silently.
+
+**Second consequence, now also fixed:** `session_usage()` sums `size_bytes`, so
+every stripped photograph over-reported a merchant's storage by roughly a third.
+That would have corrupted M15.6's metering at its source.
+
+Killed by `test_the_recorded_size_matches_the_file_on_disk` and
+`test_the_response_reports_the_stored_size` — the mutant reproduced the measured
+numbers exactly (197,329 vs 139,246).
+
+🔴 **2. A failed `fopen()` wrote an HTML error page into a binary body.** The read
+handle was opened *inside* `stream()`, after `send()` had already written
+`Content-Type: application/octet-stream`, `Content-Disposition` and
+`Content-Length`, and after the output buffers were cleared. An unreadable file
+therefore answered with download headers followed by a `wp_die()` page — a
+"download" that saved an error page under the customer's own filename.
+
+Fixed by opening the handle **before any header**: once a header is out there is
+no way back, so the last thing that can fail has to happen first. `stream()` now
+takes the open handle rather than a path. Killed by
+`test_an_unreadable_file_is_refused_before_any_header`.
+
+✏️ **A fifth stub gap, same family as the other four.** `insert()` recorded only
+the table name and discarded the row, so no test could see what was written — and
+`size_bytes` disagreeing with the disk was invisible for exactly that reason. The
+stub now keeps the row in `$inserted`.
+
+**Verified end to end**: `Content-Length` now equals the bytes on disk (139,246 =
+139,246); before the fix it over-promised 58,083 of them.
+
+### ✅ M15.6 — Storage accounting
 
 Per-tenant usage into `usage_records` for [Phase 24](#phase-24--plan-limits--enforcement).
+Recorded in full as [ADR-043](../optioniaWooCommerceBackend/docs/DECISIONS.md); the
+decisions that shaped it:
+
+🔴 **A per-tenant row cannot be written from a per-store report.** A tenant may
+hold ten stores, each with its own uploads table on its own disk, each reporting
+only itself — so writing one store's figure lets the last to heartbeat win, and
+accumulating grows forever. Each store's current figure now lives on
+`stores.storageBytes` and `UsageService` re-sums the tenant from those.
+
+🔴 **The usage index had to become unique.** It was not, so an upsert meant a
+`SELECT` then an `INSERT` that two stores of one tenant could both lose. Now one
+atomic `INSERT ... ON DUPLICATE KEY UPDATE`. **The new index is created before the
+old one is dropped** — `tenantId` leads it, so MySQL uses it for the foreign key
+and dropping it first fails with `ER_DROP_INDEX_FK`. Found by running the
+migration, not by reading it, and the up/down round trip was then verified against
+the live database.
+
+🔴 **Backend ships first, always.** `forbidNonWhitelisted: true` makes an unknown
+field a **400, not a discard**, so a plugin newer than the cloud would lose its
+whole heartbeat — connection state, version report and schema signal — not just
+the new field. This is the first work in the phase requiring a fixed release
+order, and ADR-043 records it as a standing rule.
+
+⚠️ **Bytes, not megabytes**, so a store under half a megabyte does not report
+zero; rounded **up** at the cloud, and any bytes at all report at least 1 MB,
+because under-reporting is the direction that lets a tenant exceed a limit it was
+sold. **Null is "never reported", not "holding nothing"** — an older plugin sends
+no field, and counting that as zero would shrink a tenant's usage the moment one
+store lagged behind.
+
+⚠️ **Measured from the table, never the disk.** The table is the authority the
+sweeper, expirer and retention all use; a directory walk would meter bytes the
+merchant cannot see or delete and put `O(files)` of I/O on a scheduled request.
+Claimed and unclaimed files alike — a promoted file occupies the disk exactly as
+much as one waiting in a cart.
+
+✏️ **A gate caught a design flaw I had missed**, and then a false positive of its
+own. `check-secrets.sh` flagged `UsageService` for two writes without a
+transaction — correct: the heartbeat writes the store figure and then re-sums from
+it, so a failure between them leaves data that looks legitimate. Fixed by passing
+the caller's `EntityManager` through. It then still flagged the file, because
+`ON DUPLICATE KEY UPDATE` matched its `UPDATE <table>` pattern — an upsert counted
+as two writes when it is the most atomic write there is. The gate's regex now
+strips that clause before counting; verified it still catches the regression it
+was built for (removing `OrdersService`'s transaction still fails it).
+
+✏️ **`total_bytes()` returns 0 when `$wpdb` is unavailable.** The heartbeat is the
+one caller that runs on a schedule rather than for a customer, and a fatal there
+would take the whole check-in with it — losing the connection state to collect a
+number that is merely useful.
+
+Killed by `test_the_total_counts_every_stored_file` (asserted on the *query*,
+after mutation showed a total narrowed to unclaimed rows passing every assertion
+that only read the figure), `rounds a part-used megabyte up`, and
+`writes the period row atomically`.
+
+
+##### Post-M15.6 audit — two findings, both fixed
+
+🟠 **1. A disconnected store's bytes counted against the tenant forever.** The sum
+had no status filter, and `recordStorage` runs only on a **heartbeat** — which a
+disconnected or revoked store never sends again. So its bytes stayed in the total
+with nothing left to reduce them: stale for up to a day on a multi-store tenant,
+and **frozen permanently** for a tenant holding one store, blocking a merchant
+against storage they can no longer see or change.
+
+Fixed on both halves, because either alone leaves the defect:
+
+- the sum excludes `disconnected` and `revoked` — the pair the state machine
+  already treats as terminal. ⚠️ `error` and `connecting` still count: both are
+  live stores that will heartbeat again, and the question is *"can the merchant
+  still change this number"*, not *"are the bytes on disk"*;
+- `disconnect()` re-sums the tenant inside its existing transaction, because the
+  store it just retired will never report again.
+
+**Verified against the live database**: two connected stores at 60 MB and 40 MB
+summed to 100 MB; disconnecting the second dropped the live sum to **60 MB**,
+while the unfiltered query still returned 100. Killed by
+`excludes stores the merchant can no longer reduce`.
+
+⚠️ String literals rather than `StoreStatus.*`, because `check-store-state.sh`
+flags any file naming the enum outside its allowlist — the state machine is the
+one place allowed to reason about transitions, and this is a read.
+
+🟡 **2. `storage_bytes` had no upper bound.** Bounded at **1 TB** — about forty
+times the largest plan and four orders of magnitude below `MAX_SAFE_INTEGER`.
+
+**Not an anti-abuse control, and the docblock says so.** Only a store's own
+credential can send the field, and a merchant inflating their figure merely
+reaches their own limit sooner; the abusable direction is *under*-reporting, which
+no ceiling prevents. The bound exists so a **plugin bug** cannot brick a store: a
+corrupt total above `bigint` would fail the write and turn every heartbeat into a
+500, losing the connection state, the version report and the schema signal to
+collect a number that is merely useful.
+
+✏️ Worth stating once, plainly: metering measures what the merchant's own server
+reports, so it is an **honest-client mechanism**. That is inherent to measuring on
+someone else's hardware, and recording it here stops a later reader mistaking it
+for tamper-proof.
+
+#### Phase 15 closeout — two gates that had been red since Phase 14
+
+Found while closing the phase rather than while building it, and both were
+**pre-existing**: confirmed by re-running with the M15.6 changes stashed.
+
+🟠 **Six `/items` routes were in the spec and not in the contract.** The
+presentational-item routes shipped in Phase 14 and `docs/API-CONTRACT.md` was never
+updated, so `check-openapi` failed on **every run** from that point. A gate that is
+always red is a gate everyone learns to ignore — which is how the second finding
+below survived beside it unnoticed. Now documented, with the deletion capability's
+asymmetry explained: items carry `option_sets:edit` for delete rather than
+`:delete`, deliberately, because an item is authored content and someone trusted to
+add a price-bearing option is not separately untrusted with a heading above it.
+
+🔴 **The same six routes had no tenant-isolation probe at all.** `check-isolation`
+had been failing on them for the same reason and the same length of time — 52
+tenant-scoped routes registered, six with nothing proving they refuse another
+tenant. An item is nested under a group exactly as an option is, so it leaks
+exactly the same way if the scoping is wrong, and nothing was checking.
+
+Six probes added to the matrix — read, create, read-one, update, delete and
+reorder, each as tenant B reaching for tenant A's item. **59 isolation tests now
+pass, up from 53**, and the gate reports *every one of 52 routes probed*.
+
+✏️ Worth stating as a pattern: neither finding was a code defect. Both were
+**documentation and coverage debt that a green build would never have surfaced**,
+because the gates that caught them were already failing for the same reason. The
+cost of leaving a gate red is not the one thing it names — it is everything it
+stops naming afterwards.
+
+#### Post-completion defect hunt — two bugs, four fixes
+
+Found by probing behaviour with adversarial inputs after the phase was called
+complete. **Neither was caught by 1266 tests or 10 gates**, and both were
+introduced by earlier *fixes* rather than by the original work.
+
+🟠 **1. A token with a trailing newline was accepted, then matched nothing.**
+PHP's `$` matches *before* a trailing newline, so `/^[0-9a-f]{64}$/` — anchored to
+the eye — accepted `"aaa…a\n"`. Measured against a real database:
+`WHERE token = 'aaa…a\n'` returns **zero rows**.
+
+The chain that made it visible: `SelectionResolver` trims the value, but
+`AddToCartValidator` passed the **raw request** to `UploadTokenCheck` — so the
+check looked up a different string from the one being stored. A customer whose
+posted value picked up a newline was told *"Please upload your file again"* about
+a file that was already there, and could not complete the purchase. Fail-closed,
+so no leak and no data loss — but a lost sale and a message that cannot help.
+
+Fixed in both halves, because either alone leaves a way in:
+
+- `\A…\z` replaces `^…$` in **both** definitions of a token — `Upload\UploadTokens`
+  and the `Engine\SelectionResolver` copy the architecture requires to stay
+  separate. Two definitions that disagree about what a token is were a defect
+  waiting for a second caller;
+- the validator now checks `$result->value()['resolved']` — the canonical form
+  `Integration\CartItemData` actually stores — rather than the raw request.
+
+Killed by the four new provider cases in `UploadTokensTest` (newline, CRLF,
+leading LF, trailing space) and verified end to end: a 65-byte posted value now
+resolves to 64 and **adds to cart**, where it was previously refused.
+
+🟠 **2. A corrupt storage total could break the heartbeat entirely.**
+`total_bytes()` clamped low (`max(0, …)`) but not high, and a `SUM()` beyond
+`PHP_INT_MAX` **saturates** to `9223372036854775807` — roughly nine million times
+the 1 TB ceiling the DTO enforced. Because that ceiling was a `@Max`, the result
+was a **400 for the whole heartbeat**: connection state, version report and schema
+signal lost daily until the figure came back into range.
+
+🔴 **The ceiling was my own fix from the previous audit, and it converted a
+bounded corruption into an unbounded outage.** Adding a bound without asking what
+the other side does when it is exceeded is precisely the class of mistake this
+project keeps surfacing.
+
+Fixed on both sides, so neither depends on the other being correct:
+
+- the plugin clamps to `UploadRepository::MAX_REPORTABLE_BYTES` (1 TB), so it can
+  never emit a figure its own server refuses;
+- the DTO **clamps rather than rejects** — a `@Transform` in place of `@Max`. A
+  metric is the least important thing in that payload and must not be able to take
+  the rest of it down. A non-numeric value still fails validation, because
+  clamping a string into a number would turn a malformed payload into a plausible
+  one.
+
+Killed by `clamps a figure above the ceiling instead of failing the heartbeat`,
+with the saturated `PHP_INT_MAX` value covered explicitly.
+
+✏️ **Not defects, recorded so they are not rediscovered:** a refunded or cancelled
+order keeps both its artwork and its storage allocation permanently — ADR-042's
+stated policy — which means measured usage only ever grows for a store with a long
+tail of cancelled orders. Worth revisiting when M24.2 enforces limits, not before.
+
+##### The quota race — closed by moving the ceiling into the write
+
+🟠 **`UploadQuota::allows()` was check-then-act.** It asks whether a file fits, and
+the endpoint then verifies content, decodes an image and moves the bytes before
+the row lands — a window wide enough for two concurrent uploads from one session
+to both be told yes and both be stored.
+
+The same shape as the `claim()` race in Stage 4b, but **unlike that one no unique
+index can express it**: the limit is a `SUM`, not a key. The three candidate fixes
+and why one wins:
+
+- **Row locking** would hold a transaction across file I/O. Rejected.
+- **Insert then delete if over** is two writes, and a concurrent pair can both
+  delete. Worse than the disease.
+- **`INSERT … SELECT … WHERE`** evaluates the session's usage *as the row is
+  written*, atomically, with no lock held across the slow part. Chosen.
+
+**Verified on both engines this plugin runs against**, before writing any code:
+MySQL permits a self-referencing `INSERT … SELECT` — the 1093 restriction covers
+`UPDATE` and `DELETE`, not this — and SQLite permits it too.
+
+**Then verified as a race, against the real schema.** A session holding 19 of 20
+files, with two uploads that had both passed `allows()` at count 19: the first
+inserted, **the second was refused by the statement**, and the session stopped
+exactly at 20. Both would previously have landed.
+
+⚠️ **`UploadQuota` stays exactly where it is.** It refuses the ordinary case
+*before* the bytes are moved, which is what stops a doomed upload doing the work;
+the guard in the statement catches only the overlap it cannot see. Removing either
+would be a regression.
+
+✏️ **The stub had to learn that a guarded insert is still an insert.** `create()`
+now writes through `query()` rather than `insert()`, so a stub recording only
+`insert()` calls went blind to every stored row at once — the sixth time this
+session that test infrastructure, not code, was the thing hiding a behaviour.
+
+Killed by `test_the_insert_carries_the_sessions_ceilings`.
 
 ### Phase 15 exit criteria
 
 ```text
-[ ] Customer uploads; merchant retrieves print-ready files from the order
-[ ] Content-based MIME verification; SVG blocked; malware scanned
-[ ] Orphan cleanup running; retention policy documented
-[ ] Per-plan quotas enforced and metered
-[ ] Cancellation behaviour for stored files documented
+[x] Customer uploads; merchant retrieves print-ready files from the order
+[x] Content-based MIME verification; SVG blocked; malware scanned (see below)
+[x] Orphan cleanup running; retention policy documented
+[~] Per-plan quotas METERED; enforcement deferred -- see below
+[x] Cancellation behaviour for stored files documented
 ```
+
+**Where each stands** — checked against the code, not assumed:
+
+| Criterion | State |
+| --- | --- |
+| Upload + retrieval | ✅ **Met.** Uploading works end to end (Stage 4d gave the resolver its `file` branch, without which no file option could be bought at all); retrieval ships as M15.5 — `UploadDownload`, `UploadArchive`, `UploadLink` and `Admin\OrderFiles`. |
+| MIME / SVG | ✅ **Met.** Content-based verification and SVG blocking ship in M15.3. |
+| Malware scanning | ⚠️ **Reassigned, not skipped** — see below. |
+| Orphan cleanup + retention | ✅ **Met.** `UploadSweeper`, `UploadExpirer` (4c) and `UploadRetention` (4e), with the policy written as ADR-042. |
+| Quotas metered | ⚠️ **Half met.** Per-**session** quotas (20 files, 100 MB) are enforced in M15.3; `usage_records` gained its first writer in M15.6, reported per store and summed per tenant (ADR-043). Per-**plan** `file_storage_mb` is **metered and not enforced** — see below. |
+| Cancellation documented | ✅ **Met.** ADR-042: cancelling deletes nothing, and why. |
+
+#### 🔴 Five extensions accepted a bare signature — fixed 2026-09-09
+
+Found by probing the real `finfo` rather than reading the code. A file of
+nothing but a format header and a script tag was **accepted**:
+
+```text
+"GIF89a<script>alert(1)</script>"            accepted as .gif
+"\x89PNG\r\n\x1a\n<script>…</script>"          accepted as .png
+"\xFF\xD8\xFF\xE0<script>…</script>"            accepted as .jpg
+"II\x2A\x00<script>…</script>"                 accepted as .tif
+```
+
+`finfo` reads the signature and stops. `wp_check_filetype_and_ext()` trusts it.
+And `getimagesize()` — which `UploadContent`'s docblock credited with verifying
+"every image type properly" — reads only the header: it answered
+**1634493810x1948791081** for that PNG rather than refusing it.
+
+**Nothing was exploitable, and that is why it survived.** Both consumption paths
+were verified before changing anything: the download sends
+`application/octet-stream` with `nosniff` and `attachment`, and the preview
+re-encodes — measured, a polyglot produced an **empty** preview rather than
+passing bytes through. The hazard was a stored file waiting for a future reader
+to be less careful.
+
+**Closed at the door.** An extension claiming a raster format must now *decode*,
+not merely start correctly. `webp` and `bmp` are deliberately absent from that
+list because they were already refused — verified, not assumed — and `.pdf` is
+absent because a document is never decoded; its guarantee is the magic-byte check
+plus a download no browser renders.
+
+⚠️ **The decode is bounded before it runs.** `imagecreatefromstring()` allocates
+for the dimensions the header claims, so a crafted 20000x20000 PNG would need
+~1.5 GB where reading its header needs 536 bytes. Dimensions are checked against
+a ceiling first — the same decompression-bomb defence `UploadEndpoint` already
+applies per option, repeated where any caller can reach it.
+
+⚠️ **Two test fixtures were themselves polyglots.** `UploadContentTest`'s `PNG`
+and `JPEG` constants were the format signature *and nothing else*, so every test
+naming "a real PNG" was uploading exactly the shape being attacked. They broke
+when the check landed, and the break was the check working. Both are now genuine
+images — a fixture standing in for the safe case has to *be* the safe case.
+
+⚠️ **One mutant survived the first pass.** Making the decode always succeed
+changed nothing, because the polyglots' absurd header dimensions were already
+refused by the pixel ceiling — defence in depth hiding the very guard under test.
+A 1x1 header with a corrupt body isolates it: it passes the ceiling and fails
+only at decode.
+
+#### 🔴 Per-plan storage is metered, not enforced — corrected 2026-09-09
+
+The criterion read *"per-plan quotas **enforced** and metered"* and was ticked.
+Audited against the code: `assertWithinLimit()` exists and is used for the
+**authoring** limits only. Nothing anywhere compares `file_storage_mb` against a
+plan, so **a tenant on a 1 GB plan can store 100 GB and nothing refuses it**.
+
+What *is* enforced is per-session: `UploadQuota::MAX_FILES` (20) and
+`MAX_BYTES` (100 MB), which bound one customer's upload burst and were never
+intended as a plan limit.
+
+**Deliberately not implemented here.** Enforcing a storage limit with no upgrade
+path in front of it breaks a merchant mid-order and gives them nothing to do
+about it — the enforcement belongs with billing, where a merchant who hits a
+ceiling can act on it. The meter is the half that had to exist first, and it
+does.
+
+⚠️ **Tracked as [M24.2](#m242--limit-enforcement-at-write-time)**, which already existed — Phase 24 *is* Plan Limits & Enforcement, and M24.1 already names storage among what it meters. A criterion whose
+other half points nowhere is how work disappears — which is the same defect the
+malware criterion had until this audit, below.
+
+#### The malware criterion belongs to ADR-040's mirror, not to this phase
+
+🔴 **Scanning on the merchant's host was examined and rejected as theatre.**
+ADR-041's Decision 5 records the measurement: `clamscan` and `clamdscan` are
+absent here, will be absent on shared hosting, and `exec()` is commonly disabled
+there. A scanner the plugin shells out to *silently does nothing on most
+installs* — worse than none, because it looks like protection and stops anyone
+asking.
+
+So scanning happens **cloud-side, where the environment is ours**, and it **gates
+the mirror**: no file reaches Optionia-managed storage unscanned. That work is
+**[M34.8](#m348--the-cloud-mirror-and-the-malware-scanning-it-gates)**, and this
+phase cannot close it because this phase does not build the mirror.
+
+⚠️ **That milestone did not exist until the 2026-09-09 audit.** The criterion was
+reassigned to "ADR-040's cloud mirror" — a decision recorded in an ADR with no
+phase, no milestone and no acceptance criteria behind it. The reassignment was
+right and the destination was imaginary, which is the same failure as ticking the
+box: work that nobody will schedule.
+
+⚠️ **The gap is real and stated, not papered over.** A file on the merchant's own
+server is unscanned until it mirrors — it is on *their* infrastructure under
+*their* security posture, exactly as any other WordPress upload is. What Phase 15
+does guarantee is narrower and keepable: the file is never executed by the
+merchant's web server, never served from a guessable path, and reaches the
+merchant as a download rather than something a browser renders inline.
+
+The criterion is marked met **because its Phase 15 half is met and its remaining
+half is [M34.8](#m348--the-cloud-mirror-and-the-malware-scanning-it-gates)** —
+leaving it open would imply work this phase can still do, and ticking it silently
+would claim protection that does not exist yet.
+
+⚠️ **This paragraph said "owned elsewhere" and named nothing** until the
+2026-09-09 audit created that milestone. "Elsewhere" is not an owner.
+
+#### What is proven, and what is reasoned — recorded 2026-09-09
+
+An exit criterion says a thing was built. It does not say how it was verified,
+and for a security subsystem that distinction is the whole value. Three of Phase
+15's guarantees rest on different kinds of evidence:
+
+| Guarantee | Evidence |
+| --- | --- |
+| Uploaded files are never executed by the web server | **Reasoned, partly measured.** `.htaccess` and `web.config` were **measured doing nothing** on the development host — a probe inside the guarded directory answered **200**, because Studio's PHP server reads neither. nginx has the same gap. |
+| Uploaded files cannot be found by guessing | **The real defence, and it is measurable.** Two independent secrets: a 64-bit salted directory and a 256-bit token. This is what holds when the web-server guards do not. |
+| A stored file cannot execute in a browser | **Test-proven.** Content type refused by MIME; the download sends `application/octet-stream` + `nosniff` + `attachment`; the preview re-encodes to fresh pixels. A polyglot was measured producing an **empty** preview rather than passing bytes through. |
+| An uploaded image is a real image | **Test-proven since the 2026-09-09 audit.** Five extensions accepted a bare signature plus a script tag before it. |
+
+⚠️ **`is_uploaded_file()` cannot be exercised at all** — no test can create a file
+PHP itself received, and a mutation removing that guard left **1091 tests
+passing**. `MovesUploadedFiles` exists as a seam so a test can prove the endpoint
+*asks*; the production implementation still calls the real function, and that
+call is reasoned about rather than proven.
+
+**Phase 15 is complete**, with two criteria whose remaining halves are now
+scheduled — [M24.2](#m242--limit-enforcement-at-write-time)
+and [M34.8](#m348--the-cloud-mirror-and-the-malware-scanning-it-gates).
 
 ---
 
@@ -4709,25 +17108,190 @@ Per-tenant usage into `usage_records` for [Phase 24](#phase-24--plan-limits--enf
 
 **Depends on:** Phases 11, 14
 
+### Pre-flight analysis (2026-09-09) — findings and the order they change
+
+Measured by running the code, not by reading it. **Two of these findings correct
+claims made in an earlier pass of this same analysis** — recorded rather than
+quietly replaced, because a wrong reading that survived one pass will survive
+another unless the correction is written down.
+
+#### ✏️ Two corrections
+
+**The unpriced-type gap is not silent.** An earlier pass called it so. It is not:
+`Admin\UnpricedTypesNotice` tells the merchant *"Optionia is not charging for some
+of your options."*, and the signal is consumed in four places — `Config\Repository`,
+`Integration\CartItemData`, `Integration\CartTotals` and the notice. A 50%
+surcharge on an £80 product still charges £80, but the merchant is **told**.
+
+**`per_unit` does have a quantity source.** The earlier pass said Phase 14 added no
+quantity field. It added a **`quantity` option type** with `value_kind: number`,
+and the resolver canonicalises it correctly — measured: `007` → `"7"`, `7.0` → `"7"`,
+`min`/`max` enforced, `0` and `-1` refused as `out_of_range`.
+
+#### 🔴 1. `weight_delta` and `sku_suffix` are the genuinely silent gap
+
+The severity ranking inverts once the notice above is accounted for. Measured
+end to end:
+
+```text
+settable via the API      option-value.dto.ts        yes
+stored + serialised       option-set.serializer.ts   yes
+delivered to the plugin   cached document            yes
+read by the plugin        src/**                     NO
+warned about              anywhere                   NO
+```
+
+A merchant configures *"Heavy oak +8000g"*, publishes, and sells. WooCommerce
+quotes shipping on the **base** weight; the merchant ships eight kilos heavier and
+absorbs the carrier difference. **The first signal is a shipping invoice.** Same
+class of loss as the unpriced surcharge — and unlike that one, nothing says so.
+
+#### 🔴 2. `per_unit` cannot mean product quantity — the build forbids it
+
+The obvious reading, *amount × cart quantity*, is **not available**.
+`Integration\CartTotals` records that `WC_Cart_Totals` already multiplies by
+quantity, and `bin/check-architecture.sh` enforces it: *"no quantity arithmetic in
+the pricing path (prices stay per unit)"* — a live gate that passes today and would
+fail the build.
+
+So the open question is not "where is a quantity" but **what binds one to a
+price**:
+
+```text
+price_config      sits on an option VALUE
+a quantity option has NO values (takesValues:false -- the customer types it)
+the link          does not exist
+```
+
+"£5 per unit" is configured on option A; the number lives on option B. Settling
+that needs a schema decision — a named reference (`quantity_from`), or a rule that
+a `per_unit` price binds to a number option in the same group — and each fails
+differently when the referenced option is deleted. **M16.2 cannot start until it is
+made.**
+
+#### 🟠 3. Two evaluators to extend, not one
+
+The cloud **validates and serialises** pricing and never evaluates a selection:
+`src/common/money/line-total.ts` handles no price types. The exit criterion says
+*"implemented in both PHP and TS"*, so every type lands twice, kept honest by
+`pricing-fixtures.json`.
+
+#### 🟡 4. `formula` exists nowhere
+
+Zero occurrences in `pricing.schema.ts`. M16.5 is a new type, a new schema branch,
+**and** a sandboxed evaluator on two runtimes.
+
+#### ✅ Verified ready — more than expected
+
+| Piece | Measured |
+| --- | --- |
+| `Support\Money::percentage()` | **8/8** against `pricing-fixtures.json` |
+| `common/money/percentage.ts` | Built, fixture-driven, 56 tests green |
+| The rounding trap | **`Math.round` fails 4 of 8** — every negative half-case |
+| `Engine\Text::measure()` | Grapheme-correct: a family emoji counts **1**, not 7 |
+| `quantity` option type | Canonicalises `007` / `7.0` → `7` |
+| Resolver forward-compatibility | Unknown types (`formula`, and a nonsense type) flow through and are reported rather than fataling |
+
+⚠️ **M16.7 is nearly answered already.** `Engine\Pricing` records that *"deltas
+carry no currency anywhere in the schema"* — so option prices are
+currency-agnostic minor units, and the milestone is documentation and tests rather
+than machinery.
+
+#### Execution order, revised by the above
+
+| Stage | Work | Why here |
+| --- | --- | --- |
+| **16a** ✅ | `weight_delta` + `sku_suffix` | **Promoted to first.** The only *silent* loss, and the config already flows end to end — nothing to design, only to consume. ⚠️ Shipping is calculated *after* cart totals, so a weight applied too late quotes the wrong rate: **verified by test, not inspection.** |
+| **16b** ✅ | `percentage` | **Done.** Not the plumbing job it looked like: there was no TS evaluator to extend, and the fixture proved both *ends* of pricing while neither language proved the middle. See [Stage 16b](#-stage-16b--percentage). |
+| **16c** ✅ | `per_char` | **Done.** Its analysis found the **price freeze already broken** for any line carrying a text, date, number or file option — quoted 85.00, charged 130.00. See [Stage 16c](#-stage-16c--per_char-and-the-price-freeze-it-was-hiding). |
+| **16d** ✅ | `per_unit` | **Done.** The blocker was stale — Phase 14 had already built the number types, and 16c the option-level plumbing. See [Stage 16d](#-stage-16d--per_unit). |
+| **16e** ✅ | `tiered` | **Done.** The bracket decision was already made in Phase 7; the real blocker was that `tiered` could only be configured where it cannot work. See [Stage 16e](#-stage-16e--tiered-the-last-pricing-type). |
+| **16f** ✅ | Currency (M16.7) + stock (M16.9) | **Done.** Stating it found two things nothing asserted: the conversion split across price types, and a stock guarantee resting on one untested line. See [Stage 16f](#-stage-16f--currency-m167-and-stock-m169). |
+
+🔴 **M16.5 (`formula`) is recommended for deferral** to a phase-sized effort of
+its own. A sandboxed expression evaluator running on two runtimes, over
+merchant-authored input, is a security boundary deserving the treatment ADR-041
+gave malware scanning — a decision recorded in its own right, not a stage inside
+a pricing phase.
+
+*Accepted, and that phase is now [Phase 16b](#phase-16b--formula-pricing).*
+
 ### M16.1 — `percentage` of base
 
 With the compounding and rounding semantics from `PRICING-SPEC.md` made explicit.
 
+⚠️ **This is where the PHP/JavaScript rounding divergence starts to bite.**
+Recorded 2026-08-31 from Phase 11 Stage 3, which measured it before either
+evaluator existed: `Support\Money::percentage()` rounds half up **away from
+zero**, and JavaScript's `Math.round` rounds **toward positive infinity**. A 5%
+discount on £0.30 is −2 minor units in PHP and −1 in JS, and six of six negative
+boundary cases disagree.
+
+Phase 11 was scoped to `fixed`, whose deltas are integer additions with no
+rounding, so nothing diverged there. This milestone is the first that rounds at
+all, and it rounds in both languages.
+
+Two things follow. `PRICING-SPEC.md` states the rule as "half up, **away from
+zero**" rather than "half up", because the shorter phrasing is satisfied by
+`Math.round` and wrong on every discount landing on a half. And the shared
+fixture carries **negative** boundary cases, so an implementation that reaches
+for `Math.round` fails a build rather than shipping a penny's difference between
+what a customer is quoted and what they are charged.
+
+Compounding needs no new decision: the schema already defines a percentage as
+"of the base product price", so two percentages each take the base and add.
+
 ### M16.2 — `per_unit` and `per_char`
 
-Quantity-driven and character-count-driven pricing (engraving). Whitespace and unicode
-counting rules defined precisely.
+Quantity-driven and character-count-driven pricing (engraving).
+
+⚠️ **Two things inherited from Phase 11's Stage 0 (2026-08-31).**
+
+*`per_unit`'s quantity source is this milestone's question.* `amount × option_quantity`
+needs a per-option quantity and nothing provides one — `Cardinality` is
+`none | one | many`, how many values may be *selected*, not a count of units.
+Phase 11 deliberately did not invent a field for it: this milestone arrives after
+[Phase 14](#phase-14--option-type-library) has built the option types that would
+carry such a number, so the question is answerable here and was not there.
+
+*And "whitespace and unicode counting rules defined precisely" is **not** this
+milestone's to define.* [M11.1a](#m111a--one-measure-function-shared-by-pricing-and-display)
+writes one normative `measure(text)`, and this milestone **consumes** it. Three
+places each believing they define that rule is exactly how the `optionia-app` bug
+happened — pricing counting five characters while the counter showed four. The
+fixture in [M11.4](#m114--cross-language-fixture-suite) asserting that the measure
+used for pricing equals the measure used for limits is what keeps that true.
 
 ### M16.3 — `tiered` / quantity breaks
 
 Bracket definition, boundary behaviour (inclusive/exclusive), and interaction with product
 quantity vs. option quantity.
 
-### M16.4 — Conditional pricing
+### M16.4 — Conditional pricing — **DEFERRED to Phase 17**
 
 Price depending on other selections — e.g. engraving costs more on metal than on wood.
 Expressed through the [Phase 17](#phase-17--conditional-logic-engine) rule engine rather
 than a parallel mechanism.
+
+🔴 **Not built in Phase 16, and the exit criteria did not say so** — recorded
+2026-09-10. `[x] All pricing types implemented in both PHP and TS   -- five of five; see M16.4` was ticked
+while this milestone had no completion record and no criterion mentioned it. The
+**fifth** instance of the pattern recorded above, and the only one where a tick
+did the concealing rather than a vague destination.
+
+It is a genuine deferral rather than an oversight: conditional pricing is an
+**action of the rule engine**, and building it inside a pricing phase would be
+the "parallel mechanism" this milestone's own sentence rules out. What was wrong
+was ticking a criterion that covered it.
+
+⚠️ **Phase 17 inherits real design work, not just an implementation.** Phase 16
+established five price types with a strict value-versus-option-level split,
+`Engine\SelectionResolver::PRICED_TYPES` as the single authority for what this
+build charges, and position rules enforced in three places — the type registry,
+the cache scanner and the evaluator. A `set_price` **action** is a sixth route to
+a price, arriving from a different direction, and whether it *replaces* a value's
+delta, *adds* to it, or is refused where an option-level type already prices is
+undecided. That decision belongs at the start of Phase 17, not inside it.
 
 ### M16.5 — Constrained formula pricing
 
@@ -4739,6 +17303,45 @@ client.
 ### M16.6 — Negative pricing and discounts
 
 Options that *reduce* price, with a floor at zero and interaction with coupons defined.
+
+⚠️ **The arithmetic floor moved to Phase 11 (decided 2026-08-31).**
+`pricing.schema.ts` already accepts negative amounts — `amountMinor` is bounded at
+`-MAX_AMOUNT_MINOR` — so a discount option is configurable **today**, five phases
+before this milestone. [M11.4](#m114--cross-language-fixture-suite) also requires
+fixtures for negative deltas, which would have meant evaluating them without the
+rule that governs them, and
+[M11.5](#m115--server-side-enforcement-at-add-to-cart) enforcing a floor that did
+not exist.
+
+So Phase 11 clamps the **line total** at zero — not each delta, which would
+silently turn a −£50 discount into £0 and charge full price. What stays here is
+the part that genuinely needs this phase: the **authoring** experience for
+discount options, and how they interact with coupons, which is where a floor at
+zero stops being arithmetic and starts being a merchant decision about who absorbs
+the difference.
+
+#### ✅ Coupon interaction — settled, and where the reasoning lives
+
+**Coupons are applied by `WC_Cart_Totals` *after* the pricing hook, and are
+unaffected by anything this phase does.** The reasoning is recorded in
+`Integration\CartTotals`'s class docblock, verified against WooCommerce 11.0.1:
+
+- Coupons run after `woocommerce_before_calculate_totals`, and fees use
+  `woocommerce_cart_calculate_fees`. **Neither goes through `set_price()`**, which
+  is the only thing this plugin touches.
+- So the blast radius is bounded to plugin-versus-plugin `set_price()` conflicts —
+  two plugins claiming the same number — which WooCommerce defines no answer for
+  in any case.
+
+A negative option delta therefore reduces the line **before** a coupon is applied
+to it, which is the order a merchant expects: the coupon discounts what the
+customer is actually buying, options included.
+
+⚠️ **Recorded here 2026-09-10 because it was true and invisible.** The reasoning
+existed only in a PHP docblock, and this milestone's own sentence asked for it to
+be *"defined"* — a decision nobody can find is not defined. Every price type
+Phase 16 shipped accepts a negative amount, so this is not hypothetical: five
+types can produce a discount, and all five sit in front of the coupon.
 
 ### M16.7 — Multi-currency
 
@@ -4776,6 +17379,140 @@ merchant absorbs the difference. Verified by test, not by inspection.
 belong in Tier 1 of this phase. The rest are per-value config with clear defaults, and can
 follow.
 
+
+#### ✅ Stage 16a-1 — `weight_delta`
+
+`Engine\SelectionResolver` sums a `weight_delta_grams` per chosen value and
+returns it beside the deltas; `Integration\CartTotals` applies it to the cart
+line's product object, next to the `set_price()` it already performs.
+
+🔴 **The field had been in the published document since Phase 5 and read by
+nothing.** A merchant could configure "Heavy oak +8kg", publish, and sell — and
+WooCommerce would quote the carrier rate for the base product, with **no error
+anywhere, because nothing failed**. The first signal is a shipping invoice. Unlike
+an unpriced price type, which raises `Admin\UnpricedTypesNotice`, this had no
+warning of any kind.
+
+##### Three decisions, each measured rather than assumed
+
+🔴 **The unit conversion is not optional.** The document carries **grams**;
+`WC_Product::get_weight()` answers in the store's configured unit — `kg` on this
+development store. Adding 8000 to a kilogram weight would make an eight-kilo
+option weigh eight *tonnes*. Killed by six failing tests.
+
+🔴 **The line total is converted, never the delta.** Measured against WooCommerce
+11.0.1: `wc_get_weight( -2000, 'kg', 'g' )` returns **0**, because the function
+clamps a negative result *(`wc-formatting-functions.php:214`)*. Converting a
+flat-pack option's −2000g on its own would silently discard it. Summing in grams
+and converting once keeps a reducing option working — and still floors at 0 when
+the line as a whole would go negative. Killed by two failing tests.
+
+🔴 **Per unit, never multiplied by quantity.**
+`WC_Cart::get_cart_contents_weight()` does `get_weight() * $values['quantity']`,
+the same shape `WC_Cart_Totals` uses for price. A line of three "+8kg" tables must
+report 28, not 44 — M11.6's silent-overcharge trap, pointed at shipping instead of
+price. ✅ **`bin/check-architecture.sh` already covers this**: its quantity guard
+scans the whole of `src/`, so the protection was inherited for free.
+
+##### Ordering, verified rather than inspected
+
+M16.8 asks for the ordering to be *"verified by test, not by inspection"*. Traced
+in WooCommerce 11.0.1: `class-wc-cart.php:1568` fires
+`woocommerce_before_calculate_totals`, **then** line 1570 constructs
+`WC_Cart_Totals`, whose `calculate()` calls `calculate_shipping_totals()`. And
+`get_cart_contents_weight()` reads `$values['data']->get_weight()` — the *same
+product object* this applicator already calls `set_price()` on. So a weight set at
+priority 10 lands before shipping reads it, and a test now pins the registration.
+
+⚠️ **Weight is live, not frozen — and that is a decision.** `CartTotals` freezes
+the *price*, because the customer was quoted a number. They were never quoted a
+weight; they were quoted a *shipping cost*, which WooCommerce recalculates from
+weight on every cart load. Freezing weight would imply a stability Optionia cannot
+deliver, because the carrier rate is not ours to freeze.
+
+##### ✏️ A gate that read the file path, not the code
+
+`Principle 5` (no float money) matched its money-word list against the whole
+`grep -rIn` line — **including the `file:line:` prefix**. Every float in
+`Integration/CartTotals.php` was therefore a hit on the *filename*: a weight named
+`$line_grams` precisely to avoid money words still failed.
+
+That is the defect this same file warns about two comments earlier — *"a gate that
+reads documentation instead of code"* — pointed at paths instead of prose. The
+identifier test now runs on the code portion only, and the prefix is restored for
+the report so a failure still names its line. **Verified it still catches a real
+violation**: a planted `(float) '12.34'` assigned to `$price_minor` fails, named by
+file and line.
+
+✏️ **`wc_get_weight()` was not stubbed**, so `apply_weight()` returned early in
+every test — the code would have been untested while appearing covered. The stub
+now mirrors the real function's **negative clamp**, which is what makes the
+convert-the-total decision provable rather than asserted.
+
+Killed by `test_the_delta_is_converted_into_the_stores_unit`,
+`test_a_reducing_option_lowers_the_line_weight`, and
+`test_the_weight_is_not_multiplied_by_quantity`.
+
+🟠 **`sku_suffix` is deliberately not in this stage.** `WC_Product::set_sku()`
+calls `wc_product_has_unique_sku()` and **throws `WC_Data_Exception`** on a
+duplicate *(`abstract-wc-product.php:868`)* — and two cart lines of one product
+with the same option produce identical SKUs. An uncaught exception on
+`before_calculate_totals` takes the cart page down, which is worse than the silent
+gap being fixed. It needs an application-point decision (order-line meta, or a
+guarded call) and is tracked as **16a-3**.
+
+##### 🔴 Post-16a-1 audit — weight compounded on every hook firing
+
+Found by auditing the stage after calling it complete, and **worse than the gap it
+was fixing**.
+
+`calculate_totals()` has nine call sites in WooCommerce core, so the hook fires
+several times per request. Price is protected — `base_price_minor()` memoises the
+base and recomputes from it. **Weight had no such protection**: it read
+`get_weight()` fresh each firing and added the delta to a weight this class had
+already changed. Measured through the real code path:
+
+```text
+firing 1 -> price=85.00  weight=28 kg
+firing 2 -> price=85.00  weight=36 kg
+firing 3 -> price=85.00  weight=44 kg
+firing 4 -> price=85.00  weight=52 kg
+```
+
+Price stayed correct; weight climbed 8 kg per firing. A **reducing** option decayed
+the other way — 18 → 16 → 14 → 12 kg — until a 20 kg product would ship as
+weightless. The customer is quoted a carrier rate for a weight that depends on how
+many times WooCommerce happened to recalculate, which is precisely what this
+class's own docblock calls *"neither visible nor arguable"*.
+
+🔴 **The failure was written directly beneath the comment forbidding it.**
+`CartTotals` states *"Why this must be idempotent… firing twice produces the same
+number as firing once"* and warns that the naive shape makes deltas **compound**
+— *"85.00, then 90.00, then 95.00, growing with every one of the nine call
+sites."* The weight code was that shape, in that file, below that paragraph.
+
+**Fixed with `$base_weights`**, memoised per cart-item key exactly as
+`$base_prices` is. Verified stable across five firings in both directions —
+28 kg stays 28 kg, 18 kg stays 18 kg — and a quantity change still recalculates
+correctly, which is why the docblock rules out an `$applied` flag as the fix.
+
+##### ✏️ Why 1280 tests and 10 gates missed it
+
+`test_is_idempotent_under_repeated_firing` **already existed**, fired
+`calculate_totals()` four times, and asserted **only `get_price()`**. Every weight
+test called `apply()` once, so all of them passed under the defect.
+
+The idempotence assertion is now made **beside the price**, in the same shape,
+rather than in a test of its own — so the next thing applied to a line is checked
+by default instead of being remembered. Killed by
+`test_the_weight_is_idempotent_under_repeated_firing` and
+`test_a_reducing_weight_is_idempotent`.
+
+⚠️ **The lesson worth keeping:** three decisions were mutation-tested here — unit
+conversion, convert-the-total, and per-unit — and all three held. The one that
+broke was the invariant the file already documented and no new test asserted.
+Mutation-testing what was just written does not check what was already required.
+
 ### M16.9 — Inventory and stock interaction
 
 **The default position, stated deliberately: Optionia does not manage stock.**
@@ -4799,15 +17536,1108 @@ What must nonetheless be handled correctly:
 **Acceptance:** an out-of-stock product cannot be purchased through the option flow; a
 variable product's variation stock is respected; the limitation is documented publicly.
 
+#### ✅ Stage 16b — `percentage`
+
+`Engine\SelectionResolver::delta_for()` dispatches `percentage` to a new
+`Engine\Pricing::percentage_of()`, and the cloud gains
+`src/common/money/price-config-delta.ts` — **its first price-config evaluator**.
+Both are held to a new `config_cases` block in `pricing-fixtures.json`.
+
+##### 🔴 The fixture proved both ENDS of pricing and neither language proved the middle
+
+The pre-flight analysis found the shared fixture testing the two things that
+could not diverge, and not the one that could:
+
+- the main `cases` hand the summer **deltas that are already computed**, so they
+  prove addition and clamping;
+- `rounding_cases` call `percentageOf(10, 500)` directly, so they prove rounding.
+
+Nothing tested that a `{type: percentage, basis_points: 500}` config **on a base
+of 10 yields a delta of 1**. Read `basis_points` as a percent on one side and as
+basis points on the other and every test in both repositories still passes —
+each half being correct in isolation is exactly what hides it.
+
+**Proven, not asserted.** With the PHP rounding alone mutated to JavaScript's
+`Math.round` semantics, the PHP suite failed on the named case *"a NEGATIVE
+percentage rounds away from zero, not toward it"* while the TypeScript suite
+stayed green — one language drifting now fails that language's build. Before
+this stage the same mutation was invisible to both.
+
+A second finding was structural: **there was no TS evaluator to extend.** The
+cloud had `percentageOf` and `sumDeltas` and nothing between them, so 16b is
+where the cloud gets a config-to-delta step at all.
+
+##### 🔴 Three copies of "what this build can price", two of them bare strings
+
+Widening the evaluator alone would have charged the percentage correctly **and
+warned the merchant it had not been charged** — the admin notice and the cart
+logger each stated `fixed` independently, and two of the three were plain string
+literals rather than the constant a test was watching.
+
+`Engine\SelectionResolver::PRICED_TYPES` is now the single authority;
+`Config\Repository` and `Integration\CartTotals` read it. A warning derived from
+anything other than the code that charges is a second opinion about what the
+first one does.
+
+The agreement test had to be **rewritten rather than updated**: it compared the
+two constants through reflection, and once `Repository` read the evaluator's
+constant that comparison would have compared a value to itself and passed
+unconditionally. It now asserts the behaviour — for each published type, whether
+the evaluator charges it and whether the scanner stays quiet must be the same
+answer — which survives the constants being merged *and* being separated again.
+
+##### The gates the fixture change broke, and why they were wrong before
+
+Adding cases carrying a percentage config broke two counters that had been
+reading the **whole file** rather than their own array:
+
+- `rounding_case_count` counted `"basis_points"` file-wide — 8 declared, and the
+  new cases would have made it 13;
+- the negative-tie floor counted `"basis_points": -` file-wide — `rounding_cases`
+  holds 5 negatives, a whole-file count reads 6, and that one unit of slack is
+  what would have let someone delete a negative rounding case and still clear the
+  floor of 3.
+
+Both are now scoped to their arrays — the third and fourth time this file has
+learned that no field name stays unique to one array, because the arrays hold the
+same shape of thing on purpose. Verified by mutation: with a rounding case
+removed, the scoped gate fails three ways (hash, count, spec coverage).
+
+A new check requires a **local** suite to read `expect_delta`, so a config case
+executed in one language only fails the other language's build — the same
+guarantee the pricing and bound cases already carried.
+
+##### Decisions
+
+**A percentage is of the base, never of a running total.** Two 50% options on an
+80.00 product add 40.00 each — 160.00, not 180.00. Compounding would make the
+total depend on option order, which the published schema does not define and the
+customer cannot see. Asserted directly in both languages rather than through the
+fixture, because a single-option case cannot distinguish the two: with one
+percentage, base and running total are the same number.
+
+**A malformed rate is reported, not coerced.** `{type: percentage}` with no
+`basis_points` returns 0 *and* records `percentage` as unpriced. `?? 0` would
+make a broken publish indistinguishable from a merchant who meant free, and
+`Number(x) || 0` in TypeScript would turn `"abc"` into a giveaway and `"500"`
+into a charge nobody configured.
+
+**Storefront preview stays server-only.** `wp_localize_script` sends `currency`
+and `upload` and no base price, so the browser cannot compute a percentage. AC3
+and AC4 both point the same way; the price shown at add-to-cart is the server's.
+
+##### What did not change
+
+`record_option_pricing()` still records **option-level** `percentage` as
+unpriced. `PRICING-SPEC.md` prices `percentage` per value, and option-level
+pricing has no defined meaning there — inventing one silently is how the two
+implementations start disagreeing.
+
+##### Verification
+
+- Plugin **1298 tests** (1282 before the stage, 1294 before the post-audit fixes), 10/10 gates green.
+- Backend **742 unit + 893 e2e**, 8/8 gates green (unit was 727).
+- `PRICING-SPEC.md` §2 rewritten and re-pinned in both repos: what is computed
+  today, the of-the-base rule with its worked example, and the malformed-rate
+  rule. Two new spec claims are gate-checked against executed cases — verified by
+  deleting the case they name and confirming the gate fails by name.
+- [ADR-044](../optioniaWooCommerceBackend/docs/DECISIONS.md) records the five
+  decisions; `docs/OPTION-TYPES.md` no longer says the plugin prices `fixed` only.
+- Eight mutants killed by name across the two languages: divisor 100, `Math.round`
+  rounding, compounding off the running total, coerced malformed rate, and
+  `PRICED_TYPES` drifting from the plugin (caught by a spec that reads the PHP
+  source rather than restating it).
+##### 🔴 Three defects the gates caught in *earlier* stages' work, fixed here
+
+Running the full backend gate for the first time since 16a surfaced three
+things that had nothing to do with `percentage`, and all three were real:
+
+1. **Four audit actions declared but unreachable.**
+   `presentational_item.{created,updated,deleted,reordered}` were defined,
+   written by `PresentationalItemsService`, and served by a wired controller —
+   and **no e2e test drove those routes**, so four audit actions could be
+   emitted by production code without ever being observed being emitted. The
+   `audit-coverage` gate refused exactly that, which is what it is for. Fixed by
+   driving all four routes; verified by removing one call and confirming the
+   gate names the missing action rather than failing generically.
+2. **An unsafe `Function` type** in `duplication.spec.ts`, now a constructor
+   type.
+3. **`9_223_372_036_854_775_807` written as a numeric literal** in
+   `heartbeat.dto.spec.ts` — past `Number.MAX_SAFE_INTEGER`, so JavaScript
+   parses it as `…808`. The test named `PHP_INT_MAX` and was asserting about a
+   number the plugin cannot send. Now built from `2 ** 63 - 1`, which makes the
+   imprecision deliberate instead of invisible.
+
+A fourth surfaced from the audit fix itself. Adding four routes to the e2e run
+pushed logins past the auth rate limiter, and `guards.e2e-spec.ts` failed with
+*expected 403, received 301* — a message about routing, from a test that had no
+token.
+
+🔴 **Three suite-local `tokenFor()` helpers never checked the login status.** A
+throttled login (429) leaves `login.body.data` undefined, the helper returns
+`undefined`, and every following request goes out as `Bearer undefined`.
+
+The flake is not the danger. **A permission test that silently sends no
+credential can PASS for the wrong reason** — so a real hole in the capability
+matrix would look like a green suite. `test/harness.ts` has guarded this since it
+was written; `guards`, `option-sets-http` and `option-authoring` had each grown
+their own copy without it. All three now raise.
+
+The lesson is the one this project keeps relearning: **a suite that was green
+when a stage closed is not evidence the stage's gates were run.** 16a's work was
+verified by its own targeted tests; three of these four would have shipped.
+
+⚠️ **`npm run test:e2e` is not a substitute for `npm run check`.** Run directly,
+it starts 33 suites in parallel and they collide on the shared port — one
+register call came back `WebSockets request was expected` from an unrelated
+listener. The gate script sequences them; a failure seen only under the parallel
+run is a harness artifact until it reproduces under the gate.
+
+🟠 **The e2e suite is load-flaky, and it has now cost three false alarms.**
+Observed across the 16b/16c runs: `option-sets-http` failed once and passed on
+re-run; `cascade` and `concurrency` failed once with a **400 and an empty error
+body** on a plain group create — 1 failure in 210 identical requests, and the
+same 400 appeared in an unrelated partial run. One run hung entirely for thirty
+minutes with no log output and had to be killed.
+
+It kept going through 16d: `audit-coverage` failed on a publish that returned a
+**400 with an empty body** (92 publishes succeeded in the same run), and
+`option-authoring` took **1055 seconds** and failed two tests on 60-second
+timeouts — the same suite passes 78 tests in **6 seconds** in isolation.
+
+None reproduced in isolation or on re-run. The rule this establishes: **a single
+e2e failure is not evidence until it reproduces**, and the diagnosis is to re-run
+the suite alone before touching any code.
+
+It continued through the 16d audit fixes: `config-document` failed on a **404**
+creating a value — 266 of 277 identical requests in the same run succeeded, and
+the suite passes 32 tests in isolation.
+
+16e added a seventh: `cascade` failed on a **404** creating a value, with 266 of
+277 identical requests succeeding in the same run and 32 tests passing in
+isolation.
+
+🔴 **Partly diagnosed in 16f, and it was not all environmental.**
+
+`option-authoring` failed on a **301** reading a value, in a suite that ran in
+5.9 seconds rather than timing out — so the usual "load" explanation did not fit.
+The cause was a **sixth unguarded inline login**: 4 of 78 logins in that gate run
+came back **429**, and an unchecked login leaves `body.data` undefined, the token
+`undefined`, and every following request going out as `Bearer undefined`.
+
+16b had fixed three suite-local `tokenFor()` helpers and **missed six inline
+logins** across four suites. All six now go through `harness.tokenFrom()`, which
+raises rather than returning a broken token. Zero unguarded logins remain.
+
+⚠️ **The dangerous half is the one that does not show up as a failure.** A test
+asserting "a viewer may NOT write" **passes without sending a credential at
+all** — so an unguarded login turns a permission test green for the wrong
+reason. Some share of the "flakes" filed against the environment were this.
+
+⚠️ **The login limit itself is the underlying cause, and raising it did not
+work.** `login` carries its own `@Throttle` of 10 per 15 minutes, which
+`setup-e2e.ts` never raised — it lifts three *global* buckets, and `@Throttle`
+overrides by name. Making the route's limit configurable and raising it in the
+test environment **broke `rate-limit.e2e-spec.ts`**: that suite proves login
+throttling engages, and setting the variable back inside it did not restore the
+behaviour, because the decorator captures the value at class-decoration time and
+the ordering could not be made to work.
+
+Reverted. The guarded logins are the fix that holds: a throttled login now
+**raises** instead of silently producing `Bearer undefined`, so the symptom is a
+named error rather than a permission test passing for the wrong reason. Raising
+the ceiling remains the better fix and needs the decorator ordering solved
+first — recorded here so the next attempt starts from what was already tried.
+
+🔴 **What remains is real, and is now
+[M30.11](#m3011--the-harness-itself-flakiness-and-gates-that-read-the-wrong-thing)**
+— it was recorded as *unowned* until the 2026-09-09 re-audit, which is the same
+defect as "deferred to its own phase" with no phase. Two full hangs needing a
+`pkill` (the second during 16e's verification, silent for 21 minutes after 58
+suites and 831 passing unit tests), one 17-minute suite, and empty-bodied
+400/404s on requests that succeed 266 times out of 277 in the same run. Those are
+not login-shaped. Every one cost analysis time that looked like debugging real
+code. The signature is consistent — empty-bodied 400s, timeouts on trivial
+reads, extreme slowdowns under the full sequential run — which points at
+resource exhaustion (connections, ports, or the shared MySQL) rather than at any
+one suite.
+
+**Recommended as its own stage before Phase 17.** The cost is no longer
+occasional: it is a tax on every gate run, and it trains exactly the wrong
+instinct — that a red build might be nothing.
+
+#### ✅ Stage 16a-3 — `sku_suffix`, on the order line rather than the product
+
+The field had been authorable in the dashboard, published in the document and
+documented in `CONFIG-CONTRACT.md` since Phase 5, and **read by no plugin code at
+all** — the same silent shape `weight_delta_grams` had before 16a-1. A merchant
+configures "Oak → -OAK", publishes, sells, and the warehouse gets nothing.
+
+##### The blocker was real, and decided the design
+
+`WC_Product::set_sku()` calls `wc_product_has_unique_sku()` and **throws
+`WC_Data_Exception`** on a duplicate — verified in the installed WooCommerce
+11.0.1 at `includes/abstracts/abstract-wc-product.php:866`. Two cart lines of one
+product with the same option produce identical SKUs, so **the duplicate is the
+normal case rather than the odd one**. An uncaught throw on
+`woocommerce_before_calculate_totals` takes cart and checkout down — the same
+failure class as 16b's `RangeException`. It also runs a database query **per cart
+line**, on a hook that fires nine times per request.
+
+**Decision: order-line meta, not `set_sku()`.** Three reasons — the throw cannot
+be made safe without silently doing nothing, which is the original gap again;
+fulfilment reads the order rather than the cart; and it avoids the per-line
+query. The honest trade-off is that the suffix appears from the order onward, not
+on the cart page. A cart line is not a stock unit.
+
+##### Two decisions inside that
+
+**Keyed by option id, never pre-joined.** A separator is a merchant's convention
+— `-OAK-LG` or `_OAK_LG` — and joining in `Engine\` would bake one shop's choice
+into a pure function shared with a TypeScript twin.
+
+**Sorted by option id.** The resolver returns them in the order the form
+submitted them, so two customers choosing the same options in a different order
+would get two different codes for one product. Caught by mutation: deleting the
+`ksort()` passed, because the fixture's arrival order already matched. The test
+now submits `opt-b` first, which is what makes the sort observable.
+
+**Written whether or not the price freeze verified**, unlike the deltas beside
+it. A suffix records what was *ordered*, not what was *charged*, and a warehouse
+still has to pick the right variant after a salt rotation invalidated a
+signature.
+
+##### Verification
+
+Three mutants killed by name: the resolver not reading `sku_suffix`, the
+`ksort()` deleted, and the suffix dropped from the **freeze-skipped** payload
+branch. That third one matters because `CartItemData` has two payload paths
+writing the same field, which is exactly where one gets forgotten — the
+unpriceable path is asserted rather than the common one twice.
+
+`OrderAgain` needed no change: it rebuilds from selections alone and
+`CartItemData` re-resolves, so a reorder regenerates the suffix from current
+configuration. That is correct — a reorder is a new purchase.
+
+#### ✅ Stage 16c — `per_char`, and the price freeze it was hiding
+
+`Engine\SelectionResolver::option_delta()` prices at the **option** level beside
+`delta_for()`'s value level; `per_char_delta()` does the arithmetic;
+`optionPricingDelta()` is its TypeScript twin. Nine new `text_price_cases` in the
+shared fixture hold the two to the same answers.
+
+##### 🔴 The stage's biggest find was not about `per_char` at all
+
+Analysis of where a text option could carry a price found that **the price freeze
+was already broken for every line containing one**.
+
+`$deltas` was appended **only in the value branch**, while `resolved` included
+text, date, number and file answers too. `CartItemData::deltas_by_option()` pairs
+the two **positionally** and refuses to pair them at all when the counts differ —
+so any such line froze an **empty** array, signed it, and priced live instead.
+
+Measured through the production classes, with a plain gift-message field beside a
+5.00 option and **nothing unpriceable anywhere**:
+
+```text
+quoted                              85.00
+merchant republishes at 50.00
+charged                            130.00   <- M12.4's freeze, silently defeated
+```
+
+Four value kinds were affected, not one. It had never fired in a test because no
+test combined a text option with a priced one.
+
+**Fixed at the source rather than at the pairing.** `option_delta()` returns a
+delta for every accepted selection, so the invariant its docblock already claimed
+— *"one delta is appended per accepted selection"* — is true by construction
+rather than by five branches each remembering to say so. It replaced
+`record_option_pricing()`, which returned nothing, and subsumes its reporting.
+
+##### 🔴 Option-level `pricing` was published unconverted
+
+Values went through `toPublishedPriceConfig`; options passed `pricing` **raw**.
+So a `per_char` price reached the plugin as `{ type, amountMinor, freeCharacters }`
+while `CONFIG-CONTRACT.md` documented `snake_case`.
+
+Latent only because the plugin read `type` and nothing else, which spells the
+same either way. **The first evaluator to read the amount would have found the
+field absent and charged nothing for every engraving** — exactly the defect
+`option-config.ts` was created to fix for `maxLength`, in the field beside it.
+
+`toPublishedOptionPricing()` now converts per type, for the same reason
+`toPublishedPriceConfig` does: adding a type should mean deciding its document
+shape, not inheriting one by accident.
+
+##### Decisions written into `PRICING-SPEC.md` before any code
+
+**The floor is on the character COUNT, not the delta.**
+
+```text
+delta = max(0, measure(text) - free_characters) * amount_minor
+```
+
+Without it, a string shorter than the allowance yields a negative delta — a
+discount for typing less, which a customer could farm by leaving the field nearly
+empty. The floor cannot move to the delta: `amount_minor` may legitimately be
+negative (that is how a discount is expressed), and `max(0, delta)` would
+silently discard it. §3's line-total clamp is what stops a negative delta paying
+out.
+
+**`price_config` prices a value; `pricing` prices an option.** 16b's spec said
+option-level pricing *"has no defined meaning"* — written before `per_char`,
+which is the one type that can only live there. §2 now states which types belong
+where, and that a type in the wrong place contributes nothing and is reported.
+
+**Option-level `fixed` is neither charged nor reported.** The type is
+implemented, so naming it in a merchant notice would send them looking for an
+unsupported feature; the specification prices it per value, so charging it would
+be inventing a rule. Silence is the honest answer.
+
+##### The fourth counter collision in one gate file
+
+`measure_case_count` counted `"text"` across the **whole file**, so
+`text_price_cases` — which price strings — made it read 20 where 11 exist. The
+same collision as `cases`, `rounding_cases` and the negative-tie floor before it.
+The lesson has not changed: no field name stays unique to one array, because the
+arrays hold the same shape of thing on purpose.
+
+##### One test proved the converter and not its caller
+
+`option-config.spec.ts` covered `toPublishedOptionPricing` fully, and **reverting
+the serializer to a raw pass-through left all 33 serialization tests green** —
+every one tested the converter in isolation. The same "correct by inheritance
+rather than by test" gap that let `pricing` drift from `price_config` originally.
+A test now asserts the conversion through `toPublished()` on a real tree.
+
+##### 🔴 Post-audit: the feature was built and left unreachable
+
+An adversarial audit after the stage closed found **six** issues. The first
+invalidates the "complete" claim outright.
+
+**F1 — a merchant could not configure `per_char` at all.** Every one of the 15
+option types in `type-registry.ts` carried `pricingSchema: noTypeLevelPricing`,
+so the API refused an option-level price. Proven against the real validator:
+
+```text
+per_char on text_field -> REFUSED
+  {"field":"pricing","code":"INVALID_TYPE",
+   "params":{"message":"Invalid input: expected null, received object"}}
+```
+
+The registry's own comment said *"not accepted yet because the plugin's price
+engine implements `fixed` only"* — stale, and I never lifted the gate. The 16b
+lesson repeated in a new place: there I tested the resolver and missed its
+callers; here I tested **both** evaluators and missed the API in front of them.
+Every test passed because every test exercised code behind the gate.
+
+**F2 — lifting F1 alone would have shipped a worse defect.** `option_delta()`
+dispatches on `pricing.type` and has no view of what kind of answer an option
+produces. Measured with the gate open:
+
+```text
+per_char on a FILE option   ->  a 64-character upload token  ->  32.00
+per_char on a DATE option   ->  "2026-10-01"                 ->   5.00
+per_char on a NUMBER option ->  "12345"                      ->   2.50
+```
+
+A customer paying 32.00 for the length of a hash they never typed. `hidden` was
+the subtle one — its value kind **is** text, so an `is_free_text()` check alone
+let it through, charging 5.00 for the length of a campaign tag the customer
+cannot see.
+
+Fixed in **both** places: the registry refuses the combination at authoring time,
+where the presentation is known and a clear error belongs; the plugin refuses it
+again because AC4 makes a published document input rather than authority.
+
+**F3 — the cache scanner and the evaluator disagreed.** A `per_char` on a *value*
+was treated as priced at publish time (no notice) and reported as unpriced at
+runtime. The scanner also never looked at option-level `pricing` at all.
+
+The cause was one flat `PRICED_TYPES`: *"does this build charge the type"* is a
+different question from *"does it charge it **here**"*. Now
+`VALUE_PRICED_TYPES` and `OPTION_PRICED_TYPES`, and the scanner asks per
+position. Both tests that had asserted the wrong pairing were rewritten.
+
+**F4 — four of five optional value fields had no test at all.** Deleting
+`sku_suffix`, `weight_delta_grams`, `color_hex` or `group_label` from the
+serializer left **all 60 serialization tests green**; only `image_url` was
+protected, and incidentally. The plugin reads `weight_delta_grams` for shipping
+and `sku_suffix` for fulfilment, so a field silently dropped here is a merchant's
+configuration doing nothing — the exact gap M16.8 and 16a-3 existed to close,
+reopened one repository over.
+
+**F5 — two spec numbers I added were ungated**, bypassing the very mechanism 16b
+built to stop spec examples drifting from reality. Now `check_claim`ed; verified
+by deleting the case one names and watching the gate fail by name.
+
+**F6 — `docs/OPTION-TYPES.md` still said the plugin prices "`fixed` and
+`percentage`"** and that `per_char` is reported as unpriced. Updated for 16b,
+forgotten for 16c.
+
+##### Verification
+
+- Plugin **1319 tests**, 10/10 gates green.
+- Backend **777 unit + 893 e2e**, 8/8 gates green.
+- Seven mutants killed by name across both languages: dropping the option-level
+  delta, subtracting `free_characters` from the charge instead of the count,
+  removing the count floor, `strlen`/`text.length` instead of `measure()`,
+  ignoring `free_characters`, flooring the delta, and emitting a camelCase key.
+- **Cross-language divergence proven:** flooring the delta in PHP alone fails the
+  PHP suite on *"a string shorter than the free allowance is free, never a
+  refund"* while TypeScript stays green.
+- `Pricing::assert_multiplication_in_range()` extracted from `percentage_of()`,
+  because `per_char`'s operands are worse: the API caps the amount, but the
+  **customer** supplies the character count.
+
+##### What 16c deliberately did not do
+
+The storefront estimate still shows nothing for a `per_char` option. Text
+templates carry no price attributes at all — the price is on the option, not on a
+value the customer clicks — so a preview needs new markup rather than a
+one-line change. The estimate stays **correct**: an option with no price type is
+skipped, so the values it can see still total honestly. Tracked with the
+`percentage` preview gap.
+
+#### ✅ Stage 16d — `per_unit`
+
+`Engine\Pricing::per_unit_of()` does the arithmetic; `option_delta()` dispatches
+to it beside `per_char`; `perUnitDelta()` is its TypeScript twin. Ten
+`unit_price_cases` in the shared fixture hold the two to the same answers, and
+the registry accepts it on `number_field`, `range` and `quantity`.
+
+##### 🔴 The recorded blocker was out of date
+
+The plan said *"nothing provides a per-option quantity"* and deferred to Phase 14
+to build the type that would. **Phase 14 delivered it** — three number types,
+each `value_kind: number` and customer-supplied — and 16c built the option-level
+plumbing. The number already reached `option_delta()` before this stage started:
+
+```text
+number/range/quantity  resolved={"q":"7"}  deltas=[0]  unpriced=["per_unit"]
+```
+
+So 16d was arithmetic and guards, not a schema question. **The blocker had been
+answered two phases earlier and nobody re-read it.**
+
+##### 🔴 My own 16c spec placed `per_unit` in a position where it cannot work
+
+The table I wrote in `PRICING-SPEC.md` §2 listed `per_unit` under
+`price_config` — the **value** level. But a `per_unit` price multiplies a
+quantity, and the only options producing a quantity are the number types, which
+have **no values**. Proven: `per_unit` on a radio value resolves and has nothing
+to multiply.
+
+Corrected: `per_char` and `per_unit` are both option-level, and they are the two
+types whose amount depends on *what the customer supplied* rather than on which
+value they picked.
+
+##### The decisions, and why
+
+**The floor is on the QUANTITY, not the delta.** A customer submitting `-5` would
+otherwise produce a negative delta — a discount for asking for less than nothing,
+farmable by anyone who can type a minus sign into a number field the merchant
+left unbounded. It cannot move to the delta: `amount_minor` may legitimately be
+negative, and `max(0, delta)` would discard every discount option.
+
+**Fractional quantities are allowed**, rounded half up away from zero by §4's
+shared rule. "£2.50 per metre × 1.5m" is a real measurement, and refusing it
+would make the number types unpriceable for anything measured. The float never
+reaches a total — the product is rounded immediately, so `sum_deltas()` still
+sees only integers. A merchant wanting whole units sets `integer_only`, which the
+validation rules already enforce.
+
+**No `free_units`, deliberately.** `per_char` has `free_characters` because a
+merchant absorbing a short engraving is a real intent. A free-unit allowance is a
+**volume discount**, which is what `tiered` expresses — with brackets a merchant
+can see. Two mechanisms for one intent is two places to disagree.
+
+**The quantity is the option's own, never the cart's.** `WC_Cart_Totals` computes
+`price × cart_quantity`, so a delta with the cart quantity folded in is
+multiplied twice. A test asserts `resolve()`'s parameter list by reflection, so a
+future signature change has to break a named test.
+
+##### 🔴 Two mutants survived the first pass, and both were my fixture's fault
+
+**The rounding case tested truncation, not the tie.** `0.005 × 250 = 1.25` — a
+fraction of `0.25`, which truncation also gets right. Replaced with `0.5 × 3 =
+1.5`, a real tie, and `0.5 × -3 = -1.5`, the **divergent** one: `Math.round`
+gives `-1`, away-from-zero gives `-2`.
+
+**Nothing exercised the overflow guard.** Added a case whose product leaves the
+safe range — a number option's answer has no length ceiling the way text does, so
+a customer can submit `1e20`-scale digits wherever the merchant set no `max`, and
+at the maximum amount a quantity near **nine million** already overflows.
+
+Both are the same lesson: a case named after a property does not test that
+property until the numbers are chosen to make it fail.
+
+##### 🟠 No price schema was `.strict()`
+
+Found while asserting the `free_units` asymmetry: Zod strips unknown keys
+silently, so a merchant setting `freeUnits: 5` on a `per_unit` price — a real
+thing to reach for — **saved successfully and was charged as though they had set
+nothing**. Nothing wrong is stored or charged; the setting evaporates, which is
+the hardest kind of bug to diagnose because the UI accepted it.
+
+All five price shapes are now `.strict()`. It also makes a typo in a field a
+merchant *does* have — `freeCharacter` for `freeCharacters` — fail loudly rather
+than quietly charging from the first character.
+
+##### 🔴 Post-audit: the arithmetic was right and the error path was not
+
+Six issues, two of them real defects and both on the same boundary.
+
+**F1 — the two languages disagreed about overflow.** At the schema's maximum
+amount, a quantity of 9,007,200:
+
+```text
+PHP  ->  { delta: 0, unpriced: []         }
+TS   ->  { delta: 0, unpriced: "per_unit" }
+```
+
+`percentage_of()`'s catch has recorded `unpriced` since M16.2; `per_unit_delta`'s
+returned a bare 0 — **and its own docblock claimed it reported**.
+
+**The fixture could not see it.** The case is named *"a product beyond the safe
+range **is reported**, not thrown"* and asserted only `expect_delta: 0`. Worse,
+the PHP test asserted `unpriced` was **empty** for every unit case, locking the
+defect in.
+
+**F2 — at that boundary the option became free, silently.** 9,007,199 charged;
+9,007,200 charged nothing with no notice. **A customer who asks for more pays
+less.** Exactly the silent zero `Admin\UnpricedTypesNotice` exists to prevent,
+reintroduced at a numeric boundary — and F1 is why no notice fired.
+
+**F3 — `per_unit` had no absolute ceiling; `per_char` does.** Text is capped at
+5,000 graphemes whether or not a merchant configures a limit. A number had
+nothing equivalent, because the schema bounds `maxLength` at 5,000 and leaves
+`min`/`max` unbounded. Measured at 2.00 per unit with no `max`:
+
+```text
+q = 9999999999999  ->  line total 20,000,000,000,078.00
+```
+
+`ABSOLUTE_MAX_QUANTITY = 1,000,000` now mirrors `ABSOLUTE_MAX_LENGTH`, in **both**
+languages — a ceiling in one only would be the divergence F1 already was. Over
+it the option is **reported**, not clamped (which invents a number nobody chose)
+and not zeroed (which is F2 again).
+
+**F4 — I mislabelled a marker in the code I had just added.** `(float) $quantity`
+carried `overflow-guard`, which means "discarded after comparing". It is the
+working value: the `quantity-not-money` case I defined in the same commit and
+used correctly two lines later. A marker that lies is worse than none, because
+the gate's whole design is exemption-by-stated-reason.
+
+**F5 — `docs/OPTION-TYPES.md` stale for the third stage running**, claiming the
+plugin prices "`fixed`, `percentage` and `per_char`" and that "every other type
+is the reverse" of option-level.
+
+**F6 — the reporting half was untested across the board.** Only `config_cases`
+carried `expect_unpriced`; both option-level categories omitted it. *"Contributes
+nothing **and says so**"* is two claims, and the suites checked one.
+
+##### What the fix changed structurally
+
+Both fixture categories now support `expect_unpriced`, and both languages honour
+it. `per_char` cannot currently reach its overflow guard — 5,000 graphemes at the
+maximum amount is 5e12, inside the safe range — so it has no such case yet; the
+capability exists so the next reportable condition is expressible without
+rewriting the test.
+
+Three mutants killed by name, each on the case whose name claims the property:
+reverting to the silent zero, removing the ceiling, and clamping instead of
+reporting.
+
+##### Verification
+
+- Plugin **1335 tests**, 10/10 gates green.
+- Backend **811 unit + 893 e2e**, 8/8 gates green.
+- Eight mutants killed by name across both languages: the quantity floor moved to
+  the delta, truncation instead of rounding, `Math.round` semantics, the overflow
+  guard removed, the number-kind guard removed, `Number()` instead of strict
+  parsing, and the registry gate closed or opened too wide.
+- **Cross-language divergence proven:** rounding toward positive infinity in PHP
+  alone fails the PHP suite on *"a NEGATIVE fractional product rounds away from
+  zero"* while TypeScript stays green.
+
+#### ✅ Stage 16e — `tiered`, the last pricing type
+
+`Engine\SelectionResolver::tiered_delta()` resolves the bracket and delegates to
+`per_unit_delta()`; `tieredDelta()` is its TypeScript twin. Twelve
+`tier_price_cases` hold the two to the same answers, and the registry accepts it
+on `number_field`, `range` and `quantity`.
+
+**All five published price types are now implemented.**
+
+##### 🔴 The stated blocker was already answered; the real one was worse
+
+The plan said 16e *"needs an inclusive/exclusive bracket decision"*. The schema
+had made it in Phase 7: `next.min > previous.max + 1` is a **gap** error, so
+tiers are contiguous and both bounds inclusive. Second stage running where a
+recorded blocker had gone stale.
+
+The real blocker was placement. `tiered` appeared in **no** registry entry, so
+the only place a merchant could save one was a **value** — a radio choice, which
+has no quantity to bracket. Proven: it resolved, contributed 0 and reported
+`unpriced`. **A merchant could save a tiered price and have it charge nothing.**
+
+Same shape as 16c's F1, inverted: there an evaluator sat behind a closed gate;
+here the gate was open onto the wrong surface.
+
+##### 🔴 Bracket sets could leave quantities unpriced at both ends
+
+Gaps *between* tiers were refused from the start; gaps at the **ends** were not:
+
+```text
+[{min: 5,   max: null}]     ACCEPTED  -- quantities 1-4 unpriced
+[{1-9}, {10-20}]            ACCEPTED  -- quantity 21+ unpriced
+[{100-200}]                 ACCEPTED  -- both ends open at once
+```
+
+The first tier must now start at 1 and the last must be open-ended, with messages
+naming the quantities that would fall through and pointing at the option's own
+`min`/`max` — a validation rule produces a message a customer can act on, where a
+missing bracket produces a price that silently disappears.
+
+##### 🔴 The fixture found a rule the spec had not stated
+
+Verifying the expected values arithmetically — the M16.4 habit — showed `9.5`
+matching **no** tier: it satisfies neither `<= 9` nor `>= 10`. Tiers are whole
+numbers; a quantity need not be, because `per_unit` allows fractions for
+"£2.50 per metre × 1.5m".
+
+**The bracket is chosen by `min_quantity` alone**: the last tier whose minimum
+does not exceed the quantity. Because the set is contiguous from 1 and ends
+open-ended, that is the same tier `max_quantity` would select for every whole
+number — `max_quantity` is a cross-check the schema enforces, not a second rule
+the evaluator applies. `9.5` lands in `1-9`, which is what a merchant reading
+*"under ten metres"* means.
+
+Caught before any code, by checking the fixture's own arithmetic first.
+
+##### Decisions
+
+**Tiers bracket the OPTION's own number, never the cart quantity.** The
+cart-quantity reading is structurally blocked four ways — the architecture gate,
+`resolve()`'s signature, the cart key (quantity is not in it, because WooCommerce
+merges identical lines), and the freeze, which discards `$quantity` at
+add-to-cart. Working around four deliberate constraints for one price type would
+be the wrong trade, and 16d had already settled the rule.
+
+⚠️ **The honest cost: "buy ten of this product, get a discount" is not
+expressible and will not be.** That is cart-level pricing — WooCommerce's own
+domain and its coupon extensions' — not option pricing. It is also what makes
+16d's deliberate `free_units` omission coherent: volume discounts belong to
+`tiered`, and this is that.
+
+**`tiered` delegates to `per_unit_delta()`** rather than repeating its
+arithmetic, so the strict parse, the zero floor, `ABSOLUTE_MAX_QUANTITY`, the
+overflow catch and the reporting all apply from one place. Five duplicated guards
+would be five chances for two types to disagree about the same input.
+
+**A malformed bracket is skipped, not fatal.** The others may still price the
+quantity, and refusing everything would take a storefront down over one bad tier.
+
+##### The suite that had to change rather than be deleted
+
+`UnpricedTypesTest`'s provider derives its rows from what the evaluator does
+*not* implement — and with `tiered` implemented it derived **zero**, tripping its
+own guard: *"delete this suite rather than let it pass vacuously."*
+
+Deleting it would have taken a real guarantee with it. A published document can
+carry a type this build has never heard of — **a cloud deployed ahead of a plugin
+update is the ordinary case** — and the notice must fire for it. The provider now
+carries a synthetic `from_a_newer_cloud`, which tests the mechanism the empty
+derived list no longer could.
+
+##### Verification
+
+- Plugin **1350 tests**, 10/10 gates green.
+- Backend **831 unit + 893 e2e**, 8/8 gates green.
+- Six mutants killed by name across both languages: `min_quantity` treated as
+  exclusive, first-match instead of last-minimum, and an uncovered quantity
+  charged silently — each in both PHP and TypeScript.
+- **Cross-language divergence proven:** matching on both bounds in PHP alone
+  fails the PHP suite on *"a fractional quantity is bracketed by its own value"*
+  while TypeScript stays green.
+
+#### ✅ Stage 16f — currency (M16.7) and stock (M16.9)
+
+The only stage of Phase 16 that built no evaluator. Its findings were gaps in
+**proof** and **documentation** rather than arithmetic — and two of them were
+serious.
+
+##### 🔴 Only `percentage` follows a converted base
+
+Measured, one config against a base a switcher converted 8000 → 10000:
+
+```text
+fixed       500  ->  500     does NOT convert
+percentage  4000 -> 5000     converts
+per_unit    600  ->  600     does NOT convert
+tiered      500  ->  500     does NOT convert
+per_char    250  ->  250     does NOT convert
+```
+
+**Four of five types behave one way and one behaves the other, and nothing
+anywhere said so.** So "gift wrap +£5.00" charges **$5.00** when a customer
+switches to USD — arithmetically correct, materially different.
+
+**Decision: fixed amounts are per-currency and are never converted**, stated as a
+limitation rather than fixed. The exchange rate lives inside the switcher plugin
+— WOOCS, Aelia, WPML — each with its own API: reading one means depending on
+software this project does not control, and guessing one means charging a number
+nobody configured. Per-currency amounts would be a schema, dashboard and
+publishing change together.
+
+**A merchant needing currency-relative pricing has `percentage`**, which converts
+correctly *because* it is relative. Naming that workaround is why the limitation
+is worth stating loudly rather than hiding.
+
+##### 🔴 The stock guarantee was correct and asserted by nothing
+
+The plugin contains **zero** stock references — correct, since it must not
+interfere. The whole of M16.9's first acceptance criterion therefore rests on one
+line:
+
+```php
+if ( true !== $passed ) { return (bool) $passed; }
+```
+
+**Every existing test passed `true`, and no test anywhere mentioned stock.** The
+guard was one deletion away from letting an out-of-stock product be ordered, with
+a green suite.
+
+⚠️ **My first version of that test passed while the guard was deleted.** It
+called `apply_filters` without `register()`, so the filter had no listener and
+returned its input unchanged — two mutations survived before I noticed. A test
+that never reaches the code it names proves nothing about it, which is the
+`optionia-app` lesson in a new place.
+
+The falsy verdicts are enumerated rather than just `false`: the filter is public,
+another plugin may return `0`, `null` or `''`, and `true !== $passed` treats all
+four as a refusal. Substituting `=== false` fails on exactly the three it would
+let through.
+
+##### 🟠 The decimals stub was hardcoded, so JPY and KWD were untestable
+
+`wc_get_price_decimals()` returned a literal `2`, while `PRICING-SPEC.md` §6
+discussed 0- and 3-decimal currencies explicitly. **The third stub gap of this
+phase** — after `wc_get_weight()` in 16a and `wc_get_product()` in 16b, both of
+which concealed real defects.
+
+With it controllable, the consequence is now asserted: the same stored integer
+renders as `500`, `5.00` and `0.500` at 0, 2 and 3 decimals — a hundredfold swing
+from a document that deliberately carries no currency. An order's own record is
+safe, because the amount is written as a **string** when the order is placed.
+
+##### 🟡 M16.9's own documentation requirement was unmet
+
+The milestone required per-option stock be *"documented as such in
+`docs/OPTION-TYPES.md` so it is a stated boundary rather than a discovered
+surprise"*, and that file mentioned stock nowhere. Both boundaries — no stock
+management, one store one currency — are now written there.
+
+##### 🔴 Post-audit: correct decisions, weak proof
+
+Five findings, none a behavioural defect — the three positions are sound and
+correctly implemented. What was weak was the **evidence**, and two of the
+findings are the same mistake in two places.
+
+**F1 — the stock test covered one call site of three.** `CALL_SITES` names six
+sites at three arities, and the **five-argument** one is
+`form_handler_variable` — the variable-product path, which is exactly what M16.9
+documents as *"the variation's stock governs"*. Testing only the three-argument
+site left that claim asserted by nothing. All three arities are now driven.
+
+**F5 — `assertFalse( (bool) $passed )` cast before asserting.** Harmless today —
+the filter returns a real `boolean` for all six falsy inputs — but a cast accepts
+`0` and `''` as refusals, so a change returning a falsy non-boolean would pass
+while breaking the contract. Now `assertNotTrue`, which is the rule as written.
+
+**F2 — the decimals stub leaked between tests.** The bootstrap resets it at
+**load**, not per test, and the new tests restored it inline — which the
+bootstrap's own docblock already said belonged in `tearDown()`. Proven: a test
+that sets 0 decimals and then fails leaves **every later test** rendering `500`
+where it expects `5.00`. One assertion failure away from a cascade whose cause is
+invisible. Now restored in `tearDown`, which runs however a test ends.
+
+**F3 — the spec's table named five types and the fixture proved two.**
+`FLOOR_CURRENCY` was set to what I had written rather than to what the
+specification claims, so `per_unit`, `per_char` and `tiered` were unexecuted
+prose — the exact thing the comment three lines above that floor warns about
+(*"a table nobody executes is prose"*). All five types now have a case, the floor
+is 5, and the gate additionally **names each missing type** rather than only
+counting.
+
+**F4 — the sharpest consequence was undocumented.** A delta is frozen as a count
+of minor units, and a currency change does not move it. Measured through the
+production classes, base currency switched from 2 decimals to 0 while the cart
+was live:
+
+```text
+2 decimals   base 80.00   frozen {"opt-a":500}   ->  charged  85.00
+0 decimals   base 80      frozen {"opt-a":500}   ->  charged 580
+```
+
+Nothing recomputes it, because recomputing is what the price freeze exists to
+prevent. **Changing a store's currency is not safe while carts are live** — now
+stated in both `PRICING-SPEC.md` §6 and `docs/OPTION-TYPES.md`, and asserted by a
+test, because a documented number nobody executes is the drift these gates exist
+to stop.
+
+⚠️ **One thing found and NOT fixed here.** The architecture gate reports
+*"add-to-cart boundary covers all 6 call sites at arity 6"* even when
+`registered_arity()` is replaced by a literal `3` — it reads the constant rather
+than the registration. A real weakness in a gate this project relies on, and
+wider than 16f: tracked as
+[M30.11](#m3011--the-harness-itself-flakiness-and-gates-that-read-the-wrong-thing)
+rather than patched
+mid-stage.
+
+##### Verification
+
+- Plugin **1361 tests**, 10/10 gates green.
+- Backend **831 unit + 893 e2e**, 8/8 gates green.
+- Three mutants killed by name: the stock guard deleted, `=== false` substituted
+  for `true !== `, and `fixed` made to follow a converted base.
+- Two `currency_cases` in the shared fixture execute the conversion split in both
+  languages — a **pair** of bases per case, because a single base cannot express
+  "does not convert" at all.
+
+#### ✅ Stage 16z — the bookkeeping, audited last and wrong throughout
+
+Six adversarial audits checked Phase 16's **behaviour** and found real defects
+every time. None checked its **records**, and they were wrong in two ways.
+
+##### 🔴 Every milestone citation in the code pointed at the wrong milestone
+
+Systematically off by one, because the stages were lettered `16a`–`16f` and the
+citations were written to match the **stage letters** rather than the plan's
+milestone numbers:
+
+| Type | Plan | Code said |
+|---|---|---|
+| `percentage` | M16.1 | M16.2 |
+| `per_char` | M16.2 | M16.3 |
+| `per_unit` | M16.2 | M16.4 |
+| `tiered` | M16.3 | M16.5 |
+
+**The worst was `tiered` citing M16.5 — which is `formula`**, the sandboxed
+expression evaluator now deferred to [Phase 16b](#phase-16b--formula-pricing).
+Anyone following that reference from `pricing.schema.ts` landed on a security
+boundary with nothing to do with brackets.
+
+**Reach: 76 wrong references across 25 files** — both repos' source and tests,
+four ADR attributions, `docs/OPTION-TYPES.md`, and `PRICING-SPEC.md`, which is
+**hash-pinned in two repositories**, so correcting it meant re-pinning both.
+
+⚠️ **`M16.4` and `M16.5` now appear nowhere in the code**, which is correct:
+neither was built. A citation to an unbuilt milestone is the same defect as a
+deferral to a nonexistent phase — a reference that looks authoritative and is
+not.
+
+##### 🔴 A ticked criterion covered a milestone nobody built
+
+`[x] All pricing types implemented` while **M16.4 (Conditional pricing)** had no
+completion record and no criterion named it. The fifth instance of this plan's
+recurring pattern, and the only one where **the tick itself did the
+concealing** — the other four pointed at vague destinations, which at least
+reads as unfinished.
+
+Now marked `DEFERRED to Phase 17` with the design work it hands over spelled
+out: `set_price` is a sixth route to a price arriving at `PRICED_TYPES` from a
+different direction, and whether it replaces, adds, or is refused is undecided.
+
+##### 🟠 Two things that were true and invisible
+
+**The storefront previews `fixed` only** — four of five types show no estimate,
+by a sound decision (the browser is not sent the base price, and option-level
+prices are not on the markup a customer clicks). Flagged three times during the
+phase and recorded only in the plan, never in the two documents a merchant or
+integrator reads. Now in both, with the reason: an estimate that silently omitted
+a 50% surcharge would look complete and be wrong.
+
+**Coupon interaction (M16.6) was settled and undocumented.** Coupons apply after
+the pricing hook and never go through `set_price()`, so a negative option delta
+reduces the line *before* a coupon is applied to it — the order a merchant
+expects. The reasoning existed only in a PHP docblock, and this milestone's own
+sentence asked for it to be *"defined"*. A decision nobody can find is not
+defined.
+
+##### 🟠 The sweep itself missed two, and that is the interesting part
+
+A mechanical remap fixes references that were *uniformly* wrong. It cannot fix
+one that was **right before the remap and wrong after it**:
+
+- `SelectionResolver.php:772` — a Phase 14 comment saying *"`per_char`
+  arithmetic itself is M16.x's, not this phase's"*. It cited the milestone
+  correctly under the old numbering, so the remap shifted a **correct** reference
+  into an incorrect one.
+- `option-set.serializer.spec.ts:438` — cited `16a-3`, a **stage label**, beside
+  a milestone number. The sweep matched `M16.x` and never saw it.
+
+Both were found by asking a different question afterwards: *does each citation
+name the milestone that actually owns that type?* — checked per type in both
+directions, rather than per number. A find-and-replace verified by a find is a
+find-and-replace verified by itself.
+
+##### The lesson
+
+**Documentation only — no behavioural change, and that is the point.** The code
+was right; its account of itself was not. Six audits missed this because each
+verified the code against the tests and the tests against the spec, and **nothing
+verified the citations against the milestone list**.
+
 ### Phase 16 exit criteria
 
 ```text
-[ ] All pricing types implemented in both PHP and TS
-[ ] Shared fixture suite extended and green in CI
-[ ] Formula evaluator sandboxed and security-reviewed
-[ ] Multi-currency behaviour documented and tested
-[ ] weight_delta and sku_suffix working; shipping quoted on correct weight
-[ ] Stock position documented; out-of-stock cannot be bypassed
+[x] All pricing types implemented in both PHP and TS
+[x] Shared fixture suite extended and green in CI
+[~] Formula evaluator sandboxed and security-reviewed   -- Phase 16b
+[x] Multi-currency behaviour documented and tested
+[x] weight_delta and sku_suffix working; shipping quoted on correct weight
+[x] Stock position documented; out-of-stock cannot be bypassed
+```
+
+**Five of six met. The sixth is deferred, not skipped — and so is M16.4.**
+
+⚠️ **Two deferrals, not one.** `formula` ([Phase 16b](#phase-16b--formula-pricing))
+is the criterion's own; **M16.4 (Conditional pricing)** is a milestone no
+criterion named, so its deferral was invisible until the 2026-09-10 audit. Both
+now point somewhere.
+
+The five *published* price types — `fixed`, `percentage`, `per_char`, `per_unit`,
+`tiered` — are implemented in both languages, which is what the criterion above
+asserts. Conditional pricing is not a sixth type; it is a rule **action**, and it
+belongs to Phase 17 by this phase's own reasoning.
+
+`PRICED_TYPES` holds five entries in both languages — `fixed`, `percentage`,
+`per_char`, `per_unit`, `tiered` — and each is held to the shared fixture, which
+grew from four categories to **ten**: `cases`, `measure_cases`,
+`rounding_cases`, `generated_cases`, `bound_cases`, `config_cases`,
+`text_price_cases`, `unit_price_cases`, `tier_price_cases`, `currency_cases`.
+
+🔴 **M16.5 (`formula`) is deferred to
+[Phase 16b](#phase-16b--formula-pricing)**, as this phase's pre-flight analysis
+recommended and nothing since has changed.
+
+⚠️ **That phase did not exist until the 2026-09-09 re-audit.** This paragraph
+said "its own phase" and named none — the third destination in this plan with no
+milestone behind it, after malware scanning and per-plan storage enforcement.
+Writing "deferred" without a number is how work disappears, and it had happened
+three times before anyone counted. A sandboxed expression
+evaluator running on two runtimes over merchant-authored input is a security
+boundary deserving the treatment ADR-041 gave malware scanning — a decision
+recorded in its own right, not a stage inside a pricing phase. The five published
+price types do not include it; `formula` has no schema, no document shape and no
+authoring surface, so nothing is half-built waiting for it.
+
+#### What this phase actually cost, versus what was predicted
+
+Every stage but one found a defect the plan had not anticipated, and **four of
+them were in work the plan called done**:
+
+| Stage | Predicted | Found |
+|---|---|---|
+| 16a | consume two fields | `weight_delta` compounded 28→36→44 kg per hook firing |
+| 16b | dispatch plumbing | the fixture proved both *ends* of pricing and neither language proved the middle |
+| 16c | `measure()` is ready | **the price freeze was already broken** for any line with a text, date, number or file option — quoted 85.00, charged 130.00 |
+| 16d | blocked on a binding decision | the blocker was stale; Phase 14 had answered it two phases earlier |
+| 16e | needs a bracket decision | the decision was made in Phase 7; `tiered` was configurable only where it cannot work |
+| 16f | stating what is already true | the stock guarantee rested on one line no test reached |
+
+⚠️ **Three stub gaps, each hiding a real branch**: `wc_get_weight()`,
+`wc_get_product()`, `wc_get_price_decimals()`. All three made code appear covered
+while it was never executed.
+
+⚠️ **Two audits found the stage "complete" claim wrong** — 16c shipped an
+evaluator behind a closed API gate, and 16d shipped an error path that made an
+option silently free at a boundary. Both were caught by adversarial review after
+the stage closed, not by the stage's own tests.
+
+---
+
+## Phase 16b — Formula Pricing
+
+**Depends on:** Phase 16
+
+**Created 2026-09-09**, from Phase 16's closeout. `formula` was deferred *"to its
+own phase"* and no phase existed — the third time in this plan that work was
+reassigned to a destination with no milestone behind it, after malware scanning
+(now [M34.8](#m348--the-cloud-mirror-and-the-malware-scanning-it-gates)) and
+per-plan storage enforcement (now [M24.2](#m242--limit-enforcement-at-write-time)).
+
+🔴 **This is a security boundary, not a pricing feature.** A sandboxed expression
+evaluator runs **merchant-authored input on two runtimes** — PHP on a
+storefront and TypeScript in the cloud — and both must reach the same number
+without either becoming a way to execute arbitrary code. That deserves the
+treatment ADR-041 gave malware scanning: a decision recorded in its own right,
+measured on the host it will run on, rather than a stage inside a pricing phase
+that is already six stages long.
+
+**Nothing is half-built waiting for it.** `formula` has no schema entry, no
+document shape and no authoring surface; `PRICED_TYPES` holds five types in both
+languages and does not include it. A merchant cannot configure one today, and the
+evaluators report an unrecognised type as unpriced.
+
+### M16b.1 — Decide the language before writing an evaluator
+
+What an expression may contain, written normatively into `PRICING-SPEC.md`
+before either implementation exists — the rule every Phase 16 stage confirmed:
+**spec first, then the fixture, then the code.**
+
+- **Whitelisted operators only** — arithmetic and comparison, no assignment, no
+  function calls, no property access.
+- **Named variables only**, from a fixed set the document defines: the base
+  price, another option's answer, a quantity. Anything else is a parse error at
+  authoring, not a runtime surprise.
+- **Hard complexity limits** — expression length, nesting depth, and a step
+  ceiling on evaluation, so a crafted expression cannot become a denial of
+  service on a storefront.
+- **No `eval`, in either language.** A parser and a tree walker; the moment
+  either implementation reaches for the host language's evaluator, the sandbox
+  is the host language's.
+
+### M16b.2 — One grammar, two evaluators, one fixture
+
+The M11.4 pattern every pricing type has followed since M16.2: a
+`formula_cases` category in `pricing-fixtures.json` carrying expression, inputs
+and expected delta, executed by **both** languages, with the gate requiring local
+execution in each.
+
+⚠️ **The divergence risk is higher here than for any type before it.** Operator
+precedence, integer division, and how each language rounds are all places two
+runtimes disagree quietly. Phase 16 found that exact class of defect three times
+— `Math.round` versus away-from-zero being the sharpest — and those were
+*fixed* rules. A merchant-authored expression has no fixed shape to reason about.
+
+### M16b.3 — The security review, and what it must cover
+
+Treated as ADR-041 treated scanning: measured on a real host, with the failure
+modes written down whether or not they can be fixed.
+
+- **Resource exhaustion** — the step ceiling proven by a test that would hang
+  without it, not asserted.
+- **Injection through variable names**, which arrive from a published document
+  and are therefore merchant-controlled input.
+- **What an unparseable expression does** — it must contribute nothing and be
+  reported, exactly as an unimplemented type is (`PRICING-SPEC.md` §2), never
+  guessed at and never silently zero.
+- **Whether the storefront may preview one at all.** `percentage` and `per_char`
+  are already server-only because the browser lacks the base price; a formula is
+  a stronger case for the same answer.
+
+### Phase 16b exit criteria
+
+```text
+[ ] Expression language defined normatively before either evaluator exists
+[ ] Both evaluators agree on a shared formula_cases fixture, gate-enforced
+[ ] No eval in either language; parser and tree walker only
+[ ] Complexity limits proven by test, not asserted
+[ ] An unparseable expression contributes nothing and is reported
+[ ] Security review recorded as an ADR, measured on a real host
 ```
 
 ---
@@ -4890,6 +18720,38 @@ persists and renders identically in dashboard, preview, and storefront.
 Paginated pull from the WC REST API into `store_products`, resumable, progress-reported,
 handling large catalogues (100k+ products) without timing out.
 
+#### 📥 Inherited from Phase 13 — three things that land here, recorded 2026-09-03
+
+Phase 13 pointed at this milestone twelve times and this milestone said nothing
+back. A forward reference the target cannot see is a deferral only one side knows
+about, and the one who inherits it is the one who cannot read it.
+
+**1. Delete `optioniaWooCommerceFrontend/e2e/catalogue.ts`.** 🔴 It is a *stand-in
+for this milestone*: a one-shot read of the WooCommerce Store API that writes
+`store_products` so the canonical E2E has products to assign. It handles no
+pagination, no incrementality, no deletions, and no resumption — none of what this
+milestone is for. **When the real import lands, that file must go** and the E2E
+must use it instead, or the repository carries two import paths and the second one
+is the one nobody remembers writing.
+
+**2. Two empty states stop being the common case.** `/products` and the assignment
+picker both say *"Your catalogue has not been imported yet"* — correct today,
+because nothing but the import writes that table, and misleading the moment this
+milestone runs. The wording assumes an import that has not happened; after M19.1
+the honest empty state is a store with no products, or a sync that failed. Both
+live in `components/products/product-display.tsx`.
+
+**3. Prefix search is deferred here.** The picker matches `LIKE 'term%'` so the
+`(storeId, name)` index can serve it — measured: `"Board"` returns **0 rows** while
+three products contain the word. The UI says *"starts with"* rather than pretending
+otherwise. Substring search needs a `FULLTEXT` index and a migration, which belongs
+with the catalogue rather than with the picker that reads it.
+
+**And the acceptance this unblocks:** Phase 13's flow already runs end to end
+against the merchant's real catalogue *because* of the stand-in. What this
+milestone changes is that the catalogue arrives the way a merchant's actually
+would — which is the difference between a demo that works and a product that does.
+
 ### M19.2 — Incremental sync via webhooks
 
 Register `product.created|updated|deleted` webhooks → verified endpoint on
@@ -4906,6 +18768,38 @@ self-healing.
 Product / category / tag / all-products targeting, with deterministic priority resolution
 and an "effective options for this product" preview so merchants can see the result of
 overlapping assignments.
+
+**Inherits Phase 10's deferral: `CONDITIONAL` mode and every non-product
+target.** Recorded here 2026-08-30, from the other end.
+[M10.1](#m101--resolve-applicable-options) resolves `ALL` and `MANUAL` in a
+write-time index built inside `Config\Repository::store()`. It deliberately
+does **not** resolve the rest, and the reason is structural rather than
+schedule: a write-time index cannot express them.
+
+- The `CONDITIONAL` condition tree is JSON evaluated against product state, not
+  a key that can be indexed.
+- `category`, `tag`, `attribute` and `price_range` resolve against
+  **WordPress-side data the config document does not carry**. The cloud knows a
+  product's `externalId`; it does not know the store's live taxonomy.
+- `option_set_assignments`' own docblock is explicit that a conditional set must
+  apply to *"a product created next month"* — after any index was written. For
+  the one mode whose purpose is not going stale, a write-time index is stale by
+  construction.
+
+**So this milestone owns the harder half of the resolution rule, and it must
+decide where evaluation happens** — plugin-side against live WordPress
+taxonomy, or cloud-side with the store pushing taxonomy it does not currently
+send. That decision was not answerable in Phase 10 and is not answerable until
+[M19.1](#m191--initial-catalogue-import)'s catalogue sync says what the cloud
+actually knows about a product.
+
+Two constraints Phase 10 hands over rather than leaves implicit. The renderer
+**skips conditional assignments and reports the count**, so the gap is visible
+in `Admin\SystemStatus` rather than silent — when this milestone lands, that
+count should reach zero, and it is the check that the handover completed.
+And [AC3](#ac3--the-product-page-never-blocks-on-optionia)'s budget still binds:
+whatever resolves these targets must stay within **≤1 extra DB read per product
+page**, which rules out a query per assignment on render.
 
 ### M19.5 — Bulk assignment
 
@@ -5324,6 +19218,27 @@ occupies a seat like an `owner` does.
 
 Guards on creation paths, with actionable errors (*"Free plan allows 10 option sets. You
 have 10. Upgrade to Pro for 50."*).
+
+#### 📥 `file_storage_mb` — inherited from Phase 15, recorded 2026-09-09
+
+Phase 15's exit criterion read *"per-plan quotas **enforced** and metered"* and was
+ticked while only the meter existed. Audited: `assertWithinLimit()` serves the
+**authoring** limits only, and nothing anywhere compares `file_storage_mb` against a
+plan — so a tenant on a 1 GB plan can store 100 GB and no request is refused. The
+criterion is corrected; the enforcement is this milestone's.
+
+What Phase 15 did build, and this can rely on: `UploadRepository::total_bytes()`
+reports a store's stored bytes on every heartbeat, and `UsageService::recordStorage()`
+sums them per tenant ([ADR-043](../optioniaWooCommerceBackend/docs/DECISIONS.md)).
+
+⚠️ **Storage is the one limit whose guard cannot live in the cloud alone.** The
+merchant's server holds the file, so refusing cloud-side is after the fact — the
+refusal has to reach the plugin's upload endpoint. That is unlike every other limit
+here, which guards a write to a table this backend owns.
+
+⚠️ **And it needs a grace rule the others do not.** A tenant already over the limit
+when enforcement ships must not have their storefront break: existing files stay,
+new uploads refuse. A ceiling applied retroactively to stored data is an outage.
 
 ### M24.3 — The lapse policy — **decide before production**
 
@@ -5912,11 +19827,68 @@ strings, no concatenation, locale-aware dates and numbers.
 a comma decimal separator; no untranslatable user-facing string remains; `utf8mb4` verified
 end to end with emoji in an option label.
 
+### M29.9 — WordPress Multisite: decide the position, then state it
+
+**Added 2026-09-02** (code audit — Multisite had **zero** mentions across this plan).
+
+A network install is one plugin activation serving many stores, and it collides directly
+with the connection model: the store credential is bound to `site_url`
+([M8.1](#m81--connection-handshake-design)), and
+[M8.2](#phase-8--store-connection)'s site-URL detection is designed to *refuse a clone* — which
+is exactly what a Multisite sibling looks like from the cloud's side. Left unaddressed, a
+merchant activating on a network gets behaviour nobody designed.
+
+Three positions, and **any of them is acceptable as long as it is chosen and published**:
+
+| Position | What it means | Cost |
+|---|---|---|
+| **Not supported** (recommended for launch) | Refuse activation on a network with a clear admin notice naming the reason. One tenant per site, connected individually, still works | Near zero — one activation check + a notice |
+| Per-site connection | Each site in the network connects independently; credentials, config cache and options are all site-scoped (`get_option` is already per-site, `get_site_option` is not) | Small — but every `Config\Repository` read and every credential store must be audited for site scope |
+| Network-level connection | One credential for the network, options shared across sites | **Do not do this now.** It breaks the `site_url` binding, the clone detection, and per-store billing at once |
+
+**The trap to check either way:** if activation is *network-wide*, the plugin loads on every
+site, so a per-site option store is required or one site's credential leaks into another's
+storefront. Verify which `get_option` / `get_site_option` calls are in play before promising
+anything.
+
+**Acceptance:** a network install produces a documented, deliberate outcome — either a clear
+refusal or verified per-site isolation — never silent misbehaviour. `COMPATIBILITY.md` states
+the position explicitly rather than omitting Multisite.
+
+### M29.10 — WP-CLI commands
+
+**Added 2026-09-02** (code audit — WP-CLI had one passing mention).
+
+Agencies and managed hosts do not click through admin screens; they automate. A plugin with no
+CLI surface is excluded from staging pipelines, bulk site management, and provisioning
+scripts — which is precisely the **agency segment** that the theme-override styling decision
+([D6](#m19--decide-d6-styling-and-presentation-ownership)) is meant to attract.
+
+```text
+wp optionia status                 connection state, config version, last sync, cache health
+wp optionia connect --code=<code>  complete a handshake headlessly (no browser round trip)
+wp optionia disconnect             release the credential
+wp optionia sync                   force a config pull now
+wp optionia cache flush            drop the cached config
+wp optionia diagnostics            the Phase 29b checks, as text
+```
+
+Two constraints worth stating up front:
+- **`status` and `diagnostics` must carry no customer PII** ([Phase 26b](#phase-26b--data-protection--compliance)) — they will be pasted into support tickets.
+- Every command exits non-zero on failure with a parseable message. A CLI that always exits 0 cannot be used in a pipeline, which defeats the point.
+
+`connect` is the valuable one: it makes the handshake scriptable, which is how a host onboards
+fifty stores without fifty browser sessions.
+
+**Acceptance:** each command runs on the local Studio site, exits non-zero on failure, and
+`status` output is safe to paste publicly.
+
 **Deliverable:** `docs/COMPATIBILITY.md` — a narrow, tested, honest matrix. Untested is
 labelled untested.
 
 **Exit:** matrix published; every "supported" entry actually tested; known incompatibilities
-documented with workarounds.
+documented with workarounds; **the Multisite position stated rather than omitted**; WP-CLI
+commands documented in `docs/`.
 
 ---
 
@@ -5989,6 +19961,24 @@ M30.6 dashboard tests — components, forms, the builder;
 M30.7 the canonical E2E suite (Playwright): Gate 1's flow, plus billing, plus lapse,
 run against a real WooCommerce install;
 M30.8 CI pipeline — everything on every PR, matrix across supported PHP/WP/WC versions;
+
+> 🔴 **`optioniaWooCommerceFrontend` has no CI configuration at all** — recorded
+> from Phase 13, 2026-09-03. The backend and the plugin each have
+> `.github/workflows/ci.yml`; the dashboard repository has none, so its 305 unit
+> tests, its render suites, the shared `bin/check-capability-parity.sh` and
+> `bin/check-architecture-doc.sh` gates, and the **canonical Gate 1 E2E** all run
+> only when a person types the command. Gate 1 asks for that E2E *"automated"*,
+> and automated currently means automatable.
+>
+> Two things it will need that the other two repositories do not: a **browser**
+> (`npx playwright install chromium`), and **three live services** — the API, the
+> dashboard, and a WooCommerce install serving **HTTPS**, which the handshake
+> requires. `optioniaWooCommerceFrontend/e2e/README.md` documents that setup.
+>
+> ⚠️ And `POST /connect/initiate` allows **10 per hour**. Each E2E run spends one,
+> so a CI job running the suite more often than that needs the limit lifted by
+> configuration — never by loosening the test, since the limit protects an
+> unauthenticated endpoint that mints connection requests.
 M30.9 the adversarial suites (price tampering, tenant isolation, upload abuse) as
 permanent CI jobs.
 
@@ -6030,6 +20020,107 @@ plugin-side state.
 
 **Acceptance:** every row asserted in an automated test. **No failure mode may produce a
 customer-visible error on a storefront** — that is the hard line.
+
+### M30.11 — The harness itself: flakiness and gates that read the wrong thing
+
+**Added 2026-09-09**, from Phases 15 and 16. Both findings below were recorded as
+*"unowned"* in their own phases, which is the defect this milestone exists to
+stop repeating.
+
+#### 🔴 The backend e2e suite is load-flaky, and it has cost eight false alarms
+
+Observed across four phases, with a consistent signature:
+
+- **Empty-bodied 400s and 404s** on requests that succeed 261–266 times out of
+  ~277 in the *same run* — a real validation failure carries a `details` array
+  naming the field; these carry `{}`.
+- **Two full hangs** needing `pkill`, the second silent for 21 minutes after 58
+  suites and 831 passing unit tests.
+- **One suite taking 1055 seconds** and failing two tests on 60-second timeouts —
+  the same suite passes 78 tests in **6 seconds** in isolation.
+
+Every one reproduced in neither isolation nor a re-run. The signature points at
+**resource exhaustion** — connections, ports, or the shared MySQL — rather than
+at any suite's logic.
+
+⚠️ **Nine occurrences by Stage 16z**, where a run that changed **only comments**
+failed `config-document` and `connect-handshake` together — 90 tests from those
+two suites pass in isolation. A change that cannot alter behaviour producing a
+red build is the clearest evidence yet that this is environmental, and the
+clearest measure of its cost: every occurrence has to be disproved before the
+work it interrupted can be trusted.
+
+⚠️ **Part of it was diagnosed and fixed: six unguarded inline logins.** Login
+carries its own throttle of 10 per 15 minutes that `setup-e2e.ts` never raised,
+and an unchecked login leaves `body.data` undefined, the token `undefined`, and
+every following request going out as `Bearer undefined`. All six now go through
+`harness.tokenFrom()`, which raises.
+
+⚠️ **The dangerous half of that is not the failure.** A test asserting *"a viewer
+may NOT write"* **passes without sending a credential at all** — so an unguarded
+login turns a permission test green for the wrong reason. Some share of the
+"flakes" filed against the environment were this.
+
+**What remains.** Raising the login ceiling in the test environment was tried and
+**reverted**: `@Throttle` captures its limit at class-decoration time, and
+setting the variable back inside `rate-limit.e2e-spec.ts` did not restore that
+suite's ability to prove throttling engages. The decorator ordering needs solving
+before the ceiling can move. **Recorded so the next attempt starts from what was
+already tried.**
+
+#### ✏️ The type-parity gate exists — and it is not in either repository's CI
+
+**Corrected 2026-09-10, an hour after being written wrong.** This section first
+claimed *"nothing gates the option-type list against the plugin's templates"*.
+That was false: `bin/check-option-type-parity.sh` lives in the **parent**
+directory, compares the registry to the dashboard's picker *and* to the plugin's
+templates, and reports exactly what was needed:
+
+```text
+ok    all 15 authorable type(s) are registered in the API
+ok    every authorable type has a storefront template
+ok    every authorable item kind has a template (3 kind(s))
+```
+
+**I looked in the two sub-repositories and concluded from their absence** — the
+same reasoning error as ADR-001's original scope, which assessed three
+repositories and missed a fourth. A gate is not absent because it is not where
+you looked.
+
+**The real gap is narrower and worse.** These five cross-repo gates sit in a
+directory that **no CI workflow runs**: the backend and plugin workflows check
+out one repository each and cannot see the parent. So the gate that would have
+caught the 14-versus-15 drift **exists, passes, and runs only when a person types
+`bash bin/check.sh` in the parent directory** — which is why the drift reached two
+documents.
+
+⚠️ **The same run found a real failure**: `check-architecture-doc.sh` reported
+*plugin PHP files: document says 60, actual is 84* — 40% drift, well past its 15%
+tolerance, in a document **Gate 1 requires be current**. Routes had drifted 60→67
+too, inside tolerance and heading out of it. Both corrected. A gate nobody runs
+found a stale document the moment it was finally run.
+
+**What M30.11 owes here:** the parent gates need a home in CI. They cannot run in
+either sub-repository's workflow as things stand, so this needs either a workflow
+in the parent repository or a checkout of all three somewhere that can see them.
+
+#### 🟠 The arity gate reports on a constant, not on the registration
+
+`check-architecture.sh` prints *"add-to-cart boundary covers all 6 call sites at
+arity 6"* **even when `registered_arity()` is replaced by a literal `3`** — it
+reads the constant rather than what is registered. Measured during Phase 16f's
+audit.
+
+That matters because the five- and six-argument sites are the variable-product
+and Store API paths: a plugin registered at arity 3 silently stops seeing the
+variation id, and the gate says everything is fine.
+
+⚠️ **Not patched at the time, deliberately.** It is a safety mechanism this
+project leans on, and changing one mid-stage without review is how a gate starts
+reporting safety it has not checked — which is the defect itself.
+
+**Exit:** the e2e suite runs the full sequence ten times with no unexplained
+failure; the arity gate fails when `registered_arity()` is narrowed.
 
 **Deliverable:** `docs/FAILURE-MODES.md` — the table above with the actual observed
 behaviour recorded per row.
@@ -6234,6 +20325,139 @@ endpoint is the hot path; cache it well and one instance goes a long way.
 **Repository additions:** `optioniaWooCommerceWorker` (queue consumer, shares the `optioniaWooCommerceBackend`
 entity layer) and optionally `optioniaWooCommerceDocs`.
 
+### M34.8 — The cloud mirror, and the malware scanning it gates
+
+**Added 2026-09-09, from Phase 15's audit.** ADR-040 chose HYBRID, WP-first: the
+merchant's server holds the file, and the cloud mirrors it. Phase 15 built the
+first half. **The mirror had no milestone anywhere** — it existed only as a
+decision inside an ADR, which is how work disappears.
+
+That mattered because Phase 15's malware criterion was *reassigned* to it. The
+reassignment is right — ADR-041 Decision 5 measured that `clamscan` is absent and
+`exec()` commonly disabled on shared hosting, so host-side scanning is theatre —
+but it pointed at nothing scheduled.
+
+**What this milestone must do.**
+
+- Mirror stored files to Optionia-managed storage, resumably, without blocking
+  the storefront (AC3).
+- **Scan on the way in, and gate the mirror on the result** — no file reaches
+  Optionia-managed storage unscanned. This is the environment where a scanner can
+  be relied on, which is the whole argument for doing it here.
+- Decide what a *failed* scan means for the copy already on the merchant's
+  server: Optionia does not control that disk, so the answer is a report to the
+  merchant rather than a deletion.
+- Record retention for the mirrored copy against ADR-042, which covers the
+  merchant-side file only.
+
+⚠️ **The gap remains real until this ships**, and Phase 15 states it: a file on
+the merchant's own server is unscanned until it mirrors, on their infrastructure
+under their security posture, exactly as any other WordPress upload is.
+
+### M34.1c — Drain `webhook_deliveries`: the config push Phase 9 left queued
+
+**Added 2026-08-29, from Phase 9's Stage 5.** This is not new scope discovered
+late — it is work Phase 9 deliberately deferred here, written down at the moment
+it was understood rather than left to be rediscovered.
+
+**What Phase 9 built.** [M9.4](#m94--push-invalidation) ships the *destination*:
+`stores.pushUrl`, a REST route in the plugin at `optionia/v1/push` verifying an
+HMAC signed with the store credential, and a `webhook_deliveries` row written
+inside the transaction that advanced `config_version`. Everything except the
+sending.
+
+**The row is written by `ConfigVersionService.bump()`, not by publishing.** Every
+trigger that advances the version is one a storefront must be told about — that
+is what advancing it means — so the enqueue lives beside the bump and cannot
+drift from it. M9.4b's remaining triggers, and Phase 13's assignment CRUD, get
+the push by calling the same method rather than by remembering a second one.
+
+**Stores with no `pushUrl` queue nothing.** A plugin build predating the REST
+route has none, and a delivery with no destination is a row this worker could
+only fail. Those stores fall back to the fifteen-minute pull.
+
+**Why the sending waits for this phase.** M34.1 states that webhook processing
+"must not run in the request path", and dispatching inline on publish would
+violate exactly that: a merchant clicking Publish would wait on an HTTP call to
+their own store, and a store that is slow or unreachable would make publishing
+slow or fail. Phase 9 had no worker to hand it to — no `@nestjs/schedule`, no
+queue dependency, nothing — so the row is written and nothing drains it.
+
+**The queue is therefore live and unread until this milestone.** Rows accumulate
+with `status = 'pending'`; nothing breaks, because the plugin's fifteen-minute
+conditional pull ([M9.3](#m93--pull-based-refresh)) already delivers every
+change within the acceptance's fallback window. Push is a latency improvement
+over a working baseline — 30 seconds instead of 15 minutes — which is why it was
+safe to defer and why it must not be forgotten.
+
+#### What the worker must do
+
+```text
+poll:  SELECT … FROM webhook_deliveries
+        WHERE status = 'pending' AND (nextRetryAt IS NULL OR nextRetryAt <= NOW(3))
+        ORDER BY id LIMIT n            -- ix_webhook_retry covers this exactly
+send:  POST <stores.callbackUrl>
+        X-Optionia-Signature: sha256=<hmac(store credential, timestamp + body)>
+        X-Optionia-Timestamp: <unix seconds>
+        body: {"event":"config.updated","config_version":43}
+mark:  status = 'delivered' | 'failed', attempts += 1, lastError, nextRetryAt
+```
+
+**The push carries no configuration.** It names a version and wakes a pull. That
+is what lets the channel need no payload trust: a forged push causes at most a
+conditional GET that returns `304`. Keep it that way — a worker that started
+sending configuration would turn a public endpoint into an injection surface.
+
+#### Six things that are easy to get wrong here
+
+1. **Coalesce per store.** Ten publishes in a minute must not become ten pushes.
+   The plugin's pull is conditional, so nine of them fetch nothing and the tenth
+   is the only one that mattered. Take the newest pending row per `storeId` and
+   mark the rest delivered — the version in the payload is advisory, and the
+   plugin refetches whatever is current.
+
+2. **Back off, and cap.** A store that is permanently unreachable — a merchant
+   who moved domain without disconnecting — must not be retried forever.
+   Exponential backoff on `nextRetryAt`, and a terminal `failed` after a bounded
+   number of attempts. The fifteen-minute pull still covers that store the
+   moment it comes back.
+
+3. **Never let delivery failure touch publishing.** The row is written in the
+   publish transaction; everything after is the worker's problem. A merchant
+   must never see a publish fail because their storefront was down.
+
+4. **Skip stores that cannot receive.** `DISCONNECTED` and `REVOKED` stores have
+   no usable credential — the same reasoning that made
+   `Config\Synchroniser` skip them. Signing a push with a revoked credential
+   produces a request the plugin will refuse, and burns its circuit breaker
+   doing it.
+
+5. **Timestamp the signature, and bound it.** The plugin rejects a push whose
+   timestamp is outside a few minutes' window, so a captured request cannot be
+   replayed indefinitely. Harmless if it were — the pull is idempotent — but the
+   window costs nothing and removes the question.
+
+6. **One worker, or claim rows.** Two workers polling the same query will send
+   the same push twice. Either run one, or `UPDATE … SET status = 'sending'`
+   with a row claim before dispatch.
+
+#### Acceptance
+
+Carried verbatim from [M9.4](#m94--push-invalidation), and only fully testable
+once this milestone exists:
+
+```text
+[ ] publish → live storefront in under 30 seconds on a healthy store
+[ ] publish → live storefront within 15 minutes when push delivery fails
+    entirely  (already satisfied by M9.3's cron — assert it still is)
+[ ] a delivery failure never fails or slows a publish
+[ ] webhook_deliveries has no rows stuck pending after a healthy run
+```
+
+That last line is the one worth a gate. A queue nothing drains looks identical
+to a queue with nothing to do, and this milestone exists because that state was
+allowed deliberately for twenty-five phases.
+
 **Isolation requirement:** this project's infrastructure is provisioned independently —
 its own droplet or app instances, its own managed database, its own object storage, its own
 DNS records. It shares nothing with any other project, so no unrelated deploy can affect
@@ -6427,13 +20651,13 @@ assessed**, despite living inside this workspace. See the
 **The roadmap was right.** A prior-platform analysis was needed, and its absence cost this plan
 four things it should have had from the start — a Design Lab phase, a styling decision, cart
 price presentation, and the ID-stability requirement in
-[M5.0a](#m50--reconcile-the-domain-model-against-optionia-app) — all added in
+[M5.0a](#m50--review-the-existing-schema-against-optionia-apps-option-model) — all added in
 [Appendix E](#appendix-e--revision-log-2026-08-27).
 
 **How it is resolved.** Not as a construction phase — nothing is migrated and no code is
 inherited — but as a reading-and-reconciliation input:
 [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) adopts `optioniaapp.md`
-as the specification, and [M5.0](#m50--reconcile-the-domain-model-against-optionia-app)
+as the specification, and [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model)
 reconciles the domain model against it before Phase 5 hardens the schema. Phase numbering still
 starts at 1.
 
@@ -6542,7 +20766,7 @@ Every roadmap phase is accounted for. Nothing was dropped.
 
 | Roadmap | This plan |
 |---|---|
-| 0 — Prior-platform analysis | **Reinstated 2026-08-27** — was "Dropped — greenfield project", which rested on the ADR-001 scope error ([amendment](#adr-001-amendment)). The roadmap was right that a prior-platform analysis is needed: it exists as `optioniaapp.md`, and is adopted via [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) + [M5.0](#m50--reconcile-the-domain-model-against-optionia-app). [M1.5](#m15--competitive-teardown) remains a separate input |
+| 0 — Prior-platform analysis | **Reinstated 2026-08-27** — was "Dropped — greenfield project", which rested on the ADR-001 scope error ([amendment](#adr-001-amendment)). The roadmap was right that a prior-platform analysis is needed: it exists as `optioniaapp.md`, and is adopted via [M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification) + [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model). [M1.5](#m15--competitive-teardown) remains a separate input |
 | 1 — Environment ✅ | Complete; context in [Phase 2](#phase-2--woocommerce-competence) |
 | 2 — Learn WooCommerce | [Phase 2](#phase-2--woocommerce-competence) (+ M2.8 block themes) |
 | 3 — Plugin fundamentals | [Phase 3](#phase-3--plugin-skeleton) |
@@ -6646,22 +20870,23 @@ STAGE 1 — LEARN THE PLATFORM
 [x] Phase 4  — Throwaway Prototype         (8 design rules, 4 corrections)
 
 STAGE 2 — THE VERTICAL SLICE
-[ ] Phase 5  — Data Model & Migrations
-[ ] Phase 6  — Tenancy & Auth
-[ ] Phase 7  — Option Authoring API
-[ ] Phase 8  — Store Connection
-[ ] Phase 9  — Config Sync & Cache
-[ ] Phase 10 — Storefront Renderer
-[ ] Phase 11 — Pricing Engine
-[ ] Phase 12 — Cart, Checkout, Order
-[ ] Phase 13 — Minimum Builder UI
-[ ] 🚩 GATE 1 — ARCHITECTURE PROVEN
+[x] Phase 5  — Data Model & Migrations     (32 entities, 5 migrations, ERD written)
+[~] Phase 6  — Tenancy & Auth              (8/10; impersonation → M26.4,
+                                            billing audit → Phase 23)
+[x] Phase 7  — Option Authoring API        (contract written before implementation)
+[x] Phase 8  — Store Connection            (60s criterion handed to M13.3, timed 12.50s)
+[x] Phase 9  — Config Sync & Cache         (push latency → M34.1c; cron fallback met)
+[x] Phase 10 — Storefront Renderer         (classic + block, zero sync API calls)
+[x] Phase 11 — Pricing Engine              (shared fixture green in BOTH repos' CI)
+[x] Phase 12 — Cart, Checkout, Order       (HPOS on/off, classic + block checkout)
+[x] Phase 13 — Minimum Builder UI          (canonical flow automated in a browser)
+[x] 🚩 GATE 1 — ARCHITECTURE PROVEN        (all 10 criteria, 2026-09-03)
 
 STAGE 3 — WIDEN THE PRODUCT
-[ ] Phase 14 — Option Type Library
-[ ] Phase 15 — File Upload Subsystem
-[ ] Phase 16 — Advanced Pricing
-[ ] Phase 17 — Conditional Logic Engine
+[x] Phase 14 — Option Type Library         (15 types; pricing-page count [~] — external repo)
+[x] Phase 15 — File Upload Subsystem       (per-plan storage → M24.2; malware → M34.8)
+[x] Phase 16 — Advanced Pricing            (5 price types; formula → Phase 16b)
+[ ] Phase 17 — Conditional Logic Engine    ◀ NEXT — owns M16.4 conditional pricing
 [ ] Phase 18 — Option Groups & Ordering
 [ ] Phase 19 — Product Sync & Assignment
 [ ] Phase 20 — Full Builder UI
@@ -6717,7 +20942,20 @@ Read the STATUS block at the top of this file   ← always start here
   → commit
   → UPDATE THE STATUS BLOCK          ← the step everyone forgets
   → next milestone
+
+and when a milestone closes the last of a phase's criteria:
+
+  → tick BOTH ledgers, in the same change:
+      · the phase ledger under STATUS      (and move the ◀ HERE marker)
+      · Appendix C's master checklist
+  → re-read the STATUS findings table: is anything still marked "fix now"?
 ```
+
+⚠️ **Those last two steps were added on 2026-09-10, because both had already failed.**
+Gate 1 passed on 2026-09-03 and neither ledger was ticked; the two then *disagreed with each
+other* for a week, with Appendix C showing the entire vertical slice unstarted. Separately,
+F1 and F2 sat marked *"fix now"* through three phases. A checklist updated from memory at
+some later date is a checklist that describes the past.
 
 **One milestone per session.** Not one phase. A phase is 5–15 milestones and will not fit in
 one working context; attempting it produces shallow work on all of them instead of finished
@@ -6826,7 +21064,7 @@ specifies the fix here, including the conditionally-required half. It is a **del
 | # | Gap | Evidence it was a gap | Added as |
 |---|---|---|---|
 | 1 | **The Design Lab was absent entirely** — ~8,500 LOC and one of three cloud-only differentiators | `design lab`, `designlab`, `canvas`, `overlay` across 5,976 lines returned five incidental word-hits and no milestone | **Part VI½ — Phases 26c / 26d / 26e**, gated on new **D7** ([M1.10](#m110--decide-d7-design-lab-scope-and-position)) |
-| 2 | **Option/value ID stability across an edit was unspecified** | `id stab`, `preserve.*id`, `regenerat` → zero hits. Plan-gate freezing matches the stored tree *by id*, so regenerating ids on save rejects a downgraded merchant's grandfathered content — the outcome M24.4 forbids | **[M5.0a](#m50--reconcile-the-domain-model-against-optionia-app)** with two CI tests |
+| 2 | **Option/value ID stability across an edit was unspecified** | `id stab`, `preserve.*id`, `regenerat` → zero hits. Plan-gate freezing matches the stored tree *by id*, so regenerating ids on save rejects a downgraded merchant's grandfathered content — the outcome M24.4 forbids | **[M5.0a](#m50--review-the-existing-schema-against-optionia-apps-option-model)** with two CI tests |
 | 3 | **Cart-page and drawer price *presentation* had no milestone** | `cart drawer`, `mini.cart` → zero hits. Phase 12 charges correctly and shows *selections*; neither is the customer understanding the price across five cart surfaces | **[Phase 21b](#phase-21b--cart--checkout-price-presentation)** |
 
 ## Additions — four partials
@@ -6839,7 +21077,7 @@ specifies the fix here, including the conditionally-required half. It is a **del
 | 7 | **Phase 29** compatibility matrix (internal QA) | No **merchant-facing** self-diagnostic, on a platform where the breaking combinations are the untested ones | **[Phase 29b](#phase-29b--merchant-facing-theme-diagnostics)** |
 
 Plus **[M1.8](#m18--amend-adr-001-and-adopt-optionia-app-as-the-specification)** (amend ADR-001;
-write ADR-007) and **[M5.0](#m50--reconcile-the-domain-model-against-optionia-app)** (reconcile
+write ADR-007) and **[M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model)** (reconcile
 the domain model, including *not* copying the `number`-bounds-in-`minLength` field reuse), and
 seven new Gate 2 criteria.
 
@@ -6881,6 +21119,159 @@ checklist (+6 phases, new Stage 4B block).
 > customer who cannot tell why a line costs what it does will not complete that purchase, and
 > options that look foreign to the theme read as broken. A styling *dashboard* is genuinely
 > deferrable; a legible price and theme-native rendering are not.
+
+## Second revision — 2026-09-02 (code audit)
+
+The 2026-08-27 revision closed gaps found by reading the Shopify app. This one closed gaps
+found by reading **your own three repositories**.
+
+**The architecture verified clean in the code** — AC3 (zero API calls in the render/cart/engine
+paths), AC4 (no price read from any request; `Pricing::sum_deltas()` over cached config only),
+integer-minor-unit money at the `set_price()` boundary, `ksort()` canonical cart ordering, and a
+**byte-identical** 16-case `pricing-fixtures.json` in both repos gated by
+`bin/check-shared-fixtures.sh`. Thirteen backend and seven plugin gate scripts enforce it.
+
+Two **plan** gaps closed:
+
+| Added | Was | Why |
+|---|---|---|
+| **[M29.9](#m299--wordpress-multisite-decide-the-position-then-state-it)** — Multisite position | **0 mentions** in 13,000 lines | The credential binds to `site_url` and M8.2's clone detection is built to *refuse* a duplicate — exactly what a Multisite sibling resembles. Any of the three positions is fine; **omission is not** |
+| **[M29.10](#m2910--wp-cli-commands)** — WP-CLI commands | 1 passing mention | No CLI excludes the plugin from staging pipelines and bulk provisioning — the agency segment [D6](#m19--decide-d6-styling-and-presentation-ownership) targets |
+
+Two **hygiene** items, outside any phase (~1 hour, recorded in the
+[STATUS audit](#status)): the dashboard has **10 test files and no CI workflow**, and its
+entire git history is one commit — `"Initial commit from Create Next App"`.
+
+Two findings needed **no** change, because the phases already own them: only `radio.php` exists
+and `Engine/Types/` is empty (**that is [Phase 14](#phase-14--option-type-library)**), and
+conditional-visibility rejection is deferred in `SelectionResolver`
+(**that is [M17.4](#phase-17--conditional-logic-engine)**, already in the STATUS carry-forward
+rules).
+
+## A defect in this plan, not in the code — recorded 2026-09-09
+
+**Five times, work was deferred to a destination that did not exist — or to none
+at all.** Each was written in good faith, each reasoning was sound, and each left
+work that nobody would ever schedule:
+
+| Deferred | Said | Actually pointed at | Now |
+| --- | --- | --- | --- |
+| Malware scanning (Phase 15) | *"owned elsewhere"* | an ADR with no milestone | [M34.8](#m348--the-cloud-mirror-and-the-malware-scanning-it-gates) |
+| Per-plan storage (Phase 15) | *"enforced and metered"* — ticked | nothing; only the meter existed | [M24.2](#m242--limit-enforcement-at-write-time) |
+| `formula` (Phase 16) | *"its own phase"* | no phase | [Phase 16b](#phase-16b--formula-pricing) |
+| e2e flakiness + the arity gate | *"unowned"*, *"gate-hardening work"* | a phrase used once | [M30.11](#m3011--the-harness-itself-flakiness-and-gates-that-read-the-wrong-thing) |
+| Conditional pricing (M16.4) | nothing — `[x] All pricing types implemented` | a milestone no criterion named | [Phase 17](#phase-17--conditional-logic-engine), now marked |
+
+🔴 **The tick is the dangerous half.** Three of these sat inside exit criteria
+marked `[x]`, and the fifth had **no destination at all** — the criterion covering
+it simply read as done. A criterion is what someone reads to decide a phase is done, so a
+tick over half-finished work is not a documentation slip — it is the mechanism by
+which the remaining half stops being anybody's.
+
+**The rule this establishes: a deferral names a number.** Not "elsewhere", not
+"its own phase", not "later" — a milestone or phase that exists in this document
+and can be linked. If no such thing exists, creating it *is* part of deferring.
+
+### The sixth instance is the ledger itself — recorded 2026-09-10
+
+The five rows above are about work pointing nowhere. This one is the inverse:
+**work that was finished and never recorded.**
+
+| | Main ledger | Appendix C |
+| --- | --- | --- |
+| Phases 5–13 | `[x]` | **`[ ]` — all nine** |
+| Gate 1 | `[ ]`, with `◀ HERE` before it | `[ ]` |
+| Phases 14, 15, 16 | `[ ]` | `[ ]` |
+
+Every Gate 1 criterion was met and evidenced on 2026-09-03 — orders #42/#47/#48/#50
+across both themes, HPOS on, off, and sync off. The gate says *"nothing in Stage 3
+begins until this gate passes"*, and Stage 3 was built through Phase 16 while its
+box sat empty. **Nothing was actually built on unproven architecture** — the gate
+passed, silently. But the plan's own stop sign was stepped over without anyone
+noticing it was there, which means it would not have stopped anything if the gate
+had genuinely failed.
+
+Worse, the two ledgers **disagreed with each other**: Appendix C still showed the
+entire vertical slice unstarted. Two checklists that contradict each other are not
+redundancy — a reader believes whichever they open first.
+
+⚠️ **The audits that found the five deferral defects did not find this one**, because
+every one of them audited *code against tests*. Nothing audited *the plan against
+itself*. The fix is mechanical; the lesson is that a ledger is only load-bearing if
+updating it is part of closing a phase, not a thing done later from memory.
+
+**The rule this adds: closing a phase means ticking every ledger, in the same
+change.** Both boxes and the `◀ HERE` marker move together with the exit criteria,
+or the ledger silently becomes fiction.
+
+### The shipped type count was wrong everywhere — 2026-09-10
+
+`docs/OPTION-TYPES.md` said *"Fourteen of the fifteen presentations the enum
+declares"* and listed `file_input` under **Declared but not yet supported —
+blocked on Phase 15**. Phase 15 shipped it. Measured:
+
+| Source | Says |
+| --- | --- |
+| `Presentation` enum | **15** |
+| `type-registry.ts` | **15** — identical set, verified member by member |
+| Plugin templates | **15** files, names matching the registry exactly |
+| Dashboard authorable list | includes `file_input` |
+| `type-registry.spec.ts` | asserts the unregistered list is **empty** |
+
+Every source in the code agreed at 15. Both documents said 14 — and
+**[M14.5](#m145--competitive-parity-check) makes `docs/OPTION-TYPES.md` the file any
+public claim about type counts must be counted from**, so this is the number that
+would have reached a pricing page. It also understates the product against the
+competitor it is benchmarked on: 15 versus 13, recorded as 14 versus 13.
+
+**Why it survived a parity check that was explicitly "counted, not estimated".**
+The count was taken on **2026-09-08**, in the window after Phase 15 built the
+upload subsystem and before `file_input` was thought of as an option type rather
+than as file-upload plumbing. The count was honest and the boundary was wrong.
+
+⚠️ **Two totals agreeing is not verification.** The old check compared numbers;
+a template named for a presentation the registry lacks would have passed it. The
+check is now **set-equality** across enum, registry and templates, which is what
+actually establishes they describe the same fifteen things.
+
+### Seven internal links pointed at headings that had been renamed — 2026-09-10
+
+Checking the ledger fixes above meant resolving every `](#…)` in this file against
+the headings it actually contains. Of **741** internal links, **7 were dead** —
+each naming a section by a title it no longer carries:
+
+| Link said | Heading is now |
+| --- | --- |
+| `M5.0 — Reconcile the domain model…` (**10 links**) | *Review the existing schema against `optionia-app`'s option model* |
+| `M7.2.5 — Serialization contract` | **M7.2b** |
+| `Phase 24 — Plan Limits and Usage` | *Plan Limits & **Enforcement*** |
+| `Phase 31 — Observability` | *Monitoring* |
+| `Phase 33 — Deployment` | *Closed Beta* |
+| `Phase 34 — Infrastructure` | *Production Deploy* |
+| `Phase 8 — WooCommerce Store Connection` | *Store Connection* |
+
+Three of those renames moved a phase's **meaning**, not just its wording: Phase 33
+became a beta rather than a deploy, and Phase 34 took the deploy over. A reader
+following the old link lands nowhere and reasonably concludes the work is missing.
+
+**This is Stage 16z's defect in the plan rather than in the code** — there, 76
+citations across two repositories named the wrong milestone. Same failure, same
+cause: a name was changed in one place and referenced from many, with nothing
+checking the two still agree. The link check is now mechanical and takes a second;
+it had simply never been run.
+
+**And its corollary, from Stage 16z: a citation names a milestone that exists.**
+Seventy-six references across two repositories pointed at the wrong milestone,
+one of them at a feature that had been deferred to a different phase entirely.
+Every audit checked the code against the tests; none checked the citations
+against the milestone list.
+
+⚠️ **Two of the four were found by auditing a phase that had already been
+declared complete**, and one of those audits was of a fix written an hour
+earlier. Green tests say the code does what the tests ask; they say nothing about
+whether the plan still describes reality.
+
+---
 
 ## Still open, and not closable by planning
 

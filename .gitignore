@@ -13,6 +13,15 @@ Thumbs.db
 # The backend is its own repository — see optioniaWooCommerceBackend/.git
 /optioniaWooCommerceBackend/
 
+# The dashboard is its own repository — see optioniaWooCommerceFrontend/.git
+#
+# Missing from this list until 2026-09-10, while the other two had been here from
+# the start. It was untracked rather than ignored, so it was exactly the
+# "unignored neighbour a broad add could reach" the optionia-app note below
+# describes — and it had just received its first real commit, 96 files of Phase
+# 13. A `git add -A` here would have nested a git repository inside another.
+/optioniaWooCommerceFrontend/
+
 # The Shopify Optionia app is a **separate project** that happens to sit here for
 # reference while its features are ported. It has nothing to do with this
 # repository and must never be committed into it.
