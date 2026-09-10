@@ -24,13 +24,28 @@ export interface PublishFinding {
 /** Everything a validator needs. Extended, never narrowed, as phases add checks. */
 export interface PublishContext {
   readonly tree: OptionSetTree;
-  /** Rules belonging to the set, live only. Empty until Phase 17 builds rule CRUD. */
+  /**
+   * Rules belonging to the set, live only.
+   *
+   * ✏️ **`conditions`, `matchType` and `action` added in M17.3.** The loader has always
+   * fetched whole `OptionRule` rows; this interface narrowed them to what the
+   * checks of the day needed. Cycle detection needs the conditions — they are
+   * the *inputs* half of every edge — so the narrowing is widened rather than
+   * the loader changed. "Extended, never narrowed", as this block says.
+   *
+   * `conditions` is typed as the stored shape rather than `RuleCondition[]`:
+   * a validator reads rows that may predate today's schema, and a check that
+   * throws on unfamiliar JSON would refuse a publish for the wrong reason.
+   */
   readonly rules: ReadonlyArray<{
     id: string;
     targetType: string;
     targetId: string;
     isEnabled: boolean;
     disabledReason: string | null;
+    conditions: readonly unknown[];
+    matchType: string;
+    action: string;
   }>;
   /**
    * Live assignments, loaded as a count for the publish preflight.
@@ -319,10 +334,332 @@ export const patternsAreSafe: PublishValidator = {
   },
 };
 
+/**
+ * Every id in a set, sorted by what kind of thing it names.
+ *
+ * Built once per validator run rather than per rule: a set may hold two hundred
+ * rules, and rebuilding this for each would walk the whole tree two hundred times
+ * to answer the same question.
+ *
+ * ⚠️ **Disabled rows are included deliberately.** A rule targeting a disabled
+ * option is not *broken* — the merchant may be about to re-enable it, and the
+ * cascade already handles the case where the row is genuinely gone. The question
+ * here is only "is this id in this set", which disabling does not change.
+ */
+function idsIn(tree: OptionSetTree): {
+  groups: Set<string>;
+  options: Set<string>;
+  values: Set<string>;
+  /** Option ids reachable from a target, whatever kind that target names. */
+  optionsUnder: Map<string, readonly string[]>;
+} {
+  const groups = new Set<string>();
+  const options = new Set<string>();
+  const values = new Set<string>();
+  const optionsUnder = new Map<string, readonly string[]>();
+
+  tree.groups.forEach(({ group, options: children }) => {
+    groups.add(group.id);
+    optionsUnder.set(
+      group.id,
+      children.map(({ option }) => option.id),
+    );
+
+    children.forEach(({ option, values: optionValues }) => {
+      options.add(option.id);
+      /* An option target affects exactly itself. */
+      optionsUnder.set(option.id, [option.id]);
+
+      optionValues.forEach((value) => {
+        values.add(value.id);
+        /* A value target affects the option that owns it. */
+        optionsUnder.set(value.id, [option.id]);
+      });
+    });
+  });
+
+  return { groups, options, values, optionsUnder };
+}
+
+/**
+ * Every id a rule names must belong to the set being published.
+ *
+ * 🔴 **A blocker, and this is the stage that can decide it.** M17.1 validates
+ * `targetId` for shape and M17.1's CRUD checks the row exists and is the kind
+ * claimed — but "is it in *this* set" needs the whole set loaded, which is what
+ * a publish context is.
+ *
+ * Blocking rather than warning, because the plugin cannot resolve an id the
+ * document does not contain: a published cross-set rule is one that **silently
+ * governs nothing**, and the merchant discovers it from a customer.
+ *
+ * ⚠️ **Worse than an ordinary stale rule.** `CascadeService` disables a rule
+ * whose target was deleted and records `TARGET_DELETED`, so the merchant is
+ * told. A cross-set target is never swept by that: a cascade sweeps within the
+ * deleted row's own set, so the other set's delete never reaches this rule. This
+ * check is the only thing standing between that rule and a storefront.
+ *
+ * ⚠️ **A rule the cascade already disabled is NOT reported here.**
+ * `rulesHaveTargets` above owns that case and makes it a *warning*, on the
+ * stated grounds that a disabled rule cannot reach a storefront — the merchant
+ * is told, and the publish proceeds. Blocking it here would silently reverse
+ * that decision and refuse a publish over logic already switched off.
+ *
+ * The case this owns is the opposite one: a rule that is **live**, whose target
+ * exists somewhere, and is in the wrong set. Nothing sweeps that — a cascade
+ * sweeps within the deleted row's own set — so without this check it publishes.
+ *
+ * A rule the *merchant* disabled is still checked. That is one they intend to
+ * re-enable, and letting it publish broken only defers the same failure.
+ */
+export const ruleTargetsAreInThisSet: PublishValidator = {
+  name: 'rule-targets-are-in-this-set',
+  validate({ tree, rules }) {
+    const { groups, options, values } = idsIn(tree);
+    const findings: PublishFinding[] = [];
+
+    /* Owned by `rulesHaveTargets`, which warns rather than blocks. */
+    const live = rules.filter((rule) => rule.disabledReason !== 'target_deleted');
+
+    const holds = (targetType: string, id: string): boolean => {
+      switch (targetType) {
+        case 'group':
+          return groups.has(id);
+        case 'option':
+          return options.has(id);
+        case 'value':
+          return values.has(id);
+        default:
+          /*
+           * An unrecognised target type is reported by falling through to the
+           * finding below rather than throwing. A row written by a future build
+           * must not make a publish fail with a stack trace.
+           */
+          return false;
+      }
+    };
+
+    live.forEach((rule) => {
+      if (!holds(rule.targetType, rule.targetId)) {
+        findings.push({
+          severity: PublishSeverity.BLOCKER,
+          code: 'RULE_TARGET_NOT_IN_SET',
+          subject: `rule:${rule.id}`,
+          message:
+            `A rule acts on a ${rule.targetType} that is not part of this option set, ` +
+            'so it could never apply. Point it at something in this set, or delete it.',
+        });
+      }
+
+      conditionOptionIds(rule.conditions).forEach((optionId) => {
+        if (!options.has(optionId)) {
+          findings.push({
+            severity: PublishSeverity.BLOCKER,
+            code: 'RULE_CONDITION_NOT_IN_SET',
+            subject: `rule:${rule.id}`,
+            message:
+              'A rule tests an option that is not part of this option set, so its ' +
+              'condition could never be answered.',
+          });
+        }
+      });
+    });
+
+    return findings;
+  },
+};
+
+/**
+ * The options a condition list reads.
+ *
+ * ⚠️ **Defensive about the stored shape.** `conditions` is a `json` column, so a
+ * row may predate today's schema or have been written by hand. Anything
+ * unrecognised contributes no ids rather than throwing: a publish must not fail
+ * with a stack trace because one rule holds unfamiliar JSON, and
+ * `ruleConditionsSchema` is what refuses malformed conditions at the door.
+ */
+function conditionOptionIds(conditions: readonly unknown[]): readonly string[] {
+  if (!Array.isArray(conditions)) {
+    return [];
+  }
+
+  return conditions.flatMap((condition) => {
+    if (typeof condition !== 'object' || condition === null) {
+      return [];
+    }
+
+    const optionId = (condition as Record<string, unknown>).optionId;
+
+    return typeof optionId === 'string' ? [optionId] : [];
+  });
+}
+
+/**
+ * The actions that change what a **later rule can read**.
+ *
+ * 🔴 **Not every action creates an edge, and treating all six as edges refuses
+ * publishes that are perfectly sound.**
+ *
+ * A rule's condition reads an option's *answer*. So an action forms an edge only
+ * if it can change one:
+ *
+ * | Action | Edge? | Why |
+ * |---|---|---|
+ * | `show` / `hide` | **yes** | An option that is not rendered has no answer |
+ * | `set_default` | **yes** | It writes the answer directly |
+ * | `set_price` | no | Changes what a line costs, never an answer |
+ * | `require` / `unrequire` | no | Changes validation, never an answer |
+ *
+ * ⚠️ **`set_price` is the one worth naming.** It is the most consequential action
+ * in the vocabulary — ADR-049 gives it the power to replace a value's delta — and
+ * it is still not an edge, because money is an output of evaluation rather than
+ * an input to it. Severity and graph position are different questions.
+ */
+const ANSWER_AFFECTING_ACTIONS: ReadonlySet<string> = new Set(['show', 'hide', 'set_default']);
+
+/**
+ * Rules that depend on each other in a loop cannot settle (M17.3).
+ *
+ * ADR-050: the evaluator refuses rather than accepting a truncated pass, so a
+ * published cycle is a line a customer cannot buy. **A blocker.**
+ *
+ * ## What an edge is
+ *
+ * A rule reads options (its conditions) and affects options (its target). The
+ * edge runs **read → affected**, so a cycle is a set of rules each waiting on
+ * the last.
+ *
+ * 🔴 **The nodes are not all the same kind, which is the whole difficulty.** A
+ * condition always names an **option**; a target may be a **group**, an
+ * **option** or a **value**. So this resolves a target to the options it
+ * contains before drawing any edge — a group to its options, a value to the
+ * option that owns it. Without that step this cycle is invisible:
+ *
+ * ```text
+ * rule 1: hide GROUP g   when option A is empty
+ * rule 2: show option A  when option B equals x     (B lives in g)
+ * ```
+ *
+ * ⚠️ **A self-loop is legitimate and must not fire.** *"Hide A when A is empty"*
+ * is a one-step rule a merchant may reasonably write, verified accepted by the
+ * 17-2 audit. Only a loop **through another rule** cannot settle.
+ *
+ * ⚠️ **Disabled rules are excluded here, unlike the target check above.** A
+ * cycle among rules that never run is not a cycle a storefront can reach, and
+ * blocking it would refuse a publish over logic the merchant has already
+ * switched off.
+ */
+export const rulesHaveNoCycles: PublishValidator = {
+  name: 'rules-have-no-cycles',
+  validate({ tree, rules }) {
+    const { optionsUnder } = idsIn(tree);
+
+    /** option id -> the options its answer can go on to affect. */
+    const edges = new Map<string, Set<string>>();
+
+    rules
+      .filter((rule) => rule.isEnabled && ANSWER_AFFECTING_ACTIONS.has(rule.action))
+      .forEach((rule) => {
+        const affected = optionsUnder.get(rule.targetId) ?? [];
+
+        conditionOptionIds(rule.conditions).forEach((readOption) => {
+          affected.forEach((affectedOption) => {
+            /*
+             * A rule whose target is the option it reads is a one-step rule, not
+             * a loop. Dropping the self-edge here is what keeps the detector from
+             * over-firing on it.
+             */
+            if (affectedOption === readOption) {
+              return;
+            }
+
+            const bucket = edges.get(readOption);
+
+            if (bucket) {
+              bucket.add(affectedOption);
+            } else {
+              edges.set(readOption, new Set([affectedOption]));
+            }
+          });
+        });
+      });
+
+    return cycleIn(edges)
+      ? [
+          {
+            severity: PublishSeverity.BLOCKER,
+            code: 'RULES_FORM_A_CYCLE',
+            subject: `set:${tree.set.id}`,
+            message:
+              'Two or more rules depend on each other in a loop, so the options they ' +
+              'control can never settle. Remove one of the conditions that closes the loop.',
+          },
+        ]
+      : [];
+  },
+};
+
+/**
+ * Whether a directed graph holds a cycle.
+ *
+ * Iterative depth-first search with an explicit stack. **Not recursion:** a set
+ * may hold two hundred rules over as many options, and a deep chain would risk a
+ * stack overflow inside a publish — which would surface as a 500 rather than as
+ * the actionable message this check exists to produce.
+ */
+function cycleIn(edges: ReadonlyMap<string, ReadonlySet<string>>): boolean {
+  const settled = new Set<string>();
+  const onPath = new Set<string>();
+
+  for (const start of edges.keys()) {
+    if (settled.has(start)) {
+      continue;
+    }
+
+    /* `enter` distinguishes descending into a node from returning through it. */
+    const stack: Array<{ node: string; enter: boolean }> = [{ node: start, enter: true }];
+
+    while (stack.length > 0) {
+      const step = stack.pop();
+
+      if (!step) {
+        break;
+      }
+
+      if (!step.enter) {
+        onPath.delete(step.node);
+        settled.add(step.node);
+        continue;
+      }
+
+      if (onPath.has(step.node)) {
+        return true;
+      }
+
+      if (settled.has(step.node)) {
+        continue;
+      }
+
+      onPath.add(step.node);
+      stack.push({ node: step.node, enter: false });
+
+      (edges.get(step.node) ?? new Set<string>()).forEach((next) => {
+        if (!settled.has(next)) {
+          stack.push({ node: next, enter: true });
+        }
+      });
+    }
+  }
+
+  return false;
+}
+
 export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   setHasContent,
   optionsHaveValues,
   rulesHaveTargets,
+  ruleTargetsAreInThisSet,
+  rulesHaveNoCycles,
   setHasAssignments,
   patternsAreSafe,
 ];

@@ -8,6 +8,8 @@ import {
   PUBLISH_VALIDATORS,
   PublishSeverity,
   runPublishChecks,
+  ruleTargetsAreInThisSet,
+  rulesHaveNoCycles,
   type PublishContext,
   patternsAreSafe,
 } from './publish-check';
@@ -55,6 +57,29 @@ function value(overrides: Partial<OptionValue> = {}): OptionValue {
     deletedAt: LIVE,
     ...overrides,
   });
+}
+
+/**
+ * One rule, in the shape `PublishContext` carries.
+ *
+ * Defaults to a rule that is **valid and creates no edge**: enabled, targeting
+ * `option-1` — which the default tree contains — on a condition naming that same
+ * option. Every cycle test therefore states only the edges it is about, and a
+ * test that forgets to is inert rather than accidentally cyclic.
+ */
+function rule(overrides: Partial<PublishContext['rules'][number]> = {}) {
+  return {
+    id: 'rule-1',
+    targetType: 'option',
+    targetId: 'option-1',
+    isEnabled: true,
+    disabledReason: null,
+    conditions: [{ optionId: 'option-1', operator: 'is_not_empty' }],
+    matchType: 'all',
+    /* `show` is answer-affecting, so a test wanting an edge gets one by default. */
+    action: 'show',
+    ...overrides,
+  };
 }
 
 function context(overrides: Partial<PublishContext> = {}): PublishContext {
@@ -275,7 +300,7 @@ describe('pre-publish checks', () => {
       const findings = runPublishChecks(
         context({
           rules: [
-            { id: 'rule-1', targetType: 'option', targetId: 'gone', isEnabled: false, disabledReason: 'target_deleted' },
+            rule({ targetId: 'gone', isEnabled: false, disabledReason: 'target_deleted' }),
           ],
         }),
       );
@@ -291,7 +316,7 @@ describe('pre-publish checks', () => {
       const findings = runPublishChecks(
         context({
           rules: [
-            { id: 'rule-1', targetType: 'option', targetId: 'x', isEnabled: false, disabledReason: null },
+            rule({ targetId: 'x', isEnabled: false, disabledReason: null }),
           ],
         }),
       );
@@ -413,6 +438,418 @@ describe('pre-publish checks', () => {
     });
   });
 
+  /**
+   * A set holding two groups, so a test can put an option in the "other" one.
+   *
+   * `option-1` sits in `group-1`; `option-2` in `group-2` with `value-2`.
+   */
+  function twoGroupTree(): OptionSetTree {
+    return {
+      set: set(),
+      groups: [
+        { group: group(), items: [], options: [{ option: option(), values: [value()] }] },
+        {
+          group: group({ id: 'group-2', label: 'Second' }),
+          items: [],
+          options: [
+            {
+              option: option({ id: 'option-2', key: 'colour', label: 'Colour' }),
+              values: [value({ id: 'value-2', valueKey: 'red', label: 'Red' })],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  describe('rule targets outside this set', () => {
+    /**
+     * 🔴 The case nothing else catches.
+     *
+     * M17.1's CRUD proves the target row **exists and is the kind claimed**, but
+     * not that it belongs to this set. Nothing sweeps a cross-set target either:
+     * `CascadeService` sweeps within the deleted row's own set, so the other
+     * set's delete never reaches this rule.
+     */
+    it('blocks a rule whose target belongs to another set', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ rules: [rule({ targetId: 'option-in-another-set' })] }),
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.code).toBe('RULE_TARGET_NOT_IN_SET');
+      expect(findings[0]?.severity).toBe(PublishSeverity.BLOCKER);
+    });
+
+    it('blocks a condition testing an option from another set', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({
+          rules: [rule({ conditions: [{ optionId: 'elsewhere', operator: 'is_empty' }] })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITION_NOT_IN_SET']);
+    });
+
+    it('accepts a rule pointing entirely within this set', () => {
+      expect(ruleTargetsAreInThisSet.validate(context({ rules: [rule()] }))).toEqual([]);
+    });
+
+    /** A target may be a group or a value, not only an option. */
+    it('resolves all three target kinds', () => {
+      const withTree = { tree: twoGroupTree() };
+
+      expect(
+        ruleTargetsAreInThisSet.validate(
+          context({ ...withTree, rules: [rule({ targetType: 'group', targetId: 'group-2' })] }),
+        ),
+      ).toEqual([]);
+      expect(
+        ruleTargetsAreInThisSet.validate(
+          context({ ...withTree, rules: [rule({ targetType: 'value', targetId: 'value-2' })] }),
+        ),
+      ).toEqual([]);
+    });
+
+    /**
+     * 🔴 An id that is real, but of the wrong kind, must not pass.
+     *
+     * `CascadeService` matches `targetType` and `targetId` **together**, so a
+     * mismatched pair is swept by neither branch and never flagged
+     * `TARGET_DELETED`. M17.1's CRUD refuses this at the door; this is the
+     * second line, because a document can carry a row written before that check.
+     */
+    it('blocks a group id offered as an option target', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ rules: [rule({ targetType: 'option', targetId: 'group-1' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_IN_SET']);
+    });
+
+    it('blocks a target type nobody defined rather than throwing', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ rules: [rule({ targetType: 'gadget' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_IN_SET']);
+    });
+
+    /**
+     * ⚠️ `rulesHaveTargets` owns the already-disabled case and makes it a
+     * WARNING, because a disabled rule cannot reach a storefront. Blocking it
+     * here would silently reverse that.
+     */
+    it('leaves a cascade-disabled rule to the validator that warns about it', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({
+          rules: [rule({ targetId: 'gone', isEnabled: false, disabledReason: 'target_deleted' })],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /** A rule the merchant switched off is one they intend to switch back on. */
+    it('still checks a rule the merchant disabled', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({
+          rules: [rule({ targetId: 'elsewhere', isEnabled: false, disabledReason: null })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_IN_SET']);
+    });
+
+    /** A `json` column may hold anything; a publish must not 500 over it. */
+    it('survives conditions that are not the shape today\'s schema writes', () => {
+      expect(() =>
+        ruleTargetsAreInThisSet.validate(
+          context({ rules: [rule({ conditions: ['nonsense', null, 42, {}] })] }),
+        ),
+      ).not.toThrow();
+    });
+  });
+
+  describe('rules that form a cycle', () => {
+    it('accepts a single rule', () => {
+      expect(rulesHaveNoCycles.validate(context({ rules: [rule()] }))).toEqual([]);
+    });
+
+    /**
+     * 🔴 The two-rule loop, which is what M17.3 exists to refuse.
+     *
+     * ADR-050: the evaluator refuses rather than accepting a truncated pass, so
+     * a published cycle is a line a customer cannot buy.
+     */
+    it('blocks A depending on B while B depends on A', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              targetId: 'option-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.code).toBe('RULES_FORM_A_CYCLE');
+      expect(findings[0]?.severity).toBe(PublishSeverity.BLOCKER);
+    });
+
+    /**
+     * 🔴 **The cycle that is invisible without resolving containment.**
+     *
+     * A condition always names an OPTION; a target may name a GROUP. So this
+     * loop only closes once a group target is expanded to the options inside it:
+     *
+     *   r1: hide GROUP group-2   when option-1 is empty
+     *   r2: show option-1        when option-2 is empty   (option-2 lives in group-2)
+     */
+    it('blocks a loop that closes only through a group target', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              action: 'hide',
+              targetType: 'group',
+              targetId: 'group-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULES_FORM_A_CYCLE']);
+    });
+
+    /** The same, through a value target resolved to its owning option. */
+    it('blocks a loop that closes only through a value target', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              targetType: 'value',
+              targetId: 'value-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULES_FORM_A_CYCLE']);
+    });
+
+    /**
+     * ⚠️ **A self-loop is legitimate**, verified accepted by the 17-2 audit.
+     * "Hide A when A is empty" is a one-step rule a merchant may reasonably
+     * write; only a loop THROUGH another rule cannot settle.
+     */
+    it('accepts a rule that reads the option it acts on', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          rules: [
+            rule({ targetId: 'option-1', conditions: [{ optionId: 'option-1', operator: 'is_empty' }] }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /**
+     * 🔴 **Not every action is an edge**, and treating all six as edges would
+     * refuse publishes that are perfectly sound.
+     *
+     * `set_price` is the most consequential action in the vocabulary — ADR-049
+     * lets it replace a value's delta — and it still cannot feed a condition,
+     * because money is an output of evaluation rather than an input to it.
+     */
+    it('accepts a price loop, because a price is not an answer', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              action: 'set_price',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              action: 'set_price',
+              targetId: 'option-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    it('accepts a require/unrequire loop, which changes validation not answers', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              action: 'require',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              action: 'unrequire',
+              targetId: 'option-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    it('treats set_default as an edge, because it writes an answer', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              action: 'set_default',
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              action: 'set_default',
+              targetId: 'option-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULES_FORM_A_CYCLE']);
+    });
+
+    /**
+     * ⚠️ Disabled rules are excluded HERE, unlike the target check — a cycle
+     * among rules that never run is not a cycle a storefront can reach.
+     */
+    it('ignores a cycle whose rules are all disabled', () => {
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              id: 'r1',
+              isEnabled: false,
+              targetId: 'option-1',
+              conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
+            }),
+            rule({
+              id: 'r2',
+              isEnabled: false,
+              targetId: 'option-2',
+              conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
+            }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /** A three-rule loop, to prove the search is not special-cased to two. */
+    it('blocks a loop that closes through a third rule', () => {
+      const tree: OptionSetTree = {
+        set: set(),
+        groups: [
+          {
+            group: group(),
+            items: [],
+            options: [
+              { option: option(), values: [value()] },
+              { option: option({ id: 'option-2', key: 'b', label: 'B' }), values: [value({ id: 'value-2', valueKey: 'b' })] },
+              { option: option({ id: 'option-3', key: 'c', label: 'C' }), values: [value({ id: 'value-3', valueKey: 'c' })] },
+            ],
+          },
+        ],
+      };
+
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree,
+          rules: [
+            rule({ id: 'r1', targetId: 'option-1', conditions: [{ optionId: 'option-2', operator: 'is_empty' }] }),
+            rule({ id: 'r2', targetId: 'option-2', conditions: [{ optionId: 'option-3', operator: 'is_empty' }] }),
+            rule({ id: 'r3', targetId: 'option-3', conditions: [{ optionId: 'option-1', operator: 'is_empty' }] }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULES_FORM_A_CYCLE']);
+    });
+
+    /** A chain is not a loop: A affects B affects C, and nothing returns. */
+    it('accepts a long chain that never closes', () => {
+      const tree: OptionSetTree = {
+        set: set(),
+        groups: [
+          {
+            group: group(),
+            items: [],
+            options: [
+              { option: option(), values: [value()] },
+              { option: option({ id: 'option-2', key: 'b', label: 'B' }), values: [value({ id: 'value-2', valueKey: 'b' })] },
+              { option: option({ id: 'option-3', key: 'c', label: 'C' }), values: [value({ id: 'value-3', valueKey: 'c' })] },
+            ],
+          },
+        ],
+      };
+
+      const findings = rulesHaveNoCycles.validate(
+        context({
+          tree,
+          rules: [
+            rule({ id: 'r1', targetId: 'option-2', conditions: [{ optionId: 'option-1', operator: 'is_empty' }] }),
+            rule({ id: 'r2', targetId: 'option-3', conditions: [{ optionId: 'option-2', operator: 'is_empty' }] }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+  });
+
   describe('the validator list', () => {
     it('runs every registered validator', () => {
       const names = PUBLISH_VALIDATORS.map((validator) => validator.name);
@@ -421,6 +858,8 @@ describe('pre-publish checks', () => {
         'set-has-content',
         'options-have-values',
         'rules-have-targets',
+        'rule-targets-are-in-this-set',
+        'rules-have-no-cycles',
         'set-has-assignments',
         'patterns-are-safe',
       ]);
