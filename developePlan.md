@@ -55,29 +55,21 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 **[Phase 17](#phase-17--conditional-logic-engine), stage 17-7 — the evaluator's
 own iteration cap, and where it is enforced.**
 
-**Done:** 17-0 (four ADRs) through **17-6**, each with its own audit. Both
-languages now execute the same 37 rule cases, and the two coercions they disagree
-on by default — booleans and non-numeric answers — are pinned by the fixture
-rather than by either language's cast.
+**Done:** 17-0 (four ADRs) through **17-6**, each with its own audit, plus
+**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
+deciding prices, in both languages identically.
 
-Stage 17-7 owns **ADR-050's second half**. The publish gate rejects cycles
-(17-3); this is the guarantee that holds when the publish gate never saw the
-document at all — the plugin evaluates a **cached** one, and
-`DegradationMatrixTest` names four ways it keeps serving that cache.
-
-🔴 **The cap exists in both evaluators already and is not yet reachable from a
-storefront.** `RuleEvaluator::MAX_PASSES` is proven by a fixture case, but nothing
-calls the evaluator: its caller arrives in **17-8**, when `resolve()` is
-restructured so rules run *before* selections are validated.
+⚠️ **Two Phase 17 criteria remain, and both are 17-8's:** a rule-hidden option
+must be **rejected server-side**, and must be **neither charged nor stored**
+(ADR-051). Nothing calls either evaluator yet.
 
 ⚠️ **17-8 must delete `RuleEvaluator` from `check-architecture.sh`'s exemption
 list.** If the gate then passes, the class was pending rather than dead —
-`Pricing`'s exemption produced exactly that evidence in Stage 6. If it still
-fails, 17-8 did not actually wire it.
+`Pricing`'s exemption produced exactly that evidence in Stage 6.
 
 ⚠️ **K3 carries into 17-7** (from the 17-5 audit): a pre-M17.1 row whose
-`conditions` is an object publishes as a rule that **never fires** — safe, silent,
-and with no publish finding.
+`conditions` is an object publishes as a rule that **never fires** — safe,
+silent, and with no publish finding.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -19955,13 +19947,34 @@ enabled rules set **different** payloads on one target. Two rules setting the
 same amount agree; refusing those would fail a merchant whose duplicates are
 harmless.
 
-⚠️ **Not built in M17.4**, which added the `actionValue` column the check needs
-and the evaluator that resolves the other four actions. This is a publish-gate
-change and belongs with `setPriceDoesNotFightOptionPricing`, not with an
-evaluator.
+✅ **Built 2026-09-10**, as `rulePayloadsDoNotConflict`, after a final Phase 17
+review found the consequence of leaving it open.
 
-**Exit:** two rules setting different amounts on one target block the publish,
-naming both; two setting the same amount do not.
+🔴 **`sortOrder` was deciding prices.** Measured in **both** languages
+identically: two `set_price` rules of 500 and 700 on one target charged **700**
+in document order `[500, 700]` and **500** in `[700, 500]` — last-wins.
+
+That contradicted three things at once: M17.2 requires evaluation be
+*"deterministic and order-independent"*; ADR-052 says *"`sortOrder` is never
+consulted"*; and the service, controller and API contract all call it
+*"presentation, not precedence"*. The loader orders by it and the evaluator took
+the last write, so **a merchant reordering their rule list for readability
+changed what customers were charged.**
+
+⚠️ **Why six stage audits missed it.** ADR-052 anticipated the conflict and
+routed it here — so the gap was *documented*, and each stage audit checked its
+own stage against a plan where it reads as handled. **A recorded deferral is
+indistinguishable from a closed one when you audit one stage at a time.**
+
+🔴 **The shared fixture is structurally unable to catch this class.** The two
+evaluators agree precisely, on the wrong thing — which is the one defect a
+cross-language fixture cannot see, and the reason a final cross-stage pass found
+what six per-stage passes did not.
+
+**Exit:** ✅ two rules setting different amounts on one target block the publish,
+naming both; two setting the same amount do not. Verified end to end — **400
+`RULE_PAYLOADS_CONFLICT`**, while identical amounts and different targets both
+publish at 201.
 
 ### M17.5 — Frontend rule runtime
 
@@ -22723,6 +22736,30 @@ citations across two repositories named the wrong milestone. Same failure, same
 cause: a name was changed in one place and referenced from many, with nothing
 checking the two still agree. The link check is now mechanical and takes a second;
 it had simply never been run.
+
+### An eighth instance: a recorded deferral reads as a closed one — 2026-09-10
+
+Phase 17 ran six stages, each with its own adversarial audit, each finding real
+defects. A **final cross-stage pass** then found one that all six had walked
+past: two `set_price` rules on one target produced an **order-dependent price**,
+decided by the `sortOrder` field that the service, the controller, the API
+contract and ADR-052 all describe as *"presentation, not precedence."*
+
+🔴 **Nothing was hidden.** ADR-052 anticipated the conflict, reasoned about it
+correctly, and routed it to **M17.4a** — a milestone that existed, was linked,
+and was not implemented. So every stage audit that reached it found a
+documented answer and moved on.
+
+**The rule this establishes: an audit scoped to one stage cannot see a deferral
+that spans two.** Each stage's audit asks *"is this stage right?"*, and a gap
+routed elsewhere is correct *for that stage*. The question no per-stage audit
+asks is *"is everything this phase deferred actually closed?"* — which takes one
+pass over the phase's own milestone list at the end.
+
+⚠️ **The shared fixture could not have caught it either.** Both evaluators
+implemented last-wins **identically**, so they agreed precisely on the wrong
+thing. A cross-language fixture proves two implementations match; it says
+nothing about whether the behaviour they match is the one that was decided.
 
 **And its corollary, from Stage 16z: a citation names a milestone that exists.**
 Seventy-six references across two repositories pointed at the wrong milestone,
