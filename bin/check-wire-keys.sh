@@ -115,7 +115,45 @@ else
   fi
 fi
 
-# --- 3. price_config keeps its own rename ------------------------------------
+# --- 3. Rule keys reaching the document are snake_case ------------------------
+#
+# Check 1 reads `key: 'value'` mappings, which is the shape `VALIDATION_KEYS` and
+# `DISPLAY_KEYS` use. `toPublishedRule` and its helpers build their objects
+# **literally** — `option_id: condition.optionId` — so none of their keys appear
+# in that grep at all, and a camelCase one would have been invisible to the gate
+# written to catch exactly this.
+#
+# The literal side is the one that reaches PHP, so it is what this reads: every
+# property name assigned inside the rule converters.
+# Only the keys ASSIGNED FROM something — `option_id: condition.optionId`. The
+# parameter list declares `targetId: string` in the same shape, and reading those
+# would flag the storage side the converter exists to translate away from.
+RULE_KEYS=$(sed -n '/^function toPublishedConditions/,$p' "$MAP" \
+  | grep -oE "^\s+[a-zA-Z_]+: (rule|condition|actionValue)\." \
+  | sed 's/[[:space:]]//g;s/:.*//' | sort -u)
+
+if [ -z "$RULE_KEYS" ]; then
+  fail "read no rule keys from option-config.ts — has toPublishedRule moved?"
+else
+  BAD_RULE=''
+  while IFS= read -r key; do
+    [ -z "$key" ] && continue
+    if printf '%s' "$key" | grep -q '[A-Z]'; then
+      BAD_RULE="$BAD_RULE $key"
+    fi
+  done <<< "$RULE_KEYS"
+
+  if [ -n "$BAD_RULE" ]; then
+    fail "these rule keys are not snake_case:$BAD_RULE"
+    printf '        A rule the plugin cannot read is a rule that silently never applies.\n'
+  else
+    pass "all $(printf '%s\n' "$RULE_KEYS" | grep -c .) rule key(s) are snake_case"
+  fi
+fi
+
+echo
+
+# --- 4. price_config keeps its own rename ------------------------------------
 #
 # The first instance of this bug. Asserted rather than trusted to stay fixed.
 if grep -q "amount_minor" "$PRICE"; then

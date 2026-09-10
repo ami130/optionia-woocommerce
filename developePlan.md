@@ -52,28 +52,31 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-5 — the serializer
-fills `rules`.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-6 — the PHP
+evaluator.**
 
-**Done:** 17-0 (four ADRs), **17-1**–**17-4**, each with its own audit. 17-4 added
-the `actionValue` column three of six actions needed, ADR-052's precedence, the
-TypeScript evaluator, and a 16-case shared fixture where **every case declares
-`expect_passes`**.
+**Done:** 17-0 (four ADRs) through **17-5**, each with its own audit. Rules now
+reach a storefront: the serializer fills them, `action_value` reaches the wire,
+disabled rules are absent, and `check-wire-keys.sh` refuses a camelCase rule key.
 
-Stage 17-5 makes rules actually reach a storefront: `OptionSetTree` carries none
-today, so `toPublished()` cannot emit them. It also extends
-`check-wire-keys.sh`, which asserts every key the plugin reads is one the API
-publishes.
+Stage 17-6 is the PHP twin of `rule-evaluator.ts`, and it lands **three things in
+one change** — the fixture is already vendored in the plugin, but its gate block
+is not, because a gate that is red for a known reason is one people learn to
+ignore:
 
-⚠️ **Two things are deliberately parked, both with a destination:**
+1. `SelectionResolver`'s rule evaluator, matching ADR-052's precedence exactly.
+2. A PHP suite reading `rule_cases` **and** `expect_passes`.
+3. The §4 block in the plugin's `check-shared-fixtures.sh`, mirrored from the
+   backend's — the two scripts must stay identical apart from their paths, which
+   `check-fixture-parity.sh` enforces.
 
-- **[M17.4a](#m174a--refuse-conflicting-set_price-payloads-at-publish)** — two
-  rules setting *different* amounts on one target. ADR-052 resolves `show`/`hide`
-  by precedence; payloads have no principled winner, so they are refused at
-  publish rather than resolved.
-- **17-6** — the PHP evaluator and the plugin's copy of `rule-fixtures.json`.
-  Vendoring the fixture now would leave the plugin's build red for two stages,
-  and a gate red for a known reason is one people learn to ignore.
+🔴 **The fixture's 20 cases are the contract.** One reaches the cap and expects a
+**refusal with no partial state** (ADR-050) — the case that exists because
+16b's fixture proved both ends of pricing and neither language proved the middle.
+
+⚠️ **Carry-forward rule 3 lands with it:** M17.4 requires a rule-hidden option be
+**rejected server-side**, not merely invisible — the one the Shopify app never
+did.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -19196,6 +19199,92 @@ and rules themselves.
 
 ⚠️ **Safe verbatim, unlike `targetId` and `conditions`**, because it carries no
 ids — an amount and a value key mean the same thing in any set.
+
+### ✅ Stage 17-5 complete — rules reach a storefront, 2026-09-10
+
+`rules: []` was hardcoded in the serializer since Phase 7. It is now filled, and
+**H2 from the 17-4 audit lands with it**: `action_value` reaches the wire, so a
+merchant authoring *"set price to 5.00"* finally has that amount arrive.
+
+| Added | |
+|---|---|
+| `OptionSetTree.rules` | a **fifth** bulk query — rules hang off the set, so no `IN` and no N+1 |
+| `toPublishedRule()` | built **explicitly**, keyed on `action` for the payload |
+| `PublishedRule.action_value` | H2, closed |
+| Disabled-rule filter | matching every sibling in the document |
+| `check-wire-keys.sh` §3 | rule keys must be snake_case |
+| 11 tests | plus the rule shape in `CONFIG-CONTRACT.md` |
+
+#### 🔴 J1 — The defect that shipped twice, and the gate that could not see it
+
+`check-wire-keys.sh` exists because storage is camelCase and the document is
+snake_case, and the seam has produced two shipped bugs: `price_config` emitted
+`amountMinor` on one path, and `validation`/`display` were published **verbatim**
+so a merchant's `maxLength` arrived spelled in a way `SelectionResolver` never
+looks for — *present in the document, enforced nowhere.*
+
+⚠️ **The existing `rename()` helper passes an unmapped key through unchanged**,
+so a partial mapping ships camelCase silently. `toPublishedRule` names every key
+instead: a field added to the schema and forgotten here is **absent** rather than
+present and unread, and a reader can act on absence.
+
+🔴 **The gate written to catch this could not see rules at all.** Check 1 reads
+`key: 'value'` mappings, which is what `VALIDATION_KEYS` uses. The rule converter
+builds objects **literally**, so none of its keys appeared in that grep. A third
+check now reads the assigned keys directly — verified by mutation: renaming
+`option_id` to `optionId` fails the gate by name.
+
+#### 🔴 J5 — Disabled rules must not publish, and a 17-3 warning depended on it
+
+The serializer drops disabled groups, options and values. Rules now match.
+
+**M17.3's `RULE_TARGET_NOT_PUBLISHED` warning depends on this being true** — it
+warns that a rule pointing at a *disabled target* will not fire, which would be
+incoherent if disabled rules shipped anyway. A rule the cascade disabled goes the
+same way: its target is gone, so publishing it would ship logic that can never
+apply.
+
+⚠️ **`is_enabled` and `disabled_reason` are therefore absent by construction.**
+A rule that is not in the document has nothing to say about why; the merchant is
+told at publish by `rulesHaveTargets` instead.
+
+#### ⚠️ J2 — Rules go IN the snapshot, and assignments prove the opposite
+
+`config-document.ts` reads assignments **live**, with stated reasoning: a set is
+assigned without republishing, and *"the snapshot is immutable, which would leave
+every set published before this code shipped carrying `assignments: []` for
+ever."*
+
+**Rules are the opposite** — they are published configuration, so changing one
+*should* require a republish. The immutability still applies, and the consequence
+is now written down: **every set published before M17.5 keeps `rules: []`
+permanently.** That is correct, because those documents genuinely had none, and
+saying so is what stops it reading as a bug later.
+
+#### ⚠️ J3 — The tree feeds the dashboard too
+
+Six `trees.load()` callers, and `toAuthoring()` is one. Adding rules to
+`OptionSetTree` therefore changes what the authoring view carries — which is
+right, because M17.6's rule builder needs them, and **a tree carrying rules that
+one serializer silently drops is the divergence shape this codebase keeps paying
+for**.
+
+##### Mutations
+
+| Mutation | Outcome |
+|---|---|
+| Conditions published verbatim (camelCase) | **killed** by two named tests |
+| Disabled rules published | **killed** by two |
+| Payload published verbatim, ignoring the action | **killed** by three |
+| `option_id` renamed to `optionId` | **caught by the gate**, by name |
+
+#### 🟡 J6 — 3.2 MB of rules per set can now reach every cached document
+
+`rulesPerSet` is 200 and `MAX_CONDITIONS_BYTES` is 16 KB, and nothing bounds the
+document itself. Not introduced by 17-5 — but 17-5 is what makes it **reachable**,
+since before this the rules never left the database. A document ceiling is a
+Phase 28 performance question rather than a rules one; recorded so it is not
+rediscovered as a surprise.
 
 #### 🔴 17-4 audit — the evaluator refused rules the publish gate accepts
 
