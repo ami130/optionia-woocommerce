@@ -21402,7 +21402,16 @@ failure whose *name* implicates the stage under test, in a suite whose fixture
 merely could not create a group. It passed alone, on the same commit, minutes
 later.
 
-🔴 **Four hangs and fifteen flakes, all in the same phase of the same command.** The
+**Twenty came from M17.4a's verification**: `store-heartbeat`, **1 of 904**,
+failing on an audit row that was written but not yet readable — `expect(row)
+.toBeDefined()` received `undefined`. Alone the suite passes **48/48**.
+
+⚠️ **A fourth distinct signature.** Not an empty-bodied 400, not a timeout, not a
+hang: a **read that outran its own write**. Every signature so far points the
+same way — the sequential e2e run is contending for something, and under that
+contention a commit takes longer to become visible than the assertion waits.
+
+🔴 **Four hangs and sixteen flakes, all in the same phase of the same command.** The
 unit half has never once done this — 48 suites and 911 tests complete in seconds
 every time. It is the sequential e2e run, and nothing else.
 
