@@ -19112,12 +19112,32 @@ says two has a different cascade and the same answer, until the day it does not.
 The gate hashes it, counts the cases, and requires a **local** suite to read both
 `rule_cases` and `expect_passes`.
 
-⚠️ **The plugin half is deliberately held back.** Vendoring the fixture there now
-would leave the plugin's build **red for two stages** on work nobody has started,
-and a gate red for a known reason is a gate people learn to ignore. 17-6 adds the
-file, the gate block and the PHP evaluator in one change — which is also the only
-way one hash reaches both repositories at once. **Verified**: with the fixture
-present and no PHP evaluator, the plugin gate fails exactly as it should.
+#### 🔴 The one-sided deferral was wrong, and `check-fixture-parity.sh` said so
+
+My first attempt vendored the fixture to the backend only and added the gate
+block there only — reasoning that a plugin build red for two stages is a gate
+people learn to ignore. **The cross-repo parity gate refused it**, with three
+failures:
+
+```text
+FAIL  rule-fixtures.json exists in the backend but not the plugin
+FAIL  the two gates pin different hashes
+FAIL  the two gate scripts differ beyond their fixture paths
+```
+
+⚠️ **That gate exists because of a measured failure this exact shape.** Its
+docblock records 2026-08-31: *"backend fixture and `EXPECTED_SHA` both updated,
+plugin untouched, and both gates reported success."* One-sided is precisely what
+it is built to catch, and my reasoning for doing it was not a reason it accepts.
+
+**Resolved by shipping the fixture to both and holding back only the gate
+block.** The file is byte-identical in both repositories — parity satisfied, and
+17-6 has the data it needs already vendored. The *reader* assertion, which is the
+half that requires a PHP evaluator, arrives with that evaluator.
+
+🔴 **Both attempts were verified, not assumed.** With the block mirrored into the
+plugin and no PHP evaluator, the plugin gate failed exactly as designed — which
+is what proved the block, not the file, was the part that had to wait.
 
 #### A bug the simplification caught
 
