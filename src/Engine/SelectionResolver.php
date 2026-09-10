@@ -653,7 +653,12 @@ final class SelectionResolver {
 				 * delta is appended either way, because the
 				 * invariant is positional and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta( $options[ $option_id ], $chosen[ $option_id ], $unpriced );
+				$deltas[] = self::option_delta(
+					$options[ $option_id ],
+					$chosen[ $option_id ],
+					$unpriced,
+					self::set_price_for( $options[ $option_id ], $evaluation['states'], $option_id, '', $unpriced )
+				);
 
 				continue;
 			}
@@ -736,7 +741,12 @@ final class SelectionResolver {
 				 * delta is appended either way, because the
 				 * invariant is positional and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta( $options[ $option_id ], $chosen[ $option_id ], $unpriced );
+				$deltas[] = self::option_delta(
+					$options[ $option_id ],
+					$chosen[ $option_id ],
+					$unpriced,
+					self::set_price_for( $options[ $option_id ], $evaluation['states'], $option_id, '', $unpriced )
+				);
 
 				continue;
 			}
@@ -883,7 +893,12 @@ final class SelectionResolver {
 				 * delta is appended either way, because the
 				 * invariant is positional and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta( $options[ $option_id ], $chosen[ $option_id ], $unpriced );
+				$deltas[] = self::option_delta(
+					$options[ $option_id ],
+					$chosen[ $option_id ],
+					$unpriced,
+					self::set_price_for( $options[ $option_id ], $evaluation['states'], $option_id, '', $unpriced )
+				);
 
 				/*
 				 * 🔴 **Option-level pricing has to be reported, even though this
@@ -989,7 +1004,12 @@ final class SelectionResolver {
 				 * delta is appended either way, because the
 				 * invariant is positional and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta( $options[ $option_id ], $chosen[ $option_id ], $unpriced );
+				$deltas[] = self::option_delta(
+					$options[ $option_id ],
+					$chosen[ $option_id ],
+					$unpriced,
+					self::set_price_for( $options[ $option_id ], $evaluation['states'], $option_id, '', $unpriced )
+				);
 
 				continue;
 			}
@@ -1075,7 +1095,12 @@ final class SelectionResolver {
 				 * delta is appended either way, because the
 				 * invariant is positional and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta( $options[ $option_id ], $chosen[ $option_id ], $unpriced );
+				$deltas[] = self::option_delta(
+					$options[ $option_id ],
+					$chosen[ $option_id ],
+					$unpriced,
+					self::set_price_for( $options[ $option_id ], $evaluation['states'], $option_id, '', $unpriced )
+				);
 
 				// Same reporting obligation as text: `per_unit` prices at the
 				// option level and this phase cannot charge it.
@@ -1606,7 +1631,37 @@ final class SelectionResolver {
 							continue;
 						}
 
-						$under[ (string) $value['id'] ][] = $option_id;
+						/*
+						 * 🔴 **A value maps to NO option, deliberately.**
+						 *
+						 * ✏️ **Mapped to its owning option until M17.8's audit.**
+						 * That reads like the containment this index is named
+						 * for, but the question it answers is narrower: *whose
+						 * answer disappears when this target is hidden?* Hiding
+						 * one colour of five removes a **choice** — the question
+						 * stays on the page and the answer stays valid.
+						 *
+						 * Measured with the old mapping: hiding `val-extra`
+						 * deleted the answer of a customer who had chosen
+						 * `plain`, and an unrelated rule reading *"opt-b is
+						 * empty"* then fired, hiding a third option nothing was
+						 * meant to touch. `hidden_options()` filters value
+						 * targets correctly one layer up — which is exactly why
+						 * this went unseen: the corruption happened underneath
+						 * the filter.
+						 *
+						 * Registered with an empty list rather than omitted, so
+						 * a value id is still a target the evaluator knows.
+						 *
+						 * ⚠️ **The cloud's `optionsUnder` keeps the value →
+						 * option edge, and is right to.** Its cycle detector
+						 * asks what a target can *reach* — `set_default` writes
+						 * the owning option's answer — which is a broader
+						 * question than *"whose answer disappears?"*. Two
+						 * questions, two maps; conflating them is what produced
+						 * the defect above.
+						 */
+						$under[ (string) $value['id'] ] = array();
 					}
 				}
 			}
@@ -3050,9 +3105,33 @@ final class SelectionResolver {
 	 * @param array<string, mixed> $option   One published option.
 	 * @param string               $answer   What the customer supplied.
 	 * @param array<string>        $unpriced Collects price types this build cannot price.
+	 * @param int|false|null       $ruled    A `set_price` rule's answer, from `set_price_for()`.
 	 * @return int Minor units, possibly negative; 0 when nothing is charged.
 	 */
-	private static function option_delta( array $option, string $answer, array &$unpriced ): int {
+	private static function option_delta( array $option, string $answer, array &$unpriced, $ruled = null ): int {
+		/*
+		 * 🔴 **A `set_price` rule is answered here too, not only in the choice
+		 * branch.**
+		 *
+		 * ✏️ **Added in M17.8's audit.** `set_price_for()` had exactly one call
+		 * site — inside the branch that looks a chosen value up — so a rule
+		 * targeting a **text, number, date or file** option was neither applied
+		 * nor reported. Measured: *"set price to 9.00"* on a text option
+		 * published cleanly and the storefront charged **0**, telling nobody.
+		 * A silent undercharge is the failure class ADR-049 §3 exists to stop.
+		 *
+		 * `false` means a rule set a price this build refuses to honour, and the
+		 * authored pricing must not stand in for it; an `int` replaces the
+		 * authored amount outright; `null` means no rule spoke.
+		 */
+		if ( false === $ruled ) {
+			return 0;
+		}
+
+		if ( is_int( $ruled ) ) {
+			return $ruled;
+		}
+
 		$pricing = $option['pricing'] ?? null;
 
 		if ( ! is_array( $pricing ) ) {

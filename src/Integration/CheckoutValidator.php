@@ -368,6 +368,7 @@ final class CheckoutValidator {
 		$missing = array();
 		$invalid = array();
 		$files   = array();
+		$hidden  = array();
 
 		foreach ( $errors as $error ) {
 			$field = isset( $error['field'] ) && is_scalar( $error['field'] ) ? (string) $error['field'] : '';
@@ -390,15 +391,58 @@ final class CheckoutValidator {
 				continue;
 			}
 
+			/*
+			 * 🔴 **"No longer available" is the wrong sentence for this.** The
+			 * option IS available — the customer's *other* answers took it off
+			 * the page, which happens when a merchant publishes a rule while the
+			 * line sits in the cart. Telling them to remove the product is the
+			 * one instruction that does not fix it: the fix is to change the
+			 * answer that hid this one, and only re-choosing on the product page
+			 * can do that.
+			 *
+			 * Found by M17.8's audit, which measured the generic wording landing
+			 * on a rule-hidden option.
+			 */
+			if ( SelectionResolver::ERROR_HIDDEN_BY_RULE === ( $error['code'] ?? '' ) ) {
+				$hidden[] = $name;
+
+				continue;
+			}
+
 			$invalid[] = $name;
 		}
+
+		/*
+		 * 🔴 **A rule-hidden option is not an unavailable one.** The generic
+		 * wording says the option is gone and asks the customer to remove the
+		 * product, and both halves are wrong: the option exists, their **other**
+		 * answers took it off the page, and removing the line is the one action
+		 * that does not fix it. Only re-choosing on the product page can change
+		 * the answer that hid this one.
+		 *
+		 * Named before the general wording for the same reason the file case is:
+		 * a line whose only problem is this deserves the message that says what
+		 * to do about it.
+		 */
+		if ( array() !== $hidden && array() === $invalid && array() === $missing && array() === $files ) {
+			return sprintf(
+				/* translators: %s: comma-separated option names, e.g. "Engraving". */
+				__(
+					'Sorry, "%s" no longer applies to one of the products in your cart because of the other options chosen. Please review that product before checking out.',
+					'optionia'
+				),
+				$this->join( $hidden )
+			);
+		}
+
+		// Anything left unnamed above is described by the general wording.
+		$invalid = array_merge( $invalid, $hidden );
 
 		/*
 		 * 🔴 **A lost file is not an unavailable option.** The generic wording
 		 * says the option is no longer available and asks the customer to remove
 		 * the product — but the option is fine, their upload expired, and
-		 * removing the line is the one thing that does not fix it. Named first
-		 * so a line that has only this problem gets the actionable message.
+		 * removing the line is the one thing that does not fix it.
 		 */
 		if ( array() !== $files && array() === $invalid && array() === $missing ) {
 			return sprintf(

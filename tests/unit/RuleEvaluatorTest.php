@@ -137,6 +137,25 @@ final class RuleEvaluatorTest extends TestCase {
 	 * @return array<string, array<int, string>>
 	 */
 	private static function options_under( array $fixture_case ): array {
+		/*
+		 * 🔴 **A case may declare the map, and one must whenever it is not the
+		 * identity.**
+		 *
+		 * ✏️ **Added in M17.8's audit.** Both runners *synthesised* this map as
+		 * `id => [id]`, which is only correct when every target is an option.
+		 * That made the fixture structurally unable to express a `group` target
+		 * (one target, several answers) or a `value` target (one target, **no**
+		 * answer) — so a case using either would have been handed a map the real
+		 * code never builds, and would have passed while production was wrong.
+		 *
+		 * The identity default keeps the other cases reading as they did: an
+		 * option-targeted case saying nothing about containment is asserting the
+		 * obvious.
+		 */
+		if ( isset( $fixture_case['options_under'] ) && is_array( $fixture_case['options_under'] ) ) {
+			return $fixture_case['options_under'];
+		}
+
 		$ids = array();
 
 		foreach ( $fixture_case['rules'] as $rule ) {

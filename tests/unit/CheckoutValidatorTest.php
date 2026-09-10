@@ -180,6 +180,71 @@ final class CheckoutValidatorTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 A rule-hidden option is not described as "no longer available".
+	 *
+	 * A merchant can publish a rule while a line sits in the cart, and the line
+	 * then stops resolving — correctly, because M12.4 deliberately does not
+	 * freeze *validity*. But the generic wording tells the customer the option is
+	 * gone and asks them to remove the product, and both halves are wrong: the
+	 * option exists, their **other** answers took it off the page, and removing
+	 * the line is the one action that does not fix it.
+	 *
+	 * Found by M17.8's audit. The message must name the option and send the
+	 * customer back to the product, because only re-choosing there can change the
+	 * answer that hid this one.
+	 */
+	public function test_a_rule_hidden_option_gets_its_own_message(): void {
+		$this->store_config( 'lux' );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'lux',
+			'opt-b' => 'yes',
+		);
+
+		$line = array_merge(
+			( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )->attach( array(), self::PRODUCT_ID, 0, 1 ),
+			array( 'product_id' => self::PRODUCT_ID )
+		);
+
+		// The merchant publishes a rule AFTER the line was added to the cart.
+		$this->store_config(
+			'lux',
+			false,
+			array(
+				array(
+					'id'          => 'r-1',
+					'target_type' => 'option',
+					'target_id'   => 'opt-b',
+					'action'      => 'hide',
+					'match_type'  => 'all',
+					'conditions'  => array(
+						array(
+							'option_id' => 'opt-a',
+							'operator'  => 'equals',
+							'value'     => 'lux',
+						),
+					),
+					'sort_order'  => 10,
+				),
+			)
+		);
+
+		$this->validator()->validate( $this->cart_with( $line ) );
+
+		$this->assertNotEmpty( $GLOBALS['optionia_test_notices'], 'The line no longer resolves, so checkout must block.' );
+
+		$message = $GLOBALS['optionia_test_notices'][0]['message'];
+
+		$this->assertStringContainsString( 'Engraving', $message, 'The message must name the option.' );
+		$this->assertStringContainsString( 'other options chosen', $message );
+		$this->assertStringNotContainsString(
+			'no longer available',
+			$message,
+			'The option IS available -- the customer other answers hid it.'
+		);
+	}
+
+	/**
 	 * A valid line raises nothing.
 	 *
 	 * The half that is easy to lose: a validator that blocked everything would
@@ -562,7 +627,7 @@ final class CheckoutValidatorTest extends TestCase {
 	 * @param string $value_key      The value key `opt-a` offers. Change it to simulate a deletion.
 	 * @param bool   $extra_required Add a newly-required option the cart line predates.
 	 */
-	private function store_config( string $value_key, bool $extra_required = false ): void {
+	private function store_config( string $value_key, bool $extra_required = false, array $rules = array() ): void {
 		$options = array(
 			array(
 				'id'     => 'opt-a',
@@ -631,11 +696,11 @@ final class CheckoutValidatorTest extends TestCase {
 								'options' => $options,
 							),
 						),
-						'rules'       => array(),
+						'rules'       => $rules,
 					),
 				),
 			),
-			'W/"' . $value_key . ( $extra_required ? '-req' : '' ) . '"'
+			'W/"' . $value_key . ( $extra_required ? '-req' : '' ) . ( array() !== $rules ? '-rules' : '' ) . '"'
 		);
 	}
 }

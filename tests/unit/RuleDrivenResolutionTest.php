@@ -420,6 +420,183 @@ final class RuleDrivenResolutionTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 Hiding a value does not erase the answer of a customer who chose another.
+	 *
+	 * The defect M17.8's audit found, and the reason `index_containment()` maps a
+	 * value to **nothing**. The old mapping sent a value target to its owning
+	 * option — right for *"where does this live"*, wrong for *"whose answer
+	 * disappears"* — so hiding one choice deleted the answer of a customer who
+	 * had picked a different one, and unrelated rules reading that option then
+	 * fired.
+	 *
+	 * ⚠️ **The assertion is on the THIRD option**, not on the one that owns the
+	 * hidden value. `hidden_options()` filtered value targets correctly one layer
+	 * up, which is exactly why this went unseen for four stages: the corruption
+	 * happened underneath the filter, and only a rule reading the erased answer
+	 * can see it.
+	 */
+	public function test_hiding_a_value_does_not_erase_the_answer_another_rule_reads(): void {
+		$sets = self::sets_with_rule( 'hide', 'value', 'val-extra' );
+
+		$sets[0]['groups'][] = array(
+			'id'      => 'group-c',
+			'options' => array(
+				array(
+					'id'     => 'opt-c',
+					'type'   => 'radio',
+					'values' => array(
+						array(
+							'id'        => 'val-c',
+							'value_key' => 'cee',
+						),
+					),
+				),
+			),
+		);
+
+		// Fires only if opt-b's answer went missing -- and it must not.
+		$sets[0]['rules'][] = self::rule( 'r-2', 'hide', 'option', 'opt-c', 'opt-b', 'is_empty', null );
+
+		$result = SelectionResolver::resolve(
+			$sets,
+			array(
+				'opt-a' => 'yes',
+				'opt-b' => 'plain',
+				'opt-c' => 'cee',
+			)
+		);
+
+		$this->assertTrue( $result->is_ok(), 'opt-b is answered, so opt-c must not be hidden' );
+		$this->assertArrayHasKey( 'opt-c', $result->value()['resolved'] );
+	}
+
+	/**
+	 * 🔴 `set_price` reaches a text option, which has no values to look up.
+	 *
+	 * The second defect the audit found: `set_price_for()` had one call site,
+	 * inside the branch that resolves a *chosen value*, so a rule targeting a
+	 * text, number, date or file option was neither applied nor reported.
+	 * Measured before the fix — this exact configuration charged **1000**, the
+	 * bare base, and `unpriced` was empty. A silent undercharge.
+	 */
+	public function test_set_price_applies_to_a_text_option(): void {
+		$result = SelectionResolver::resolve( self::sets_with_text_rule( null ), self::text_answers(), 1000 );
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1900, $result->value()['total_minor'] );
+	}
+
+	/**
+	 * ...and is refused, not applied, where the option prices itself.
+	 *
+	 * ADR-049 §3: *"the evaluator ignores the `set_price` and adds the type to
+	 * `unpriced`"* — so the merchant's own `per_char` still charges, and the
+	 * discarded rule is reported rather than silently dropped. 1050 is base plus
+	 * five characters at 10; 1900 would mean the rule won.
+	 */
+	public function test_set_price_against_per_char_is_reported_and_the_authored_rate_still_applies(): void {
+		$result = SelectionResolver::resolve(
+			self::sets_with_text_rule(
+				array(
+					'type'         => 'per_char',
+					'amount_minor' => 10,
+				)
+			),
+			self::text_answers(),
+			1000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1050, $result->value()['total_minor'] );
+		$this->assertContains( 'per_char', $result->value()['unpriced'] );
+	}
+
+	/**
+	 * A conflicting pair on a text option cancels, exactly as on a choice.
+	 *
+	 * The `false`-versus-`null` distinction reaches `option_delta()` too: a
+	 * cancelled conflict must not fall back to the authored pricing there
+	 * either.
+	 */
+	public function test_a_conflicting_set_price_on_a_text_option_charges_nothing(): void {
+		$sets = self::sets_with_text_rule(
+			array(
+				'type'         => 'per_char',
+				'amount_minor' => 10,
+			)
+		);
+
+		$high                 = $sets[0]['rules'][0];
+		$high['id']           = 'r-high';
+		$high['action_value'] = array( 'amount_minor' => 700 );
+		$sets[0]['rules'][]   = $high;
+
+		$result = SelectionResolver::resolve( $sets, self::text_answers(), 1000 );
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1000, $result->value()['total_minor'] );
+		$this->assertContains( SelectionResolver::UNPRICED_RULE_CONFLICT, $result->value()['unpriced'] );
+	}
+
+	/**
+	 * The answers the three text cases share.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function text_answers(): array {
+		return array(
+			'opt-a' => 'yes',
+			'opt-t' => 'HELLO',
+		);
+	}
+
+	/**
+	 * One trigger and one text option carrying a `set_price` rule of 900.
+	 *
+	 * @param ?array<string, mixed> $pricing Option-level pricing, or null for none.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function sets_with_text_rule( ?array $pricing ): array {
+		$text = array(
+			'id'         => 'opt-t',
+			'type'       => 'text_field',
+			'value_kind' => 'text',
+		);
+
+		if ( null !== $pricing ) {
+			$text['pricing'] = $pricing;
+		}
+
+		$rule                 = self::rule( 'r-1', 'set_price', 'option', 'opt-t', 'opt-a', 'equals', 'yes' );
+		$rule['action_value'] = array( 'amount_minor' => 900 );
+
+		return array(
+			array(
+				'id'     => 'set-1',
+				'groups' => array(
+					array(
+						'id'      => 'group-a',
+						'options' => array(
+							array(
+								'id'     => 'opt-a',
+								'type'   => 'radio',
+								'values' => array(
+									array(
+										'id'        => 'val-yes',
+										'value_key' => 'yes',
+									),
+								),
+							),
+							$text,
+						),
+					),
+				),
+				'rules'  => array( $rule ),
+			),
+		);
+	}
+
+	/**
 	 * Two sets whose rules differ only in document order.
 	 *
 	 * @param bool $reversed Whether to emit the pair the other way round.
