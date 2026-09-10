@@ -20013,6 +20013,116 @@ resolver reads it as *a rule that fired replaces the merchant's answer in both
 directions*, on the grounds that `unrequire` is otherwise an action that does
 nothing. Marked at the line and carried to **17-11** for the exit audit.
 
+#### 🔍 The 17-8 audit — six findings, and what they had in common, 2026-09-10
+
+Run after 17-8 closed green. **Three were real defects**, one of them a silent
+undercharge. All were found by *probing the shipped code*, not by reading it —
+the same method that found N1 at the end of 17-6.
+
+##### 🔴 F1 — a hidden *value* erased its option's answer
+
+`index_containment()` mapped a value id to its owning option, and the evaluator
+clears answers through that map. So hiding one value of a five-value radio
+deleted the answer of a customer who had chosen **a different value**, and any
+rule reading that option then fired on a blank.
+
+Measured — a rule hides `val-extra`; the customer chose `plain`:
+
+```text
+opt-b answered 'plain', so "opt-b is_empty" is FALSE and opt-c must stay visible
+opt-c hidden? YES (WRONG)          passes: 2, where 1 is correct
+```
+
+🔴 **`hidden_options()` filtered value targets correctly — one layer above the
+corruption.** That is why six audits and 1430 tests walked past it: the guard
+17-8 was proud of sat above the map it should have been fixing. The map answers
+*"whose answer disappears?"*, and the honest answer for a value is **nobody's**.
+
+**Both languages shared it**, so it was a specification gap rather than a porting
+slip. Group targets were always correct — clearing the contained options is
+exactly right there.
+
+🔴 **The first fix was too broad, and the publish gate caught it.** Changing the
+backend's one `optionsUnder` map broke *"blocks a loop that closes only through a
+value target"* — because **the cycle detector asks a different question**. It
+needs to know what a target can *reach*: `set_default` writes the owning option's
+answer, and `show`/`hide` change what may be picked for it, so a rule reading
+that option genuinely is downstream. The evaluator asks the narrower *"whose
+answer disappears?"*, and there the answer is nobody's.
+
+**Two questions, now two maps.** Conflating them is what deleted a customer's
+answer in the first place, and conflating them the other way would have published
+cycles no detector caught. The backend keeps containment for cycles; the plugin's
+`index_containment()` — the one that feeds the evaluator — maps a value to
+nothing.
+
+##### 🔴 F2 — the fixture could not have caught F1, and still cannot express the shape
+
+Two facts, and the second is worse:
+
+| | |
+|---|---|
+| All 64 rules across all 44 cases were `target_type: option` | no `group`, no `value` |
+| **Both runners *synthesised* `options_under` as `id => [id]`** | so even a value case would have been handed a map production never builds |
+
+A fixture that manufactures its own containment cannot test containment. Cases
+may now **declare** `options_under`, identity remaining the default so the other
+44 read as before — and the two new cases pin exactly what F1 got wrong.
+
+##### 🔴 F4 — `set_price` was silently ignored on every non-choice option
+
+`set_price_for()` had **exactly one call site**, inside the branch that resolves
+a chosen value. A rule targeting a text, number, date or file option was neither
+applied nor reported:
+
+| Configuration | Charged | Reported |
+|---|---|---|
+| `set_price` 9.00 on a text option | **0.00** | nothing |
+| `set_price` 9.00 on a `per_char` text option | per_char only | **nothing** |
+
+The first row is a **silent undercharge** — the merchant authors it, it publishes
+cleanly, the storefront charges nothing and tells no one. That is the failure
+class ADR-049 §3 exists to prevent, reintroduced by where the call site landed.
+
+Now routed through `option_delta()`, which all five non-choice types already
+share, so one call site covers them the way one already covered choices.
+
+##### 🟡 F3, F5, F6 — wording, a dead output, and a sequencing gap
+
+**F3.** A rule published while a line sits in the cart correctly stops that line
+resolving (M12.4 deliberately does not freeze *validity*) — but the customer read
+*"no longer available… please remove it"*. Both halves wrong: the option exists,
+their **other** answers hid it, and removing the line is the one action that does
+not fix it. It now gets its own sentence, pointing back at the product.
+
+**F5.** `set_default` is resolved by both evaluators and read by nothing. Given a
+fuse naming 17-9, on the terms `Pricing` and `RuleEvaluator` were both held to.
+
+**F6.** The renderer has no rule awareness, so a hidden option is still *shown*
+and then refused server-side. That is 17-9's subject and scheduled — but it means
+17-8 made the server stricter than the page, and the window is open until 17-9.
+
+##### What the three real findings had in common
+
+**17-8 tested the layer it wrote and trusted the layer beneath it.** The value
+filter went where the new code was rather than where the behaviour lived; the
+`set_price` call site went into the branch being edited rather than into the
+function five branches already shared. Both passed their own tests, because both
+tests were written against the same assumption.
+
+##### Mutation results — four fixes, four killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| N1 | value maps back to its option | `test_hiding_a_value_does_not_erase_the_answer_another_rule_reads` |
+| N2 | `option_delta()` ignores the rule price | `test_set_price_applies_to_a_text_option` |
+| N3 | a refused price falls back to authored pricing | `test_a_conflicting_set_price_on_a_text_option_charges_nothing` |
+| N4 | rule-hidden falls back to generic wording | `test_a_rule_hidden_option_gets_its_own_message` |
+
+Plus the fixture mutant: restoring the old value mapping in the **declared** map
+fails the new case with `3 passes, expected 1` — the cascade F1 described, now
+pinned in a file both languages execute.
+
 ### M17.1 — Rule model
 
 ```text
