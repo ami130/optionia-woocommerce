@@ -1,7 +1,7 @@
 {
-  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included \u2014 the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. TWO COERCION RULES ARE PINNED HERE BECAUSE THE LANGUAGES DISAGREE BY DEFAULT. (1) A boolean operand compares as 'true'/'false' \u2014 PHP's own (string) cast gives '1' and '', so a PHP evaluator must not use it. (2) A non-numeric answer never satisfies greater_than or less_than \u2014 PHP's (float) cast turns 'abc' into 0.0 and would make `less_than 5` fire. Both were measured, and neither was covered before M17.6. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included \u2014 the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. AN UNREADABLE CONDITION EVALUATES TO FALSE, NEVER SKIPPED. PHP's first evaluator used `continue`, so a rule with [valid-and-true, garbage] under `all` fired there and not in TypeScript \u2014 a disagreement about whether a field is hidden, which under ADR-051 is a disagreement about money. Skipping also made a rule MORE likely to fire the more corrupt its document was. TWO COERCION RULES ARE ALSO PINNED HERE BECAUSE THE LANGUAGES DISAGREE BY DEFAULT. (1) A boolean operand compares as 'true'/'false' \u2014 PHP's own (string) cast gives '1' and '', so a PHP evaluator must not use it. (2) A non-numeric answer never satisfies greater_than or less_than \u2014 PHP's (float) cast turns 'abc' into 0.0 and would make `less_than 5` fire. Both were measured, and neither was covered before M17.6. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
   "version": 1,
-  "rule_case_count": 37,
+  "rule_case_count": 41,
   "rule_cases": [
     {
       "name": "a rule that does not fire changes nothing",
@@ -1283,6 +1283,110 @@
         }
       ],
       "answers": {},
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "an unreadable condition fails an ALL rule rather than being skipped",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_not_empty"
+            },
+            "garbage"
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "y"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "an unreadable condition cannot satisfy an ANY rule on its own",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "any",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            },
+            "garbage"
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "y"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "a readable true condition still satisfies ANY beside an unreadable one",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "any",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_not_empty"
+            },
+            "garbage"
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "y"
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "a rule whose only condition is unreadable never fires",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            "garbage"
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": "y"
+      },
       "expect_passes": 1,
       "expect_refused": false,
       "expect_states": {}
