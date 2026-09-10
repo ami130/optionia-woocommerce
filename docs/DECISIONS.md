@@ -4267,3 +4267,255 @@ by definition.
 Two `currency_cases` execute the conversion split in both languages, each
 carrying a **pair** of bases — a single base cannot express "does not convert"
 at all.
+
+---
+
+## ADR-049 — `set_price`: replaces a value's price, and is refused where an option prices itself
+
+**Status:** accepted · **Date:** 2026-09-10 · **Milestone:** M17.1, M17.4
+
+### Context
+
+M17.1 lists `set_price` among the actions a conditional rule may take. It was
+written before Phase 16 existed. Phase 16 shipped **five price types across two
+positions** (`PRICING-SPEC.md` §2):
+
+| Position | Types | Prices |
+|---|---|---|
+| `price_config` on a **value** | `fixed`, `percentage` | the value the customer chose |
+| `pricing` on an **option** | `per_char`, `per_unit`, `tiered` | the option, as a function of what the customer supplied |
+
+So a rule saying *"set this to 5.00"* now lands on a build where the thing it
+targets may already have a price — and what "already has a price" means differs
+between the two positions. The plan never revisited this, and nothing in the
+codebase decides it.
+
+### Decision
+
+**1. Against a value-level price, `set_price` replaces.**
+
+A rule that fires supplies the value's delta outright; the authored
+`price_config` does not also apply. Adding was rejected: a merchant writing
+*"set price to 5.00"* means the price **is** 5.00, not "5.00 plus whatever it
+was". Under `percentage` the additive reading is worse still — a 10% value with
+a rule adding 5.00 produces a number the merchant cannot predict without knowing
+the base.
+
+Replacement is also the only reading that is **idempotent**: two rules both
+setting 5.00 leave the price at 5.00, where adding would leave 10.00 and make
+the outcome depend on rule ordering that M17.2 explicitly makes
+order-independent.
+
+**2. Against an option-level price, `set_price` is refused at publish.**
+
+`per_char`, `per_unit` and `tiered` do not hold an amount; they hold a
+**function of the customer's input** — a rate per character, a rate per unit, a
+bracket table. A rule setting a flat amount on one does not override a number,
+it **overrides a function with a constant**, discarding the merchant's rate
+silently and charging the same for a 3-character engraving as for a 300-character
+one.
+
+There is no arithmetic that reconciles them. Refusing at publish time, with a
+message naming the option and its pricing type, is the honest answer: the
+merchant is told at the moment they author it, not by a customer's invoice.
+
+**3. The plugin reports the refused combination rather than trusting the
+document.** AC4 makes the published document *input*, not authority. A document
+carrying the refused combination can still arrive from a stale cache, a partial
+publish, or a plugin build older than the publish rule. The evaluator ignores the
+`set_price` and adds the type to `unpriced`, so a merchant is told rather than a
+customer undercharged.
+
+### Consequences
+
+**This mirrors what `option_delta()` already does, and deliberately.** The same
+two-layer shape is in the shipped resolver for `per_char` on a non-typed option:
+the cloud's type registry refuses the combination at authoring time, and the
+plugin reports it at runtime because a document is input rather than authority.
+Phase 17 gets the same treatment rather than a new pattern — a second way of
+handling "configuration this build cannot price" is a second thing to keep
+consistent.
+
+⚠️ **Refusal is at publish, not at rule creation.** A merchant may author a rule
+and *then* change the option's pricing type to `per_unit`, which would make an
+already-saved rule invalid. Validating only at creation would let that through.
+Publish is the gate every other cross-object rule in this system uses, and it is
+where the whole document is visible at once.
+
+🔴 **A wrong answer here is a mispriced order, not a broken screen.** This is the
+same class as the 16c price freeze — quoted 85.00, charged 130.00 — which shipped
+green for two phases and was caught only by adversarial review. The fixture cases
+for `set_price` therefore assert the **charged amount** against an authored
+`price_config`, not merely that a rule fired.
+
+**What this does not decide.** `set_price` against a value with no
+`price_config` at all is unambiguous — the rule supplies the only price there is
+— and needs no rule beyond "replace".
+
+---
+
+## ADR-050 — Rule cycles: rejected at publish, capped at evaluation, and a cap refuses
+
+**Status:** accepted · **Date:** 2026-09-10 · **Milestone:** M17.2, M17.3
+
+### Context
+
+M17.3 specifies *"cycles detected at **publish** time and rejected with a clear
+merchant-facing error"*. Necessary, and **not sufficient** — for a reason the
+shipped architecture already establishes rather than one Phase 17 introduces.
+
+The plugin does not evaluate the document the cloud just validated. It evaluates
+a **cached** one, and `DegradationMatrixTest` names four guarantees that keep it
+serving that cache:
+
+```text
+test_api_unreachable_keeps_serving
+test_a_revoked_credential_keeps_serving
+test_a_malformed_document_keeps_the_previous_version
+test_a_too_new_schema_keeps_the_last_good_copy
+```
+
+Each is correct and each means the same thing here: **a storefront will evaluate
+rule sets that no publish-time check has seen** — from a cache predating the
+check, from a build older than the rule that added it, or from a site the cloud
+cannot currently reach.
+
+A cycle is not the only way to exceed a cap. Rules that merely cascade deeply, or
+that oscillate between two stable states, reach the same place without any single
+rule referring to itself.
+
+### Decision
+
+**1. Cycles are rejected at publish, as M17.3 says.** A merchant authoring a
+cycle is told at the moment they author it, naming the rules involved.
+
+**2. The evaluator carries its own iteration cap, in both languages,
+independent of any publish-time check.** Publish-time rejection stops a merchant
+*creating* a cycle. The cap is what stops a cached document *hanging a
+storefront*, and it must hold without reference to whether the document was ever
+validated. A pure function that can loop forever on hostile input is not a pure
+function anybody can deploy.
+
+**3. Reaching the cap refuses the evaluation and reports it. It does not
+return the state it reached.**
+
+Accepting a truncated pass means a field wrongly shown or hidden, and a price
+computed from it — **a wrong price that looks right**. This project has now
+shipped that exact shape twice:
+
+- **16c** — the price freeze was broken for every non-value option: quoted
+  85.00, charged 130.00.
+- **16d** — a `per_unit` overflow returned a bare `0` in PHP, making the option
+  **silently free** at the boundary; a customer asking for more paid less.
+
+Both passed their suites. Both were found by adversarial review after the stage
+closed. A refusal is loud, bounded, and reaches the merchant; a truncated
+evaluation is silent and reaches the customer's invoice.
+
+**4. The cap is a shared fixture case, not an implementation detail.** Both
+languages must agree on *when* the cap trips and *what* the refusal looks like.
+16d is the precedent: PHP returned a bare `0` where TypeScript reported
+`unpriced`, and the two disagreed at exactly the boundary where the money is
+wrong.
+
+### Consequences
+
+⚠️ **The cap's value is a constant with a stated reason, not a tuned number.**
+It bounds the work a hostile or corrupt document can cause on a storefront page
+render. It is not a limit on legitimate rule depth — a document needing more
+iterations than the cap allows is one the merchant should be told about at
+publish, which is decision 1's job.
+
+⚠️ **Refusing means the line cannot be added to the cart.** That is a real cost
+to a merchant whose document is somehow bad, and it is the correct direction:
+`AC6` makes WooCommerce own the transaction, and refusing an add-to-cart is a
+mechanism this plugin already has and already tests. Charging a wrong price is
+not recoverable in the same way — it reaches a customer's card.
+
+🔴 **A cap that no test reaches is a cap that does not exist.** M16.9's stock
+guarantee rested on a single line no test executed, and the first test written
+for it **passed while the guard was deleted**. The cap gets a fixture case that
+fails when the cap is removed, in both languages, verified by mutation rather
+than by exit code.
+
+---
+
+## ADR-051 — A rule-hidden option is not charged, not stored, and not restored
+
+**Status:** accepted · **Date:** 2026-09-10 · **Milestone:** M17.4, M17.5
+
+### Context
+
+M17.5 asks for *"a documented policy on whether [hidden values] are restored if
+re-shown"* and states none. It is three questions, not one, and only the third is
+a genuine preference:
+
+1. A rule hides a field the customer already filled — is the value still
+   **charged**?
+2. Is it still **stored** on the order?
+3. If the field re-shows, is the old answer **restored**?
+
+### Decision
+
+**1. Not charged.** A hidden option contributes no delta, whatever the customer
+typed before it was hidden.
+
+This is not a preference. A field the customer cannot see, carrying a charge they
+cannot inspect, is the 16c defect restated: a line quoted at 85.00 and charged
+130.00 because a delta was counted that the customer's view did not show. AC4
+makes the price server-authoritative precisely so that what is charged is
+derivable from what was legitimately selected — and a rule-hidden option was not
+legitimately selected.
+
+**2. Not stored.** The selection does not reach `cart_item_data`, the order line,
+or the fulfilment output.
+
+A hidden option that persists is worse than a wasted column: `_optionia_selections`
+is what the merchant fulfils from, and M12.6b makes the order screen sufficient
+for fulfilment on its own. An engraving instruction that the customer's own
+configuration removed, sitting in the fulfilment output, gets engraved.
+
+⚠️ **This is also what keeps cart-line merging correct.** WooCommerce derives the
+cart item key textually from `cart_item_data`, so two customers reaching the same
+visible configuration by different routes must produce **identical** payloads. If
+a hidden value persisted, two identical orders would occupy two lines because one
+carried a ghost the other did not.
+
+**3. Not restored.** If a rule re-shows the field, it comes back empty.
+
+This is the one that is genuinely a choice, and the reason is state visibility.
+Restoring means the storefront holds a value the customer cannot see, cannot
+edit, and did not re-confirm — and then charges for it the moment a rule flips.
+Not restoring means exactly one state exists: what is on the screen. A customer
+who re-enters a value has confirmed it; a customer who does not, has not.
+
+The cost is real and small — a customer toggling a rule condition back and forth
+retypes. The alternative cost is a charge for something invisible.
+
+### Consequences
+
+⚠️ **The resolver runs twice per add-to-cart, and both runs must agree.**
+`AddToCartValidator` resolves to decide whether the line is legal, and
+`CartItemData::attach()` **re-resolves** rather than carrying state across
+filters — deliberately, so the result cannot depend on invocation order. Rule
+evaluation must therefore be a pure function of `(document, selections)` with no
+hidden state, or the two runs can disagree and the validated line is not the
+stored one.
+
+🔴 **"Not stored" must be proven at the order, not at the resolver.** The path is
+resolver → `cart_item_data` → session → order meta → fulfilment output, and
+Phase 12 found real defects at three of those hops. A test asserting the resolver
+drops the value proves the first hop only.
+
+**M17.4's server-side rejection is the enforcement half of decision 2**, and the
+two are deliberately different mechanisms: rejection refuses a *submitted* value
+for a hidden option (a forged or stale payload), while this decision governs a
+value the customer legitimately entered before a rule hid it. The first is an
+error; the second is ordinary use and must not be.
+
+⚠️ **A rule-hidden option is a third state the resolver does not have.**
+`resolve()` currently sorts option ids into "known to this product" and
+"unknown — reported as an error", because an unknown id may be another tenant's.
+Rule-hidden is neither: known, and legitimately absent. Conflating it with either
+gives a wrong answer — an error the customer cannot act on, or a silent
+acceptance that defeats M17.4.
