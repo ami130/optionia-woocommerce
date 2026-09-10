@@ -54,24 +54,25 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 **[Phase 17](#phase-17--conditional-logic-engine), stage 17-2 — rule CRUD.**
 
-**Done so far:** 17-0 (ADR-049, ADR-050, ADR-051) and **17-1** — `RuleOperator`
-plus the `.strict()` condition schemas, 21 tests, five mutants each killed by a
-named failing test.
+**Done:** 17-0 (ADR-049/050/051), **17-1**, and 17-1's **audit — eight findings,
+all fixed**. See
+[the audit table](#-stage-17-1-audit--eight-findings-all-fixed-2026-09-10).
 
-Stage 17-2 is the CRUD surface over the **existing** `option_rules` table and
-`OptionRule` entity, both of which shipped in Phases 5–7 and are already used by
-the cascade service. Tenant-scoped, with a **negative test per route** —
-`check-isolation.sh` gates that and runs in CI.
+Stage 17-2 builds the CRUD surface over the **existing** `option_rules` table,
+and inherits three obligations from that audit:
 
-⚠️ **The entity's shape is the contract, not a starting point.** `targetId` is
-polymorphic and deliberately not a foreign key, so a rule whose target is deleted
-survives to be flagged rather than cascading away; `disabledReason` exists so a
-merchant can be told *which* target vanished. Both are load-bearing for
-`cascade.service.ts` today.
+1. **Wire the schema.** `ruleConditionsSchema` is imported by nothing but its own
+   spec — a deliberate stage boundary, and the same silhouette as 16c's evaluator
+   behind a closed API gate. 17-2 is where it stops being one.
+2. **Enforce `AUTHORING_LIMITS.rulesPerSet`** (200). It is declared and called by
+   nothing, because no rule-creating route exists yet. A limit nothing calls is
+   indistinguishable from a limit nobody wrote — `file_storage_mb` stayed metered
+   and unenforced for a whole phase that way.
+3. **A negative test per route.** `check-isolation.sh` gates it and runs in CI.
 
 ⚠️ **`optionId` inside a condition is still unvalidated against the set** — by
-design. That check belongs with the publish-time cycle detection in **17-3**,
-where the whole document is visible at once.
+design. That is a cross-object question needing the set loaded, and it belongs
+with the publish-time cycle detection in **17-3**.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18937,6 +18938,69 @@ an option *in this set* is a cross-object question needing the set loaded, and i
 belongs with the publish-time check that also detects cycles (17-3). Validating it
 in two places would be two answers to one question — the divergence shape this
 project keeps paying for.
+
+#### 🔴 Stage 17-1 audit — eight findings, all fixed 2026-09-10
+
+Audited by **running the code**, not reading it: nine probes, five mutations, and
+cross-checks against the entity, the migration and the frozen wire contract.
+**Two findings were structural**, and one was a live data-loss bug in code that
+predates Phase 17 entirely.
+
+| # | Finding | Fix |
+|---|---|---|
+| **A1** | 🔴 The schema **contradicted the entity and the wire**: it nested `matchType` inside `conditions`, while `OptionRule` has it as a **column** and `PublishedRule` as a **sibling**. One fact, two homes, free to disagree | `ruleConditionsSchema` is now a bare array; a test asserts the nested form is refused |
+| **A2** | 🔴 **Nothing imported the schema** — the 16c silhouette exactly | Recorded in the file as a stage boundary: 17-1 defines the shape, 17-2 wires it |
+| **A3** | 🔴 `UNARY_RULE_OPERATORS` / `LIST_RULE_OPERATORS` were **dead exports**, with the same lists hardcoded in the schema — two copies of one truth in the commit that added the constant meant to prevent it | The schema's `z.enum()` calls are now **built from** the partitions; a test asserts every operator lands in exactly one |
+| **A4** | 🔴 **No aggregate bound. Measured: 4.77 MB accepted** — 20 conditions × 50 operands × 5,000 chars, every per-item limit satisfied | `MAX_CONDITIONS_BYTES = 16384` on the serialized list, plus `AUTHORING_LIMITS.rulesPerSet = 200` |
+| **A5** | 🔴 **`duplicate()` copied no rules at all.** A merchant duplicating a configured set got one with its conditional logic silently removed | `copyableRuleFields` + `copyRulesInto`, with id remapping; unit guard **and** e2e test |
+| **A6** | 🟠 `.min(1)` on `optionId` accepted `'  '` — a guard bypassed by pressing space | `.trim()` before the length check |
+| **A7** | 🟠 `greater_than 'blue'`, `contains 42`, `contains false` all accepted — comparisons no evaluator can answer consistently | Binary branch split into **equality / substring / ordering**, each with its operand type |
+| **A8** | 🔴 Entity and wire typed `conditions` as `Record<string, unknown>` — an **object**, where M17.1 specifies a **list** | Both corrected to arrays; not a wire break, since `CONFIG-CONTRACT.md` documents only *"array … always empty"* and never published an inner shape |
+
+##### A4 is the lesson this project has now learned twice
+
+`SelectionResolver::ABSOLUTE_MAX_LENGTH` caps one engraving at 5,000 graphemes,
+and **its own docblock records that this was not enough**: *"50 text options ×
+5000 characters = 244 KB accepted in one request"*. `MAX_TEXT_BYTES` was added as
+the budget. Stage 17-1 shipped the per-item cap and not the budget, in a file
+whose constants cite that very docblock.
+
+**A per-item cap is not a bound on a request.** Written down here as a rule
+rather than a third rediscovery.
+
+##### A5 is the third instance of one bug in one function
+
+`duplication.ts` exists *because* of this bug. Its docblock records `groupLabel`
+reaching one of four copy paths, and presentational items reaching none —
+*"Nothing failed. Every suite stayed green, because no test asserted that a copy
+is complete."* Rules were then added to the schema and never to the copy.
+
+⚠️ **The dangerous fix would have been the obvious one.** Copying a rule verbatim
+carries `targetId` and every condition's `optionId` — ids pointing at the
+**source set's** rows. That is worse than dropping the rule, because it produces
+one that *evaluates*, against another set's document. `copyRulesInto` remaps
+through an id map and disables anything it cannot map, with
+`TARGET_DELETED` so the merchant is told rather than left guessing.
+
+🔴 **The type system now refuses the dangerous version.** `copyableRuleFields`
+returns `Omit<…, 'targetId' | 'conditions'>`, so a future caller carrying either
+verbatim **fails to compile** — a stronger guard than a test, verified by
+attempting exactly that mutation.
+
+##### Mutation results
+
+| Mutation | Outcome |
+|---|---|
+| `disabledReason` dropped from the rule copy | **killed** by two named tests |
+| `targetId` copied verbatim | **refused by `tsc`** — cannot compile |
+| `copyRulesInto` call removed (the original A5 bug) | **killed** — *"Received length: 0"* |
+| A tenth operator added to the enum only | **killed** — the coverage test reads the enum |
+| The five original 17-1 mutants | still killed |
+
+⚠️ **One mutation initially reported "0 tests", which is a compile failure, not a
+survivor.** Removing the `copyRulesInto` call left its import unused and `tsc`
+refused the file. The import had to be removed too before the mutation was a
+real test of the assertion rather than of the linter.
 
 ### ~~🔴 Three decisions blocking stage 17-1~~ — resolved above
 
