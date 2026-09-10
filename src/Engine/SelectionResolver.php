@@ -10,6 +10,19 @@
  * reject unknown option or value keys; reject options not applicable to this
  * product; enforce required; recompute price from cached config".
  *
+ * ## Rules run before validation, and the order is load-bearing
+ *
+ * ✏️ **Since M17.8.** `resolve()` evaluates the set's conditional rules before
+ * it looks at a single selection, because whether a submitted value is legal
+ * *depends on* the rule outcome — an option a rule hid must refuse the value
+ * posted for it, and cannot simultaneously be missing-and-required.
+ *
+ * The evaluator is fed the selections **as posted**, never a partial result.
+ * `AddToCartValidator` resolves to decide legality and `CartItemData::attach()`
+ * re-resolves rather than carrying state across filters, deliberately, so the
+ * outcome cannot depend on filter order — and that only holds if both runs get
+ * the same input. ADR-051 records why.
+ *
  * ## The one rule this class exists to enforce
  *
  * **Nothing price-like in the request is read.** The browser sends option ids
