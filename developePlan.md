@@ -55,21 +55,30 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 **[Phase 17](#phase-17--conditional-logic-engine), stage 17-7 — the evaluator's
 own iteration cap, and where it is enforced.**
 
-**Done:** 17-0 (four ADRs) through **17-6**, each with its own audit, plus
-**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
-deciding prices, in both languages identically.
+**Done:** 17-0 (four ADRs) through **17-6** and **17-8**, each with its own
+audit, plus **M17.4a** — closed after a final cross-stage pass found that
+`sortOrder` was deciding prices, in both languages identically.
 
-⚠️ **Two Phase 17 criteria remain, and both are 17-8's:** a rule-hidden option
-must be **rejected server-side**, and must be **neither charged nor stored**
-(ADR-051). Nothing calls either evaluator yet.
+✅ **Both remaining Phase 17 criteria closed in 17-8:** a rule-hidden option is
+now **rejected server-side** (`ERROR_HIDDEN_BY_RULE`) and is **neither charged
+nor stored** (ADR-051), proven by nine mutants and thirteen named tests. The
+evaluator has a caller.
 
-⚠️ **17-8 must delete `RuleEvaluator` from `check-architecture.sh`'s exemption
-list.** If the gate then passes, the class was pending rather than dead —
-`Pricing`'s exemption produced exactly that evidence in Stage 6.
+✅ **`RuleEvaluator` was deleted from `check-architecture.sh`'s exemption list**
+in 17-8, and the gate passed without it — the class was pending rather than dead.
+Second time that fuse has produced exactly the evidence it was built for.
 
-⚠️ **K3 carries into 17-7** (from the 17-5 audit): a pre-M17.1 row whose
+🔴 **17-8 found M17.4a's defect a layer down**: with `sortOrder` correctly
+ignored, `set_price` still resolved by *last writer wins*, so **document order**
+decided the price (1700 versus 1500 on the same pair). The publish gate blocks
+that pair, but AC4 makes the document input rather than authority. Conflicting
+amounts now **cancel** in both languages and are reported, never charged.
+
+⚠️ **K3 is still open** (from the 17-5 audit): a pre-M17.1 row whose
 `conditions` is an object publishes as a rule that **never fires** — safe,
-silent, and with no publish finding.
+silent, and with no publish finding. Not folded into 17-8: that stage restructured
+the *plugin's* resolver, and K3 wants a **publish-time warning** in the backend.
+Carried to **17-11**, where the exit audit covers publish findings.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -19902,6 +19911,108 @@ real test of the assertion rather than of the linter.
    charging is not a preference (F4). Not restoring keeps one visible state rather
    than a hidden one a customer cannot see and did not confirm.
 
+### ✅ Stage 17-8 complete — the evaluator meets the resolver, 2026-09-10
+
+**The stage the plan called "the risky one"**, and it earned the label: a
+2663-line function with one public entry point, reordered so rules run **before**
+selections are validated. Both remaining Phase 17 criteria close here.
+
+| Added | Where |
+|---|---|
+| `index_containment()` — target id → the options under it | `Engine/SelectionResolver.php` |
+| `index_rules()` — every rule across every matched set, flattened | same |
+| `hidden_options()` / `hidden_values()` — targets translated to options | same |
+| `set_price_for()` — ADR-049, in three answers rather than two | same |
+| `ERROR_HIDDEN_BY_RULE`, `ERROR_RULES_UNSETTLED`, `UNPRICED_RULE_CONFLICT` | same |
+| 13 tests | `tests/unit/RuleDrivenResolutionTest.php` |
+| 3 shared-fixture cases (41 → **44**) | `rule-fixtures.json`, both repos |
+
+**Why the order had to change, restated from F5:** whether a submitted value is
+legal *depends on* the rule outcome. Validating first and consulting rules after
+would decide legality against a page that no longer exists.
+
+#### The wire-shape gap found before any code was written
+
+🔴 **`PublishedValue` had no `id`.** `RuleTargetType` is `option | group | value`
+and the plugin resolves a target by id, so a value-targeted rule reached the
+storefront naming something the document did not contain — and could never fire.
+Groups and options had carried an id since M7.5 for exactly this reason; nothing
+on the storefront had needed a value's until rules did. `value_key` is not a
+substitute: it is unique **within one option**.
+
+Measured rather than argued: dropping the field fails `tsc`, and publishing
+`value_key` in its place compiles and is killed by both new tests.
+
+#### 🔴 The finding: document order was deciding prices — M17.4a's defect, one layer down
+
+M17.4a found `sortOrder` deciding a price and fixed it. 17-8 found the **same
+shape wearing different clothes**: with `sortOrder` correctly ignored, the
+`set_price` branch in both evaluators still did *last writer wins*, so the price
+became a function of **array order**.
+
+Measured, in the plugin, by resolving one pair in both document orders:
+
+```text
+rules [500, 700] -> total 1700
+rules [700, 500] -> total 1500
+```
+
+⚠️ **The publish gate is not a defence here, and that is the lesson.**
+`rulePayloadsDoNotConflict` (M17.4a) blocks the pair at publish, which is why
+this was invisible for a stage and a half. But **AC4 makes the document input,
+not authority** — a stale cache, a partial publish, or a plugin build older than
+the publish rule delivers the pair anyway, and the storefront then charges an
+amount that depends on JSON ordering.
+
+**Resolved by cancelling, in both languages:** two rules setting *different*
+amounts clear the price and set `price_conflict`; the resolver reports
+`rule_price_conflict` in `unpriced` rather than charging anything. Cancelling is
+the only resolution that is order-independent **and** never invents a number no
+merchant chose. Two rules setting the *same* amount agree and are not a conflict
+— the case ADR-052 explicitly declines to refuse.
+
+🔴 **A second defect was hiding behind the first.** The fix's first version
+returned `null` on conflict, and `null` already meant *"no rule spoke, use the
+authored price"* — so a cancelled conflict silently billed the **authored** 250
+on a line whose rules had set 500 and 700. Caught only because the
+order-independence test was strengthened to assert the *outcome* rather than
+merely that both orders agreed: two orders returning the same wrong number
+satisfy an equality assertion perfectly. `set_price_for()` now returns
+`int|false|null`, and the three answers are documented at the signature.
+
+#### Where the fuse worked, for the second time
+
+`RuleEvaluator` was deleted from `check-architecture.sh`'s exemption list, as
+[the note there instructed](#phase-17--conditional-logic-engine). The gate's
+*"every class is reachable from production code"* check then **passed without
+it** — the evidence that the class was pending rather than dead. `Pricing`
+produced the same evidence in Stage 6.
+
+#### Mutation results — nine mutants, nine killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| M1 | Hidden option's submission not refused | `test_a_value_for_a_rule_hidden_option_is_refused` |
+| M2 | Hidden option still required | `test_a_hidden_option_is_never_required` |
+| M3 | `target_type` ignored — a hidden value hides its option | `test_hiding_one_value_leaves_the_options_other_values_choosable` |
+| M4 | Cap refusal ignored | `test_a_cascade_deeper_than_the_pass_limit_is_refused` |
+| M5 | `set_price` adds instead of replacing | `test_set_price_replaces_the_authored_value_price` |
+| M6 | `set_price` honoured against `per_char` | `test_set_price_against_option_level_pricing_is_reported_not_applied` |
+| M7 | Conflict falls back to the authored price | `test_two_set_price_rules_agree_whichever_order_they_arrive_in` |
+| M8 | Last-writer-wins restored (PHP) | shared fixture |
+| M9 | Last-writer-wins restored (TypeScript) | **the same** shared fixture |
+
+M8 and M9 are the pair worth keeping: one fixture edit killed the same mutant in
+both languages, which is what the fixture is for.
+
+#### Open, and deliberately not settled here
+
+📌 **`unrequire` versus an authored `is_required`.** ADR-052 settles `require`
+against `unrequire` between *rules*, and is silent on rule-versus-authoring. The
+resolver reads it as *a rule that fired replaces the merchant's answer in both
+directions*, on the grounds that `unrequire` is otherwise an action that does
+nothing. Marked at the line and carried to **17-11** for the exit audit.
+
 ### M17.1 — Rule model
 
 ```text
@@ -21354,6 +21465,20 @@ Observed across four phases, with a consistent signature:
 Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
+
+⚠️ **Fourteen occurrences by Stage 17-8.** The fourteenth is the cleanest
+demonstration of the signature so far: **3 failed, 901 passed**, all three in
+`config-document.e2e-spec.ts`, and all three failing in *fixture setup* rather
+than in an assertion — `POST /v1/option-sets`, `POST /v1/options/:id/values` and
+a publish, each returning **`400` with a body of `{}`**. Three different routes,
+one run. Re-run alone: **32 of 32 pass**.
+
+🔴 **It arrived in the one run where a wire-shape change made it plausible.**
+17-8 added `id` to every published value, so "the config document suite fails"
+was exactly what a real regression would have looked like — and the empty body is
+what distinguished them, because a genuine `forbidNonWhitelisted` rejection
+carries a `details` array naming the field. Worth recording as the case where the
+noise most resembled a signal.
 
 ⚠️ **Thirteen occurrences by Stage 17-3**, and the thirteenth was a **fourth full
 hang**: 22 e2e suites passed, then the run stalled with the output file untouched
