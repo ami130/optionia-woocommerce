@@ -1,3 +1,4 @@
+import { OptionRule } from './entities/option-rule.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { PresentationalItem } from './entities/presentational-item.entity';
 
@@ -26,10 +27,17 @@ import { PresentationalItem } from './entities/presentational-item.entity';
  * Columns every copy path deliberately decides for itself.
  *
  * `id`, `createdAt`, `updatedAt` and `deletedAt` belong to the new row.
- * `optionId` / `optionGroupId` are the *new* parent, which only the caller
- * knows. `valueKey`, `label` and `sortOrder` may be rewritten by the caller —
- * a value duplicated in place needs a fresh key, one copied into a new option
- * does not.
+ * `optionId` / `optionGroupId` / `optionSetId` are the *new* parent, which only
+ * the caller knows. `valueKey`, `label` and `sortOrder` may be rewritten by the
+ * caller — a value duplicated in place needs a fresh key, one copied into a new
+ * option does not.
+ *
+ * 🔴 **`targetId` and `conditions` are here for a stronger reason than the
+ * others.** A rule points at rows by id, and a copy has new ids, so carrying
+ * them verbatim would aim the copied rule at the **source set's** rows — a rule
+ * that works and governs the wrong document. The caller must remap both through
+ * its id map, and `duplication.spec.ts` asserts they are absent from the copy
+ * helper so the remap cannot be forgotten.
  */
 export const COPY_DECIDED_BY_CALLER = [
   'id',
@@ -38,9 +46,12 @@ export const COPY_DECIDED_BY_CALLER = [
   'deletedAt',
   'optionId',
   'optionGroupId',
+  'optionSetId',
   'valueKey',
   'label',
   'sortOrder',
+  'targetId',
+  'conditions',
 ] as const;
 
 /**
@@ -93,5 +104,53 @@ export function copyableItemFields(source: PresentationalItem): Omit<
     content: source.content,
     sortOrder: source.sortOrder,
     display: source.display,
+  };
+}
+
+/**
+ * Everything a copied `OptionRule` inherits.
+ *
+ * 🔴 **`duplicate()` did not copy rules at all**, found by auditing Stage 17-1.
+ * A merchant duplicating a configured set got one with **every piece of its
+ * conditional logic silently removed** — no error, and a copy that looks right
+ * until a customer sees a field that should have been hidden.
+ *
+ * ⚠️ **This is the third time this exact bug has been found in this file.**
+ * `groupLabel` reached one copy path and not the others; presentational items
+ * were copied by none. Each time the cause was the same — a new thing to copy,
+ * and four hand-written lists — and each time every suite stayed green, because
+ * nothing asserted a copy was *complete*.
+ *
+ * ## What the caller decides, and why it is not simply omitted
+ *
+ * 🔴 **`targetId` is deliberately NOT here, and a rule cannot be copied without
+ * remapping it.** It points at a group, option or value **in the source set**,
+ * and the copy created new rows with new ids. Copying it verbatim produces a
+ * rule aimed at another set's row — which is worse than dropping the rule,
+ * because it would silently govern the wrong document.
+ *
+ * The same is true of every `optionId` inside `conditions`.
+ *
+ * So this helper returns only what is safe to carry, and the caller must supply
+ * `targetId` and `conditions` from its own id map. `duplication.spec.ts` asserts
+ * both are absent, so a future caller cannot forget the remap by accident.
+ */
+export function copyableRuleFields(source: OptionRule): Omit<
+  Partial<OptionRule>,
+  'id' | 'optionSetId' | 'targetId' | 'conditions'
+> {
+  return {
+    targetType: source.targetType,
+    action: source.action,
+    matchType: source.matchType,
+    sortOrder: source.sortOrder,
+    /*
+     * Disabled work stays disabled, as everywhere else in this file — and the
+     * reason travels with it. A rule disabled because its target was deleted
+     * must not silently come back enabled in a copy, because the target is still
+     * gone.
+     */
+    isEnabled: source.isEnabled,
+    disabledReason: source.disabledReason,
   };
 }

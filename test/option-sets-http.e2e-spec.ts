@@ -458,6 +458,99 @@ describe('option sets (e2e)', () => {
     }, 40_000);
 
     /**
+     * 🔴 **Rules were copied by nothing, and every suite stayed green.**
+     *
+     * Found by auditing Stage 17-1: `duplicate()` carried groups, options,
+     * values and items and **no rules at all**, so a merchant duplicating a
+     * configured set got one with its conditional logic silently removed.
+     *
+     * The unit guard in `duplication.spec.ts` asserts the *field list* is
+     * complete. This asserts the row actually arrives — and, more importantly,
+     * that its ids were **remapped**: a rule copied verbatim would point at the
+     * source set's rows, which is worse than dropping it, because it would
+     * evaluate and govern the wrong document.
+     */
+    it('copies rules, repointing them at the copy rather than the source', async () => {
+      const created = await asA('post').send({ name: 'Conditional', storeId: storeA });
+      const setId = created.body.data.id as string;
+
+      const groupId = randomUUID();
+      const optionId = randomUUID();
+      const ruleId = randomUUID();
+      const S = `'1970-01-01 00:00:00.000'`;
+
+      await dataSource.query(
+        `INSERT INTO option_groups (id, optionSetId, label, description, displayType,
+                                    sortOrder, isCollapsible, isEnabled, createdAt, updatedAt, deletedAt)
+         VALUES (?, ?, 'Engraving', '', 'inline', 0, 0, 1, NOW(3), NOW(3), ${S})`,
+        [groupId, setId],
+      );
+      await dataSource.query(
+        `INSERT INTO options (id, optionGroupId, \`key\`, valueKind, cardinality, presentation,
+                              label, description, placeholder, helpText, isRequired, sortOrder,
+                              isEnabled, createdAt, updatedAt, deletedAt)
+         VALUES (?, ?, 'wants_engraving', 'choice', 'one', 'radio', 'Engrave?', '', '', '', 1, 0, 1,
+                 NOW(3), NOW(3), ${S})`,
+        [optionId, groupId],
+      );
+
+      /* Targets the option, and its condition names that same option. */
+      await dataSource.query(
+        `INSERT INTO option_rules (id, optionSetId, targetType, targetId, action, conditions,
+                                   matchType, sortOrder, isEnabled, disabledReason,
+                                   createdAt, updatedAt, deletedAt)
+         VALUES (?, ?, 'option', ?, 'show', ?, 'all', 0, 1, NULL, NOW(3), NOW(3), ${S})`,
+        [
+          ruleId,
+          setId,
+          optionId,
+          JSON.stringify([{ optionId, operator: 'equals', value: 'yes' }]),
+        ],
+      );
+
+      const copy = await asA('post', `/${setId}/duplicate`).send({});
+      const copyId = copy.body.data.id as string;
+
+      const rules = await dataSource.query(
+        `SELECT targetId, conditions, action, matchType, isEnabled
+           FROM option_rules WHERE optionSetId = ?`,
+        [copyId],
+      );
+
+      expect(rules).toHaveLength(1);
+
+      const [rule] = rules;
+
+      /* What the rule DOES is carried verbatim. */
+      expect(rule.action).toBe('show');
+      expect(rule.matchType).toBe('all');
+      expect(Number(rule.isEnabled)).toBe(1);
+
+      /* The copied option's id, discovered rather than assumed. */
+      const [copiedOption] = await dataSource.query(
+        `SELECT o.id FROM options o
+           JOIN option_groups g ON g.id = o.optionGroupId
+          WHERE g.optionSetId = ?`,
+        [copyId],
+      );
+
+      /*
+       * 🔴 The assertion that matters: the rule points at the COPY's option,
+       * not the source's. Equality with `optionId` here would mean a rule
+       * silently governing another set.
+       */
+      expect(rule.targetId).toBe(copiedOption.id);
+      expect(rule.targetId).not.toBe(optionId);
+
+      const conditions =
+        typeof rule.conditions === 'string' ? JSON.parse(rule.conditions) : rule.conditions;
+
+      expect(conditions).toEqual([
+        { optionId: copiedOption.id, operator: 'equals', value: 'yes' },
+      ]);
+    }, 40_000);
+
+    /**
      * A disabled option stays disabled in the copy. Silently enabling work a
      * merchant turned off would republish it on the copy's first publish.
      */

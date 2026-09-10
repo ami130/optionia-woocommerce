@@ -231,6 +231,21 @@ export const RuleOperator = {
 } as const;
 export type RuleOperator = (typeof RuleOperator)[keyof typeof RuleOperator];
 
+/*
+ * The operators grouped by the **shape of operand** each one takes.
+ *
+ * 🔴 **These are the single source, and the schema builds its unions from them.**
+ * The first version of this file declared the sets and then the schema listed the
+ * same operators again as literals — two copies of one truth, in the same commit
+ * that added the constant meant to prevent exactly that. The PHP evaluator
+ * (M17.2) needs the same partition, so a third copy was already queued.
+ *
+ * ⚠️ **Typed as tuples, not `readonly RuleOperator[]`.** `z.enum()` needs the
+ * literal members to narrow, and a widened array makes every branch of the
+ * condition union accept every operator — which would silently undo the
+ * separation these sets exist to express.
+ */
+
 /**
  * The operators that take no operand.
  *
@@ -239,10 +254,10 @@ export type RuleOperator = (typeof RuleOperator)[keyof typeof RuleOperator];
  * silently ignored — the `freeUnits: 5` shape Phase 16's audit found, where a
  * setting saved successfully and did nothing.
  */
-export const UNARY_RULE_OPERATORS: readonly RuleOperator[] = [
+export const UNARY_RULE_OPERATORS = [
   RuleOperator.IS_EMPTY,
   RuleOperator.IS_NOT_EMPTY,
-];
+] as const;
 
 /**
  * The operators whose operand is a **list** rather than a single value.
@@ -250,10 +265,60 @@ export const UNARY_RULE_OPERATORS: readonly RuleOperator[] = [
  * Separated for the same reason as the unary set: `in` with a scalar operand is
  * a merchant meaning `equals` and getting silence.
  */
-export const LIST_RULE_OPERATORS: readonly RuleOperator[] = [
-  RuleOperator.IN,
-  RuleOperator.NOT_IN,
-];
+export const LIST_RULE_OPERATORS = [RuleOperator.IN, RuleOperator.NOT_IN] as const;
+
+/**
+ * The operators that compare **magnitude**, and therefore need a number.
+ *
+ * 🔴 **There is no defined ordering for text, and inventing one is how two
+ * languages begin to disagree.** Is `"Blue" > "apple"`? Byte order says yes,
+ * case-insensitive alphabetical says no, and a locale-aware collation says it
+ * depends on the locale. PHP's `>` on strings and JavaScript's are already
+ * different functions.
+ *
+ * `option_delta()` gives this exact reasoning for refusing `fixed` at the option
+ * level: *"inventing one independently in two languages is how they begin to
+ * disagree"*. So the operand must be a number, and a merchant wanting "is this
+ * text one of these" has `in`.
+ */
+export const ORDERING_RULE_OPERATORS = [
+  RuleOperator.GREATER_THAN,
+  RuleOperator.LESS_THAN,
+] as const;
+
+/**
+ * The operator that asks whether one string occurs inside another.
+ *
+ * `contains 42` is a merchant asking a question about text using a number. It
+ * has an obvious-looking answer — stringify and search — and that is the trap:
+ * `contains 1` would match the answer `"10"`, and `contains false` would match
+ * the engraving `"falsely modest"`. A string operand says what was meant.
+ */
+export const SUBSTRING_RULE_OPERATORS = [RuleOperator.CONTAINS] as const;
+
+/**
+ * The operators that compare for **equality**, whatever the answer's type.
+ *
+ * Equality is the one comparison that is well defined across strings, numbers
+ * and booleans in both languages, so these keep a permissive operand.
+ */
+export const EQUALITY_RULE_OPERATORS = [
+  RuleOperator.EQUALS,
+  RuleOperator.NOT_EQUALS,
+] as const;
+
+/**
+ * Every operator taking exactly one operand.
+ *
+ * Retained as a named set because the *arity* split (one operand, a list, none)
+ * is a different question from the *type* split above, and the rule builder
+ * (M17.6) needs the first to decide how many inputs to draw.
+ */
+export const BINARY_RULE_OPERATORS = [
+  ...EQUALITY_RULE_OPERATORS,
+  ...SUBSTRING_RULE_OPERATORS,
+  ...ORDERING_RULE_OPERATORS,
+] as const;
 
 /* -------------------------------------------------------------------------
  * Assignment

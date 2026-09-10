@@ -7,12 +7,13 @@ import { ParentSetService } from './parent-set';
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
-import { GroupDisplayType } from '../common/database/enums';
+import { GroupDisplayType, RuleDisabledReason } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
+import { OptionRule } from './entities/option-rule.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { PresentationalItem } from './entities/presentational-item.entity';
-import { copyableItemFields, copyableValueFields } from './duplication';
+import { copyableItemFields, copyableRuleFields, copyableValueFields } from './duplication';
 import { Option } from './entities/option.entity';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
@@ -276,19 +277,33 @@ export class OptionGroupsService {
  *
  * `OptionSetsService.duplicate` now calls this rather than repeating it, so there
  * is one traversal again, and the per-row field lists live in `duplication.ts`.
+ *
+ * ## Why it returns an id map
+ *
+ * 🔴 **Rules point at rows by id, and a copy has new ids.** An `OptionRule`
+ * targets a group, option or value, and its conditions name options — all in the
+ * *source* set. Copying a rule verbatim aims it at another set's rows, which is
+ * worse than dropping it: it would silently govern the wrong document.
+ *
+ * Only this traversal knows which new row replaced which old one, so it reports
+ * that rather than making the caller re-derive it — a second traversal is how
+ * `groupLabel` and the presentational items were lost in the first place.
  */
 export async function copyOptionsInto(
   manager: EntityManager,
   fromGroupId: string,
   toGroupId: string,
-): Promise<void> {
+): Promise<Map<string, string>> {
   const options = await manager.find(Option, {
     where: { optionGroupId: fromGroupId, deletedAt: LIVE_SENTINEL_SQL as never },
     order: { sortOrder: 'ASC' },
   });
 
+  /** Source row id -> copied row id, for options and values alike. */
+  const idMap = new Map<string, string>();
+
   if (options.length === 0) {
-    return;
+    return idMap;
   }
 
   /**
@@ -343,10 +358,12 @@ export async function copyOptionsInto(
       }),
     );
 
+    idMap.set(option.id, optionCopy.id);
+
     const optionValues = valuesByOption.get(option.id) ?? [];
 
     if (optionValues.length > 0) {
-      await manager.save(
+      const copies = await manager.save(
         optionValues.map((value) =>
           manager.create(OptionValue, {
             optionId: optionCopy.id,
@@ -360,6 +377,19 @@ export async function copyOptionsInto(
           }),
         ),
       );
+
+      /*
+       * `manager.save` preserves input order, so index alignment is safe here —
+       * and it is asserted rather than trusted, because a silent misalignment
+       * would remap a rule onto the wrong value.
+       */
+      optionValues.forEach((value, index) => {
+        const copy = copies[index];
+
+        if (copy) {
+          idMap.set(value.id, copy.id);
+        }
+      });
     }
   }
 
@@ -385,4 +415,121 @@ export async function copyOptionsInto(
       ),
     );
   }
+
+  return idMap;
+}
+
+/**
+ * Copy an option set's rules, remapping every id they point at.
+ *
+ * 🔴 **`duplicate()` copied no rules at all** until Stage 17-1's audit. A
+ * merchant duplicating a configured set got one with every piece of its
+ * conditional logic silently removed — the third instance of this exact bug in
+ * this traversal, after `groupLabel` and the presentational items.
+ *
+ * ## Why a rule can be dropped, and why that is the safe direction
+ *
+ * A rule names rows by id: `targetId` points at a group, option or value, and
+ * every condition names an option. All of them are ids **in the source set**,
+ * and the copy created new rows. Three outcomes are possible per rule, and only
+ * one of them is acceptable:
+ *
+ * | If | Then |
+ * |---|---|
+ * | every id maps | copy the rule with the new ids |
+ * | some id does not map | **skip the rule entirely** |
+ * | copy the ids verbatim | ❌ a rule governing another set's rows |
+ *
+ * The third is worse than dropping, because it produces a rule that *works* and
+ * governs the wrong document. An id fails to map when its target was
+ * soft-deleted — the copy walks live rows only — which is exactly the case
+ * `disabledReason: TARGET_DELETED` already describes for the source.
+ *
+ * ⚠️ **A skipped rule is not silent.** It is copied disabled with that reason,
+ * so the merchant sees it in the copy and can repoint it, rather than
+ * discovering months later that a field never hides. Dropping the row would
+ * repeat the bug this function exists to fix, one level down.
+ */
+export async function copyRulesInto(
+  manager: EntityManager,
+  fromSetId: string,
+  toSetId: string,
+  idMap: ReadonlyMap<string, string>,
+): Promise<void> {
+  const rules = await manager.find(OptionRule, {
+    where: { optionSetId: fromSetId, deletedAt: LIVE_SENTINEL_SQL as never },
+    order: { sortOrder: 'ASC' },
+  });
+
+  if (rules.length === 0) {
+    return;
+  }
+
+  await manager.save(
+    rules.map((rule) => {
+      const remapped = remapConditions(rule.conditions, idMap);
+      const target = idMap.get(rule.targetId);
+      const intact = target !== undefined && remapped !== null;
+
+      return manager.create(OptionRule, {
+        optionSetId: toSetId,
+        /*
+         * A rule whose target did not survive keeps the source's id rather than
+         * inventing one: it is disabled, and the original id is what tells a
+         * merchant *which* target went missing.
+         */
+        targetId: target ?? rule.targetId,
+        conditions: remapped ?? rule.conditions,
+        ...copyableRuleFields(rule),
+        isEnabled: intact ? rule.isEnabled : false,
+        disabledReason: intact ? rule.disabledReason : RuleDisabledReason.TARGET_DELETED,
+      });
+    }),
+  );
+}
+
+/**
+ * Rewrite every `optionId` inside a stored condition list through the id map.
+ *
+ * Returns `null` when any id has no counterpart, because a partially remapped
+ * rule is the dangerous outcome — it would evaluate, against a mixture of two
+ * sets' rows.
+ *
+ * ⚠️ **Defensive about the stored shape.** `conditions` is a `json` column, so a
+ * row written by an older build, a migration, or a hand-edit may not match
+ * today's schema. Anything unrecognised is treated as unmappable rather than
+ * being reshaped on the way past — a copy is not the place to discover that.
+ */
+function remapConditions(
+  conditions: unknown,
+  idMap: ReadonlyMap<string, string>,
+): Record<string, unknown>[] | null {
+  if (!Array.isArray(conditions)) {
+    return null;
+  }
+
+  const remapped: Record<string, unknown>[] = [];
+
+  for (const condition of conditions) {
+    if (typeof condition !== 'object' || condition === null) {
+      return null;
+    }
+
+    const source = condition as Record<string, unknown>;
+    const optionId = source.optionId;
+
+    if (typeof optionId !== 'string') {
+      return null;
+    }
+
+    const mapped = idMap.get(optionId);
+
+    if (mapped === undefined) {
+      return null;
+    }
+
+    remapped.push({ ...source, optionId: mapped });
+  }
+
+  return remapped;
 }

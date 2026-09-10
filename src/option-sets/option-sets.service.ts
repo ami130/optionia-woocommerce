@@ -9,7 +9,7 @@ import { OptionSetStatus } from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
-import { copyOptionsInto } from './option-groups.service';
+import { copyOptionsInto, copyRulesInto } from './option-groups.service';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { assertVersionMatches } from './optimistic-lock';
 import { HardDeleteService, type PurgeResult } from './hard-delete.service';
@@ -307,6 +307,16 @@ export class OptionSetsService {
         order: { sortOrder: 'ASC' },
       });
 
+      /**
+       * Source row id -> copied row id, across groups, options and values.
+       *
+       * Rules target rows by id and name options by id, so a copied rule is
+       * meaningless without this. Built as the traversal goes rather than by a
+       * second pass, because two traversals of one tree is how `groupLabel` and
+       * the presentational items were lost.
+       */
+      const idMap = new Map<string, string>();
+
       for (const group of groups) {
         const groupCopy = await manager.save(
           manager.create(OptionGroup, {
@@ -334,8 +344,14 @@ export class OptionSetsService {
          *
          * One call, one traversal, one set of field lists in `duplication.ts`.
          */
-        await copyOptionsInto(manager, group.id, groupCopy.id);
+        idMap.set(group.id, groupCopy.id);
+
+        for (const [from, to] of await copyOptionsInto(manager, group.id, groupCopy.id)) {
+          idMap.set(from, to);
+        }
       }
+
+      await copyRulesInto(manager, source.id, created.id, idMap);
 
       return created;
     });

@@ -33,6 +33,30 @@ export const AUTHORING_LIMITS = {
   itemsPerGroup: 50,
   /** Values on one option. */
   valuesPerOption: 500,
+
+  /**
+   * Conditional rules in one option set.
+   *
+   * 🔴 **Missing until Stage 17-1's audit**, while `MAX_CONDITIONS_BYTES` bounded
+   * a single rule at 16 KB and nothing bounded how many rules a set could hold.
+   * Both halves are needed: the per-rule cap stops one rule being enormous, and
+   * this stops a thousand ordinary ones — and rules reach the published document
+   * every storefront caches, so the total is what matters there.
+   *
+   * Lower than `optionsPerGroup` deliberately. A set with more rules than options
+   * is not a configurator anyone can reason about, and M17.6's plain-language
+   * summaries have to be readable as a list. It is also the bound on the
+   * cycle detector's input at publish (M17.3): cycle detection over a rule graph
+   * is superlinear, and an unbounded graph is an unbounded publish.
+   *
+   * ⚠️ **Declared here in 17-1, enforced in 17-2** — there is no rule-creating
+   * route to enforce it on yet. Stated because a limit nothing calls is
+   * indistinguishable from a limit nobody wrote, and this file's own history is
+   * why: `assertWithinLimit` existed and was applied to authoring limits only,
+   * so per-plan `file_storage_mb` stayed metered and unenforced for a whole
+   * phase.
+   */
+  rulesPerSet: 200,
 } as const;
 
 /**

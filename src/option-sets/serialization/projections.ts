@@ -234,7 +234,15 @@ export interface PublishedRule {
   readonly target_id: string;
   readonly action: string;
   readonly match_type: string;
-  readonly conditions: Record<string, unknown>;
+  /**
+   * The conditions, as a flat list — never a nested tree (M17.1).
+   *
+   * ✏️ Typed as a bare `Record` until Stage 17-1, a placeholder written when
+   * `rules` was an always-empty array. Correcting it is not a wire break:
+   * `CONFIG-CONTRACT.md` documents `rules` as *"array … always empty in Phase
+   * 7"* and never published an inner shape, so no plugin can be reading one.
+   */
+  readonly conditions: readonly Record<string, unknown>[];
   readonly sort_order: number;
 }
 

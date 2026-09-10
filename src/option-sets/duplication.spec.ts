@@ -3,8 +3,10 @@ import { getMetadataArgsStorage } from 'typeorm';
 import {
   COPY_DECIDED_BY_CALLER,
   copyableItemFields,
+  copyableRuleFields,
   copyableValueFields,
 } from './duplication';
+import { OptionRule } from './entities/option-rule.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { PresentationalItem } from './entities/presentational-item.entity';
 
@@ -131,6 +133,59 @@ describe('copy completeness', () => {
     it('never copies identity or parentage', () => {
       expect(copied).not.toContain('id');
       expect(copied).not.toContain('optionGroupId');
+    });
+  });
+
+  /**
+   * 🔴 **The third instance of this bug, found by auditing Stage 17-1.**
+   *
+   * `duplicate()` copied groups, options, values and items — and **no rules at
+   * all**. A merchant duplicating a configured set got one with every piece of
+   * its conditional logic silently removed. Same shape as `groupLabel` and the
+   * presentational items before it: a new thing to copy, hand-written lists, and
+   * a green suite over real data loss.
+   */
+  describe('OptionRule', () => {
+    const copied = Object.keys(copyableRuleFields({} as OptionRule));
+
+    it('accounts for every column', () => {
+      const unaccounted = columnsOf(OptionRule).filter(
+        (column) =>
+          !copied.includes(column) &&
+          !(COPY_DECIDED_BY_CALLER as readonly string[]).includes(column),
+      );
+
+      expect(unaccounted).toEqual([]);
+    });
+
+    it('carries what the rule DOES — its target kind, action and connective', () => {
+      expect(copied).toEqual(expect.arrayContaining(['targetType', 'action', 'matchType']));
+    });
+
+    /**
+     * 🔴 The two fields that must NOT travel verbatim.
+     *
+     * `targetId` names a row in the source set and `conditions` names options in
+     * it. Copying either as-is produces a rule aimed at another set's rows —
+     * worse than dropping the rule, because it would evaluate and silently
+     * govern the wrong document. The caller remaps both through its id map, and
+     * their absence here is what forces it to.
+     */
+    it('never carries an id that points into the source set', () => {
+      expect(copied).not.toContain('targetId');
+      expect(copied).not.toContain('conditions');
+      expect(copied).not.toContain('id');
+      expect(copied).not.toContain('optionSetId');
+    });
+
+    /**
+     * A rule disabled because its target was deleted must not come back enabled
+     * in a copy — the target is still gone. The reason travels with the flag,
+     * because `isEnabled` alone cannot say whether the merchant or the system
+     * turned it off.
+     */
+    it('keeps a disabled rule disabled, with the reason it was disabled for', () => {
+      expect(copied).toEqual(expect.arrayContaining(['isEnabled', 'disabledReason']));
     });
   });
 });

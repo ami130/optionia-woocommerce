@@ -42,14 +42,24 @@ export class OptionRule extends SoftDeletableEntity {
   action: RuleAction;
 
   /**
-   * The condition tree.
+   * The conditions, as a flat list.
    *
-   * JSON because the shape is arbitrary — nested groups of comparisons against
-   * other options' values. Validated by a versioned Zod schema, and checked for
-   * cycles at publish time rather than discovered at customer request time.
+   * JSON because a list of heterogeneous comparisons has no useful relational
+   * shape. Validated by `ruleConditionsSchema`, and checked for cycles at publish
+   * time rather than discovered at customer request time.
+   *
+   * ✏️ **Typed `Record<string, unknown>` and described as "nested groups" until
+   * Stage 17-1.** Both were placeholders written before M17.1 was implemented,
+   * and both were wrong: M17.1 specifies `IF <conditions, matched ALL|ANY>` —
+   * **one list and one connective**, not a tree. The array type is what
+   * `ruleConditionsSchema` actually produces, and the mismatch surfaced as a
+   * compile error the first time a rule was copied.
+   *
+   * ⚠️ **`matchType` is the sibling column below, deliberately not a key in
+   * here.** One fact, one home.
    */
   @Column({ type: 'json' })
-  conditions: Record<string, unknown>;
+  conditions: Record<string, unknown>[];
 
   @Column({ type: 'varchar', length: 10, default: RuleMatchType.ALL })
   matchType: RuleMatchType;

@@ -1,6 +1,14 @@
-import { RuleMatchType, RuleOperator } from '../../common/database/enums';
+import {
+  BINARY_RULE_OPERATORS,
+  LIST_RULE_OPERATORS,
+  ORDERING_RULE_OPERATORS,
+  RuleMatchType,
+  RuleOperator,
+  UNARY_RULE_OPERATORS,
+} from '../../common/database/enums';
 import {
   MAX_CONDITIONS_PER_RULE,
+  MAX_OPERAND_LENGTH,
   MAX_OPERAND_LIST_LENGTH,
   ruleConditionSchema,
   ruleConditionsSchema,
@@ -130,6 +138,94 @@ describe('ruleConditionSchema', () => {
     });
   });
 
+  /*
+   * 🔴 An operator whose operand type is nonsense produces a comparison no
+   * evaluator can answer consistently in two languages.
+   *
+   * Measured before this split: `greater_than 'blue'`, `greater_than true`,
+   * `contains 42`, `contains false` and `in ['a', 1, true]` were all accepted.
+   */
+  describe('operands whose TYPE the operator cannot compare', () => {
+    it('refuses greater_than against text — there is no ordering to agree on', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'opt-1',
+        operator: RuleOperator.GREATER_THAN,
+        value: 'blue',
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('refuses less_than against a boolean', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'opt-1',
+        operator: RuleOperator.LESS_THAN,
+        value: true,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('refuses contains against a number — `contains 1` would match "10"', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'opt-1',
+        operator: RuleOperator.CONTAINS,
+        value: 42,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('refuses contains against a boolean — `contains false` would match "falsely modest"', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'opt-1',
+        operator: RuleOperator.CONTAINS,
+        value: false,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('still accepts equals against any scalar — equality is well defined in both languages', () => {
+      for (const value of ['blue', 42, true]) {
+        expect(
+          ruleConditionSchema.safeParse({
+            optionId: 'opt-1',
+            operator: RuleOperator.EQUALS,
+            value,
+          }).success,
+        ).toBe(true);
+      }
+    });
+
+    it('refuses a non-finite magnitude — NaN and Infinity compare with nothing', () => {
+      for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(
+          ruleConditionSchema.safeParse({
+            optionId: 'opt-1',
+            operator: RuleOperator.GREATER_THAN,
+            value,
+          }).success,
+        ).toBe(false);
+      }
+    });
+
+    /*
+     * `-0 === 0` in both languages, but they serialize differently: JSON.stringify
+     * gives `0`, PHP's json_encode gives `-0`. A stored `-0` is a value that
+     * round-trips into a different one.
+     */
+    it('refuses -0, which does not survive a round trip intact', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: 'opt-1',
+        operator: RuleOperator.LESS_THAN,
+        value: -0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('the option under test', () => {
     it('refuses a condition that names no option', () => {
       const result = ruleConditionSchema.safeParse({
@@ -146,6 +242,32 @@ describe('ruleConditionSchema', () => {
       });
 
       expect(result.success).toBe(false);
+    });
+
+    /*
+     * ⚠️ `.min(1)` alone accepted `'  '` — a guard bypassed by pressing space.
+     * Measured before `.trim()`: stored as `{"optionId":"  "}`, naming no option
+     * and matching nothing, on a rule that looked authored.
+     */
+    it('refuses a whitespace-only option id, which names no option', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: '   ',
+        operator: RuleOperator.IS_EMPTY,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it('trims a padded id rather than storing the padding', () => {
+      const result = ruleConditionSchema.safeParse({
+        optionId: '  opt-1  ',
+        operator: RuleOperator.IS_EMPTY,
+      });
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(result.data.optionId).toBe('opt-1');
     });
   });
 
@@ -167,32 +289,72 @@ describe('ruleConditionSchema', () => {
    * shipped complete behind a closed API gate and nothing could reach it.
    */
   it('accepts every operator RuleOperator declares', () => {
-    const unreachable = Object.values(RuleOperator).filter((operator) => {
-      const listOperand = operator === RuleOperator.IN || operator === RuleOperator.NOT_IN;
-      const unary =
-        operator === RuleOperator.IS_EMPTY || operator === RuleOperator.IS_NOT_EMPTY;
+    /*
+     * The operand is chosen from the same partitions the schema is built from,
+     * so this asks "can every operator be authored?" rather than "does every
+     * operator take a string?". Hard-coding a string here would have made the
+     * test fail when ordering operators became numeric — a correct change
+     * reported as a regression.
+     */
+    const operandFor = (operator: RuleOperator): Record<string, unknown> => {
+      if ((UNARY_RULE_OPERATORS as readonly RuleOperator[]).includes(operator)) return {};
+      if ((LIST_RULE_OPERATORS as readonly RuleOperator[]).includes(operator)) {
+        return { value: ['a'] };
+      }
+      if ((ORDERING_RULE_OPERATORS as readonly RuleOperator[]).includes(operator)) {
+        return { value: 10 };
+      }
 
-      return !ruleConditionSchema.safeParse({
-        optionId: 'opt-1',
-        operator,
-        ...(unary ? {} : { value: listOperand ? ['a'] : 'a' }),
-      }).success;
-    });
+      return { value: 'a' };
+    };
+
+    const unreachable = Object.values(RuleOperator).filter(
+      (operator) =>
+        !ruleConditionSchema.safeParse({ optionId: 'opt-1', operator, ...operandFor(operator) })
+          .success,
+    );
 
     expect(unreachable).toEqual([]);
+  });
+
+  /*
+   * 🔴 The partitions in `enums.ts` are the single source the schema is built
+   * from. If an operator were added to the enum but to no partition, it would be
+   * silently unauthorable while the enum advertised it — 16c's defect, where a
+   * complete `per_char` evaluator shipped behind a closed API gate.
+   */
+  it('sorts every operator into exactly one operand partition', () => {
+    const partitioned = [
+      ...UNARY_RULE_OPERATORS,
+      ...LIST_RULE_OPERATORS,
+      ...BINARY_RULE_OPERATORS,
+    ] as readonly RuleOperator[];
+
+    expect([...partitioned].sort()).toEqual([...Object.values(RuleOperator)].sort());
+    expect(new Set(partitioned).size).toBe(partitioned.length);
   });
 });
 
 describe('ruleConditionsSchema', () => {
   const one = { optionId: 'opt-1', operator: RuleOperator.IS_EMPTY } as const;
 
-  it('accepts a rule with one condition and a connective', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: RuleMatchType.ALL,
-      conditions: [one],
-    });
+  it('accepts a flat list of conditions', () => {
+    expect(ruleConditionsSchema.safeParse([one]).success).toBe(true);
+  });
 
-    expect(result.success).toBe(true);
+  /*
+   * 🔴 `matchType` is a COLUMN on OptionRule and a SIBLING of `conditions` in
+   * `PublishedRule`, which is frozen at schema_version 1.
+   *
+   * An earlier version of this schema nested it inside the JSON. That would have
+   * given one fact two homes — a column and a key, free to disagree — and
+   * contradicted a wire contract that cannot change. This test is what stops it
+   * coming back.
+   */
+  it('does not carry matchType: that is a column, not part of the JSON', () => {
+    expect(ruleConditionsSchema.safeParse({ matchType: RuleMatchType.ALL, conditions: [one] }).success).toBe(
+      false,
+    );
   });
 
   /*
@@ -201,46 +363,54 @@ describe('ruleConditionsSchema', () => {
    * no condition a merchant could edit to get it back.
    */
   it('refuses a rule with no conditions, because it would always fire', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: RuleMatchType.ALL,
-      conditions: [],
-    });
-
-    expect(result.success).toBe(false);
+    expect(ruleConditionsSchema.safeParse([]).success).toBe(false);
   });
 
   it('refuses more conditions than a plain-language summary can carry', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: RuleMatchType.ANY,
-      conditions: Array.from({ length: MAX_CONDITIONS_PER_RULE + 1 }, () => one),
-    });
+    const tooMany = Array.from({ length: MAX_CONDITIONS_PER_RULE + 1 }, () => one);
 
-    expect(result.success).toBe(false);
+    expect(ruleConditionsSchema.safeParse(tooMany).success).toBe(false);
   });
 
-  it('refuses a missing connective — ALL and ANY are not interchangeable', () => {
-    const result = ruleConditionsSchema.safeParse({ conditions: [one] });
+  /*
+   * 🔴 The aggregate bound, and the reason it exists.
+   *
+   * Every per-item limit here is satisfied by 20 conditions x 50 operands x
+   * 5,000 characters — and that payload measured **4.77 MB**, accepted, before
+   * `MAX_CONDITIONS_BYTES` existed. `SelectionResolver::ABSOLUTE_MAX_LENGTH`
+   * learned the same lesson one phase earlier: a per-item cap is not a bound on
+   * a request.
+   */
+  describe('the aggregate byte budget', () => {
+    const fatCondition = {
+      optionId: 'opt-1',
+      operator: RuleOperator.IN,
+      value: Array.from({ length: MAX_OPERAND_LIST_LENGTH }, () => 'x'.repeat(MAX_OPERAND_LENGTH)),
+    };
 
-    expect(result.success).toBe(false);
-  });
+    it('refuses a rule that satisfies every per-item limit and is megabytes long', () => {
+      const payload = Array.from({ length: MAX_CONDITIONS_PER_RULE }, () => fatCondition);
 
-  it('refuses an unknown connective', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: 'none_of',
-      conditions: [one],
+      /* The premise: each part is individually legal. */
+      expect(ruleConditionSchema.safeParse(fatCondition).success).toBe(true);
+      expect(payload.length).toBeLessThanOrEqual(MAX_CONDITIONS_PER_RULE);
+
+      expect(ruleConditionsSchema.safeParse(payload).success).toBe(false);
     });
 
-    expect(result.success).toBe(false);
-  });
-
-  it('refuses an unknown top-level field', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: RuleMatchType.ALL,
-      conditions: [one],
-      stopOnFirstMatch: true,
+    it('refuses even ONE condition that is over the budget by itself', () => {
+      expect(ruleConditionsSchema.safeParse([fatCondition]).success).toBe(false);
     });
 
-    expect(result.success).toBe(false);
+    it('accepts a realistic rule comfortably — the budget does not bite normal use', () => {
+      const realistic = Array.from({ length: MAX_CONDITIONS_PER_RULE }, (_, i) => ({
+        optionId: `0199b8c2-0000-7000-8000-00000000${String(i).padStart(4, '0')}`,
+        operator: RuleOperator.EQUALS,
+        value: 'Midnight Blue Anodised Aluminium',
+      }));
+
+      expect(ruleConditionsSchema.safeParse(realistic).success).toBe(true);
+    });
   });
 
   /*
@@ -249,11 +419,6 @@ describe('ruleConditionsSchema', () => {
    * so that adding nesting later is a deliberate act rather than an accident.
    */
   it('refuses a nested condition group', () => {
-    const result = ruleConditionsSchema.safeParse({
-      matchType: RuleMatchType.ALL,
-      conditions: [{ matchType: RuleMatchType.ANY, conditions: [one] }],
-    });
-
-    expect(result.success).toBe(false);
+    expect(ruleConditionsSchema.safeParse([{ conditions: [one] }]).success).toBe(false);
   });
 });
