@@ -1,5 +1,5 @@
 {
-  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included \u2014 the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
   "version": 1,
   "rule_case_count": 20,
   "rule_cases": [
@@ -17,7 +17,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -39,7 +40,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -65,7 +67,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -78,7 +81,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {},
@@ -104,7 +108,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -117,7 +122,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {},
@@ -143,7 +149,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -156,7 +163,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {},
@@ -182,7 +190,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000c",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -195,7 +204,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {
@@ -230,7 +240,8 @@
           ],
           "action_value": {
             "amount_minor": 500
-          }
+          },
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -259,7 +270,8 @@
           ],
           "action_value": {
             "value_key": "large"
-          }
+          },
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -285,7 +297,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -308,7 +321,8 @@
               "operator": "equals",
               "value": 2
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -337,7 +351,8 @@
               "operator": "equals",
               "value": "0"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -362,7 +377,8 @@
               "operator": "not_equals",
               "value": "red"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -385,7 +401,8 @@
               "operator": "greater_than",
               "value": "apple"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -413,7 +430,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000c",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -442,7 +460,8 @@
               "operator": "starts_with",
               "value": "x"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -461,7 +480,8 @@
           "target_id": "0199b8c2-0000-7000-8000-00000000000a",
           "action": "hide",
           "match_type": "all",
-          "conditions": []
+          "conditions": [],
+          "sort_order": 10
         }
       ],
       "answers": {},
@@ -483,7 +503,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000a",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         }
       ],
       "answers": {
@@ -511,7 +532,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000a",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -524,7 +546,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {
@@ -557,7 +580,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r2",
@@ -570,7 +594,8 @@
               "option_id": "0199b8c2-0000-7000-8000-00000000000b",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         }
       ],
       "answers": {
@@ -601,7 +626,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000000",
               "operator": "is_not_empty"
             }
-          ]
+          ],
+          "sort_order": 10
         },
         {
           "id": "r1",
@@ -614,7 +640,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000001",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 20
         },
         {
           "id": "r2",
@@ -627,7 +654,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000002",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 30
         },
         {
           "id": "r3",
@@ -640,7 +668,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000003",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 40
         },
         {
           "id": "r4",
@@ -653,7 +682,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000004",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 50
         },
         {
           "id": "r5",
@@ -666,7 +696,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000005",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 60
         },
         {
           "id": "r6",
@@ -679,7 +710,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000006",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 70
         },
         {
           "id": "r7",
@@ -692,7 +724,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000007",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 80
         },
         {
           "id": "r8",
@@ -705,7 +738,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000008",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 90
         },
         {
           "id": "r9",
@@ -718,7 +752,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000009",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 100
         },
         {
           "id": "r10",
@@ -731,7 +766,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000010",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 110
         },
         {
           "id": "r11",
@@ -744,7 +780,8 @@
               "option_id": "0199b8c2-0000-7000-8000-000000000011",
               "operator": "is_empty"
             }
-          ]
+          ],
+          "sort_order": 120
         }
       ],
       "answers": {
