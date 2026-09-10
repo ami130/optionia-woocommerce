@@ -18670,8 +18670,35 @@ been answered two phases earlier, 16e's decision was made in Phase 7.
 |---|---|---|
 | `PublishedRule` interface | **Exists** in `projections.ts` — `id`, `target_type`, `target_id`, `action`, `match_type`, `conditions`, `sort_order` | The wire shape is already designed. Phase 17 fills it, and does not get to redesign it lightly |
 | `rules: []` in the document | **Shipped**, hardcoded empty in `option-set.serializer.ts:214` | Every connected plugin already parses the key. Filling it is **additive**, not a schema break — exactly as `CONFIG-CONTRACT.md` §Additive planned |
-| `rules` database table | **Does not exist** | A migration is the first code |
-| Rule CRUD, evaluator, UI | **None, in any repository** | Genuinely greenfield |
+| `option_rules` table | 🔴 **EXISTS** — in the *initial* schema, plus `RuleDisabledReason` | ✏️ **The analysis said "does not exist" and was wrong.** No migration needed |
+| `OptionRule` entity | 🔴 **EXISTS**, and is more complete than M17.1 describes — polymorphic `targetId` deliberately not an FK, `isEnabled`, `disabledReason` | Phase 17 authors *against* this shape rather than designing one |
+| `RuleTargetType`, `RuleAction`, `RuleMatchType` | 🔴 **EXIST** — all three targets, **all six** M17.1 actions, both match types | Nothing to add |
+| Cascade handling of rules | 🔴 **EXISTS** — deleting a target sets `isEnabled: false`, `disabledReason: TARGET_DELETED`; rules block a hard delete | The "surfaced to the merchant" promise is already kept in the data layer |
+| `RuleOperator` (the nine condition operators) | **ABSENT** | The one enum 17-1 adds |
+| Rule CRUD, service, controller, DTOs, Zod schema | **None** | 17-1 and 17-2 |
+| Evaluator, either language | **None** | 17-4, 17-6 |
+
+⚠️ **Correction, 2026-09-10, before writing any 17-1 code.** The pre-flight
+analysis above recorded *"`rules` database table — does not exist"* and *"Rule
+CRUD, evaluator, UI — none, in any repository; genuinely greenfield"*. **The
+first is false and the second is two-thirds false.** The table, the entity, three
+enums covering every action M17.1 lists, and the cascade behaviour that disables
+orphaned rules all shipped in Phase 5–7 and have been carrying their own tests
+since.
+
+**The analysis grepped for `rule|conditional` across `src` and read the file
+list, which returned migrations and auth files and looked empty of rule
+infrastructure.** It never looked in `entities/`. Same error as F2's scope
+defect two days earlier — *a finding measured only where it was noticed* — and
+the same fix: the corrected question is not *"does a rules table exist?"* but
+*"what does each layer already have?"*, asked per layer.
+
+**What this changes.** Stage 17-1 shrinks to `RuleOperator` plus the `.strict()`
+condition schemas, and gains an obligation the plan did not have: **the existing
+shape is the contract**. `targetId` is polymorphic and deliberately not an FK;
+`disabledReason` exists so a merchant can be told *which* target vanished. A
+Phase 17 that redesigned those would be discarding decisions already made and
+tested.
 | Plugin reading rules | **None.** Every `rules` match in plugin source is *validation* rules or `flush_rewrite_rules()` | M17.4's rejection is new code, not an edit |
 | `SelectionResolver::is_hidden()` | Exists — but keys on the **`hidden` presentation**, "who supplies the value" | 🔴 **Not** rule-visibility. Reusing this name for rule-hidden options would conflate two unrelated ideas |
 | Shared fixture mechanism | `pricing-fixtures.json` + `assignment-wire.json`, hash-pinned in both repos | M17.2 reuses it. A third fixture, same gate |
@@ -18780,7 +18807,7 @@ shipped fails closed (ADR-043).
 | # | Stage | Repo | Closes |
 |---|---|---|---|
 | **17-0** | **Decide F1, F3, F4** — three ADRs, no code | — | F1, F3, F4 |
-| 17-1 | `rules` table + entity + migration, `conditions` `.strict()` | backend | F6 |
+| 17-1 | `RuleOperator` enum + `.strict()` condition schemas (**table and entity already exist**) | backend | F6 |
 | 17-2 | Rule CRUD, tenant-scoped, negative test per route | backend | — |
 | 17-3 | Publish-time cycle detection, actionable message | backend | F2 (half) |
 | 17-4 | TS evaluator + **shared fixture** with intermediate passes | backend | F7 |
