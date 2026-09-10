@@ -341,21 +341,41 @@ export const patternsAreSafe: PublishValidator = {
  * rules, and rebuilding this for each would walk the whole tree two hundred times
  * to answer the same question.
  *
- * ⚠️ **Disabled rows are included deliberately.** A rule targeting a disabled
- * option is not *broken* — the merchant may be about to re-enable it, and the
- * cascade already handles the case where the row is genuinely gone. The question
- * here is only "is this id in this set", which disabling does not change.
+ * 🔴 **Two answers, because "in the set" and "in the document" are different
+ * questions and conflating them hid a defect.**
+ *
+ * `OptionSetSerializer` drops a disabled thing **entirely** — its own docblock
+ * says so: *"a disabled thing is absent from the document entirely, so the flag
+ * has nothing left to say."* Groups, options and values are each filtered on
+ * `isEnabled` on the way out.
+ *
+ * So a rule may name an id that is genuinely in the set and genuinely **absent
+ * from what publishes**. Measured before this split: such a rule published with
+ * a 201 and no finding at all — the same "publishes and silently governs
+ * nothing" defect this validator exists to prevent, reached through a door it
+ * was not watching. Nothing else catches it either: `CascadeService` fires on
+ * **delete**, never on disable.
+ *
+ * `groups` / `options` / `values` answer *"is it in the set"*; the `published`
+ * sets answer *"will it be in the document"*.
  */
 function idsIn(tree: OptionSetTree): {
   groups: Set<string>;
   options: Set<string>;
   values: Set<string>;
+  /** The same three, narrowed to what a publish will actually emit. */
+  published: { groups: Set<string>; options: Set<string>; values: Set<string> };
   /** Option ids reachable from a target, whatever kind that target names. */
   optionsUnder: Map<string, readonly string[]>;
 } {
   const groups = new Set<string>();
   const options = new Set<string>();
   const values = new Set<string>();
+  const published = {
+    groups: new Set<string>(),
+    options: new Set<string>(),
+    values: new Set<string>(),
+  };
   const optionsUnder = new Map<string, readonly string[]>();
 
   tree.groups.forEach(({ group, options: children }) => {
@@ -365,20 +385,38 @@ function idsIn(tree: OptionSetTree): {
       children.map(({ option }) => option.id),
     );
 
+    if (group.isEnabled) {
+      published.groups.add(group.id);
+    }
+
     children.forEach(({ option, values: optionValues }) => {
       options.add(option.id);
       /* An option target affects exactly itself. */
       optionsUnder.set(option.id, [option.id]);
 
+      /*
+       * An option inside a disabled group does not publish either, however
+       * enabled it is itself — the serializer drops the whole group.
+       */
+      const optionPublishes = group.isEnabled && option.isEnabled;
+
+      if (optionPublishes) {
+        published.options.add(option.id);
+      }
+
       optionValues.forEach((value) => {
         values.add(value.id);
         /* A value target affects the option that owns it. */
         optionsUnder.set(value.id, [option.id]);
+
+        if (optionPublishes && value.isEnabled) {
+          published.values.add(value.id);
+        }
       });
     });
   });
 
-  return { groups, options, values, optionsUnder };
+  return { groups, options, values, published, optionsUnder };
 }
 
 /**
@@ -415,7 +453,7 @@ function idsIn(tree: OptionSetTree): {
 export const ruleTargetsAreInThisSet: PublishValidator = {
   name: 'rule-targets-are-in-this-set',
   validate({ tree, rules }) {
-    const { groups, options, values } = idsIn(tree);
+    const { groups, options, values, published } = idsIn(tree);
     const findings: PublishFinding[] = [];
 
     /* Owned by `rulesHaveTargets`, which warns rather than blocks. */
@@ -465,9 +503,82 @@ export const ruleTargetsAreInThisSet: PublishValidator = {
       });
     });
 
-    return findings;
+    return [
+      ...findings,
+      ...targetsThatWillNotPublish(rules, published, (rule) =>
+        holds(rule.targetType, rule.targetId),
+      ),
+    ];
   },
 };
+
+/**
+ * Rules naming something real that this publish will **not emit**.
+ *
+ * 🔴 **The gap between "in the set" and "in the document".** A disabled group,
+ * option or value is dropped by the serializer entirely, so a rule pointing at
+ * one publishes and then finds nothing to act on. Measured before this check:
+ * a 201 with **no finding at all** — the same defect `RULE_TARGET_NOT_IN_SET`
+ * exists to prevent, one state earlier.
+ *
+ * Nothing else catches it. `CascadeService` reacts to a **delete**, never to a
+ * disable, so `TARGET_DELETED` is never recorded and the merchant is never told.
+ *
+ * ⚠️ **A warning, not a blocker, and the difference from a cross-set target is
+ * real.** Disabling is reversible and routinely deliberate mid-edit — a merchant
+ * turning an option off, publishing, and turning it back on is ordinary work,
+ * and blocking it would make the natural order of work an error. A cross-set id
+ * is never going to resolve; a disabled one resolves the moment it is re-enabled.
+ *
+ * The precedent is `rulesHaveTargets`, which warns for the same reason: the rule
+ * cannot misbehave, it simply will not fire, and the merchant needs to know
+ * before a customer does.
+ *
+ * ⚠️ **Disabled rules are skipped.** A rule that is off, pointing at something
+ * that is off, is not a surprise waiting to happen.
+ */
+function targetsThatWillNotPublish(
+  rules: PublishContext['rules'],
+  published: { groups: Set<string>; options: Set<string>; values: Set<string> },
+  isInThisSet: (rule: PublishContext['rules'][number]) => boolean,
+): readonly PublishFinding[] {
+  const willPublish = (targetType: string, id: string): boolean => {
+    switch (targetType) {
+      case 'group':
+        return published.groups.has(id);
+      case 'option':
+        return published.options.has(id);
+      case 'value':
+        return published.values.has(id);
+      default:
+        /* An unknown type is already a blocker above; say nothing twice. */
+        return true;
+    }
+  };
+
+  return rules
+    .filter(
+      (rule) =>
+        rule.isEnabled &&
+        rule.disabledReason !== 'target_deleted' &&
+        /*
+         * Only for a target that IS in the set. One that is not is already a
+         * blocker, and a second finding about the same rule would bury the one
+         * that actually stops the publish.
+         */
+        isInThisSet(rule) &&
+        !willPublish(rule.targetType, rule.targetId),
+    )
+    .map((rule) => ({
+      severity: PublishSeverity.WARNING,
+      code: 'RULE_TARGET_NOT_PUBLISHED',
+      subject: `rule:${rule.id}`,
+      message:
+        `A rule acts on a ${rule.targetType} that is disabled, so it is left out of ` +
+        'the published configuration and the rule will not fire. Re-enable it, or ' +
+        'remove the rule.',
+    }));
+}
 
 /**
  * The options a condition list reads.

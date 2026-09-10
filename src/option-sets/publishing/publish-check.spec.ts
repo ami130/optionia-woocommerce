@@ -571,6 +571,133 @@ describe('pre-publish checks', () => {
     });
   });
 
+  /**
+   * 🔴 **"In the set" and "in the document" are different questions.**
+   *
+   * `OptionSetSerializer` drops a disabled thing entirely — its docblock says
+   * *"a disabled thing is absent from the document entirely"*. So a rule can
+   * name something genuinely in the set and genuinely absent from what
+   * publishes. Measured before this check: a 201 with **no finding at all**.
+   *
+   * Nothing else catches it: `CascadeService` fires on delete, never on disable.
+   */
+  describe('rule targets that will not be published', () => {
+    it('warns when the target option is disabled', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.options[0]!.option.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetId: 'option-2' })] }),
+      );
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.code).toBe('RULE_TARGET_NOT_PUBLISHED');
+      expect(findings[0]?.severity).toBe(PublishSeverity.WARNING);
+    });
+
+    /**
+     * An option inside a disabled group does not publish either, however enabled
+     * it is itself — the serializer drops the whole group.
+     */
+    it('warns when the target sits inside a disabled group', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.group.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetId: 'option-2' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_PUBLISHED']);
+    });
+
+    it('warns for a disabled group target', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.group.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetType: 'group', targetId: 'group-2' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_PUBLISHED']);
+    });
+
+    it('warns for a disabled value target', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.options[0]!.values[0]!.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetType: 'value', targetId: 'value-2' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_PUBLISHED']);
+    });
+
+    /**
+     * ⚠️ **A warning, not a blocker, and the difference from a cross-set target
+     * is real.** Disabling is reversible and routinely deliberate mid-edit;
+     * blocking would make "turn it off, publish, turn it back on" an error.
+     */
+    it('does not stop the publish', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.options[0]!.option.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetId: 'option-2' })] }),
+      );
+
+      expect(hasBlockers(findings)).toBe(false);
+    });
+
+    it('says nothing when everything the rule names is enabled', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree: twoGroupTree(), rules: [rule({ targetId: 'option-2' })] }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /**
+     * 🔴 A cross-set target is absent from both sets, so it would trip this
+     * warning too — and a second finding about the same rule would bury the
+     * blocker that actually stops the publish.
+     */
+    it('reports a cross-set target once, as the blocker', () => {
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ rules: [rule({ targetId: 'somewhere-else' })] }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_TARGET_NOT_IN_SET']);
+    });
+
+    it('says nothing about a rule the merchant disabled', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.options[0]!.option.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({ tree, rules: [rule({ targetId: 'option-2', isEnabled: false })] }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /** `rulesHaveTargets` owns the cascade-disabled case, and warns about it. */
+    it('leaves a cascade-disabled rule to the validator that owns it', () => {
+      const tree = twoGroupTree();
+      tree.groups[1]!.options[0]!.option.isEnabled = false;
+
+      const findings = ruleTargetsAreInThisSet.validate(
+        context({
+          tree,
+          rules: [
+            rule({ targetId: 'option-2', isEnabled: false, disabledReason: 'target_deleted' }),
+          ],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+  });
+
   describe('rules that form a cycle', () => {
     it('accepts a single rule', () => {
       expect(rulesHaveNoCycles.validate(context({ rules: [rule()] }))).toEqual([]);
