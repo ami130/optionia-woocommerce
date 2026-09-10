@@ -415,7 +415,19 @@ function idsIn(tree: OptionSetTree): {
 
       optionValues.forEach((value) => {
         values.add(value.id);
-        /* A value target affects the option that owns it. */
+
+        /*
+         * A value target *reaches* the option that owns it, which is what the
+         * cycle detector needs: `set_default` writes that option's answer, and
+         * `show`/`hide` change what can be picked for it, so a rule reading that
+         * option is genuinely downstream of this one.
+         *
+         * ⚠️ **This is NOT the map the evaluator clears answers through.** That
+         * one asks the narrower *"whose answer disappears?"*, and for a value the
+         * answer is nobody's — see M17.8's audit and `index_containment()` in the
+         * plugin. Two questions, deliberately two maps: conflating them once
+         * already deleted a customer's answer.
+         */
         optionsUnder.set(value.id, [option.id]);
 
         if (optionPublishes && value.isEnabled) {

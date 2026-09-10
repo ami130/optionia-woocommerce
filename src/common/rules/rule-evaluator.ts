@@ -369,6 +369,19 @@ function resolve(
         break;
       }
       case 'set_default': {
+        /*
+         * 📌 **Resolved here and read by nothing, until 17-9.**
+         *
+         * A default is a rendering decision — which value a form shows before
+         * the customer touches it — and the renderer is 17-9's subject. The
+         * resolver deliberately does not apply it: substituting a default for an
+         * answer the customer never gave would charge them for a choice they did
+         * not make, the shape ADR-051 forbids for hidden options.
+         *
+         * ⚠️ **DELETE THIS NOTE IN 17-9.** If nothing reads it by the end of
+         * Phase 17, this is dead output and the action should be reconsidered
+         * rather than left computed.
+         */
         const key = rule.actionValue?.valueKey;
 
         if (typeof key === 'string' && key !== '') {

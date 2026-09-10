@@ -30,6 +30,8 @@ interface FixtureCase {
   readonly expect_passes: number;
   readonly expect_refused: boolean;
   readonly expect_states: Record<string, Record<string, unknown>>;
+  /** Target id -> the options whose answers it clears. Identity when absent. */
+  readonly options_under?: Record<string, readonly string[]>;
 }
 
 interface Fixture {
@@ -105,7 +107,19 @@ describe('shared rule fixture', () => {
     });
     Object.keys(testCase.answers).forEach((id) => optionIds.add(id));
 
-    const optionsUnder = new Map([...optionIds].map((id) => [id, [id]] as const));
+    /*
+     * 🔴 **A case may declare the map, and one must whenever it is not the
+     * identity.**
+     *
+     * ✏️ **Added in M17.8's audit.** Synthesising `id => [id]` is only correct
+     * when every target is an option — it cannot express a `group` target (one
+     * target, several answers) or a `value` target (one target, **no** answer),
+     * so such a case would have been handed a map the real code never builds and
+     * would have passed while production was wrong.
+     */
+    const optionsUnder = testCase.options_under
+      ? new Map(Object.entries(testCase.options_under))
+      : new Map([...optionIds].map((id) => [id, [id]] as const));
 
     const outcome = evaluateRules(
       testCase.rules.map(toRule),
