@@ -19197,6 +19197,113 @@ and rules themselves.
 ⚠️ **Safe verbatim, unlike `targetId` and `conditions`**, because it carries no
 ids — an amount and a value key mean the same thing in any set.
 
+#### 🔴 17-4 audit — the evaluator refused rules the publish gate accepts
+
+Five live probes against the evaluator. **The worst finding was not a gap but a
+contradiction**: two halves of Phase 17 disagreeing, with the newer half wrong.
+
+##### 🔴 H1 — An ordinary rule made the product unbuyable
+
+Measured: *"hide A when A is answered"* — the rule **17-3's audit verified as
+legitimate and publishing with a 201** — reached the pass cap and **refused**.
+Under ADR-050 a refusal means the line cannot be added to a cart.
+
+```text
+pass 1  A answered -> rule fires -> A cleared (ADR-051)
+pass 2  A cleared  -> rule stops firing -> A restored
+pass 3  identical to pass 1, for ever
+```
+
+🔴 **Not confined to self-reference.** Any rule whose **target contains** the
+option its condition reads had the same shape. Proven by isolating it: a group
+hiding the option its own condition tested **refused**, while the same rule over
+a group *not* containing that option settled in two passes. So *"hide the
+Engraving group when Engraving Text is filled"* was unbuyable.
+
+🔴 **M17.3 has a guard for exactly this and M17.4 had no counterpart.** The
+cycle detector drops the self-edge before its search, on the stated grounds that
+a one-step rule is legitimate. I wrote that guard, then built an evaluator that
+refused what it permits.
+
+**Fixed by making hides accumulate.** A target hidden by an earlier pass stays
+hidden, so the fixed point is **monotone** — each pass can only add, and the loop
+must terminate. It is also what a customer sees: a field that vanished does not
+reappear because vanishing removed the reason it vanished.
+
+⚠️ **The cap is still reachable, by depth rather than oscillation** — a cascade
+longer than the limit, which is a real shape and now a fixture case.
+
+##### 🔴 Two mutants survived because the fix had TWO mechanisms
+
+Removing the accumulated-hide seeding changed nothing. Removing the clear-from-
+accumulated-set changed nothing either. **Each hid the other's absence** — and
+neither was individually load-bearing, so neither was individually tested.
+
+Only the third mutation, removing the block that re-adds earlier hides, failed
+anything. The redundant half was deleted: **two mechanisms for one fact is the
+divergence shape this codebase keeps paying for**, and mutation is what exposed
+that it was two rather than one.
+
+##### 🔴 H3 — The fixture barely proved the middle it exists for
+
+Its whole stated purpose is 16b's lesson — *prove the middle, not just the ends*.
+Measured before the fix:
+
+| `expect_passes` | cases |
+|---|---|
+| 1 | **15** |
+| 2 | 1 |
+| **refusal expected** | **0** |
+
+One cascade case and **zero cap cases**. The cap is ADR-050's central guarantee,
+and it was tested only in the unit spec — so **M17.6's PHP evaluator could cap
+differently and the shared fixture would not notice**, which is the one thing a
+shared fixture exists to prevent.
+
+Now **20 cases**, spanning 1, 2, 3 and 10 passes, with a refusal case asserting
+**no partial state**.
+
+⚠️ **One expectation was wrong and the fixture caught it.** I predicted three
+passes for a case that settles in two; both rules resolve in the same pass, so
+the require lands earlier than I reasoned. Corrected to what was **measured**,
+not to what I assumed — a fixture asserting a number I guessed would pin the
+wrong behaviour into two languages.
+
+##### 🔴 H2 — `actionValue` cannot reach a storefront
+
+The payload reaches the migration, entity, DTOs, service and evaluator — and
+**not `PublishedRule`**. A merchant can author *"set price to 5.00"*, it
+validates, stores and publishes, and the document the plugin receives cannot
+carry the amount.
+
+**G1 repeated one layer out**: I fixed the shape at the layer I was looking at
+and not at the wire. Left to **17-5**, which is where `rules` stops being an
+empty array — a field here with no writer would be a promise — and recorded **on
+the interface itself**, because that is where someone implementing 17-5 looks.
+
+#### 🔴 The migration was written and never run — 166 e2e failures
+
+`npm run check` does **not** run migrations; CI runs them as a separate step
+before the tests. So a stage that adds a column passes lint, typecheck and all
+977 unit tests while every e2e request touching that table answers **500**.
+
+Measured: **166 failures across 8 suites**, all `ER_BAD_FIELD_ERROR` —
+*`Unknown column 'OptionRule.actionValue'`*. The entity declared the column, the
+database did not have it, and nothing between them noticed.
+
+⚠️ **I reported "977 unit tests pass" before the e2e half finished**, which was
+true and gave a misleading impression of completeness. The unit suite cannot see
+this class of defect **at all**: it never opens a connection. A schema change is
+only proven by the half of the suite that talks to a database.
+
+**Verified up, down and up again** — CI runs `migration:run`,
+`migration:revert`, `migration:run`, and an irreversible migration is a
+production incident waiting for a bad deploy.
+
+**The rule this establishes: a stage that adds a column runs the migration
+before it reports.** Not because CI would miss it — CI would have caught this —
+but because "the tests pass" is a claim about the tests that ran.
+
 #### 🟡 G6 — `bound_cases` is the one category no gate counts
 
 Nine of ten pricing categories have their declared count verified.
