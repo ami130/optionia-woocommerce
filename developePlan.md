@@ -40,8 +40,12 @@ PLUGIN    optioniaWooCommercePlugin     Phases 3, 8-16 built ✅  1371 tests, 26
                                         15 option types, convention-resolved templates
 DASHBOARD optioniaWooCommerceFrontend   Phase 13 built      ✅  Next.js + shadcn
                                         auth · dashboard · option-sets · stores · connect
-                                        🔴 STILL one commit + no CI — F1/F2 below, open
-                                           since 2026-09-02 and marked "fix now" then
+                                        463 tests · CI added 2026-09-10 (F1)
+
+⚠️ All three repositories were uncommitted until 2026-09-10 — plugin and backend
+   both last committed 2026-08-28, the end of Phase 8. 411 files, ~99k insertions,
+   now committed on `develop` in each. See F2 below: the finding named only the
+   dashboard and the defect was project-wide.
 WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
                                                                 HPOS on · block cart/checkout
 ```
@@ -105,7 +109,7 @@ they fire only when a person runs `bash bin/check.sh` here. See F5 above.
 | # | Finding | Severity | Where it belongs |
 |---|---|---|---|
 | ~~F1~~ | ~~**Frontend has 10 test files and NO CI**~~ — ✅ **CLOSED 2026-09-10.** `.github/workflows/ci.yml` mirrors the backend: Node 20 and 24, lint, typecheck, test, `npm audit --omit=dev`. It had grown to **21 files and 463 assertions** by the time it was fixed. Every gate verified passing locally first, so it does not land red | ~~fix now~~ | done |
-| ~~F2~~ | ~~**Frontend git history is one commit**~~ — ✅ **CLOSED 2026-09-10.** 96 files, 24,633 insertions, committed to a new `develop` branch matching the other two repositories. Secret-scanned before staging: only `.env.local.example` is tracked, holding one `NEXT_PUBLIC_` localhost URL | ~~fix now~~ | done |
+| ~~F2~~ | ~~**Frontend git history is one commit**~~ — ✅ **CLOSED 2026-09-10, and it was three times larger than this finding said.** F2 named the dashboard. **All three repositories were uncommitted**: the plugin and the backend had both stopped at 2026-08-28, the end of Phase 8, so Phases 9–16 existed only in the working tree of every repository at once. Committed: dashboard 96 files, plugin 176, backend 139 — **411 files, ~99,000 insertions**. Each verified before staging by its own gates, including both secret scanners | ~~fix now~~ | done |
 | F5 | **The five cross-repo gates in `bin/` run in no CI workflow.** They compare the three repositories against each other — type parity, capability parity, fixture hashes, wire keys, and whether `ARCHITECTURE.md` still describes the code. Each sub-repository's workflow checks out only itself and cannot see them, so they run only when a person types `bash bin/check.sh` here. **Found 2026-09-10 by running them: one was failing** — `ARCHITECTURE.md` claimed 60 plugin PHP files against an actual 84 | **real** | [M30.11](#m3011--the-harness-itself-flakiness-and-gates-that-read-the-wrong-thing) |
 | ~~F3~~ | ~~**`Engine/Types/` and `Engine/Contracts/` are empty; one option template exists** (`radio.php`)~~ — ✅ **RESOLVED by Phase 14.** There are now **15** templates. `Engine/Types/` and `Engine/Contracts/` are still empty, and that turned out to be the right answer rather than missing work: a type is a template plus a registry entry, resolved by convention (`'options/' . sanitize_key($type) . '.php'`), so adding one needs no PHP class and no renderer edit. The empty directories are the design working | ~~expected~~ | done |
 | F4 | **Conditional-visibility rejection not implemented** — `SelectionResolver` says *"per-type rules…"* and defers | expected | [M17.4](#phase-17--conditional-logic-engine) — and see the carry-forward rules above; this is the one the Shopify app never did |
@@ -114,11 +118,24 @@ F1 and F2 are hygiene, not design, but they compound: an uncommitted dashboard w
 un-run tests is the one place a regression could enter unnoticed while Stage 3 proceeds.
 
 🔴 **And Stage 3 proceeded anyway.** Both were marked *"fix now — Immediate"* on 2026-09-02
-and were still open on 2026-09-10, through Phases 14, 15 and 16. For eight days the dashboard
-was one `rm -rf` from losing every line of Phase 13, and its 463 assertions gated nothing.
-**Nothing marked "fix now" should survive a phase boundary** — if it does, either it was not
-urgent or the boundary is not a checkpoint. Here it was the second: no step in
+and were still open on 2026-09-10, through Phases 14, 15 and 16. **Nothing marked "fix now"
+should survive a phase boundary** — if it does, either it was not urgent or the boundary is
+not a checkpoint. Here it was the second: no step in
 [the milestone loop](#the-milestone-loop) re-reads this table.
+
+🔴 **F2 also measured only the repository it happened to look at.** It said *"Frontend git
+history is one commit"*, which was true — and the plugin and backend had **both** last
+committed on 2026-08-28, at the end of Phase 8. So on 2026-09-10 the entire product from
+Phase 9 to Phase 16 — config sync, the renderer, the pricing engine, cart and order
+integration, the whole upload subsystem, the 15-type library — existed **only as uncommitted
+working-tree changes in all three repositories simultaneously**. One `git checkout .` in the
+wrong directory would have taken thirteen days of work with it.
+
+**A finding scoped to where it was noticed understates itself.** The dashboard was the
+repository someone happened to open; the defect was project-wide. The corrected question is
+not *"is this repository committed?"* but *"when did each repository last commit, and does
+that date match the work claimed done?"* — which takes one command across all three and
+would have caught it on 2026-09-02.
 
 ### Two coverage gaps in the plan itself — ✅ CLOSED 2026-09-02
 
@@ -20949,6 +20966,10 @@ and when a milestone closes the last of a phase's criteria:
       · the phase ledger under STATUS      (and move the ◀ HERE marker)
       · Appendix C's master checklist
   → re-read the STATUS findings table: is anything still marked "fix now"?
+  → check ALL THREE repositories have committed, not just the one worked in:
+      for r in Backend Plugin Frontend; do
+        (cd optioniaWooCommerce$r && git log -1 --format="$r %ad" --date=short)
+      done
 ```
 
 ⚠️ **Those last two steps were added on 2026-09-10, because both had already failed.**
@@ -21203,6 +21224,37 @@ updating it is part of closing a phase, not a thing done later from memory.
 **The rule this adds: closing a phase means ticking every ledger, in the same
 change.** Both boxes and the `◀ HERE` marker move together with the exit criteria,
 or the ledger silently becomes fiction.
+
+### A finding measured only where it was noticed — 2026-09-10
+
+F2 read *"Frontend git history is one commit — all Phase 13 work is
+uncommitted"*, severity **fix now**. Every word true. It was also **one third of
+the actual defect**, and the two-thirds it missed were larger:
+
+| Repository | Last commit | Uncommitted |
+| --- | --- | --- |
+| Dashboard | 2026-08-?? (scaffold) | 96 files — *the one F2 named* |
+| **Plugin** | **2026-08-28** | **176 files** |
+| **Backend** | **2026-08-28** | **139 files** |
+
+Both other repositories had stopped at the end of Phase 8. So Phases 9–16
+entire — config sync, the renderer, the pricing engine, cart and order
+integration, the upload subsystem, the type library — existed only as
+working-tree changes **in all three repositories at once**, for thirteen days,
+while the plan's top-level findings table described the problem as belonging to
+the dashboard.
+
+**Why it stayed that way.** F2 was written during an audit of the dashboard. The
+question asked was *"is this repository committed?"* and the honest answer was
+recorded. Nobody asked the same question of the two repositories that were not
+being audited that day — and the finding, once written, read as a complete
+statement of the problem.
+
+**The rule: a finding states the scope it was measured over.** F2 should have
+read *"the dashboard is uncommitted; the other two repositories were not
+checked."* That version invites the follow-up; the version written closes it.
+The check itself is one command across all three, and it now sits in
+[the milestone loop](#the-milestone-loop).
 
 ### The shipped type count was wrong everywhere — 2026-09-10
 
