@@ -21068,7 +21068,17 @@ The re-run after that hang then flaked in its own right — **the fourteenth**:
 value: 400 {}`*. Alone they pass **32/32** and **28/28**. Neither suite reads
 anything 17-3 touched.
 
-🔴 **Four hangs and ten flakes, all in the same phase of the same command.** The
+**Fifteen and sixteen came from 17-4's verification.** The fifteenth was
+`option-authoring` failing 13 of 904 — **78/78 alone**. The sixteenth was
+`option-sets-http` failing 4 of 904 on **20-second timeouts** rather than
+assertions — **36/36 alone**.
+
+🔴 **The timeout signature is the clearest evidence yet.** Not an empty-bodied
+400, not a hang: four tests simply took longer than 20 seconds inside a full
+sequential run, in a suite that completes in seconds by itself. Nothing about a
+rule evaluator changes how long an audit-trail query takes.
+
+🔴 **Four hangs and twelve flakes, all in the same phase of the same command.** The
 unit half has never once done this — 48 suites and 911 tests complete in seconds
 every time. It is the sequential e2e run, and nothing else.
 
