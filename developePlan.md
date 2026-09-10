@@ -21167,7 +21167,15 @@ assertions — **36/36 alone**.
 sequential run, in a suite that completes in seconds by itself. Nothing about a
 rule evaluator changes how long an audit-trail query takes.
 
-🔴 **Four hangs and twelve flakes, all in the same phase of the same command.** The
+**Seventeen came from 17-5's verification**: `option-authoring` again, 4 of 904,
+failing in `beforeAll` with *"the set … is not visible"* — a set created moments
+earlier by the same suite. Alone it passes **78/78**.
+
+🔴 **The same suite has now flaked three times in three consecutive stages**,
+each time on a different assertion and each time passing alone. Nothing about a
+serializer changes whether a set the suite just created is visible to it.
+
+🔴 **Four hangs and thirteen flakes, all in the same phase of the same command.** The
 unit half has never once done this — 48 suites and 911 tests complete in seconds
 every time. It is the sequential e2e run, and nothing else.
 
