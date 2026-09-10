@@ -29,6 +29,10 @@ import { OptionValuesService } from './option-values.service';
 import { OptionsController } from './options.controller';
 import { OptionsRepository } from './options.repository';
 import { OptionsService } from './options.service';
+import { OptionRule } from './entities/option-rule.entity';
+import { OptionRulesController } from './option-rules.controller';
+import { OptionRulesRepository } from './option-rules.repository';
+import { OptionRulesService } from './option-rules.service';
 import { PresentationalItem } from './entities/presentational-item.entity';
 import { PresentationalItemsController } from './presentational-items.controller';
 import { PresentationalItemsRepository } from './presentational-items.repository';
@@ -52,6 +56,7 @@ import { OptionTypeValidator } from './types/option-type.validator';
       Option,
       OptionValue,
       OptionSetAssignment,
+      OptionRule,
       PresentationalItem,
     ]),
     AuthModule,
@@ -68,6 +73,7 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionGroupsController,
     OptionsController,
     OptionValuesController,
+    OptionRulesController,
     PresentationalItemsController,
   ],
   // `OptionTypeValidator` is injected by `OptionsService` (option type JSON) and
@@ -85,6 +91,8 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionsService,
     OptionValuesRepository,
     OptionValuesService,
+    OptionRulesRepository,
+    OptionRulesService,
     PresentationalItemsRepository,
     PresentationalItemsService,
     OptionTypeValidator,

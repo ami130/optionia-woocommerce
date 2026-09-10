@@ -184,8 +184,13 @@ function check(field: string, schema: z.ZodType, value: unknown): ErrorDetail[] 
  *
  * The message is for a person and may be reworded; the code is what a dashboard
  * branches on, so it is derived from the issue kind rather than the text.
+ *
+ * ⚠️ **Exported since M17.1's CRUD.** Rules validate `conditions` against their
+ * own Zod schema and must produce the same codes a dashboard already branches
+ * on — a second mapping would answer `INVALID_VARIANT` here and `INVALID_UNION`
+ * there for one kind of mistake.
  */
-function codeFor(issue: z.core.$ZodIssue): string {
+export function codeFor(issue: z.core.$ZodIssue): string {
   switch (issue.code) {
     case 'invalid_type':
       return 'INVALID_TYPE';

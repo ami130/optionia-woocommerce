@@ -101,6 +101,25 @@ export const AuditAction = {
   PRESENTATIONAL_ITEM_REORDERED: 'presentational_item.reordered',
 
   /**
+   * Conditional rules (M17.1).
+   *
+   * 🔴 **A rule decides whether a customer is charged**, so its trail matters
+   * more than most: `set_price` replaces a value's delta (ADR-049), and a
+   * `hide` removes an option from the line entirely (ADR-051). "Why did this
+   * order cost that" is answerable only if every change to the logic is
+   * recorded with who made it.
+   *
+   * No `RULE_DISABLED` action: a rule disabled because its target was deleted is
+   * written by the cascade, and the cascade's own delete action already records
+   * the cause. A second row for the consequence would say the same thing twice
+   * and invite the two to disagree.
+   */
+  OPTION_RULE_CREATED: 'option_rule.created',
+  OPTION_RULE_UPDATED: 'option_rule.updated',
+  OPTION_RULE_DELETED: 'option_rule.deleted',
+  OPTION_RULE_REORDERED: 'option_rule.reordered',
+
+  /**
    * Store connection transitions (M8.1b).
    *
    * `connect/initiate` is deliberately absent. It is `@Public()` and carries no

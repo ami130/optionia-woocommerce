@@ -153,6 +153,31 @@ describe('audit coverage (e2e)', () => {
     await post(`/groups/${group}/items/reorder`, { items: [{ id: item, sortOrder: 20 }] });
     await del(`/items/${item}`);
 
+    /*
+     * Conditional rules, with their own four audit actions (M17.1).
+     *
+     * Driven here in the same change that declared the actions, because this
+     * gate refuses both directions: an action nothing drives is
+     * declared-but-unreachable, and a mutation writing no row is a hole in a
+     * trail that is trusted. Rules matter more than most — `set_price` replaces
+     * a value's delta and `hide` removes an option from the line entirely, so
+     * "why did this order cost that" is answerable only if the logic's history
+     * is.
+     */
+    const rule = idOf(
+      await post(`/option-sets/${set}/rules`, {
+        targetType: 'option',
+        targetId: option,
+        action: 'show',
+        matchType: 'all',
+        conditions: [{ optionId: option, operator: 'equals', value: 'v' }],
+      }),
+      'rule',
+    );
+    await patch(`/rules/${rule}`, { action: 'hide' });
+    await post(`/option-sets/${set}/rules/reorder`, { rules: [{ id: rule, sortOrder: 20 }] });
+    await del(`/rules/${rule}`);
+
     const groupCopy = idOf(await post(`/groups/${group}/duplicate`), 'group copy');
     const optionCopy = idOf(await post(`/options/${option}/duplicate`), 'option copy');
     const setCopy = idOf(await post(`/option-sets/${set}/duplicate`), 'set copy');
@@ -178,7 +203,7 @@ describe('audit coverage (e2e)', () => {
     await del(`/option-sets/${setCopy}`);
     await del(`/option-sets/${setCopy}/permanent`);
 
-    return { set, group, option, value, groupCopy, optionCopy, setCopy, valueCopy };
+    return { set, group, option, value, rule, groupCopy, optionCopy, setCopy, valueCopy };
   }
 
   describe('every mutation is recorded', () => {
@@ -240,6 +265,28 @@ describe('audit coverage (e2e)', () => {
           AuditAction.OPTION_VALUE_DELETED,
         ]),
       );
+    }, 60_000);
+
+    /**
+     * Conditional rules (M17.1).
+     *
+     * 🔴 **A rule decides whether a customer is charged**, so its trail carries
+     * more weight than most: `set_price` replaces a value's delta (ADR-049), and
+     * `hide` removes an option from the line entirely (ADR-051). Asserted by
+     * resource id rather than only through the `unaccounted` sweep below, so a
+     * failure names *which* of the four went unrecorded.
+     */
+    it('records the rule lifecycle', async () => {
+      expect(await actionsFor(ids.rule)).toEqual(
+        expect.arrayContaining([
+          AuditAction.OPTION_RULE_CREATED,
+          AuditAction.OPTION_RULE_UPDATED,
+          AuditAction.OPTION_RULE_DELETED,
+        ]),
+      );
+
+      /* Reorder is recorded against the SET, as every reorder in this API is. */
+      expect(await actionsFor(ids.set)).toContain(AuditAction.OPTION_RULE_REORDERED);
     }, 60_000);
 
     /**

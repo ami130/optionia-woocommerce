@@ -40,6 +40,7 @@ describe('tenant isolation matrix (e2e)', () => {
     option: '',
     value: '',
     item: '',
+    rule: '',
   };
 
   beforeAll(async () => {
@@ -74,6 +75,17 @@ describe('tenant isolation matrix (e2e)', () => {
     owned.value = idOf(
       await post(tokenA, `/options/${owned.option}/values`, { valueKey: 'a', label: 'A' }),
       'value',
+    );
+
+    owned.rule = idOf(
+      await post(tokenA, `/option-sets/${owned.set}/rules`, {
+        targetType: 'option',
+        targetId: owned.option,
+        action: 'show',
+        matchType: 'all',
+        conditions: [{ optionId: owned.option, operator: 'equals', value: 'a' }],
+      }),
+      'rule',
     );
 
     // A published version, so the version routes have something real to hide.
@@ -197,6 +209,29 @@ describe('tenant isolation matrix (e2e)', () => {
     ['GET /v1/items/:id', () => get(tokenB, `/items/${owned.item}`)],
     ['PATCH /v1/items/:id', () => patch(tokenB, `/items/${owned.item}`, { content: 'x' })],
     ['DELETE /v1/items/:id', () => del(tokenB, `/items/${owned.item}`)],
+    /**
+     * Conditional rules (M17.1).
+     *
+     * A rule carries `set_price` and `hide` among its actions, so a cross-tenant
+     * read is not merely a leak of structure — it is a leak of the logic that
+     * decides what a competitor's customers are charged.
+     */
+    ['GET /v1/option-sets/:id/rules', () => get(tokenB, `/option-sets/${owned.set}/rules`)],
+    ['POST /v1/option-sets/:id/rules', () =>
+      post(tokenB, `/option-sets/${owned.set}/rules`, {
+        targetType: 'option',
+        targetId: owned.option,
+        action: 'hide',
+        matchType: 'all',
+        conditions: [{ optionId: owned.option, operator: 'is_empty' }],
+      })],
+    ['GET /v1/rules/:id', () => get(tokenB, `/rules/${owned.rule}`)],
+    ['PATCH /v1/rules/:id', () => patch(tokenB, `/rules/${owned.rule}`, { action: 'hide' })],
+    ['DELETE /v1/rules/:id', () => del(tokenB, `/rules/${owned.rule}`)],
+    ['POST /v1/option-sets/:id/rules/reorder', () =>
+      post(tokenB, `/option-sets/${owned.set}/rules/reorder`, {
+        rules: [{ id: owned.rule, sortOrder: 10 }],
+      })],
     ['POST /v1/groups/:id/items/reorder', () =>
       post(tokenB, `/groups/${owned.group}/items/reorder`, {
         items: [{ id: owned.item, sortOrder: 10 }],
@@ -447,6 +482,84 @@ describe('tenant isolation matrix (e2e)', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data).toEqual([]);
+    }, 60_000);
+  });
+
+  /**
+   * Rule routes, by role rather than by tenant (M6.5).
+   *
+   * 🔴 **Nothing gated this.** `guards.e2e-spec` proves the permission matrix
+   * against a **synthetic probe controller**, so it cannot tell whether a real
+   * route carries the capability its author intended — and no gate compares
+   * `@RequireCapability` against anything. Downgrading a rule route from
+   * `OPTION_SETS_EDIT` to `OPTION_SETS_VIEW` passed every suite, which means a
+   * viewer could author logic carrying `set_price`.
+   *
+   * These drive the **real** routes with a demoted member, which is the only
+   * thing that can catch it.
+   */
+  describe('rule routes refuse a viewer', () => {
+    /**
+     * Tenant A's own member, demoted to `viewer`.
+     *
+     * ⚠️ **Demoted rather than invited into A's tenant.** `TenantGuard` reads the
+     * **stored** membership row rather than a claim in the token, so changing the
+     * role takes effect on the next request and the existing token stays valid —
+     * which is the same path a real demotion takes. Moving a *different* member's
+     * `tenantId` instead invalidates their token and produces a 401, proving
+     * nothing about capabilities.
+     *
+     * Restored afterwards, because every other test in this file depends on
+     * `tokenA` being able to write.
+     */
+    beforeAll(async () => {
+      await setRoleA('viewer');
+    }, 60_000);
+
+    afterAll(async () => {
+      await setRoleA('owner');
+    }, 60_000);
+
+    async function setRoleA(role: string): Promise<void> {
+      await harness.dataSource.query(
+        `UPDATE tenant_members tm JOIN users u ON u.id = tm.userId
+            SET tm.role = ? WHERE u.email = ?`,
+        [role, `${NS}-a@example.com`],
+      );
+    }
+
+    const viewerToken = (): string => tokenA;
+
+    it('lets a viewer read rules', async () => {
+      const response = await get(viewerToken(), `/option-sets/${owned.set}/rules`);
+
+      expect(response.status).toBe(200);
+    }, 60_000);
+
+    it('refuses a viewer creating a rule — a rule can carry set_price', async () => {
+      const response = await post(viewerToken(), `/option-sets/${owned.set}/rules`, {
+        targetType: 'option',
+        targetId: owned.option,
+        action: 'set_price',
+        matchType: 'all',
+        conditions: [{ optionId: owned.option, operator: 'is_not_empty' }],
+      });
+
+      expect(response.status).toBe(403);
+    }, 60_000);
+
+    it('refuses a viewer editing, deleting or reordering a rule', async () => {
+      expect((await patch(viewerToken(), `/rules/${owned.rule}`, { action: 'hide' })).status).toBe(
+        403,
+      );
+      expect((await del(viewerToken(), `/rules/${owned.rule}`)).status).toBe(403);
+      expect(
+        (
+          await post(viewerToken(), `/option-sets/${owned.set}/rules/reorder`, {
+            rules: [{ id: owned.rule, sortOrder: 10 }],
+          })
+        ).status,
+      ).toBe(403);
     }, 60_000);
   });
 });

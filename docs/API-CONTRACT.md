@@ -925,6 +925,31 @@ built before any of these endpoints.
 | `POST /groups/:id/items` · `PATCH /items/:id` · `DELETE /items/:id` | `option_sets:edit` | `[built]` |
 | `POST /groups/:id/items/reorder` | `option_sets:edit` | `[built]` |
 | `GET /groups/:id/items` · `GET /items/:id` | `option_sets:view` | `[built]` |
+| `POST /option-sets/:id/rules` · `PATCH /rules/:id` · `DELETE /rules/:id` | `option_sets:edit` | `[built]` |
+| `POST /option-sets/:id/rules/reorder` | `option_sets:edit` | `[built]` |
+| `GET /option-sets/:id/rules` · `GET /rules/:id` | `option_sets:view` | `[built]` |
+
+> **Rules are nested under the SET, not a group.** A rule's conditions may name
+> options in any group, and its target may be a group, an option or a value
+> anywhere in the set — so a group is the wrong parent, and nesting under one
+> would imply a scope the engine does not have.
+>
+> `conditions` is a **flat array** of `{ optionId, operator, value? }`, with
+> `matchType` (`all` | `any`) as a sibling field rather than a key inside it.
+> Nine operators; three operand shapes — `is_empty` / `is_not_empty` take none,
+> `in` / `not_in` take a list, the rest take a single value whose type the
+> operator decides. `greater_than` and `less_than` require a **number**, and
+> `contains` a **string**: text has no ordering two languages agree on, and
+> `contains 1` would otherwise match the answer `"10"`.
+>
+> ⚠️ **`sortOrder` is presentation, not precedence.** M17.2 makes evaluation
+> order-independent; the order here decides what a merchant reads in the rule
+> list and nothing else.
+>
+> ⚠️ **A rule cannot move between sets.** `targetId` and every condition's
+> `optionId` name rows in the set the rule was created in, so `PATCH` accepts no
+> `optionSetId`. `isEnabled` is not accepted either — its only writer today is
+> the cascade, recording that a target was deleted.
 
 > **Presentational items carry `option_sets:edit` for deletion too**, unlike
 > their siblings above, which split `:edit` from `:delete`. That is deliberate and
