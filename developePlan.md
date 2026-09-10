@@ -55,8 +55,8 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 **[Phase 17](#phase-17--conditional-logic-engine), stage 17-4 — the TypeScript
 evaluator and the shared fixture.**
 
-**Done:** 17-0 (three ADRs), **17-1** + audit, **17-2** + audit, **17-3** — two
-publish validators, five mutants killed, verified against real publishes.
+**Done:** 17-0 (three ADRs), **17-1** + audit, **17-2** + audit, **17-3** + audit
+— three publish validators, eight mutants killed, verified against real publishes.
 
 Stage 17-4 writes the cloud's evaluator and, more importantly, **the fixture both
 languages will be held to**. Three constraints carry into it:
@@ -74,6 +74,15 @@ languages will be held to**. Three constraints carry into it:
    affect an answer; `set_price` and `require`/`unrequire` do not. An evaluator
    disagreeing with the cycle detector would refuse documents the detector
    passed, or loop on ones it blocked.
+
+🔴 **17-4 inherits one open question from 17-3's audit (F3).** Two rules with
+contradictory actions on one target — `show` and `hide`, same condition —
+**publish freely today**, and correctly: one node, no loop, so the cycle detector
+has nothing to say. Whether that needs a publish-time check cannot be decided
+until the evaluator exists, because the answer depends on what the evaluator
+does: resolve it deterministically (last-wins by `sortOrder`) or oscillate into
+ADR-050's cap. **17-4 decides, then 17-3's gate is revisited if needed** —
+guessing now would put a rule in the publish gate that the runtime contradicts.
 
 ⚠️ **Rules still do not reach the published document.** `OptionSetTree` carries
 none, so the snapshot half is **17-5**. 17-3 validates what *would* be published.
@@ -19053,6 +19062,69 @@ default fixture — which is how badly it would have over-fired.
 over as many options, and a deep chain in a recursive search would risk a stack
 overflow **inside a publish** — surfacing as a 500 rather than the actionable
 message this check exists to produce.
+
+#### 🔴 17-3 audit — one real gap, found by asking a different question
+
+The DFS was probed in isolation against the graphs most likely to break a
+hand-rolled one. **It is correct**: a diamond (`A→B`, `A→C`, `B→D`, `C→D`) and a
+shared tail both report *no cycle* — the classic false positive — and a
+500-node chain resolves without touching the stack limit, closed or open.
+
+##### 🔴 F1/F2 — A rule naming a **disabled** target published silently
+
+**Measured: `201`, with no finding at all.**
+
+The chain nothing was watching:
+
+| | |
+|---|---|
+| `idsIn()` | walked the tree **without** filtering `isEnabled` |
+| `OptionSetSerializer` | **drops** disabled groups, options and values entirely |
+| `CascadeService` | fires on **delete**, never on disable |
+
+So a live rule could name an id that is genuinely in the set and genuinely
+**absent from what publishes** — the same "publishes and governs nothing" defect
+`RULE_TARGET_NOT_IN_SET` exists to prevent, one state earlier, through a door it
+was not watching.
+
+🔴 **The cause was my own comment.** `idsIn` carried *"disabled rows are included
+deliberately — a rule targeting a disabled option is not broken, the merchant may
+be about to re-enable it."* That reasoning is right for **authoring** and I
+applied it to **publishing**, where the question is different: *what will
+actually be in the document.* The serializer's own docblock had already said it —
+*"a disabled thing is absent from the document entirely"*.
+
+`idsIn` now answers **both** questions, and `RULE_TARGET_NOT_PUBLISHED` reports
+the difference.
+
+⚠️ **A warning, not a blocker.** Disabling is reversible and routinely deliberate
+mid-edit; blocking would make "turn it off, publish, turn it back on" an error. A
+cross-set id will never resolve; a disabled one resolves the moment it is
+re-enabled. Same reasoning `rulesHaveTargets` gives for warning rather than
+blocking.
+
+⚠️ **An option inside a disabled group does not publish either**, however enabled
+it is itself — the serializer drops the whole group. Mutation-proven: ignoring
+the group's state fails *"warns when the target sits inside a disabled group"*.
+
+⚠️ **A cross-set target would have tripped both checks**, and a second finding
+about one rule buries the one that actually stops the publish. The warning fires
+only for a target that **is** in the set. Mutation-proven by three tests.
+
+##### 🟡 F3 — Contradictory rules on one target publish freely, and 17-4 must decide
+
+`show` and `hide` on the same option with the same condition: **accepted, 201.**
+Correctly ignored by the cycle detector — one node, no loop.
+
+**Whether that needs a check belongs to [17-4](#-the-next-thing-to-do), not
+here.** ADR-050 caps iterations and refuses non-convergence, so the evaluator
+either resolves it deterministically (last-wins by `sortOrder`) or oscillates
+into the cap. Until the evaluator exists there is no way to say which, and
+guessing would put a rule in the publish gate that the runtime then contradicts.
+
+⚠️ **Recorded so 17-4 decides deliberately.** This is the "deferred to nowhere"
+pattern the plan indicts itself for seven times; the destination here is a stage
+that starts next.
 
 #### What 17-3 deliberately did not do
 
