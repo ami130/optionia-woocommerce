@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { OptionGroup } from '../entities/option-group.entity';
 import { OptionSet } from '../entities/option-set.entity';
+import { OptionRule } from '../entities/option-rule.entity';
 import { OptionValue } from '../entities/option-value.entity';
 import { Option } from '../entities/option.entity';
 import { PresentationalItem } from '../entities/presentational-item.entity';
@@ -9,6 +10,7 @@ import { toPublishedPriceConfig } from './price-config';
 import {
   toPublishedDisplay,
   toPublishedOptionPricing,
+  toPublishedRule,
   toPublishedValidation,
 } from './option-config';
 import type {
@@ -27,6 +29,14 @@ import type {
 /** An option set with its children loaded, in display order. */
 export interface OptionSetTree {
   readonly set: OptionSet;
+  /**
+   * The set's conditional rules, live only, in list order (M17.5).
+   *
+   * ⚠️ **Flat, beside the groups rather than inside them.** A rule's target may
+   * be a group, an option or a value anywhere in the set, and its conditions may
+   * name options in any group — so no branch of the tree owns it.
+   */
+  readonly rules: readonly OptionRule[];
   readonly groups: ReadonlyArray<{
     readonly group: OptionGroup;
     readonly items: readonly PresentationalItem[];
@@ -200,7 +210,11 @@ export class OptionSetSerializer {
        * immutable. So `ConfigDocumentBuilder` joins them **live** and overwrites
        * whatever stands here.
        *
-       * `rules` is still genuinely unbuilt, and waits on Phase 17.
+       * `rules` **are** in the snapshot, unlike assignments, and deliberately:
+       * a rule is published configuration, so changing one *should* require a
+       * republish. The same immutability applies, though — every set published
+       * before M17.5 keeps `rules: []` for ever, which is correct, because those
+       * documents genuinely had none.
        *
        * Present rather than omitted: 7k freezes this document for v1, and a
        * plugin written against a shape lacking these keys would need a
@@ -211,7 +225,23 @@ export class OptionSetSerializer {
       groups: tree.groups
         .filter((node) => node.group.isEnabled)
         .map((node) => this.groupToPublished(node)),
-      rules: [],
+      /*
+       * 🔴 **Disabled rules are absent entirely**, exactly as a disabled group,
+       * option or value is — the flag has nothing left to say once the thing it
+       * describes is not in the document.
+       *
+       * M17.3's `RULE_TARGET_NOT_PUBLISHED` warning depends on this being true:
+       * it warns a merchant that a rule pointing at a *disabled target* will not
+       * fire, which would be incoherent if disabled rules shipped anyway.
+       *
+       * ⚠️ **A rule the cascade disabled is dropped by the same filter**, and
+       * that is the intended outcome — its target is gone, so publishing it
+       * would ship logic that can never apply. `rulesHaveTargets` warns the
+       * merchant at publish; this is what makes the warning true.
+       */
+      rules: tree.rules
+        .filter((rule) => rule.isEnabled)
+        .map((rule) => toPublishedRule(rule)),
     };
   }
 

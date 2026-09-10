@@ -1,5 +1,6 @@
 import { OptionGroup } from '../entities/option-group.entity';
 import { OptionSet } from '../entities/option-set.entity';
+import { OptionRule } from '../entities/option-rule.entity';
 import { OptionValue } from '../entities/option-value.entity';
 import { Option } from '../entities/option.entity';
 import { PresentationalItem } from '../entities/presentational-item.entity';
@@ -107,9 +108,32 @@ function item(overrides: Partial<PresentationalItem> = {}): PresentationalItem {
   });
 }
 
+const OPTION_ID = '0199b8c2-0000-7000-8000-000000000001';
+
+function rule(overrides: Partial<OptionRule> = {}): OptionRule {
+  return Object.assign(new OptionRule(), {
+    id: 'rule-1',
+    optionSetId: 'set-1',
+    targetType: 'option',
+    targetId: OPTION_ID,
+    action: 'hide',
+    matchType: 'all',
+    conditions: [{ optionId: OPTION_ID, operator: 'is_empty' }],
+    actionValue: null,
+    sortOrder: 10,
+    isEnabled: true,
+    disabledReason: null,
+    createdAt: AT,
+    updatedAt: AT,
+    deletedAt: new Date(1970, 0, 1),
+    ...overrides,
+  });
+}
+
 function tree(overrides: Partial<OptionSetTree> = {}): OptionSetTree {
   return {
     set: set(),
+    rules: [],
     groups: [{ group: group(), items: [item()], options: [{ option: option(), values: [value()] }] }],
     ...overrides,
   };
@@ -190,6 +214,134 @@ describe('OptionSetSerializer', () => {
 
       expect(serializer.toAuthoring(published).publishedBy).toBe('user-42');
       expect(JSON.stringify(serializer.toPublished(published))).not.toContain('user-42');
+    });
+  });
+
+  /**
+   * Rules in the document (M17.5).
+   *
+   * 🔴 **The keys are the whole risk.** `check-wire-keys.sh` exists because this
+   * defect has shipped twice — `price_config` emitted `amountMinor` on one path,
+   * and `validation`/`display` were published verbatim so a merchant's
+   * `maxLength` arrived spelled in a way `SelectionResolver` never looks for:
+   * *present in the document, enforced nowhere.*
+   */
+  describe('rules in the published document', () => {
+    it('emits every key in the document’s snake_case convention', () => {
+      const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;
+
+      expect(published).toEqual({
+        id: 'rule-1',
+        target_type: 'option',
+        target_id: OPTION_ID,
+        action: 'hide',
+        match_type: 'all',
+        conditions: [{ option_id: OPTION_ID, operator: 'is_empty' }],
+        sort_order: 10,
+      });
+    });
+
+    it('carries a condition’s operand when it has one', () => {
+      const [published] = serializer.toPublished(
+        tree({
+          rules: [rule({ conditions: [{ optionId: OPTION_ID, operator: 'equals', value: 'yes' }] })],
+        }),
+      ).rules;
+
+      expect(published?.conditions).toEqual([
+        { option_id: OPTION_ID, operator: 'equals', value: 'yes' },
+      ]);
+    });
+
+    /**
+     * ⚠️ `is_empty` carries no operand and the schema refuses one. Emitting
+     * `value: undefined` would put a key in the document a PHP reader sees as
+     * `null` — a third state where there are two.
+     */
+    it('omits the operand entirely when the operator takes none', () => {
+      const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;
+
+      expect(published?.conditions[0]).not.toHaveProperty('value');
+    });
+
+    describe('the payload an action acts with', () => {
+      it('renames set_price’s amount', () => {
+        const [published] = serializer.toPublished(
+          tree({ rules: [rule({ action: 'set_price', actionValue: { amountMinor: 500 } })] }),
+        ).rules;
+
+        expect(published?.action_value).toEqual({ amount_minor: 500 });
+      });
+
+      it('renames set_default’s value key', () => {
+        const [published] = serializer.toPublished(
+          tree({ rules: [rule({ action: 'set_default', actionValue: { valueKey: 'large' } })] }),
+        ).rules;
+
+        expect(published?.action_value).toEqual({ value_key: 'large' });
+      });
+
+      /**
+       * Omitted rather than null: a key always present and usually null teaches
+       * a reader to ignore it.
+       */
+      it('omits the payload for an action that acts on its own', () => {
+        const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;
+
+        expect(published).not.toHaveProperty('action_value');
+      });
+
+      /**
+       * ⚠️ A payload on a `hide` rule is a row written before M17.4's
+       * per-action validation. Dropping it is right — nothing reads it, and
+       * carrying it forward preserves a merchant's mistaken belief that they
+       * configured something.
+       */
+      it('drops a payload the action cannot use', () => {
+        const [published] = serializer.toPublished(
+          tree({ rules: [rule({ action: 'hide', actionValue: { amountMinor: 500 } })] }),
+        ).rules;
+
+        expect(published).not.toHaveProperty('action_value');
+      });
+    });
+
+    /**
+     * 🔴 **A disabled rule is absent entirely**, exactly as a disabled group,
+     * option or value is. M17.3's `RULE_TARGET_NOT_PUBLISHED` warning depends on
+     * this: it warns that a rule pointing at a disabled *target* will not fire,
+     * which would be incoherent if disabled rules shipped anyway.
+     */
+    it('leaves a disabled rule out of the document', () => {
+      const published = serializer.toPublished(
+        tree({ rules: [rule({ isEnabled: false })] }),
+      );
+
+      expect(published.rules).toEqual([]);
+    });
+
+    it('leaves out a rule the cascade disabled, whose target is gone', () => {
+      const published = serializer.toPublished(
+        tree({ rules: [rule({ isEnabled: false, disabledReason: 'target_deleted' })] }),
+      );
+
+      expect(published.rules).toEqual([]);
+    });
+
+    /**
+     * ⚠️ `is_enabled` and `disabled_reason` are absent by construction: a rule
+     * that is not published has nothing to say about why, and the merchant is
+     * told at publish by `rulesHaveTargets` instead.
+     */
+    it('never carries the enabled flag or its reason', () => {
+      const [published] = serializer.toPublished(tree({ rules: [rule()] })).rules;
+
+      expect(published).not.toHaveProperty('is_enabled');
+      expect(published).not.toHaveProperty('disabled_reason');
+    });
+
+    it('carries no rules when a set has none', () => {
+      expect(serializer.toPublished(tree()).rules).toEqual([]);
     });
   });
 

@@ -86,6 +86,7 @@ function rule(overrides: Partial<PublishContext['rules'][number]> = {}) {
 function context(overrides: Partial<PublishContext> = {}): PublishContext {
   const tree: OptionSetTree = {
     set: set(),
+    rules: [],
     groups: [{ group: group(), items: [], options: [{ option: option(), values: [value()] }] }],
   };
 
@@ -106,6 +107,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [{ group: group(), items: [], options: [{ option: option(), values: [] }] }],
           },
         }),
@@ -121,6 +123,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group(),
@@ -141,6 +144,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group(),
@@ -163,6 +167,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               { group: group({ isEnabled: false }), items: [], options: [{ option: option(), values: [] }] },
               {
@@ -184,6 +189,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group(),
@@ -203,6 +209,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group(),
@@ -221,7 +228,7 @@ describe('pre-publish checks', () => {
   describe('an empty set', () => {
     it('blocks a set with no enabled options', () => {
       const findings = runPublishChecks(
-        context({ tree: { set: set(), groups: [] } }),
+        context({ tree: { set: set(), rules: [], groups: [] } }),
       );
 
       expect(findings.some((f) => f.code === 'SET_HAS_NO_OPTIONS')).toBe(true);
@@ -242,6 +249,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group(),
@@ -269,6 +277,7 @@ describe('pre-publish checks', () => {
         context({
           tree: {
             set: set(),
+            rules: [],
             groups: [
               {
                 group: group({ isEnabled: false }),
@@ -287,7 +296,7 @@ describe('pre-publish checks', () => {
     it('blocks a group with neither options nor items', () => {
       const findings = runPublishChecks(
         context({
-          tree: { set: set(), groups: [{ group: group(), items: [], options: [] }] },
+          tree: { set: set(), rules: [], groups: [{ group: group(), items: [], options: [] }] },
         }),
       );
 
@@ -363,6 +372,7 @@ describe('pre-publish checks', () => {
     return context({
       tree: {
         set: set(),
+        rules: [],
         groups: [
           {
             group: group(),
@@ -447,6 +457,7 @@ describe('pre-publish checks', () => {
   function twoGroupTree(): OptionSetTree {
     return {
       set: set(),
+      rules: [],
       groups: [
         { group: group(), items: [], options: [{ option: option(), values: [value()] }] },
         {
@@ -920,6 +931,7 @@ describe('pre-publish checks', () => {
     it('blocks a loop that closes through a third rule', () => {
       const tree: OptionSetTree = {
         set: set(),
+        rules: [],
         groups: [
           {
             group: group(),
@@ -951,6 +963,7 @@ describe('pre-publish checks', () => {
     it('accepts a long chain that never closes', () => {
       const tree: OptionSetTree = {
         set: set(),
+        rules: [],
         groups: [
           {
             group: group(),

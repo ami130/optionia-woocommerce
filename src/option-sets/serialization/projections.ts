@@ -234,32 +234,21 @@ export interface PublishedRule {
   readonly target_id: string;
   readonly action: string;
   readonly match_type: string;
-  /*
-   * 🔴 **`action_value` is MISSING, and M17.5 must add it.**
-   *
-   * M17.4 gave `OptionRule` an `actionValue` column because three of the six
-   * actions could not otherwise be expressed — `set_price` had no amount to set
-   * and `set_default` no value to write. That column reaches the entity, the
-   * DTOs, the service and the evaluator, and **stops here**: a merchant can
-   * author "set price to 5.00", it validates, it stores, it publishes, and the
-   * document the plugin receives cannot carry the amount.
-   *
-   * Not added in M17.4 because nothing fills `rules` yet — the serializer emits
-   * `[]` and `OptionSetTree` carries no rules at all, so a field here would have
-   * been a promise with no writer. M17.5 adds both together.
-   *
-   * ⚠️ **Recorded here rather than only in the plan** because this interface is
-   * where someone implementing M17.5 looks, and "the payload is missing" is
-   * invisible from a shape that never mentions it.
-   */
   /**
-   * The conditions, as a flat list — never a nested tree (M17.1).
+   * What the action acts **with** — `{ amount_minor }` for `set_price`,
+   * `{ value_key }` for `set_default`, and **absent** for the four that act on
+   * their own (M17.4).
    *
-   * ✏️ Typed as a bare `Record` until Stage 17-1, a placeholder written when
-   * `rules` was an always-empty array. Correcting it is not a wire break:
-   * `CONFIG-CONTRACT.md` documents `rules` as *"array … always empty in Phase
-   * 7"* and never published an inner shape, so no plugin can be reading one.
+   * ✏️ **Missing until M17.5.** M17.4 gave `OptionRule` the column because three
+   * of six actions could not otherwise be expressed, and it reached the entity,
+   * the DTOs, the service and the evaluator — and stopped short of the wire. A
+   * merchant could author "set price to 5.00", have it validate, store and
+   * publish, and the document the plugin received could not carry the amount.
+   *
+   * Optional rather than nullable: a key always present and usually null teaches
+   * a reader to ignore it.
    */
+  readonly action_value?: Record<string, unknown>;
   readonly conditions: readonly Record<string, unknown>[];
   readonly sort_order: number;
 }

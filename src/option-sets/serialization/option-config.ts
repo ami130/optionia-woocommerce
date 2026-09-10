@@ -28,7 +28,8 @@
  * wrong-looking, which is easier to notice than a rule that quietly disappears.
  */
 
-import { PriceType } from '../../common/database/enums';
+import { PriceType, RuleAction } from '../../common/database/enums';
+import type { PublishedRule } from './projections';
 
 /** Stored key → document key, for every rule the plugin reads. */
 const VALIDATION_KEYS: Readonly<Record<string, string>> = {
@@ -198,4 +199,125 @@ export function toPublishedOptionPricing(
       // did not.
       return pricing;
   }
+}
+
+/**
+ * A rule's condition list, in the document's convention (M17.5).
+ *
+ * 🔴 **Built explicitly, never renamed.** `rename()` above passes an unmapped
+ * key **through unchanged**, so a partial mapping ships camelCase silently —
+ * which is the defect `check-wire-keys.sh` exists for, and which has shipped
+ * twice already: `price_config` emitted `amountMinor` on one path, and
+ * `validation`/`display` were published verbatim so a merchant's `maxLength`
+ * arrived spelled in a way `SelectionResolver` never looks for. *Present in the
+ * document, enforced nowhere.*
+ *
+ * Naming each key means a field added to the schema and forgotten here is
+ * **absent** from the document rather than present and unread — a reader can act
+ * on absence, and cannot act on a key it does not recognise.
+ */
+function toPublishedConditions(conditions: unknown): readonly Record<string, unknown>[] {
+  if (!Array.isArray(conditions)) {
+    return [];
+  }
+
+  return conditions.flatMap((raw) => {
+    if (typeof raw !== 'object' || raw === null) {
+      return [];
+    }
+
+    const condition = raw as Record<string, unknown>;
+    const published: Record<string, unknown> = {
+      option_id: condition.optionId,
+      operator: condition.operator,
+    };
+
+    /*
+     * `is_empty` and `is_not_empty` carry no operand, and the schema refuses one
+     * (M17.1). Emitting `value: undefined` would put a key in the document that
+     * a PHP reader sees as `null` — a third state where there are two.
+     */
+    if (condition.value !== undefined) {
+      published.value = condition.value;
+    }
+
+    return [published];
+  });
+}
+
+/**
+ * What a rule's action acts **with**, in the document's convention.
+ *
+ * Keyed on the action rather than renamed, for the reason `toPublishedOptionPricing`
+ * is: the payload's shape depends on the action, and a flat map cannot express
+ * that a `hide` rule must carry nothing at all.
+ */
+function toPublishedActionValue(
+  action: string,
+  actionValue: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!actionValue) {
+    return null;
+  }
+
+  switch (action) {
+    case RuleAction.SET_PRICE:
+      return { amount_minor: actionValue.amountMinor };
+    case RuleAction.SET_DEFAULT:
+      return { value_key: actionValue.valueKey };
+    default:
+      /*
+       * The four actions that act on their own. A payload here is a row written
+       * before M17.4's per-action validation, and dropping it is right: nothing
+       * reads it, and carrying it forward would preserve a merchant's mistaken
+       * belief that they configured something.
+       */
+      return null;
+  }
+}
+
+/**
+ * One rule, in the document's convention (M17.5).
+ *
+ * ⚠️ **`is_enabled` is deliberately absent.** A disabled rule is not published
+ * at all — the serializer filters it out, exactly as it does a disabled group,
+ * option or value. The flag has nothing left to say, and M17.3's
+ * `RULE_TARGET_NOT_PUBLISHED` warning depends on that being true.
+ *
+ * ⚠️ **`disabled_reason` likewise.** It exists to tell a *merchant* why the
+ * system switched a rule off; a storefront that never receives the rule has no
+ * use for the reason.
+ */
+export function toPublishedRule(rule: {
+  id: string;
+  targetType: string;
+  targetId: string;
+  action: string;
+  matchType: string;
+  conditions: unknown;
+  actionValue: Record<string, unknown> | null;
+  sortOrder: number;
+}): PublishedRule {
+  const published: Record<string, unknown> = {
+    id: rule.id,
+    target_type: rule.targetType,
+    target_id: rule.targetId,
+    action: rule.action,
+    match_type: rule.matchType,
+    conditions: toPublishedConditions(rule.conditions),
+    sort_order: rule.sortOrder,
+  };
+
+  const actionValue = toPublishedActionValue(rule.action, rule.actionValue);
+
+  /*
+   * Omitted rather than null for the four actions that take none — the same
+   * choice `optional()` makes elsewhere in this document. A key that is always
+   * present and usually null teaches a reader to ignore it.
+   */
+  if (actionValue) {
+    published.action_value = actionValue;
+  }
+
+  return published as unknown as PublishedRule;
 }

@@ -97,7 +97,20 @@ breaking change.
           ]
         }
       ],
-      "rules": []
+      "rules": [
+        {
+          "id": "01a03fb0-…",
+          "target_type": "option",             // option · group · value
+          "target_id": "01a03fa4-…",
+          "action": "hide",                    // show · hide · require · unrequire · set_price · set_default
+          "match_type": "all",                 // all · any
+          "conditions": [
+            { "option_id": "01a03fa4-…", "operator": "equals", "value": "no" }
+          ],
+          "action_value": { "amount_minor": 500 },  // omitted unless the action needs one
+          "sort_order": 10
+        }
+      ]
     }
   ]
 }
@@ -130,7 +143,36 @@ publish, because storefronts must re-fetch after one.
 | `version` | int | The publish that produced this content. Matches the snapshot it came from. |
 | `assignments` | array | Where the set applies. **Always empty in Phase 7** (Phase 13). |
 | `groups` | array | Ordered by `sort_order`, then `id`. |
-| `rules` | array | Conditional logic. **Always empty in Phase 7** (Phase 17). |
+| `rules` | array | Conditional logic (M17.5). Empty for any set published before it. |
+
+### Rule
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | UUID. |
+| `target_type` | string | `option` · `group` · `value` — what kind of row `target_id` names. |
+| `target_id` | string | The row the action acts on. **Not a foreign key**: a rule whose target is deleted is disabled and surfaced to the merchant rather than cascading away. |
+| `action` | string | `show` · `hide` · `require` · `unrequire` · `set_price` · `set_default`. |
+| `match_type` | string | `all` · `any` — how the conditions combine. |
+| `conditions` | array | Flat, never nested. Each is `{ option_id, operator, value? }`. |
+| `action_value` | object | **Omitted** unless the action needs one: `{ amount_minor }` for `set_price`, `{ value_key }` for `set_default`. |
+| `sort_order` | int | ⚠️ **Presentation, not precedence.** M17.2 makes evaluation order-independent; this decides the order a merchant reads the rule list and nothing else. |
+
+> **Nine operators**, in three operand shapes. `is_empty` and `is_not_empty`
+> carry **no** `value` — the key is absent, not null. `in` and `not_in` take an
+> array. `equals`, `not_equals` and `contains` take a scalar; `greater_than` and
+> `less_than` take a **number**, because text has no ordering PHP and JavaScript
+> agree on.
+>
+> **Disabled rules are absent entirely**, exactly as a disabled group, option or
+> value is — so `is_enabled` and `disabled_reason` never appear. A rule the
+> cascade disabled because its target was deleted is left out for the same
+> reason, and the merchant is told at publish instead.
+>
+> **Contradictions resolve by meaning, never by order** (ADR-052): `hide` beats
+> `show`, and `require` beats `unrequire`. Two rules setting *different*
+> `action_value` payloads on one target have no principled winner and are refused
+> at publish.
 
 ## Group
 
