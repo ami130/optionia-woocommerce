@@ -52,37 +52,31 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-3 — publish-time cycle
-detection.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-4 — the TypeScript
+evaluator and the shared fixture.**
 
-**Done:** 17-0 (ADR-049/050/051), **17-1** + its eight-finding audit, and **17-2**
-— six CRUD routes, four gates satisfied, four mutants killed — plus **17-2's own
-audit**: four findings, three fixed, one recorded.
+**Done:** 17-0 (three ADRs), **17-1** + audit, **17-2** + audit, **17-3** — two
+publish validators, five mutants killed, verified against real publishes.
 
-Stage 17-3 is the first stage that needs the **whole set at once**, and it owns
-three questions 17-1 and 17-2 deliberately deferred to it:
+Stage 17-4 writes the cloud's evaluator and, more importantly, **the fixture both
+languages will be held to**. Three constraints carry into it:
 
-1. **Does `targetId` name a row in this set?** Validated for shape only so far.
-2. **Does each condition's `optionId` name an option in this set?** Same.
-3. **Do the rules form a cycle?** ADR-050: rejected at publish with a message
-   naming the rules involved — *and* the evaluator still carries its own cap,
-   because the plugin evaluates a **cached** document no publish check has seen.
+1. 🔴 **The fixture must prove the middle, not just the ends.** 16b's lesson,
+   recorded: *the fixture proved both ends of pricing and neither language proved
+   the middle*. For rules the interesting failures are **iteration order**,
+   **cascade depth** and **cap behaviour** — none visible in a final state. The
+   fixture declares intermediate passes.
+2. 🔴 **Cap behaviour is a fixture case, not an implementation detail** (ADR-050).
+   16d is the precedent: PHP returned a bare `0` where TypeScript reported
+   `unpriced`, and they disagreed at exactly the boundary where the money is
+   wrong.
+3. ⚠️ **The edge rules from 17-3 must match.** Only `show`/`hide`/`set_default`
+   affect an answer; `set_price` and `require`/`unrequire` do not. An evaluator
+   disagreeing with the cycle detector would refuse documents the detector
+   passed, or loop on ones it blocked.
 
-⚠️ **A rule referencing a deleted row is not the same as a cycle.** The cascade
-already disables such a rule with `TARGET_DELETED`, so 17-3 must distinguish
-"points at nothing" (already handled, stays disabled) from "points at something
-that points back" (new, refuse the publish).
-
-⚠️ **Two narrower questions are already answered, so 17-3 must not re-answer
-them.** Since the 17-2 audit, `OptionRulesService` refuses a `targetId` that is
-not a UUID and one whose row is not the **kind** the rule claims — because a
-mismatched pair is invisible to the cascade and would govern nothing for ever.
-17-3 owns only what needs the **whole set**: is the target in *this* set, and do
-the rules form a cycle.
-
-🟡 **A self-referential rule is legitimate.** "Hide A when A is empty" is a
-one-step rule, not a cycle — verified accepted. The detector must not over-fire
-on it.
+⚠️ **Rules still do not reach the published document.** `OptionSetTree` carries
+none, so the snapshot half is **17-5**. 17-3 validates what *would* be published.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18964,6 +18958,108 @@ stage cannot build.
 | `OptionRulesService` | six methods; `rulesPerSet` enforced on create |
 | `OptionRulesController` | six routes under `option-sets/:id/rules` and `rules/:id` |
 | Tests | 11 unit, 6 isolation probes, 3 capability probes, 4 audit drives |
+
+### ✅ Stage 17-3 complete — publish-time validation, 2026-09-10
+
+**Far smaller than the plan implied**, because M7.4 built the mechanism for it
+four phases early: `PublishValidator` is a registered list whose docblock already
+named *"M17.3's cycle detection"*, `PublishContext.rules` already existed, and
+`publish.service.context()` already loaded every live rule in full. 17-3 adds
+**two validators to a list** — exactly what the contract promised.
+
+| Added | |
+|---|---|
+| `ruleTargetsAreInThisSet` | every `targetId` and condition `optionId` resolves inside the set — **blocker** |
+| `rulesHaveNoCycles` | a loop through answer-affecting actions — **blocker** |
+| `PublishContext.rules` | widened with `conditions`, `matchType`, `action` |
+| 20 tests | plus a `rule()` builder so cycle tests state only the edges they are about |
+
+#### 🔴 E2 — A rule edge is not option→option, and that is the whole difficulty
+
+A condition always names an **option**. A target may name a **group**, an
+**option** or a **value**. So an edge only closes once containment is resolved:
+
+```text
+rule 1: hide GROUP g   when option A is empty
+rule 2: show option A  when option B equals x     (B lives in g)
+```
+
+That is a genuine cycle, and **invisible to a naive `targetId → optionId`
+graph**. `idsIn()` maps a group to the options inside it and a value to the
+option that owns it, before any edge is drawn.
+
+⚠️ Verified by mutation: removing the group expansion leaves *"blocks a loop that
+closes only through a group target"* failing, and nothing else.
+
+#### 🔴 E3 — Not every action is an edge, and treating them all as edges over-fires
+
+A condition reads an option's **answer**, so an action is an edge only if it can
+change one:
+
+| Action | Edge? | Why |
+|---|---|---|
+| `show` / `hide` | **yes** | An option not rendered has no answer |
+| `set_default` | **yes** | It writes the answer directly |
+| `set_price` | no | Changes what a line costs, never an answer |
+| `require` / `unrequire` | no | Changes validation, never an answer |
+
+🔴 **`set_price` is the one worth naming.** It is the most consequential action in
+the vocabulary — ADR-049 lets it replace a value's delta — and it is still not an
+edge, because **money is an output of evaluation rather than an input to it**.
+Severity and graph position are different questions.
+
+Treating all six as edges refuses publishes that are perfectly sound. Verified:
+that mutation fails two named tests.
+
+#### 🔴 E5 — The two validators disagreed, and a pre-existing test caught it
+
+`rulesHaveTargets` has warned since 7g on a rule the cascade disabled, on the
+stated grounds that *"the rule is already disabled, so the storefront is
+consistent"*. My blocker fired on the same rows and **silently reversed that
+decision** — a merchant would have been refused a publish over logic already
+switched off.
+
+**Caught by `warns rather than blocks`, a test written four phases ago.** The
+target check now defers that case explicitly, and a test asserts the deferral so
+the two cannot drift back into disagreement.
+
+##### The disabled-rule filters run opposite ways, deliberately
+
+| Check | Disabled rules |
+|---|---|
+| `rulesHaveNoCycles` | **excluded** — a cycle among rules that never run is not one a storefront can reach |
+| `ruleTargetsAreInThisSet` | **included**, except cascade-disabled — a rule the merchant switched off is one they mean to switch on, and publishing it broken defers the same failure |
+
+Both directions are mutation-proven.
+
+#### ⚠️ E7 — A self-loop is legitimate and must not fire
+
+*"Hide A when A is empty"* is a one-step rule, verified accepted in the 17-2
+audit. The self-edge is dropped before the search, so only a loop **through
+another rule** blocks. Removing that guard fails *"accepts a single rule"* — the
+default fixture — which is how badly it would have over-fired.
+
+#### Verified end to end, against a real publish
+
+| | |
+|---|---|
+| Two-rule cycle | **400** `RULES_FORM_A_CYCLE`, and named by `publish-check` first |
+| Cross-set target | **400** `RULE_TARGET_NOT_IN_SET` |
+| Price cycle | **201** — publishes, correctly |
+| Self-referential rule | **201** |
+| Clean set with one rule | **201** |
+
+⚠️ **`cycleIn()` is iterative, not recursive.** A set may hold two hundred rules
+over as many options, and a deep chain in a recursive search would risk a stack
+overflow **inside a publish** — surfacing as a 500 rather than the actionable
+message this check exists to produce.
+
+#### What 17-3 deliberately did not do
+
+🔴 **Rules still do not reach the published document.** `OptionSetTree` carries
+no rules, so `toPublished()` cannot emit them — the snapshot half is **17-5**.
+This stage validates what *would* be published; it does not publish it. Worth
+stating plainly, because "cycle detection works" reads as "rules ship".
 
 #### 🔴 17-2 audit — four findings, three fixed and one recorded, 2026-09-10
 
