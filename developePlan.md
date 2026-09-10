@@ -19368,6 +19368,51 @@ and a rule set's states are keyed by target id — the insertion order is the or
 rules happened to fire, which M17.2 makes explicitly meaningless. Two identical
 state maps failed on ordering alone. Now compared as maps, `ksort`ed both sides.
 
+#### 🔴 17-6 audit — a divergence the fixture could not see
+
+Both evaluators run side by side on cases the fixture does **not** cover — the
+only way to find where a shared fixture is blind.
+
+##### ✅ Twelve uncovered comparisons, identical in both
+
+`"5"` vs `5` fires; `"5.0"` and `"05"` do not; leading whitespace and case
+differences do not; `contains "ABC"` vs `"abc"` does not; `in "true"` vs
+`[true]` fires; and `"-3" > -5`, `".5" < 1`, `"+7" > 5` all fire. **Twelve for
+twelve** — including the awkward ones: a bare `+`, a leading `.`, negatives.
+
+⚠️ **One probe turned out unreachable.** `equals` against an *array* answer
+differs — but `SelectionResolver` refuses a non-scalar answer as *"a probe, not a
+typo"* before rules ever see it, so it cannot arise.
+
+##### 🔴 M1 — An unreadable condition was skipped in PHP and false in TypeScript
+
+```text
+rule: match_type = "all", conditions = [ {valid, true}, "garbage" ]
+
+PHP   fires = true      ← skipped the garbage, fired on the remainder
+TS    fires = false     ← evaluated it as false, so ALL failed
+```
+
+One line: `if ( ! is_array( $condition ) ) { continue; }`, with no TypeScript
+counterpart.
+
+🔴 **The two languages disagreed about whether a field is hidden**, and ADR-051
+makes a hidden field one that is **not charged** — so they disagreed about money,
+the exact class M17.6 exists to close.
+
+🔴 **PHP's was the wrong answer.** A condition the evaluator cannot read is one it
+cannot confirm, and under `all` an unconfirmable condition must fail. Skipping
+made a rule **more likely to fire the more corrupt its document was**.
+
+⚠️ **The fixture could not catch it**, because every case carried well-formed
+conditions — the artifact meant to hold the two languages together was blind to
+the one place they parted. Four cases now pin it, covering `all`, `any`, and a
+rule whose only condition is unreadable.
+
+✏️ **The fixture cases broke my own test helper**, which assumed every condition
+was an array — the same assumption the evaluator had just been corrected for, one
+layer up. Hardened rather than worked around.
+
 #### 🔴 17-5 audit — two shapes describing one wire, and a claim that was false
 
 Four probes serializing real entities and comparing the output against the shared
