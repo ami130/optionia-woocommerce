@@ -52,27 +52,25 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-2 — rule CRUD.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-3 — publish-time cycle
+detection.**
 
-**Done:** 17-0 (ADR-049/050/051), **17-1**, and 17-1's **audit — eight findings,
-all fixed**. See
-[the audit table](#-stage-17-1-audit--eight-findings-all-fixed-2026-09-10).
+**Done:** 17-0 (ADR-049/050/051), **17-1** + its eight-finding audit, and **17-2**
+— six CRUD routes, four gates satisfied, four mutants killed.
 
-Stage 17-2 builds the CRUD surface over the **existing** `option_rules` table,
-and inherits three obligations from that audit:
+Stage 17-3 is the first stage that needs the **whole set at once**, and it owns
+three questions 17-1 and 17-2 deliberately deferred to it:
 
-1. **Wire the schema.** `ruleConditionsSchema` is imported by nothing but its own
-   spec — a deliberate stage boundary, and the same silhouette as 16c's evaluator
-   behind a closed API gate. 17-2 is where it stops being one.
-2. **Enforce `AUTHORING_LIMITS.rulesPerSet`** (200). It is declared and called by
-   nothing, because no rule-creating route exists yet. A limit nothing calls is
-   indistinguishable from a limit nobody wrote — `file_storage_mb` stayed metered
-   and unenforced for a whole phase that way.
-3. **A negative test per route.** `check-isolation.sh` gates it and runs in CI.
+1. **Does `targetId` name a row in this set?** Validated for shape only so far.
+2. **Does each condition's `optionId` name an option in this set?** Same.
+3. **Do the rules form a cycle?** ADR-050: rejected at publish with a message
+   naming the rules involved — *and* the evaluator still carries its own cap,
+   because the plugin evaluates a **cached** document no publish check has seen.
 
-⚠️ **`optionId` inside a condition is still unvalidated against the set** — by
-design. That is a cross-object question needing the set loaded, and it belongs
-with the publish-time cycle detection in **17-3**.
+⚠️ **A rule referencing a deleted row is not the same as a cycle.** The cascade
+already disables such a rule with `TARGET_DELETED`, so 17-3 must distinguish
+"points at nothing" (already handled, stays disabled) from "points at something
+that points back" (new, refuse the publish).
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -18939,6 +18937,95 @@ belongs with the publish-time check that also detects cycles (17-3). Validating 
 in two places would be two answers to one question — the divergence shape this
 project keeps paying for.
 
+### ✅ Stage 17-2 complete — rule CRUD, 2026-09-10
+
+Six routes over the existing `option_rules` table, built in the order the
+analysis set: repository, DTOs, audit actions, service, controller — **routes
+last**, because registering one makes four gates fire at once and a half-landed
+stage cannot build.
+
+| Added | |
+|---|---|
+| `OptionRulesRepository` | one join on `option_sets`, plus `countBySet` |
+| `CreateOptionRuleDto` / `Update…` / `Reorder…` | shape at the boundary, Zod for content |
+| Four `AuditAction`s | created · updated · deleted · reordered |
+| `OptionRulesService` | six methods; `rulesPerSet` enforced on create |
+| `OptionRulesController` | six routes under `option-sets/:id/rules` and `rules/:id` |
+| Tests | 11 unit, 6 isolation probes, 3 capability probes, 4 audit drives |
+
+#### 🔴 C1 — `enableImplicitConversion` silently destroyed every condition
+
+Found by the isolation fixture failing with
+*`conditions.0` — expected object, received array*. Measured with
+`plainToInstance`:
+
+```text
+in    [{ optionId: 'o1', operator: 'equals', value: 'a' }]
+out   [[]]
+```
+
+`main.ts` sets `enableImplicitConversion: true`. `class-transformer` reads the
+**design-time element type** of an array — for `unknown[]` it infers `Array` and
+coerces every element into one. **Before any validator runs**, so the schema
+never saw what the merchant sent, and 17-1's entire `.strict()` effort was
+bypassed upstream of itself.
+
+`@Type(() => Object)` names the element type and the payload survives.
+
+⚠️ **Why no sibling hit this.** `validation` and `pricing` are
+`Record<string, unknown>` — objects, which implicit conversion leaves alone.
+`conditions` is the **first array of objects in this API**, so it is the first
+field the behaviour could reach.
+
+🔴 **A unit test would not have caught it.** The transform happens in the HTTP
+pipe; a service test passing a literal never meets it. The e2e fixture did.
+
+#### 🔴 C2 — No gate compares a route's capability against anything
+
+Mutating the create route from `OPTION_SETS_EDIT` to `OPTION_SETS_VIEW` **passed
+every suite** — so a viewer could author a rule carrying `set_price`.
+
+`guards.e2e-spec` proves the permission matrix against a **synthetic probe
+controller**, which cannot tell whether a real route carries the capability its
+author intended. `check-capability-parity.sh` compares the API's table to the
+dashboard's mirror, not routes to capabilities.
+
+Closed for rules by driving the **real** routes with a demoted member. Verified
+by mutation: with the downgrade in place exactly one probe fails and the
+untouched routes still pass.
+
+⚠️ **The gap is general, not rule-specific.** Every `@RequireCapability` in this
+API rests on its author having typed the right constant. Recorded as
+**[M30.12](#m3012--no-gate-compares-a-routes-capability-against-anything)**.
+
+##### Mutations
+
+| Mutation | Outcome |
+|---|---|
+| Tenancy join removed from the repository | **killed** — five rule probes fail; TypeORM emits `r.tenantId` on a table with no such column |
+| `rulesPerSet` check removed | **killed** by two named tests |
+| Conditions trusted unvalidated | **killed** by four named tests |
+| Create downgraded to `OPTION_SETS_VIEW` | **killed** by one probe, precisely |
+
+⚠️ **Two mutations first reported "0 tests"** — compile failures, not survivors.
+Removing a call left its import unused. The import had to go too before the
+mutation tested the guard rather than the linter. Same trap as 17-1's.
+
+##### Two decisions recorded
+
+⚠️ **A rule edit does not bump `config_version`, and that is correct.** The
+document is built from **immutable published snapshots**, so a draft rule is
+invisible to every storefront until a publish. `check-config-invalidation.sh`
+watches `option_sets` and `option_set_versions` for this reason — its docblock
+records that flagging all twenty mutating routes *"over-fires by a factor of
+five"*, and noise gets exemptions added until a gate means nothing.
+`touchSet` still runs: the **set** changed, and optimistic locking depends on it.
+
+⚠️ **`sortOrder` on a rule is presentation, not precedence.** M17.2 makes
+evaluation order-independent and ADR-050 caps iterations rather than letting a
+first match win. Stated on the service, the controller and in the contract,
+because a `sortOrder` on a rule invites exactly the wrong assumption.
+
 #### 🔴 Stage 17-1 audit — eight findings, all fixed 2026-09-10
 
 Audited by **running the code**, not reading it: nine probes, five mutations, and
@@ -20427,6 +20514,17 @@ Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
 
+⚠️ **Twelve occurrences by Stage 17-2.** The twelfth hit `config-delivery`: 4 of
+its 38 tests failed with *`Fixture failed to create set: {}`* — the empty body
+again, in fixture setup rather than any assertion. Alone, the suite passes
+**38/38**. Full run: **900 of 904**.
+
+🔴 **A different suite each time, and always the fixture.** Stage 16z hit
+`config-document` and `connect-handshake`; 17-1 hit `config-document`; 17-2 hit
+`config-delivery`. What they share is not their subject but their **shape** — a
+`beforeAll` creating a set over HTTP, which is where the empty-bodied 400/404
+lands. That is the sharpest characterisation yet of where to look.
+
 ⚠️ **Eleven occurrences by Stage 17-1**, and the tenth and eleventh came from
 the **same change** — a new schema file and an enum, touching nothing either
 failing suite reads.
@@ -20537,6 +20635,49 @@ behaviour recorded per row.
 **Exit:** CI green and required for merge; the canonical E2E runs on every release;
 coverage meaningful on pricing, rules, tenancy, and cart/order — the four places a bug
 costs real money.
+
+---
+
+### M30.12 — No gate compares a route's capability against anything
+
+**Added 2026-09-10**, from Stage 17-2's mutation testing.
+
+#### 🔴 The measurement
+
+Downgrading `POST /option-sets/:id/rules` from `OPTION_SETS_EDIT` to
+`OPTION_SETS_VIEW` **passed every suite in the repository** — unit, e2e, and all
+eight gates. A viewer could then author a rule carrying `set_price`, which
+replaces a value's delta (ADR-049), on a set they are trusted only to read.
+
+#### Why every existing mechanism misses it
+
+| Mechanism | What it actually proves |
+| --- | --- |
+| `guards.e2e-spec` | The permission matrix, against a **synthetic probe controller**. It cannot see a real route at all |
+| `check-capability-parity.sh` | The API's capability *table* matches the dashboard's mirror — not that any route uses the right one |
+| `check-isolation.sh` | Every route has a **cross-tenant** probe. Cross-*role* is a different question |
+| `check-openapi.sh` | Every guarded operation declares a **realm**, not which capability |
+
+Each is correct about its own question. **Nothing asks whether
+`@RequireCapability` names the constant its author meant** — so every one of them
+rests on somebody having typed the right word, once, with no second reader.
+
+#### What this milestone owes
+
+A gate that reads the router's capability metadata and compares it against a
+declared expectation per route — the shape `check-isolation.sh` already uses,
+where a new route fails until someone states what it needs.
+
+⚠️ **The declaration must not be a second hand-written list**, or it drifts from
+the decorators exactly as four copy paths drifted in `duplication.ts`. The
+`check-architecture-doc.sh` precedent applies: read one side from the code, and
+require the other to be stated deliberately.
+
+**Closed for rules already**, by driving the real routes with a demoted member in
+`isolation-matrix.e2e-spec` — mutation-verified, exactly one probe failing on the
+downgrade. That is six routes of seventy-three.
+
+**Exit:** a mutation of any route's `@RequireCapability` fails a named test.
 
 ---
 
