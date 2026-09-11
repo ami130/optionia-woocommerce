@@ -4914,3 +4914,208 @@ migration, and no behaviour change for any existing store.
 *hidden-by-default* option are one feature, not two, and neither is meaningful
 without the other. That is a Phase 18 question at the earliest — it changes the
 option model, which is that phase's subject.
+
+---
+
+## ADR-057 — Multi-select is Phase 18's first stage, and M18.4 waits on it
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M14.1, M18.4
+
+### Context
+
+M18.4 asks for group-level rules, and its own example is *"choose at least 2 from
+this group"*. **Nothing in this system can choose two of anything.**
+
+⚠️ **This is a deferral, not a leak, and the distinction matters.** The type
+registry declares `checkbox` as `[ONE]` while M14.1's table says `one | many`,
+and says why:
+
+> *"Declaring `MANY` here would make the API **accept** a multi-select that
+> `Engine\SelectionResolver` then refuses… A merchant would author it, publish
+> it, and a customer would hit the error. `MANY` joins this array in the stage
+> that builds the array path through resolver, cart, labels and order — not
+> before."*
+
+The fence is real and enforced: `assertValidOption` answers `INCOMPATIBLE_AXIS`
+for `cardinality: many`. Measured end to end — a checkbox resolves one value, and
+an array is refused `ERROR_NOT_SCALAR`.
+
+🔴 **The gap runs further back than the resolver.** `checkbox.php` names its
+inputs `optionia[opt-id]`, **not `optionia[opt-id][]`** — so a browser sends only
+the last checked box regardless of what the server would accept.
+
+### Decision
+
+**Multi-select is built first in Phase 18**, as the stage that registry note
+names, and **M18.4 is sequenced behind it**.
+
+**1. It is the deepest change in the phase, so it goes first.** The path is
+template → request → resolver → deltas → cart item → labels → order meta →
+fulfilment output → analytics. Every later milestone that touches selections
+inherits whatever shape this lands on; building M18.2's display types or M18.5's
+presentation config first would mean revisiting them.
+
+**2. M18.4's example is unbuildable without it.** *"Choose at least 2"* is a
+count over a multi-value answer. Shipping group rules against single-value
+options would either mean counting **options answered** — a different feature
+wearing M18.4's words — or a rule that can never be satisfied.
+
+⚠️ **And `minSelections`/`maxSelections` already exist**, authorable per option
+and enforced nowhere, because there is nothing to count. This stage is what makes
+them mean something.
+
+**3. `MANY` joins the registry only when the whole path is proven**, on exactly
+the terms the note sets — not when the resolver accepts an array. The API
+accepting a configuration the storefront cannot serve is the failure the fence
+was built to prevent, and a partial build would step around it.
+
+### Consequences
+
+🔴 **The cart item key is the risk to watch.** WooCommerce derives it textually
+from `cart_item_data`, so two customers reaching the same visible configuration
+must produce **identical** payloads — an array whose order depends on checkbox
+DOM order would split one product into two lines. Selections must be sorted
+before they are frozen.
+
+⚠️ **`deltas_by_option()` pairs `resolved` with `deltas` positionally**, and a
+multi-value option contributes *several* deltas for one key. That pairing is what
+16c's defect turned on — a count mismatch returns an empty array and silently
+defeats the price freeze. It has to change shape, not just tolerate arrays.
+
+📌 **The shared fixture gains multi-select cases**, or the three evaluators agree
+only by accident. A rule condition reading a multi-value answer — `in`,
+`not_in`, `contains` — is the interesting half, and none of the 46 cases covers
+it today.
+
+---
+
+## ADR-058 — Group nesting is deferred, and it is not the same change as hidden-by-default
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M18.1
+
+### Context
+
+M18.1 asks for *"group model and nesting (depth-limited)"*. Two questions had to
+be answered before anything was built:
+
+1. Is nesting worth its cost in this phase?
+2. Is it the **same** model change as the *hidden-by-default* option state that
+   ADR-056 deferred here when it withdrew `show`?
+
+**Nesting is expensive.** `OptionSetTree.groups` is a flat array, and **21 sites
+read it** — 15 across the backend and dashboard, 6 in the plugin. Every one
+assumes one level: the serializer, the publish validators, the renderer, and
+`index_containment()`, which a rule's evaluation depends on.
+
+⚠️ **And nothing has ever asked for it.** `M18.1` appears exactly once in the
+plan — in the phase's own one-line summary. No competitive teardown names it, no
+merchant scenario records it, and no other milestone depends on it. Every other
+Phase 18 milestone has a stated purpose; this one has a sentence.
+
+### Decision
+
+**1. Nesting is deferred out of Phase 18**, recorded as **M18.1a** rather than
+silently dropped.
+
+Twenty-one call sites is a large, irreversible reshaping of the structure every
+other part of the system reads, in service of a feature with no recorded driver.
+The other four milestones are straightforwardly useful and all of them are
+cheaper. ⚠️ **If a merchant asks, this decision is one to revisit** — what it is
+not is a thing to build because a summary line mentions it.
+
+**2. It is NOT the same change as hidden-by-default, and treating them as one
+would be wrong.**
+
+| | Nesting | Hidden-by-default |
+|---|---|---|
+| Changes | the **shape** of the tree | one **boolean** on an option |
+| Blast radius | 21 tree walkers | the renderer, and `show`'s evaluator branch |
+| Blocked by | nothing — just cost | a product decision ADR-056 states |
+
+They share only the phrase *"the option model"*. Bundling them would make a
+cheap, well-understood change wait on an expensive one nobody needs — which is
+how `set_default` came to be evaluated three times over for nothing.
+
+**3. Hidden-by-default stays deferred too, and for its own reason.** It is
+meaningless without `show`, which ADR-056 withdrew; reinstating the pair is one
+feature, and it needs a merchant asking for *"this option appears only when…"*
+rather than an inference from a withdrawn action.
+
+### Consequences
+
+📌 **M18.1a records both**, so neither is lost and neither reads as scheduled
+work. The exit criterion *"merchants can structure a complex product into legible
+sections"* is met by M18.2's display types — accordion, tabs and stepped are what
+make twelve options legible, and they operate on the flat groups that already
+exist.
+
+⚠️ **Flatness is now an assumption worth stating**, rather than one that merely
+holds. Anything built in this phase may rely on it; the day nesting arrives, this
+ADR is the list of what has to change.
+
+---
+
+## ADR-059 — `display_type` and `is_collapsible` are delivered, and the overlap between them is resolved
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M18.2
+
+### Context
+
+Both fields are on `option_groups`, accepted by both DTOs, and **published in the
+config document**. Neither is authorable in the dashboard, and neither is read by
+the storefront: every group renders as a plain `<fieldset>`.
+
+⚠️ **That is the shape ADR-055 and ADR-056 just withdrew two rule actions for** —
+specified, carried across the wire, applied nowhere — so delivering rather than
+withdrawing needs a reason, not an assumption. Phase 17 ended by learning that
+"pending" is a claim, and it was wrong twice.
+
+### Decision
+
+**Both are delivered in M18.2**, and the distinction between them is settled
+here because they overlap.
+
+**1. The reason this is pending and `set_default` was dead: nothing blocks it.**
+`set_default` could not be built without contradicting ADR-051 — a decision had
+to change first. `show` could not reveal anything, because no state existed for
+it to act on. **`display_type` needs only a template and some CSS**: an 84-line
+partial and a 301-line stylesheet. The distance between "carried" and "consumed"
+is work, not a question.
+
+**2. `display_type` is the group's layout. `is_collapsible` is not a fifth
+layout.**
+
+They read as overlapping — `accordion` is collapsible by nature — and
+`is_collapsible` carries **no docblock at all**, which in this codebase means it
+was added without its reasoning being written down. Settled as:
+
+| Field | Answers |
+|---|---|
+| `display_type` | **how the group is laid out**: `inline`, `accordion`, `tabs`, `stepped` |
+| `is_collapsible` | **whether an `inline` group can be folded away**, and nothing else |
+
+🔴 **`is_collapsible` is ignored for every type but `inline`.** An accordion is
+already collapsible and a tab already hides its siblings; honouring the flag
+there would give two fields one job and let a merchant set a contradiction —
+`accordion` with `is_collapsible: false` — that no rendering can satisfy.
+
+**3. Both become authorable in the same stage that renders them.** A field the
+storefront honours but no merchant can set is the same defect in the other
+direction, and shipping the two halves separately is how the current state
+arose.
+
+### Consequences
+
+⚠️ **`stepped` is the one with a real cost.** Inline, accordion and tabs are
+layout; a wizard is *flow* — it needs to know which step a customer is on, what
+"next" means when a rule hides the step they were heading for, and what the
+add-to-cart button does before the last step. M17.9's rule runtime already
+hides and shows groups, so those interact.
+
+📌 **If `stepped` proves larger than the other three, it ships separately** and
+this ADR is the record that it was scoped as part of one milestone. It must not
+quietly become a fifth thing that publishes and renders as `inline`.
+
+**No migration.** Existing rows carry `inline` and `false`, which is what they
+render as today — so the first merchant to change one sees a change, and every
+other storefront is untouched.
