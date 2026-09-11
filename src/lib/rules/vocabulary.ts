@@ -34,7 +34,6 @@ export const RULE_ACTIONS = [
   'require',
   'unrequire',
   'set_price',
-  'set_default',
 ] as const;
 export type RuleAction = (typeof RULE_ACTIONS)[number];
 
@@ -161,5 +160,4 @@ export const ACTION_PHRASING: Readonly<Record<RuleAction, string>> = {
   require: 'Require',
   unrequire: 'Make optional',
   set_price: 'Set the price of',
-  set_default: 'Preselect',
 };

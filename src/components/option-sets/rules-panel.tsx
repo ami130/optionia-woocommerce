@@ -254,13 +254,22 @@ function AddRule({ set, onAdded }: { set: AuthoringSet; onAdded: () => void }) {
               value={action}
               onChange={(event) => setAction(event.target.value as RuleAction)}
             >
-              {RULE_ACTIONS.filter((value) => value !== 'set_price' && value !== 'set_default').map(
-                (value) => (
-                  <option key={value} value={value}>
-                    {ACTION_PHRASING[value]}
-                  </option>
-                ),
-              )}
+              {/*
+                * ⚠️ **`set_price` is offered by the vocabulary and not by this
+                * picker.** It carries a payload the builder has no field for,
+                * and what it does to a quoted total is ADR-054's open question.
+                * Offering an action a merchant cannot complete is worse than
+                * omitting one — and the vocabulary still lists it, so the
+                * cross-repo parity gate keeps watching it.
+                *
+                * ✏️ `set_default` used to be filtered here too, and is now
+                * simply gone: ADR-055 withdrew the action.
+                */}
+              {RULE_ACTIONS.filter((value) => value !== 'set_price').map((value) => (
+                <option key={value} value={value}>
+                  {ACTION_PHRASING[value]}
+                </option>
+              ))}
             </select>
           </div>
 
