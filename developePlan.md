@@ -20656,6 +20656,208 @@ customer *submits* — the `value_key` the templates render into `input.value`, 
 the value id. Returning ids would have produced rules that validate, publish, and
 **silently never fire**.
 
+### ✅ Stage 17-11 complete — the exit audit, and the five things it found
+
+**Every criterion checked against shipped code rather than the record.** Six of
+the ten verified clean on inspection. Four did not, and one of those was the
+stage's own name.
+
+| Fixed | Where |
+|---|---|
+| **G5** — rule tamper cases in the adversarial suite | `AdversarialAddToCartTest` (+5) |
+| **G2** — "not stored" proven at the **order** | `OrderLineItemTest` (+2) |
+| **G1** — the fixture gate could not see the third evaluator | both `check-shared-fixtures.sh` |
+| **G4** — the estimate showed a price the server would change | `frontend.js`, **ADR-054** |
+| **K3** — malformed conditions publish silently | `ruleConditionsAreAList` |
+| **G3** — the inlined payload bound | recorded in `Assets::publish_rules()` |
+
+#### 🔴 G5 — the adversarial suite had no rule coverage at all
+
+Twenty-seven tamper tests, and **not one involved a rule**. `grep -c
+hidden_by_rule` returned **0** across that file and `AddToCartValidatorTest`,
+while the criterion reads *"hidden-option submissions rejected **server-side**"*.
+Rejection was proven inside the resolver's own suite and never at the boundary a
+forged request actually crosses.
+
+Five cases now go through the real `apply_filters` hook: a forged value for a
+hidden option, its control, the price it must not contribute, a forged
+`action_value`, and a ghost option id.
+
+#### 🔴 G2 — "not stored" was proven at one hop of five
+
+ADR-051 is explicit — *"the path is resolver → `cart_item_data` → session → order
+meta → fulfilment output, and Phase 12 found real defects at three of those
+hops. A test asserting the resolver drops the value proves the first hop only."*
+
+`grep -l "'action' => 'hide'"` across the whole plugin suite returned **one**
+file, and it was not an order test. Now carried end to end: a customer answers an
+option, a rule hides it, and `_optionia_selections` — what a merchant fulfils
+from — is asserted not to contain it.
+
+⚠️ **My first version of that test was wrong**, and usefully so. It posted a
+value for the hidden option, which is the *forged* case the adversarial suite
+covers and which `resolve()` correctly refuses. ADR-051's case is the honest
+customer: the storefront clears and disables the field (M17.9), so what arrives
+is the **absence** of the answer, and the test had to prove that absence
+survives.
+
+#### 🔴 G1 — a gate that asked "does anyone?" instead of "do all three?"
+
+`SUITE_ROOT="tests/unit"` — the PHP suite alone, written when there were two
+evaluators. M17.9 added a third under `tests/js`. **Measured: deleting
+`tests/js/rule-fixtures.test.js` left every gate green**, still printing *"rule
+cases are executed here"*.
+
+🔴 **Widening the search was not enough.** The check asked for *at least one*
+reader, which the PHP suite satisfied alone — so the mutant survived the first
+fix. `RULE_SUITE_FLOOR` is now per repository (**2** in the plugin, **1** in the
+backend) and the parity gate normalises it, exactly as it already did for
+`SUITE_ROOT`. Deleting the JS suite now fails with *"only 1 of 2 local
+suite(s)"*.
+
+#### 🔴 G4 — the estimate showed £5.00 while the server charged £25.00
+
+Measured, on a value authored at 5.00 with a `set_price` rule setting 25.00. The
+amount never reaches the page by design (AC4 — `action_value` is withheld), so
+the estimate used the authored price.
+
+**ADR-054**: the estimate refuses when any rule on the product sets a price. That
+is the line `selectedTotal()` already draws for `percentage`, `per_char`,
+`per_unit` and `tiered` — *"a partial total is the failure mode worth avoiding:
+it looks right"*. Asked of the **rules**, not the answers, so an estimate does
+not appear and vanish as a customer types.
+
+📌 The real fix for both is Phase 21's server-quoted preview — which is what
+`common/money/line-total.ts` is exempted for in the backend's reachability gate.
+
+#### 🟡 G3, and a correction to my own earlier analysis
+
+**The 17-9 audit reported rule count as uncapped. That was wrong** —
+`AUTHORING_LIMITS.rulesPerSet = 200`, enforced at create. The real bound is
+200 × 16 KB = **3.1 MB** inlined into a product page: legal, publishable, and
+unmeasured.
+
+**Recorded rather than capped.** Realistic usage is ~39 KB, and it takes two
+hundred rules each carrying sixteen kilobytes of operands to approach the bound.
+A threshold invented without a real case is a guess, and a guess that refuses a
+publish is worse than a measurement nobody needed. What would change it: a
+merchant report, or Phase 28's performance work.
+
+#### Two criteria reworded, and why that is not bookkeeping
+
+Both said *"PHP and TS"* / *"both languages"* — written before the browser
+evaluator existed. **G1 is what that narrowness cost**: the gate enforcing the
+criterion was built to the same two-language assumption, and a whole evaluator
+could stop executing the shared cases without anything failing.
+
+#### Mutation results — eight mutants, eight killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| G5a | a hidden option accepts a posted value | `test_a_value_for_a_rule_hidden_option_is_refused_at_add_to_cart` |
+| G5b | the validator refuses everything | its control test |
+| G1a | the JS fixture suite deleted | *"only 1 of 2 local suite(s)"* |
+| G1b | one repo weakens its own gate | `check-fixture-parity.sh` |
+| P1 | the K3 validator never fires | `warns about a rule whose conditions are not a list` |
+| P2 | K3 warns about disabled rules too | `says nothing about a disabled rule` |
+| P3 | the estimate does not refuse on `set_price` | `shows no estimate when a rule sets a price` |
+| P4 | the estimate refuses always | `still estimates when no rule sets a price` |
+
+#### 🔍 The 17-11a pass — auditing the audit's own fixes
+
+Every 17-11 fix re-probed by mutation rather than re-read. **Four findings, and
+the worst was a test I had written in the same stage.**
+
+##### 🔴 A5 — my own "not stored" test proved nothing
+
+`test_a_rule_hidden_option_reaches_no_order_meta` **passed** with:
+
+| Mutant | Result |
+|---|---|
+| `$rule_hidden` emptied | ✅ passed |
+| `$rules = array()` — rules never loaded at all | ✅ passed |
+
+The customer never submitted the hidden option, so it was absent from the order
+whether rules existed or not. The test and its control distinguished *submitted*
+from *not submitted*, never *hidden* from *not hidden* — a tautology in the same
+family this project keeps finding, written while explicitly reasoning about
+ADR-051's honest-customer case.
+
+🔴 **And the criterion had been ticked on it.** Unticked the moment the tautology
+was measured, and restored only once the replacement killed both mutants — which
+is the order that keeps the record honest rather than the order that looks tidy.
+
+🔴 **The rewrite found what is actually true.** `OrderLineItem` copies the frozen
+cart line and **never re-resolves**, so nothing at that hop can strip a hidden
+option. The real guarantee is upstream: a line carrying one is refused wholesale
+by `CheckoutValidator` and never becomes an order. The two-step test now proves
+*that* — answer both options with no rule, publish the rule, watch the frozen
+line stop resolving — and its control proves the same line reaches an order when
+no rule hides it.
+
+##### 🔴 A1 — the JS suite's count assertion compared the fixture to itself
+
+```js
+expect(FIXTURE.rule_cases).toHaveLength(FIXTURE.rule_case_count);  // the file agreeing with itself
+```
+
+True however few cases ran. Measured: gutting the provider to `it.each([])` left
+the suite reporting **2 passed** and every gate green.
+
+⚠️ **The PHP suite never had the hole** — its `assertCount` reads
+`provide_rule_cases()`, the real provider, and truncating it fails. The JS side
+now tallies executions as the cases run, which is the only way an `it.each` can
+make the same guarantee.
+
+##### 🟡 A3 — K3 caught half the malformation, and then its guards were unproven
+
+The first fix checked `!Array.isArray` alone, so a list containing **junk** —
+one good condition beside one broken one — published with no finding.
+
+🔴 **Extending it exposed a second problem: three of five guards were not
+provable.** Mutating `typeof condition === 'object'` failed nothing, because
+every case then covered was rejected by the `optionId` check instead.
+
+- **Removed** `typeof condition === 'object'`: with `!Array.isArray` and the
+  field checks present, the only value it uniquely rejects is a **function**
+  carrying those fields — which cannot survive a JSON column.
+- **Kept and tested** `!Array.isArray`: an array *can* carry `optionId` and
+  `operator`, which the field checks alone call usable.
+- **Kept and tested** `!== null`, `optionId`, `operator`.
+
+All four remaining guards now die under mutation. The one that could not be
+proven is gone rather than left as decoration.
+
+##### 🟡 A4 / A2 — two limitations recorded rather than fixed
+
+**A type-only import counts as a caller** in both reachability gates. `import
+type { X } from './x'` matches the same pattern as a value import, so a module
+whose runtime use disappears reads as alive. Not fixed deliberately: telling them
+apart means parsing TypeScript rather than reading it, and a gate that needs a
+compiler breaks when the compiler moves.
+
+**ADR-051's hop chain was one link short.** `Reporting\OrderPayload` sends
+selections to the cloud and reads the same `META_SELECTIONS` the fulfilment
+output does — so it inherits the guarantee rather than needing its own. Named
+because a chain listed short is one somebody believes they have walked.
+
+##### Mutation results — ten mutants, ten killed, two after rework
+
+| # | Mutant | Killed by |
+|---|---|---|
+| A5a | rules never loaded | `test_a_line_hidden_by_a_later_rule_cannot_reach_an_order` |
+| A5b | `$rule_hidden` emptied | the same |
+| A1a | JS provider truncated | `executes every declared case` |
+| Q1 | junk inside the array accepted | `warns about a list that contains an unreadable condition` |
+| Q2 | missing `optionId` accepted | `warns about a condition with no optionId` |
+| Q3 | non-array accepted | `warns about a rule whose conditions are not a list` |
+| Q4 | `!Array.isArray` dropped | `warns about a condition that is an array wearing the right fields` |
+| Q5 | `!== null` dropped | `warns about a null condition` |
+| Q6 | `operator` check dropped | `warns about a condition with no operator` |
+| Q7 | `typeof object` dropped | **survived — the guard was removed instead** |
+
+### 🏁 Phase 17 complete — all ten exit criteria met
+
 ### M17.1 — Rule model
 
 ```text
@@ -20743,18 +20945,32 @@ Engraving = Yes"*), conflict warnings, and a rule tester.
 ### Phase 17 exit criteria
 
 ```text
-[ ] Rules evaluate identically in PHP and TS against shared fixtures
-[ ] Cycles rejected at publish with an actionable message
-[ ] The evaluator's own iteration cap holds on a CACHED document          (F2)
-[ ] Cap behaviour is a fixture case, agreed by both languages             (F3, F7)
-[ ] Hidden-option submissions rejected server-side
-[ ] A rule-hidden option is not charged and not stored                    (F4)
-[ ] set_price's interaction with all five Phase 16 price types is decided,
-    implemented, and refused where it cannot be expressed                 (F1)
-[ ] Every condition schema is .strict()                                   (F6)
-[ ] Nested/cascading rules correct
-[x] Merchants can author rules without documentation           (17-10)
+[x] Rules evaluate identically in PHP, TS and JS against shared fixtures  (17-11)
+[x] Cycles rejected at publish with an actionable message                (17-3)
+[x] The evaluator's own iteration cap holds on a CACHED document         (F2, 17-8)
+[x] Cap behaviour is a fixture case, agreed by all three languages        (F3, F7)
+[x] Hidden-option submissions rejected server-side                       (17-8, 17-11)
+[x] A rule-hidden option is not charged and not stored                   (F4, 17-11a)
+[x] set_price's interaction with all five Phase 16 price types is decided,
+    implemented, and refused where it cannot be expressed                (F1, 17-8)
+[x] Every condition schema is .strict()                                  (F6, 17-1)
+[x] Nested/cascading rules correct                                       (17-4, 17-6)
+[x] Merchants can author rules without documentation                     (17-10)
 ```
+
+✏️ **Two criteria were reworded in 17-11, and the reason matters.** Both said
+*"PHP and TS"* / *"both languages"* — written before M17.9 put a **third**
+evaluator in the browser, because AC3 forbids the storefront asking a server. The
+criteria were not wrong when written; they were narrower than the system became,
+and a criterion that names two of three implementations is one a third can fail
+without contradicting.
+
+🔴 **That narrowness was load-bearing, not cosmetic.** `check-shared-fixtures.sh`
+searched `tests/unit` alone and its rule check asked for *at least one* reader —
+so deleting `tests/js/rule-fixtures.test.js` left every gate green. Measured.
+`SUITE_ROOT` is now a list and `RULE_SUITE_FLOOR` is per repository, so the
+question the gate asks is *"does every evaluator here execute the shared
+cases?"* rather than *"does anyone?"*.
 
 ⚠️ **Five criteria added 2026-09-10** from the pre-flight analysis above. The
 original five were written before Phase 16 existed and before the plugin cached
@@ -22108,6 +22324,18 @@ Observed across four phases, with a consistent signature:
 Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
+
+⚠️ **Sixteen occurrences by Stage 17-11a**, and the sixteenth is the first where
+a suite **failed in isolation too** — `cascade.e2e-spec.ts`, 3 of 32, after the
+full run showed it taking **486 seconds**. That looked like a real regression and
+was read as one for several minutes.
+
+🔴 **It was not.** Three consecutive isolated runs afterwards: **32, 32, 32**.
+The isolated re-run had simply inherited an exhausted machine from the full run
+that preceded it — so the usual "passes alone" discriminator gave a false
+negative, which is the one failure mode this signature had not yet shown. The
+486-second suite time is the tell that survives: no assertion takes eight
+minutes.
 
 ⚠️ **Fifteen occurrences by Stage 17-10**, and the fifteenth is the first to hit
 **rate-limiting** rather than fixture setup: `auth endpoints › accepts a valid

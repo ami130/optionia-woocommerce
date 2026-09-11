@@ -136,7 +136,13 @@ fi
 # paths are genuinely independent, which is why neither can be derived from the
 # other. Only the assignment line is normalised -- every use of the variable
 # still has to match, so a gate that searched the wrong tree would be caught.
-NORMALISE_GATE="s|tests\{0,1\}/fixtures/shared|SHARED|g; s|^SUITE_ROOT=.*|SUITE_ROOT=SUITES|"
+#
+# `RULE_SUITE_FLOOR` is normalised on the same terms and for a third reason: the
+# plugin evaluates rules in **two** languages (PHP for what may be submitted,
+# JavaScript for what the page shows) and the backend in one. The number is a
+# property of the repository, not of the checks — and every *use* of it still has
+# to match, so a gate that stopped comparing readers at all would be caught.
+NORMALISE_GATE="s|tests\{0,1\}/fixtures/shared|SHARED|g; s|^SUITE_ROOT=.*|SUITE_ROOT=SUITES|; s|^RULE_SUITE_FLOOR=.*|RULE_SUITE_FLOOR=N|"
 PLUGIN_GATE=$(sed "$NORMALISE_GATE" optioniaWooCommercePlugin/bin/check-shared-fixtures.sh)
 BACKEND_GATE=$(sed "$NORMALISE_GATE" optioniaWooCommerceBackend/bin/check-shared-fixtures.sh)
 
