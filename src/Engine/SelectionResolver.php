@@ -297,27 +297,17 @@ final class SelectionResolver {
 	public const UNPRICED_RULE_CONFLICT = 'rule_price_conflict';
 
 	/**
-	 * Rule target types, as the cloud's `RuleTargetType` spells them.
+	 * A rule target naming one value, as the cloud's `RuleTargetType` spells it.
 	 *
-	 * Constants rather than literals because the three are read together and
-	 * mean different things structurally — an option target hides an answer, a
-	 * group target hides several, a value target hides none and removes a
-	 * choice. A typo in any one of them would silently stop a rule applying,
-	 * which is the failure mode hardest to notice.
-	 */
-	private const TARGET_OPTION = 'option';
-
-	/**
-	 * A rule target naming a group: hides every option inside it.
+	 * ✏️ **`option` and `group` were constants here too, and are gone.** Once
+	 * `index_containment()` mapped a value to no options, nothing needed to ask
+	 * *"is this target an option or a group?"* — the map answers it structurally,
+	 * and reading the type as well was a second mechanism for one fact. Removing
+	 * it changed no test; removing the map broke two.
 	 *
-	 * @see self::TARGET_OPTION
-	 */
-	private const TARGET_GROUP = 'group';
-
-	/**
-	 * A rule target naming one value: removes a choice, never the question.
-	 *
-	 * @see self::TARGET_OPTION
+	 * This one survives because `hidden_values()` asks the opposite question, and
+	 * the map cannot answer it: a value target maps to nothing precisely so it
+	 * clears no answer, which is also why it cannot be recognised from the map.
 	 */
 	private const TARGET_VALUE = 'value';
 
@@ -485,7 +475,7 @@ final class SelectionResolver {
 			return Result::error( self::ERROR_RULES_UNSETTLED );
 		}
 
-		$rule_hidden  = self::hidden_options( $rules, $evaluation['states'], $containment );
+		$rule_hidden  = self::hidden_options( $evaluation['states'], $containment );
 		$hidden_value = self::hidden_values( $rules, $evaluation['states'] );
 
 		/*
@@ -1503,44 +1493,34 @@ final class SelectionResolver {
 	 * no caller has to know that a group id and an option id are different kinds
 	 * of key.
 	 *
-	 * 🔴 **A hidden *value* must not hide its option, and the state map alone
-	 * cannot tell the difference.** `RuleEvaluator` keys its states by
-	 * `target_id` and carries no `target_type` — deliberately, because conflict
-	 * resolution is per target and the type never enters it. But
-	 * `index_containment()` maps a value id to the option that owns it, which is
-	 * the right answer to *"where does this target live"* and the wrong answer to
-	 * *"what does hiding it clear"*: hiding one colour of five removes a choice,
-	 * not the question.
+	 * 🔴 **`$containment` is the only thing that decides this, and that is
+	 * deliberate.** A value target maps to no options there — hiding one colour
+	 * of five removes a *choice*, not the question — so a hidden value
+	 * contributes nothing here without needing to be filtered out by type.
 	 *
-	 * So the **rules** are consulted for the type, not the states. Measured
-	 * before this read `target_type`: a rule hiding a single value emptied the
-	 * whole option, and a required option with four remaining choices reported
-	 * `required` against a customer who could see and pick them.
+	 * ✏️ **This method used to read `target_type` as well**, back when
+	 * `index_containment()` mapped a value to its owning option. Fixing that map
+	 * (M17.8's audit) made the type check dead: removing it changed no test,
+	 * while removing the *map* fix broke two. Two mechanisms for one fact is the
+	 * shape that let two mutants survive in 17-4 — each hid the other's absence —
+	 * so the redundant half went and the load-bearing one stayed.
 	 *
 	 * A hidden value is handled where values are looked up instead — as a value
-	 * the option no longer offers.
+	 * the option no longer offers. See `hidden_values()`.
 	 *
-	 * @param array<int, array<string, mixed>>    $rules       Every rule, flattened.
 	 * @param array<string, array<string, mixed>> $states      Target id -> resolved state.
 	 * @param array<string, array<int, string>>   $containment Target id -> the options under it.
 	 * @return array<string, bool>
 	 */
-	private static function hidden_options( array $rules, array $states, array $containment ): array {
+	private static function hidden_options( array $states, array $containment ): array {
 		$hidden = array();
 
-		foreach ( $rules as $rule ) {
-			$target_id   = isset( $rule['target_id'] ) && is_scalar( $rule['target_id'] ) ? (string) $rule['target_id'] : '';
-			$target_type = isset( $rule['target_type'] ) && is_scalar( $rule['target_type'] ) ? (string) $rule['target_type'] : '';
-
-			if ( self::TARGET_OPTION !== $target_type && self::TARGET_GROUP !== $target_type ) {
+		foreach ( $states as $target_id => $state ) {
+			if ( empty( $state['hidden'] ) ) {
 				continue;
 			}
 
-			if ( empty( $states[ $target_id ]['hidden'] ) ) {
-				continue;
-			}
-
-			foreach ( $containment[ $target_id ] ?? array() as $option_id ) {
+			foreach ( $containment[ (string) $target_id ] ?? array() as $option_id ) {
 				$hidden[ $option_id ] = true;
 			}
 		}

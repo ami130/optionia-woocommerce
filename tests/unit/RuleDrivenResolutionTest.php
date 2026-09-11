@@ -597,6 +597,163 @@ final class RuleDrivenResolutionTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 A hidden group does not hide a *value* that happens to share its id.
+	 *
+	 * `hidden_values()` reads `target_type` rather than trusting the id alone,
+	 * and this is the case that proves it must. Ids are UUIDv7 in the cloud, so
+	 * two objects never collide by accident — but **AC4 makes the document input
+	 * rather than authority**, and a forged or corrupted one can carry whatever
+	 * ids it likes. A payload that made a group id equal a value id would
+	 * otherwise refuse a choice the customer could legitimately make.
+	 *
+	 * Added by the follow-up audit, which found the guard surviving mutation:
+	 * removing the type check broke no test, because every fixture used distinct
+	 * ids. A guard nothing can fail is a guard nobody knows is load-bearing.
+	 */
+	public function test_a_hidden_group_does_not_hide_a_value_sharing_its_id(): void {
+		$shared = 'collides-with-a-group';
+
+		$result = SelectionResolver::resolve(
+			array(
+				array(
+					'id'     => 'set-1',
+					'groups' => array(
+						array(
+							'id'      => $shared,
+							'options' => array(
+								array(
+									'id'     => 'opt-b',
+									'type'   => 'radio',
+									'values' => array(
+										array(
+											'id'        => 'val-b',
+											'value_key' => 'bee',
+										),
+									),
+								),
+							),
+						),
+						array(
+							'id'      => 'group-a',
+							'options' => array(
+								array(
+									'id'     => 'opt-a',
+									'type'   => 'radio',
+									'values' => array(
+										array(
+											'id'        => 'val-yes',
+											'value_key' => 'yes',
+										),
+									),
+								),
+								array(
+									'id'     => 'opt-c',
+									'type'   => 'radio',
+									'values' => array(
+										// Same id as the group hidden above.
+										array(
+											'id'        => $shared,
+											'value_key' => 'cee',
+										),
+									),
+								),
+							),
+						),
+					),
+					'rules'  => array(
+						self::rule( 'r-1', 'hide', 'group', $shared, 'opt-a', 'equals', 'yes' ),
+					),
+				),
+			),
+			array(
+				'opt-a' => 'yes',
+				'opt-c' => 'cee',
+			)
+		);
+
+		$this->assertTrue( $result->is_ok(), 'The group is hidden; the value merely shares its id.' );
+		$this->assertArrayHasKey( 'opt-c', $result->value()['resolved'] );
+	}
+
+	/**
+	 * 🔴 `unrequire` lifts a merchant's authored `is_required`.
+	 *
+	 * ⚠️ **This is a decision, not a specification.** ADR-052 settles `require`
+	 * against `unrequire` *between rules* — restrictive wins — and is silent on
+	 * rule-versus-authoring. The resolver reads a rule that fired as replacing
+	 * the merchant's answer in both directions, on the grounds that `unrequire`
+	 * is otherwise an action that can never do anything: every option it could
+	 * target is either already optional or authored required.
+	 *
+	 * Pinned here because the follow-up audit found the branch **surviving
+	 * mutation** — rewriting it so an authored `is_required` always wins broke no
+	 * test. An undecided behaviour that is also unproven is one nobody can tell
+	 * has changed. Carried to 17-11; if the exit audit decides the other way,
+	 * this test is the thing that changes with it.
+	 */
+	public function test_unrequire_lifts_an_authored_required_flag(): void {
+		$sets = self::sets_with_rule( 'unrequire', 'option', 'opt-b' );
+
+		$sets[0]['groups'][1]['options'][0]['is_required'] = true;
+
+		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => 'yes' ) );
+
+		$this->assertTrue( $result->is_ok(), 'The rule fired, so the authored flag no longer applies.' );
+	}
+
+	/**
+	 * ...and the same option is still required when that rule does not fire.
+	 *
+	 * The control. Without it, a mutation that skipped the required pass
+	 * altogether would satisfy the assertion above — "no error" is produced just
+	 * as well by a check that never runs.
+	 */
+	public function test_the_authored_required_flag_stands_when_unrequire_does_not_fire(): void {
+		$sets = self::sets_with_rule( 'unrequire', 'option', 'opt-b' );
+
+		$sets[0]['groups'][1]['options'][0]['is_required'] = true;
+
+		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => 'no' ) );
+
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame( SelectionResolver::ERROR_REQUIRED, $result->get_errors()[0]['code'] );
+	}
+
+	/**
+	 * A `set_price` on the chosen value beats one on the whole option.
+	 *
+	 * The more specific statement wins, the same way a value's `price_config` is
+	 * more specific than the option's `pricing`. Both rules fire here — 900 on
+	 * the option, 300 on the value — so a total of 1300 proves the value won and
+	 * 1900 would prove it did not.
+	 *
+	 * Found surviving mutation by the follow-up audit: no test targeted a
+	 * `value` with `set_price` at all, so removing the precedence changed
+	 * nothing.
+	 */
+	public function test_a_value_set_price_beats_an_option_set_price(): void {
+		$sets = self::sets_with_rule( 'set_price', 'option', 'opt-b' );
+
+		$sets[0]['rules'][0]['action_value'] = array( 'amount_minor' => 900 );
+
+		$on_value                 = self::rule( 'r-2', 'set_price', 'value', 'val-extra', 'opt-a', 'equals', 'yes' );
+		$on_value['action_value'] = array( 'amount_minor' => 300 );
+		$sets[0]['rules'][]       = $on_value;
+
+		$result = SelectionResolver::resolve(
+			$sets,
+			array(
+				'opt-a' => 'yes',
+				'opt-b' => 'extra',
+			),
+			1000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1300, $result->value()['total_minor'] );
+	}
+
+	/**
 	 * Two sets whose rules differ only in document order.
 	 *
 	 * @param bool $reversed Whether to emit the pair the other way round.
