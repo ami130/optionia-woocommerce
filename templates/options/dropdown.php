@@ -129,6 +129,17 @@ unset( $optionia_probe );
 			$optionia_key = (string) $optionia_value['value_key'];
 
 			/*
+			 * 🔴 **The value's own id, for a rule that targets one value.**
+			 * `value_key` is unique only within one option; a rule's `target_id`
+			 * must identify a value across a whole set. Emitted only when
+			 * present, so a document from a cloud older than M17.8 carries no
+			 * empty attribute the runtime could match by accident.
+			 */
+			$optionia_value_id = isset( $optionia_value['id'] ) && is_scalar( $optionia_value['id'] )
+				? (string) $optionia_value['id']
+				: '';
+
+			/*
 			 * A blank label is treated as no group: an empty `<optgroup label="">`
 			 * renders as an unlabelled indent in every browser, which reads as a
 			 * rendering fault rather than a merchant's choice.
@@ -172,6 +183,9 @@ unset( $optionia_probe );
 			?>
 			<option
 				value="<?php echo esc_attr( $optionia_key ); ?>"
+				<?php if ( '' !== $optionia_value_id ) : ?>
+					data-optionia-value="<?php echo esc_attr( $optionia_value_id ); ?>"
+				<?php endif; ?>
 				<?php if ( '' !== $optionia_ptype ) : ?>
 					data-optionia-price-type="<?php echo esc_attr( $optionia_ptype ); ?>"
 				<?php endif; ?>

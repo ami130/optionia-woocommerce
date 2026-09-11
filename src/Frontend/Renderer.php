@@ -168,6 +168,13 @@ final class Renderer {
 
 		$this->assets->enqueue_frontend();
 
+		/*
+		 * Rules travel with the page, after the enqueue that registers the
+		 * handle they attach to. Per product, because a page may render several
+		 * and `enqueue_frontend()` is idempotent — see `publish_rules()`.
+		 */
+		$this->assets->publish_rules( $product_id, $sets );
+
 		// phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- every template escapes its own output; this is assembled markup.
 		echo $this->templates->render(
 			'partials/option-sets.php',
@@ -223,7 +230,19 @@ final class Renderer {
 					continue;
 				}
 
+				/*
+				 * 🔴 **The `id` is carried for M17.9, and nothing else reads it.**
+				 * A rule may target a group, and the storefront runtime resolves
+				 * a target by id — so a group without one in the DOM is a rule
+				 * the page cannot apply, however correctly the evaluator decided
+				 * it.
+				 *
+				 * Options have carried theirs since Phase 10; groups did not,
+				 * because until rules existed nothing on the page needed to name
+				 * a group.
+				 */
 				$groups[] = array(
+					'id'          => isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '',
 					'label'       => isset( $group['label'] ) ? (string) $group['label'] : '',
 					'description' => isset( $group['description'] ) ? (string) $group['description'] : '',
 					'options'     => $markup,

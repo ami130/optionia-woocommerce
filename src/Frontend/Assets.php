@@ -110,6 +110,84 @@ final class Assets {
 	}
 
 	/**
+	 * Hand one product's conditional rules to the storefront runtime (M17.9).
+	 *
+	 * 🔴 **Inlined at render time, never fetched.** AC3 forbids the storefront
+	 * read path reaching Optionia, and `bin/check-architecture.sh` enforces it
+	 * over every render-path file — so the rules travel with the page that needs
+	 * them, exactly as the currency settings do.
+	 *
+	 * ⚠️ **`wp_add_inline_script`, not `wp_localize_script`, and the difference
+	 * matters here.** `enqueue_frontend()` is idempotent: a page rendering two
+	 * configurable products calls it twice and the second call returns early. A
+	 * second `wp_localize_script` under the same object name would be dropped
+	 * with it, so the second product would silently get no rules. Inline script
+	 * **appends**, and the payload is keyed by product id, which is what the DOM
+	 * is keyed by too.
+	 *
+	 * 🔴 **Nothing price-like crosses this boundary.** Only what show/hide needs:
+	 * a rule's target, its action, and its conditions. `action_value` is
+	 * deliberately withheld — a `set_price` amount on the page would be a second
+	 * source of truth for a number AC4 makes server-authoritative, and M17.9 is
+	 * show/hide only. The estimate already refuses to price four of five types
+	 * rather than disagree with the server; this keeps that line.
+	 *
+	 * @param int                              $product_id The product these rules belong to.
+	 * @param array<int, array<string, mixed>> $sets       The sets assigned to it.
+	 */
+	public function publish_rules( int $product_id, array $sets ): void {
+		$rules = array();
+
+		foreach ( $sets as $set ) {
+			foreach ( (array) ( $set['rules'] ?? array() ) as $rule ) {
+				if ( ! is_array( $rule ) ) {
+					continue;
+				}
+
+				$conditions = isset( $rule['conditions'] ) && is_array( $rule['conditions'] )
+					? array_values( array_filter( $rule['conditions'], 'is_array' ) )
+					: array();
+
+				$rules[] = array(
+					'target_type' => isset( $rule['target_type'] ) && is_scalar( $rule['target_type'] ) ? (string) $rule['target_type'] : '',
+					'target_id'   => isset( $rule['target_id'] ) && is_scalar( $rule['target_id'] ) ? (string) $rule['target_id'] : '',
+					'action'      => isset( $rule['action'] ) && is_scalar( $rule['action'] ) ? (string) $rule['action'] : '',
+					'match_type'  => isset( $rule['match_type'] ) && is_scalar( $rule['match_type'] ) ? (string) $rule['match_type'] : 'all',
+					'conditions'  => $conditions,
+				);
+			}
+		}
+
+		if ( array() === $rules ) {
+			/*
+			 * A product with no rules emits nothing at all — not an empty array.
+			 * The overwhelming majority of products have none, and a page that
+			 * carries no rule payload is one the runtime can skip entirely.
+			 */
+			return;
+		}
+
+		$payload = wp_json_encode(
+			array(
+				'productId' => $product_id,
+				'rules'     => $rules,
+			)
+		);
+
+		if ( false === $payload ) {
+			// Unencodable configuration draws no rules rather than broken JSON,
+			// which would take the whole runtime down with it (AC3).
+			return;
+		}
+
+		wp_add_inline_script(
+			Keys::ASSET_FRONTEND_JS,
+			'window.optioniaRules = window.optioniaRules || []; window.optioniaRules.push(' . $payload . ');',
+			'before'
+		);
+	}
+
+	/**
 	 * What the upload runtime needs to reach the plugin's own route (M15.2).
 	 *
 	 * ⚠️ **The nonce here is a filter, not a credential, and the difference is

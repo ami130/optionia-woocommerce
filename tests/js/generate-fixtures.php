@@ -43,6 +43,8 @@ function optionia_fixture_option( string $type, array $extras = array() ): array
 	$values = $takes_values
 		? array(
 			array(
+				// A rule may target one value, and the runtime resolves it by id.
+				'id'           => 'val-' . $type . '-lux',
 				'value_key'    => 'lux',
 				'label'        => 'Luxury',
 				'price_config' => array(

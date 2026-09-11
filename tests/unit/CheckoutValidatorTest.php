@@ -245,6 +245,88 @@ final class CheckoutValidatorTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 Rules that never settle get a message that is true.
+	 *
+	 * `ERROR_RULES_UNSETTLED` carries `field => null` — rightly, since a cascade
+	 * that does not converge is not about any one option. But every bucket in
+	 * `message()` is keyed by field, so the fieldless error fell through to the
+	 * fully generic *"an option that is no longer available… please remove it"*.
+	 * No option was removed, and **removing the line cannot fix it**.
+	 *
+	 * ⚠️ **Reaching the cap takes a long chain of ANSWERED options, and the
+	 * cart line must carry them.** Two options cannot do it: accumulated hides
+	 * make the fixed point monotone, so a pair chasing each other settles and
+	 * reports `hidden_by_rule` instead. Measured, while a first version of this
+	 * test asserted only *"not no-longer-available"* and passed on the
+	 * rule-hidden message — proving nothing about the branch it was written for.
+	 *
+	 * Found by the 17-9 audit while confirming 17-7.
+	 */
+	public function test_rules_that_never_settle_do_not_blame_a_missing_option(): void {
+		$chain = array();
+
+		for ( $i = 0; $i <= 12; $i++ ) {
+			$chain[] = array(
+				'id'     => "chain-$i",
+				'type'   => 'radio',
+				'label'  => "Chain $i",
+				'values' => array(
+					array(
+						'value_key' => 'x',
+						'label'     => 'X',
+					),
+				),
+			);
+		}
+
+		// The line is frozen with every link answered, so each hide clears an
+		// answer the next link reads and the chain advances one option a pass.
+		$this->store_config( 'lux', false, array(), $chain );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => 'lux' );
+
+		foreach ( $chain as $option ) {
+			$_POST[ Keys::FIELD_PREFIX ][ $option['id'] ] = 'x';
+		}
+
+		$line = array_merge(
+			( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )->attach( array(), self::PRODUCT_ID, 0, 1 ),
+			array( 'product_id' => self::PRODUCT_ID )
+		);
+
+		$rules = array();
+
+		for ( $i = 1; $i <= 12; $i++ ) {
+			$rules[] = array(
+				'id'          => "r-$i",
+				'target_type' => 'option',
+				'target_id'   => "chain-$i",
+				'action'      => 'hide',
+				'match_type'  => 'all',
+				'conditions'  => array(
+					array(
+						'option_id' => 'chain-' . ( $i - 1 ),
+						'operator'  => 1 === $i ? 'is_not_empty' : 'is_empty',
+					),
+				),
+				'sort_order'  => 10,
+			);
+		}
+
+		$this->store_config( 'lux', false, $rules, $chain );
+
+		$this->validator()->validate( $this->cart_with( $line ) );
+
+		$this->assertNotEmpty( $GLOBALS['optionia_test_notices'], 'The line must not check out silently.' );
+
+		// The branch under test, named rather than inferred from what it is not.
+		$this->assertStringContainsString(
+			'cannot be worked out',
+			$GLOBALS['optionia_test_notices'][0]['message']
+		);
+	}
+
+	/**
 	 * A valid line raises nothing.
 	 *
 	 * The half that is easy to lose: a validator that blocked everything would
@@ -627,7 +709,7 @@ final class CheckoutValidatorTest extends TestCase {
 	 * @param string $value_key      The value key `opt-a` offers. Change it to simulate a deletion.
 	 * @param bool   $extra_required Add a newly-required option the cart line predates.
 	 */
-	private function store_config( string $value_key, bool $extra_required = false, array $rules = array() ): void {
+	private function store_config( string $value_key, bool $extra_required = false, array $rules = array(), array $extra_options = array() ): void {
 		$options = array(
 			array(
 				'id'     => 'opt-a',
@@ -675,6 +757,8 @@ final class CheckoutValidatorTest extends TestCase {
 				),
 			);
 		}
+
+		$options = array_merge( $options, $extra_options );
 
 		( new Repository( new Logger( new Settings() ) ) )->store(
 			array(

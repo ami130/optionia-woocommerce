@@ -77,7 +77,24 @@ $optionia_describe = OptionView::described_by( $optionia_option );
 				continue;
 			}
 
-			$optionia_key      = (string) $optionia_value['value_key'];
+			$optionia_key = (string) $optionia_value['value_key'];
+
+			/*
+			 * 🔴 **The value's own id, for a rule that targets one value.**
+			 *
+			 * `value_key` is unique only **within one option**, so it cannot
+			 * identify a value across a set — matching on it would let a rule
+			 * hiding `large` in one option hide `large` in every other. The
+			 * published document carries a value `id` since M17.8 for exactly
+			 * this, and M17.9 is what reads it on the page.
+			 *
+			 * Emitted only when present: a document from a cloud older than
+			 * M17.8 has no value ids, and an empty attribute would be a target
+			 * the runtime could match by accident.
+			 */
+			$optionia_value_id = isset( $optionia_value['id'] ) && is_scalar( $optionia_value['id'] )
+				? (string) $optionia_value['id']
+				: '';
 			$optionia_input_id = 'optionia-' . $optionia_id . '-' . sanitize_key( $optionia_key );
 
 			/*
@@ -104,6 +121,9 @@ $optionia_describe = OptionView::described_by( $optionia_option );
 					name="<?php echo esc_attr( $optionia_field ); ?>"
 					value="<?php echo esc_attr( $optionia_key ); ?>"
 					data-optionia="value"
+					<?php if ( '' !== $optionia_value_id ) : ?>
+						data-optionia-value="<?php echo esc_attr( $optionia_value_id ); ?>"
+					<?php endif; ?>
 					<?php if ( '' !== $optionia_ptype ) : ?>
 						data-optionia-price-type="<?php echo esc_attr( $optionia_ptype ); ?>"
 					<?php endif; ?>

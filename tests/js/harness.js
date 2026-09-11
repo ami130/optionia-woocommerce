@@ -8,6 +8,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SOURCE = readFileSync(resolve(HERE, '../../assets/js/frontend.js'), 'utf8');
 
 /**
+ * The rule evaluator, which the storefront loads as a separate script.
+ *
+ * `Assets.php` registers it before `frontend.js`, so evaluating it first here is
+ * what a browser does — and `applyRules()` degrades to doing nothing when the
+ * namespace is absent, which a test can also exercise by passing `rules: false`.
+ */
+const RULES_SOURCE = readFileSync(resolve(HERE, '../../assets/js/rules.js'), 'utf8');
+
+/**
  * Default currency, matching what `Assets.php` localises.
  *
  * Overridable per test so a store with different conventions — a comma decimal
@@ -168,6 +177,18 @@ export async function loadStorefront(html, options = {}) {
     this.append = (name, value) => this.entries.push([name, value]);
     this.get = (name) => (this.entries.find((e) => e[0] === name) ?? [])[1];
   };
+
+  if (options.engine !== false) {
+    dom.window.eval(RULES_SOURCE);
+  }
+
+  /*
+   * Rules as `Assets::publish_rules()` pushes them: one entry per product, on a
+   * global the runtime reads by product id.
+   */
+  if (options.rules) {
+    dom.window.optioniaRules = [{ productId: options.productId ?? 1, rules: options.rules }];
+  }
 
   dom.window.eval(SOURCE);
 

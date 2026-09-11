@@ -371,6 +371,26 @@ final class CheckoutValidator {
 		$hidden  = array();
 
 		foreach ( $errors as $error ) {
+			/*
+			 * 🔴 **A refusal that names no option is answered before the loop
+			 * skips it.** `ERROR_RULES_UNSETTLED` carries `field => null`, and
+			 * rightly — a cascade that never settles is not about any one
+			 * option. But every bucket below is keyed by field, so the fieldless
+			 * error fell through all of them to the fully generic wording:
+			 * *"an option that is no longer available… please remove it"*.
+			 *
+			 * Both halves were wrong, and the second actively unhelpful: no
+			 * option was removed, and removing the line cannot fix rules that do
+			 * not converge. Found by the 17-9 audit; the customer now gets a
+			 * sentence that is true and a merchant gets a logged code.
+			 */
+			if ( SelectionResolver::ERROR_RULES_UNSETTLED === ( $error['code'] ?? '' ) ) {
+				return __(
+					'Sorry, the options on one of the products in your cart cannot be worked out right now. Please contact us so we can complete your order.',
+					'optionia'
+				);
+			}
+
 			$field = isset( $error['field'] ) && is_scalar( $error['field'] ) ? (string) $error['field'] : '';
 
 			if ( '' === $field ) {

@@ -120,6 +120,308 @@
 	}
 
 	/**
+	 * The customer's answers, keyed by option id, as the evaluator reads them.
+	 *
+	 * 🔴 **Shaped exactly like the server's `$selections`**, because the same
+	 * rules are evaluated against both and a different shape is a different
+	 * answer. One scalar per option: an unchecked box and an untouched field are
+	 * both **absent**, not empty strings, so `is_empty` means the same thing
+	 * here as it does in `SelectionResolver`.
+	 *
+	 * @param {Element} root The options container.
+	 * @return {Object} Option id -> the customer's answer.
+	 */
+	function answersIn( root ) {
+		var answers = {};
+		var options = root.querySelectorAll( '[data-optionia-option]' );
+		var i;
+
+		for ( i = 0; i < options.length; i++ ) {
+			var option = options[ i ];
+			var id = option.getAttribute( 'data-optionia-option' );
+
+			if ( ! id ) {
+				continue;
+			}
+
+			var checked = option.querySelector( 'input[type="radio"][data-optionia="value"]:checked, input[type="checkbox"][data-optionia="value"]:checked' );
+
+			if ( checked ) {
+				answers[ id ] = checked.value;
+
+				continue;
+			}
+
+			var select = option.querySelector( 'select[data-optionia="value"]' );
+
+			if ( select ) {
+				if ( '' !== select.value ) {
+					answers[ id ] = select.value;
+				}
+
+				continue;
+			}
+
+			/*
+			 * A typed field: text, number, date, range, quantity. Its value is
+			 * the answer, and a blank one is left absent rather than stored as
+			 * `''` — see the note above on what `is_empty` has to mean.
+			 *
+			 * 🔴 **Radios and checkboxes are excluded explicitly, and must be.**
+			 * A radio carries its `value` attribute whether or not it is chosen,
+			 * so a bare `input[data-optionia="value"]` matches an *unchecked*
+			 * one and reads the answer the customer did not give. Measured: an
+			 * untouched form hid an option, because `opt-a` read `"yes"` from a
+			 * radio nobody had selected. The `:checked` branch above is the only
+			 * one entitled to answer for those two types.
+			 */
+			var typed = option.querySelector(
+				'input[data-optionia="value"]:not([type="radio"]):not([type="checkbox"]), textarea[data-optionia="value"]'
+			);
+
+			if ( typed && '' !== typed.value ) {
+				answers[ id ] = typed.value;
+			}
+		}
+
+		return answers;
+	}
+
+	/**
+	 * Which options each rule target controls, built from the page itself.
+	 *
+	 * Mirrors `SelectionResolver::index_containment()`, and the asymmetry is the
+	 * same one: a **group** controls every option inside it, an **option**
+	 * controls itself, and a **value** controls **nothing** — hiding one choice
+	 * of five removes a choice, not the question. Mapping a value to its option
+	 * here would clear the answer of a customer who picked a different value,
+	 * which is the defect M17.8's audit found on the server.
+	 *
+	 * @param {Element} root The options container.
+	 * @return {Object} Target id -> the option ids whose answers it clears.
+	 */
+	function containmentIn( root ) {
+		var under = {};
+		var groups = root.querySelectorAll( '[data-optionia-group]' );
+		var i;
+		var j;
+
+		for ( i = 0; i < groups.length; i++ ) {
+			var groupId = groups[ i ].getAttribute( 'data-optionia-group' );
+			var inGroup = groups[ i ].querySelectorAll( '[data-optionia-option]' );
+
+			if ( groupId ) {
+				under[ groupId ] = [];
+			}
+
+			for ( j = 0; j < inGroup.length; j++ ) {
+				var optionId = inGroup[ j ].getAttribute( 'data-optionia-option' );
+
+				if ( ! optionId ) {
+					continue;
+				}
+
+				if ( groupId ) {
+					under[ groupId ].push( optionId );
+				}
+
+				under[ optionId ] = [ optionId ];
+			}
+		}
+
+		// A value target clears nothing, and is registered so it is still known.
+		var values = root.querySelectorAll( '[data-optionia-value]' );
+
+		for ( i = 0; i < values.length; i++ ) {
+			var valueId = values[ i ].getAttribute( 'data-optionia-value' );
+
+			if ( valueId ) {
+				under[ valueId ] = [];
+			}
+		}
+
+		return under;
+	}
+
+	/**
+	 * The rules this block was given, or an empty list.
+	 *
+	 * `Assets::publish_rules()` pushes one entry per product, because a page may
+	 * render several. Matching on the product id is what keeps one product's
+	 * rules off another's controls.
+	 *
+	 * @param {Element} root The options container.
+	 * @return {Array} The rules for this product.
+	 */
+	function rulesFor( root ) {
+		var published = window.optioniaRules;
+
+		if ( ! Array.isArray( published ) ) {
+			return [];
+		}
+
+		var productId = root.getAttribute( 'data-optionia-product' );
+		var found = [];
+		var i;
+
+		for ( i = 0; i < published.length; i++ ) {
+			var entry = published[ i ];
+
+			if ( entry && String( entry.productId ) === String( productId ) && Array.isArray( entry.rules ) ) {
+				found = found.concat( entry.rules );
+			}
+		}
+
+		return found;
+	}
+
+	/**
+	 * Show or hide controls according to the rules (M17.9).
+	 *
+	 * 🔴 **Hiding clears what was typed, and that is ADR-051.** A hidden option
+	 * is not charged, not stored and **not restored** — so the field comes back
+	 * empty if a rule re-shows it. Restoring would mean the page holds a value
+	 * the customer cannot see, cannot edit and did not re-confirm, and then
+	 * charges for it the moment a rule flips. Exactly one state exists: what is
+	 * on the screen.
+	 *
+	 * ⚠️ **`hidden`, not `display: none` in a style attribute.** The property
+	 * removes the element from the accessibility tree as well as the layout, so
+	 * a screen reader does not announce a field a sighted customer cannot see.
+	 * A CSS-only hide leaves it focusable and readable.
+	 *
+	 * 🔴 **A refusal shows everything.** If the rules do not settle (ADR-050),
+	 * the page is left with every control visible rather than in whatever state
+	 * the last pass reached. The server refuses what it must; a customer seeing
+	 * a form they can act on beats a blank product they cannot.
+	 *
+	 * @param {Element} root The options container.
+	 */
+	function applyRules( root ) {
+		var engine = window.optioniaRuleEngine;
+		var rules = rulesFor( root );
+
+		if ( ! engine || 0 === rules.length ) {
+			return;
+		}
+
+		var outcome = engine.evaluate( rules, answersIn( root ), containmentIn( root ) );
+
+		if ( null !== outcome.refused ) {
+			revealAll( root );
+
+			return;
+		}
+
+		var states = outcome.states;
+
+		revealAll( root );
+
+		Object.keys( states ).forEach( function ( targetId ) {
+			if ( ! states[ targetId ].hidden ) {
+				return;
+			}
+
+			var targets = root.querySelectorAll(
+				'[data-optionia-group="' + cssEscape( targetId ) + '"],' +
+				'[data-optionia-option="' + cssEscape( targetId ) + '"],' +
+				'[data-optionia-value="' + cssEscape( targetId ) + '"]'
+			);
+			var i;
+
+			for ( i = 0; i < targets.length; i++ ) {
+				hideTarget( targets[ i ] );
+			}
+		} );
+	}
+
+	/**
+	 * Undo every rule-driven hide, so each pass starts from the authored page.
+	 *
+	 * Recomputed rather than diffed: a rule that stops firing must put its
+	 * target back, and tracking what to undo is a second source of truth for a
+	 * fact the evaluator already answers completely.
+	 *
+	 * @param {Element} root The options container.
+	 */
+	function revealAll( root ) {
+		var hiddenNow = root.querySelectorAll( '[data-optionia-hidden]' );
+		var i;
+
+		for ( i = 0; i < hiddenNow.length; i++ ) {
+			hiddenNow[ i ].removeAttribute( 'data-optionia-hidden' );
+			hiddenNow[ i ].hidden = false;
+
+			if ( 'OPTION' === hiddenNow[ i ].tagName ) {
+				hiddenNow[ i ].disabled = false;
+			}
+		}
+	}
+
+	/**
+	 * Hide one element and clear whatever it holds.
+	 *
+	 * ⚠️ **A hidden `<option>` is disabled, not just hidden.** `hidden` on an
+	 * option is honoured inconsistently across browsers, and a hidden-but-enabled
+	 * option is still selectable by keyboard — which would let a customer choose
+	 * a value the server then refuses. Disabling is what every browser honours.
+	 *
+	 * @param {Element} element The element to hide.
+	 */
+	function hideTarget( element ) {
+		element.setAttribute( 'data-optionia-hidden', '' );
+
+		if ( 'OPTION' === element.tagName ) {
+			element.disabled = true;
+
+			if ( element.selected ) {
+				element.selected = false;
+			}
+
+			return;
+		}
+
+		element.hidden = true;
+		clearWithin( element );
+	}
+
+	/**
+	 * Empty every control inside a hidden element (ADR-051: not restored).
+	 *
+	 * @param {Element} element The element being hidden.
+	 */
+	function clearWithin( element ) {
+		var controls = element.querySelectorAll( 'input[data-optionia="value"], select[data-optionia="value"], textarea[data-optionia="value"]' );
+		var i;
+
+		for ( i = 0; i < controls.length; i++ ) {
+			var control = controls[ i ];
+
+			if ( 'radio' === control.type || 'checkbox' === control.type ) {
+				control.checked = false;
+
+				continue;
+			}
+
+			control.value = '';
+		}
+	}
+
+	/**
+	 * Escape an id for use inside an attribute selector.
+	 *
+	 * Ids are UUIDs from the cloud, so this cannot matter today — but AC4 makes
+	 * the document input rather than authority, and a forged id containing a
+	 * quote would otherwise break out of the selector.
+	 *
+	 * @param {string} value The id.
+	 * @return {string}
+	 */
+	function cssEscape( value ) {
+		return String( value ).replace( /["\\]/g, '\\$&' );
+	}
+
+	/**
 	 * Total the currently selected values within one options block.
 	 *
 	 * Returns null when any selected value carries a price this cannot compute,
@@ -334,6 +636,12 @@
 
 		root.addEventListener( 'change', function ( event ) {
 			if ( event.target && event.target.matches( '[data-optionia="value"]' ) ) {
+				/*
+				 * Rules first, then the estimate: hiding an option clears its
+				 * answer (ADR-051), so a total computed before that would
+				 * include a value the customer can no longer see.
+				 */
+				applyRules( root );
 				refresh( root );
 			}
 		} );
@@ -361,7 +669,23 @@
 			if ( event.target.matches( 'input[data-optionia="value"]' ) ) {
 				refreshCounter( event.target );
 			}
+
+			/*
+			 * A typed answer can satisfy a condition too — "engraving is not
+			 * empty" must take effect as the customer types, not when the field
+			 * loses focus. `change` covers the chosen types above.
+			 */
+			if ( event.target.matches( '[data-optionia="value"]' ) ) {
+				applyRules( root );
+			}
 		} );
+
+		/*
+		 * Applied before the first `refresh()`, so a page whose defaults already
+		 * satisfy a rule paints correctly rather than flashing the full form and
+		 * then collapsing it.
+		 */
+		applyRules( root );
 
 		refresh( root );
 

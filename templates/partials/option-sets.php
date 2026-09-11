@@ -25,7 +25,7 @@ if ( array() === $optionia_groups ) {
 ?>
 <div class="optionia-options" data-optionia="options" data-optionia-product="<?php echo esc_attr( (string) ( $optionia['product_id'] ?? '' ) ); ?>">
 	<?php foreach ( $optionia_groups as $optionia_group ) : ?>
-		<fieldset class="optionia-group" data-optionia="group">
+		<fieldset class="optionia-group" data-optionia="group" data-optionia-group="<?php echo esc_attr( (string) ( $optionia_group['id'] ?? '' ) ); ?>">
 			<?php if ( '' !== (string) ( $optionia_group['label'] ?? '' ) ) : ?>
 				<legend class="optionia-group__label"><?php echo esc_html( (string) $optionia_group['label'] ); ?></legend>
 			<?php endif; ?>
