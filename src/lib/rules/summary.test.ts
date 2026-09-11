@@ -54,9 +54,15 @@ function rule(over: Partial<AuthoringRule>): AuthoringRule {
 }
 
 describe('rule summaries', () => {
+  /**
+   * ⚠️ **M17.6's example reads "Show Engraving Text when Engraving = Yes".**
+   * `show` was withdrawn by ADR-056 — nothing is hidden for it to reveal — so
+   * the same configuration is now written the other way round. The sentence
+   * shape the milestone asked for is what this pins, not the verb.
+   */
   it('reads as the sentence M17.6 asks for', () => {
-    expect(ruleSentence(rule({ action: 'show' }), labels)).toBe(
-      'Show Engraving Text when Engraving is Yes',
+    expect(ruleSentence(rule({ action: 'hide' }), labels)).toBe(
+      'Hide Engraving Text when Engraving is Yes',
     );
   });
 

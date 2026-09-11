@@ -29,7 +29,6 @@ export type RuleTargetType = (typeof RULE_TARGET_TYPES)[number];
 
 /** What a rule does to its target. */
 export const RULE_ACTIONS = [
-  'show',
   'hide',
   'require',
   'unrequire',
@@ -155,7 +154,6 @@ export const OPERATOR_PHRASING: Readonly<Record<RuleOperator, string>> = {
 
 /** How each action reads: *"**Show** Engraving Text when…"*. */
 export const ACTION_PHRASING: Readonly<Record<RuleAction, string>> = {
-  show: 'Show',
   hide: 'Hide',
   require: 'Require',
   unrequire: 'Make optional',
