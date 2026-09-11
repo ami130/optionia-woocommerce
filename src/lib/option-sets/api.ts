@@ -1,5 +1,11 @@
 import { api } from '@/lib/api/client';
 import type { SortEntry } from './entries';
+import type {
+  RuleAction,
+  RuleMatchType,
+  RuleOperator,
+  RuleTargetType,
+} from '@/lib/rules/vocabulary';
 
 export type OptionSetStatus = 'draft' | 'published' | 'archived';
 
@@ -507,6 +513,107 @@ export async function unassignProduct(
   const { data } = await api.delete<AssignmentWriteResult>(
     `/option-sets/${setId}/assignments/${encodeURIComponent(externalProductId)}`,
   );
+
+  return data;
+}
+
+/* -------------------------------------------------------------------------
+ * Conditional rules (M17.6)
+ * ---------------------------------------------------------------------- */
+
+/**
+ * One condition, as the API stores and returns it.
+ *
+ * ⚠️ **`value` is absent for the unary operators**, not null. The schema is
+ * `.strict()`, so sending `value: null` with `is_empty` is a 400 rather than an
+ * ignored field — `UNARY_OPERATORS` in `@/lib/rules/vocabulary` is the list to
+ * branch on.
+ */
+export interface RuleCondition {
+  optionId: string;
+  operator: RuleOperator;
+  value?: string | number | boolean | Array<string | number | boolean>;
+}
+
+/** A rule as the authoring API returns it. */
+export interface AuthoringRule {
+  id: string;
+  targetType: RuleTargetType;
+  targetId: string;
+  action: RuleAction;
+  matchType: RuleMatchType;
+  conditions: RuleCondition[];
+  actionValue: Record<string, unknown> | null;
+  sortOrder: number;
+  isEnabled: boolean;
+  /** Why the *system* switched it off, or null when the merchant did. */
+  disabledReason: string | null;
+}
+
+/** What a new rule needs. The API fills in the rest. */
+export interface NewRule {
+  targetType: RuleTargetType;
+  targetId: string;
+  action: RuleAction;
+  matchType: RuleMatchType;
+  conditions: RuleCondition[];
+  actionValue?: Record<string, unknown>;
+}
+
+export async function listRules(setId: string): Promise<AuthoringRule[]> {
+  const { data } = await api.get<AuthoringRule[]>(`/option-sets/${setId}/rules`);
+
+  return data;
+}
+
+export async function createRule(setId: string, rule: NewRule): Promise<AuthoringRule> {
+  const { data } = await api.post<AuthoringRule>(`/option-sets/${setId}/rules`, rule);
+
+  return data;
+}
+
+export async function updateRule(
+  id: string,
+  changes: Partial<NewRule> & { isEnabled?: boolean },
+): Promise<AuthoringRule> {
+  const { data } = await api.patch<AuthoringRule>(`/rules/${id}`, changes);
+
+  return data;
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  await api.delete(`/rules/${id}`);
+}
+
+/**
+ * What a customer would see, given these answers (ADR-053).
+ *
+ * 🔴 **The server evaluates, not this.** Three implementations of the rule
+ * engine already exist — PHP for the storefront, TypeScript for publishing, and
+ * JavaScript in the browser because AC3 forbids the storefront asking a server.
+ * The dashboard has no such constraint, so a fourth would be spent for nothing:
+ * a merchant testing a rule wants the storefront's answer, and the honest way to
+ * get it is to ask the thing that decides.
+ *
+ * ⚠️ **It reads the merchant's draft**, so a rule authored and not yet published
+ * is included — which is the whole point of a tester.
+ */
+export interface RuleTestResult {
+  hiddenOptionIds: string[];
+  hiddenGroupIds: string[];
+  hiddenValueIds: string[];
+  requiredOptionIds: string[];
+  optionalOptionIds: string[];
+  passes: number;
+  /** Set when the rules did not settle; the lists are then empty (ADR-050). */
+  refused: string | null;
+}
+
+export async function testRules(
+  setId: string,
+  answers: Record<string, unknown>,
+): Promise<RuleTestResult> {
+  const { data } = await api.post<RuleTestResult>(`/option-sets/${setId}/rules/test`, { answers });
 
   return data;
 }
