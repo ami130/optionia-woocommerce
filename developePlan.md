@@ -52,10 +52,10 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-9 — the frontend
-runtime: show/hide in the browser, and the value policy that goes with it.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-10 — the rule
+builder UI in the dashboard: plain-language summaries and a tester.**
 
-**Done:** 17-0 (four ADRs) through **17-8**, each with its own audit, plus
+**Done:** 17-0 (four ADRs) through **17-9**, each with its own audit, plus
 **M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
 deciding prices, in both languages identically.
 
@@ -66,11 +66,17 @@ and 17-6; refusal-on-reaching-it as a **shared-fixture case** both languages
 execute; and enforcement independent of publish as `ERROR_RULES_UNSETTLED` in
 17-8. Verified by reading the code, not the record.
 
-🔴 **17-9 is where rules meet the browser, and nothing of that exists yet.**
-`Assets.php` localises **currency and upload settings only** — no rules reach the
-page. So today a rule-hidden option is *still rendered*, the customer can fill it
-in, and the server refuses it at add-to-cart. The server is stricter than the
-page, and that window stays open until this stage lands.
+✅ **17-9 closed the window 17-8 opened.** Rules now reach the page, a **third
+evaluator** runs in the browser against the same 46-case shared fixture, and a
+rule-hidden option is no longer rendered. Nine mutants, nine killed — and the
+visibility tests caught a real defect on the way: an untouched form hid an
+option, because the typed-field selector matched an *unchecked radio*.
+
+⚠️ **Two things 17-9 deliberately did not do.** The price estimate still ignores
+`set_price` — a separate decision about what the browser may compute, and the one
+place a customer could see a number the server will change (**17-11**). And
+animation and focus polish belong with **21c**, where option styling lives;
+`hidden` is correct and accessible without them.
 
 ✅ **Both remaining Phase 17 criteria closed in 17-8:** a rule-hidden option is
 now **rejected server-side** (`ERROR_HIDDEN_BY_RULE`) and is **neither charged
@@ -20202,6 +20208,121 @@ defect can create a survivor**: the F1 fix was correct and made a neighbouring
 guard vacuous in the same commit, and only mutating afterwards showed it.
 
 Mutation after the fix, not only before it, is the practice this round adds.
+
+### ✅ Stage 17-9 complete — rules meet the browser, 2026-09-11
+
+**The stage that closes the window 17-8 opened.** Until now a rule-hidden option
+was still *rendered*, the customer could fill it in, and the server refused it at
+add-to-cart — stricter than the page, which is the wrong way round.
+
+| Added | Where |
+|---|---|
+| `data-optionia-group` on every group | `Renderer.php`, `partials/option-sets.php` |
+| `data-optionia-value` on the five choice types | `radio`, `checkbox`, `dropdown`, `color_swatch`, `image_swatch` |
+| `Assets::publish_rules()` — rules inlined per product | `Frontend/Assets.php` |
+| **A third rule evaluator**, in the browser | `assets/js/rules.js` |
+| `answersIn()`, `containmentIn()`, `applyRules()` and the hide/reveal pair | `assets/js/frontend.js` |
+| The cap-refusal message (**O1**) | `CheckoutValidator.php` |
+| 9 fixture tests + 9 visibility tests + 1 checkout test | `tests/js/`, `tests/unit/` |
+
+#### J3 was already decided, and the analysis was wrong to reopen it
+
+📌 **ADR-051 §3 settles the restore policy**: *"Not restored. If a rule re-shows
+the field, it comes back empty."* The 17-9 analysis proposed writing a new ADR
+for it and recommended exactly that answer — which was right and **redundant**.
+Read before writing; a decision already taken does not need taking twice.
+
+#### 🔴 A third evaluator, and why that was the right call
+
+Two already exist and neither can decide what a *page* shows: AC3 forbids the
+storefront read path reaching Optionia, so asking is not an option. Three things
+make the third safe rather than a third chance to disagree (16d):
+
+1. **The same `rule-fixtures.json`** the other two execute — 46 cases, byte
+   identical across repositories, hash-pinned.
+2. **The specification was already written in JavaScript's idiom.** `as_string()`
+   spells a boolean `'true'`/`'false'` — *JavaScript's* spelling, which PHP had
+   to be bent to produce — and the numeric pattern is plain ASCII. This port was
+   the least likely of the three to drift, because the others were written
+   towards it.
+3. It mirrors the PHP function for function, so a reader can *see* a difference
+   rather than derive one.
+
+**It passed all 46 shared cases on the first run**, including cascade depths and
+the cap refusal — and four mutants confirm the fixture is what is holding it:
+spelling a boolean PHP's way fails **3 cases**, using `Number()` fails 1,
+dropping hide-accumulation fails 2, and letting `not_equals` fire on a blank
+fails 1.
+
+⚠️ **It ships as a classic script, not an ES module.** `frontend.js` is an IIFE
+loaded with a plain `<script>` tag; making either a module changes how WordPress
+emits that tag and how every theme orders it — a load-order regression across
+thousands of sites to save a namespace.
+
+#### 🔴 The defect the visibility tests caught
+
+**An untouched form hid an option.** `answersIn()`'s typed-field fallback used
+`input[data-optionia="value"]`, which matches an **unchecked radio** — so `opt-a`
+read `"yes"` from a radio nobody had selected, and the rule fired on an empty
+page. The evaluator was correct throughout; the binding fed it a fabricated
+answer.
+
+This is the class `frontend-contract.test.js` exists for, restated: *the
+arithmetic was right and the selector pointed at the wrong element*. Radios and
+checkboxes are now excluded explicitly — the `:checked` branch is the only one
+entitled to answer for them.
+
+#### What the browser deliberately does NOT do
+
+🔴 **It never prices anything.** `action_value` is not even sent to the page:
+a `set_price` amount there would be a second source of truth for a number AC4
+makes server-authoritative. `set_price` and `set_default` reach the action switch
+and do nothing. This keeps the line `selectedTotal()` already drew — it returns
+`null` rather than compute a total it cannot stand behind.
+
+🔴 **A refusal shows everything.** If the rules do not settle, every control stays
+visible rather than freezing in whatever state the last pass reached. The server
+refuses what it must; a customer seeing a form they can act on beats a blank
+product they cannot. The same applies when `rules.js` fails to load at all.
+
+#### O1 closed — a message that is true
+
+`ERROR_RULES_UNSETTLED` carries `field => null`, and every bucket in `message()`
+is keyed by field — so it fell through to *"an option that is no longer
+available… please remove it"*. Nothing was removed, and removing the line cannot
+fix rules that do not converge.
+
+⚠️ **Its first test passed while proving nothing.** A two-option cascade
+**cannot** reach the cap — accumulated hides make the fixed point monotone — so
+the line settled and reported `hidden_by_rule`, and an assertion phrased as *"not
+no-longer-available"* was satisfied by the wrong message entirely. Rewritten to
+freeze a thirteen-link answered chain onto the cart line and assert the branch
+**by name**.
+
+#### Mutation results — nine mutants, nine killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| R1 | booleans spelled PHP's way | shared fixture (**3 cases**) |
+| R2 | `numericValue` uses `Number()` | shared fixture |
+| R3 | hides do not accumulate | shared fixture (2 cases) |
+| R4 | `not_equals` fires on a blank | shared fixture |
+| B1 | radios not excluded from the typed fallback | `applies rules on first paint` |
+| B2 | a hidden option keeps what was typed | `clears what the customer typed` |
+| B3 | `revealAll()` removed | `shows it again when the rule stops firing` |
+| B4 | product id ignored | `ignores rules published for a different product` |
+| O1 | the unsettled branch removed | `test_rules_that_never_settle_…` |
+
+#### Still open after this stage
+
+📌 **`set_price` on the page.** The estimate does not react to a `set_price`
+rule, deliberately — a separate decision about what the browser may compute, and
+the one place a customer could still see a number the server will change. For
+**17-11**.
+
+📌 **Animation and focus management.** M17.5 asks for *"animate transitions; keep
+focus management sane"*. `hidden` is correct and accessible; a transition is
+presentation and belongs with **21c**, where option styling lives.
 
 ### M17.1 — Rule model
 
