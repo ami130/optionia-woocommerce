@@ -834,6 +834,142 @@ final class AdversarialAddToCartTest extends TestCase {
 	// --- Helpers -------------------------------------------------------------
 
 	/**
+	 * A value posted for a rule-hidden option is refused at add-to-cart.
+	 *
+	 * 🔴 **Twenty-seven tamper tests existed here and not one involved a rule.**
+	 * Found by the 17-11 exit audit: `grep -c hidden_by_rule` returned 0 across
+	 * this file and `AddToCartValidatorTest`, while Phase 17's criterion reads
+	 * *"hidden-option submissions rejected **server-side**"*. Rejection was
+	 * proven inside the resolver's own suite and never at the boundary a forged
+	 * request actually crosses.
+	 *
+	 * The honest customer never sends this: the option is not on their page. So
+	 * a request carrying it came from a console, a stale tab, or a script — and
+	 * "it had no effect on the price" is a weaker guarantee than "it was
+	 * refused" (M17.4).
+	 */
+	public function test_a_value_for_a_rule_hidden_option_is_refused_at_add_to_cart(): void {
+		$this->store_config( array( self::hide_rule( 'opt-b', 'front' ) ) );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'front',
+			'opt-b' => 'wrap',
+		);
+
+		$this->assertFalse( $this->fire(), 'A hidden option must not accept a posted value.' );
+	}
+
+	/**
+	 * The same payload is accepted when the rule does not fire.
+	 *
+	 * 🔴 **The control, and without it the test above proves nothing.** A
+	 * validator that refused every request would satisfy it — this is what makes
+	 * the refusal *about the rule*.
+	 */
+	public function test_the_same_payload_is_accepted_when_the_rule_does_not_fire(): void {
+		$this->store_config( array( self::hide_rule( 'opt-b', 'front' ) ) );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'back',
+			'opt-b' => 'wrap',
+		);
+
+		$this->assertTrue( $this->fire() );
+	}
+
+	/**
+	 * A rule cannot be used to charge for an option the customer cannot see.
+	 *
+	 * ADR-051's "not charged", at the boundary rather than in the resolver. The
+	 * forged `opt-b` is worth 3.00; the line must not carry it.
+	 */
+	public function test_a_rule_hidden_option_contributes_nothing_to_the_total(): void {
+		$this->store_config( array( self::hide_rule( 'opt-b', 'front' ) ) );
+
+		$result = SelectionResolver::resolve(
+			$this->sets(),
+			array( 'opt-a' => 'front' ),
+			8000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 8500, $result->value()['total_minor'], 'Only the visible option is charged.' );
+		$this->assertArrayNotHasKey( 'opt-b', $result->value()['resolved'] );
+	}
+
+	/**
+	 * 🔴 A forged `action_value` in the POST cannot set a price.
+	 *
+	 * `set_price` amounts live in the cached document and are never read from a
+	 * request — the same guarantee `test_an_injected_price_field_cannot_change_the_total`
+	 * makes for value prices, extended to the shape rules introduced.
+	 */
+	public function test_a_forged_rule_payload_cannot_set_a_price(): void {
+		$this->store_config();
+
+		$_POST['action_value'] = array( 'amount_minor' => 999999 );
+		$_POST['amount_minor'] = '999999';
+		$_POST['rules']        = array(
+			array(
+				'target_id' => 'opt-a',
+				'action'    => 'set_price',
+			),
+		);
+
+		$result = SelectionResolver::resolve( $this->sets(), array( 'opt-a' => 'front' ), 8000 );
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 8500, $result->value()['total_minor'], 'The rule came from the request, not the config.' );
+	}
+
+	/**
+	 * 🔴 A forged hidden-field value cannot steer which options are hidden.
+	 *
+	 * A `hidden` option's value belongs to the merchant, and `rule_answers()`
+	 * substitutes `default_value` before any condition reads it. Without that a
+	 * customer could post anything and decide what the server treats as hidden —
+	 * found by the 17-9 audit and guarded here at the boundary.
+	 */
+	public function test_a_forged_hidden_field_cannot_steer_the_rules(): void {
+		$this->store_config( array( self::hide_rule( 'opt-b', 'front' ) ) );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'back',
+			'opt-b' => 'wrap',
+		);
+
+		// A field the document does not have: it must not become an answer.
+		$_POST[ Keys::FIELD_PREFIX ]['opt-ghost'] = 'front';
+
+		$this->assertFalse( $this->fire(), 'An option the product does not have is still refused.' );
+	}
+
+	/**
+	 * One rule hiding `$target` while `opt-a` equals `$when`.
+	 *
+	 * @param string $target The option the rule hides.
+	 * @param string $when   The `opt-a` value that fires it.
+	 * @return array<string, mixed>
+	 */
+	private static function hide_rule( string $target, string $when ): array {
+		return array(
+			'id'          => 'r-1',
+			'target_type' => 'option',
+			'target_id'   => $target,
+			'action'      => 'hide',
+			'match_type'  => 'all',
+			'conditions'  => array(
+				array(
+					'option_id' => 'opt-a',
+					'operator'  => 'equals',
+					'value'     => $when,
+				),
+			),
+			'sort_order'  => 10,
+		);
+	}
+
+	/**
 	 * Fire the three-argument call site.
 	 */
 	private function fire(): bool {
@@ -913,7 +1049,7 @@ final class AdversarialAddToCartTest extends TestCase {
 	/**
 	 * Store this store's configuration: one required radio, two values.
 	 */
-	private function store_config(): void {
+	private function store_config( array $rules = array() ): void {
 		( new Repository( new Logger( new Settings() ) ) )->store(
 			array(
 				'option_sets' => array(
@@ -956,14 +1092,37 @@ final class AdversarialAddToCartTest extends TestCase {
 											),
 										),
 									),
+
+									/*
+									 * A second option, so a rule has something to
+									 * act on that is not also its trigger. Free,
+									 * so a price assertion about it is about the
+									 * rule rather than about arithmetic.
+									 */
+									array(
+										'id'     => 'opt-b',
+										'type'   => 'radio',
+										'label'  => 'Gift wrap',
+										'values' => array(
+											array(
+												'id'    => 'val-wrap',
+												'value_key' => 'wrap',
+												'label' => 'Wrap it',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 300,
+												),
+											),
+										),
+									),
 								),
 							),
 						),
-						'rules'       => array(),
+						'rules'       => $rules,
 					),
 				),
 			),
-			'W/"store-11"'
+			'W/"store-11"' . ( array() !== $rules ? '-rules' : '' )
 		);
 	}
 

@@ -206,6 +206,75 @@ describe('rule-driven visibility', () => {
     expect(window.document.querySelector('[data-optionia-option="opt-b"]').hidden).toBe(false);
   });
 
+  /**
+   * 🔴 The estimate refuses when a `set_price` rule could change the total.
+   *
+   * The amount a rule sets never reaches the page — `action_value` is withheld,
+   * because a price on the storefront is a second source of truth for a number
+   * AC4 makes server-authoritative. So the browser knows *that* a rule sets a
+   * price and never *what*.
+   *
+   * Measured by the 17-11 exit audit: a value authored at 5.00 with a rule
+   * setting 25.00 showed **+£5.00** while the server charged **£25.00**. The
+   * estimate now shows nothing, which is the line `selectedTotal()` already
+   * draws for every price type it cannot compute.
+   */
+  it('shows no estimate when a rule sets a price', async () => {
+    const markup = `
+      <div class="optionia-options" data-optionia="options" data-optionia-product="1">
+        <fieldset data-optionia="group" data-optionia-group="group-a">
+          <div data-optionia="option" data-optionia-option="opt-a">
+            <label><input type="checkbox" name="optionia[opt-a]" value="gift" data-optionia="value"
+              data-optionia-price-type="fixed" data-optionia-price="500"> Gift</label>
+          </div>
+        </fieldset>
+        <p data-optionia="estimate" hidden></p>
+      </div>`;
+
+    const { window } = await loadStorefront(markup, {
+      rules: [{
+        target_type: 'option',
+        target_id: 'opt-a',
+        action: 'set_price',
+        match_type: 'all',
+        conditions: [{ option_id: 'opt-a', operator: 'is_not_empty' }],
+      }],
+    });
+
+    const gift = window.document.querySelector('input[type="checkbox"]');
+    gift.checked = true;
+    fire(window, gift, 'change');
+
+    expect(window.document.querySelector('[data-optionia="estimate"]').textContent).toBe('');
+  });
+
+  /**
+   * The control: with no `set_price` rule, the same option still estimates.
+   *
+   * Without it, a runtime that had stopped estimating entirely would satisfy
+   * the test above — and a missing estimate everywhere is its own defect.
+   */
+  it('still estimates when no rule sets a price', async () => {
+    const markup = `
+      <div class="optionia-options" data-optionia="options" data-optionia-product="1">
+        <fieldset data-optionia="group" data-optionia-group="group-a">
+          <div data-optionia="option" data-optionia-option="opt-a">
+            <label><input type="checkbox" name="optionia[opt-a]" value="gift" data-optionia="value"
+              data-optionia-price-type="fixed" data-optionia-price="500"> Gift</label>
+          </div>
+        </fieldset>
+        <p data-optionia="estimate" hidden></p>
+      </div>`;
+
+    const { window } = await loadStorefront(markup, {});
+
+    const gift = window.document.querySelector('input[type="checkbox"]');
+    gift.checked = true;
+    fire(window, gift, 'change');
+
+    expect(window.document.querySelector('[data-optionia="estimate"]').textContent).toContain('5');
+  });
+
   /** One product's rules must not reach another's controls. */
   it('ignores rules published for a different product', async () => {
     const { window } = await loadStorefront(page(), {

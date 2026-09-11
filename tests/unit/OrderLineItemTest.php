@@ -317,6 +317,188 @@ final class OrderLineItemTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 A rule published after add-to-cart cannot leave its option on an order.
+	 *
+	 * **ADR-051 is explicit that this must be proven here rather than at the
+	 * resolver:** *"the path is resolver → `cart_item_data` → session → order
+	 * meta → fulfilment output, and Phase 12 found real defects at three of
+	 * those hops."*
+	 *
+	 * ⚠️ **The two-step is the whole test, and a one-step version proves
+	 * nothing.** A first attempt simply never submitted the hidden option — so
+	 * it was absent from the order whether rules existed or not, and the test
+	 * passed with rule evaluation **disabled entirely**. Measured; it
+	 * distinguished *submitted* from *not submitted*, never *hidden* from *not
+	 * hidden*.
+	 *
+	 * The case that actually exists: a customer answers both options while no
+	 * rule applies, and the merchant publishes a hiding rule afterwards. The
+	 * line is already frozen with the answer on it.
+	 *
+	 * 🔴 **`OrderLineItem` copies the frozen line and never re-resolves**, so
+	 * nothing at this hop can strip the value. The guarantee is upstream:
+	 * `CheckoutValidator` refuses the line, and it never becomes an order at
+	 * all. This asserts that refusal — the thing that is actually true — rather
+	 * than a stripping that does not happen.
+	 */
+	public function test_a_line_hidden_by_a_later_rule_cannot_reach_an_order(): void {
+		// Step one: no rule yet, and the customer answers both options.
+		$this->store_rule_config( false );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'yes',
+			'opt-b' => 'engrave-me',
+		);
+
+		$line = ( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )
+			->attach( array(), self::PRODUCT_ID, 0, 1 );
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		$this->assertSame(
+			'engrave-me',
+			$line[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]['opt-b'] ?? null,
+			'Precondition: the answer is frozen onto the line while no rule hides it.'
+		);
+
+		// Step two: the merchant publishes the rule. The frozen line no longer resolves.
+		$this->store_rule_config( true );
+
+		$result = SelectionResolver::resolve(
+			( new Repository( new Logger( new Settings() ) ) )->option_sets_for_product( self::PRODUCT_ID ),
+			$line[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ],
+			0
+		);
+
+		$this->assertFalse(
+			$result->is_ok(),
+			'A frozen line carrying a now-hidden option must not resolve.'
+		);
+		$this->assertSame( SelectionResolver::ERROR_HIDDEN_BY_RULE, $result->get_errors()[0]['code'] );
+		$this->assertSame( 'opt-b', $result->get_errors()[0]['field'] );
+	}
+
+	/**
+	 * The control: the same frozen line resolves while no rule hides it.
+	 *
+	 * Without it, a resolver that refused every cart line would satisfy the test
+	 * above — and "no order can ever be placed" is a worse defect than the one
+	 * being guarded against.
+	 */
+	public function test_the_same_frozen_line_resolves_when_no_rule_hides_it(): void {
+		$this->store_rule_config( false );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array(
+			'opt-a' => 'yes',
+			'opt-b' => 'engrave-me',
+		);
+
+		$line = ( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )
+			->attach( array(), self::PRODUCT_ID, 0, 1 );
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		$result = SelectionResolver::resolve(
+			( new Repository( new Logger( new Settings() ) ) )->option_sets_for_product( self::PRODUCT_ID ),
+			$line[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ],
+			0
+		);
+
+		$this->assertTrue( $result->is_ok() );
+
+		// And it reaches the order, which is what makes the refusal above meaningful.
+		$item = optionia_test_order_item();
+		( new OrderLineItem() )->attach(
+			$item,
+			'cart-key',
+			array_merge(
+				$line,
+				array(
+					'product_id' => self::PRODUCT_ID,
+					'quantity'   => 1,
+				)
+			)
+		);
+
+		$stored = json_decode( (string) $item->get_meta( Keys::META_SELECTIONS ), true );
+
+		$this->assertSame( 'engrave-me', $stored['opt-b'] ?? null );
+	}
+
+	/**
+	 * One trigger, one text option, and a rule hiding the text when the trigger
+	 * is answered "yes".
+	 */
+	private function store_rule_config( bool $with_rule = true ): void {
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-1',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => (string) self::PRODUCT_ID,
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'options' => array(
+									array(
+										'id'     => 'opt-a',
+										'type'   => 'radio',
+										'label'  => 'Engraving',
+										'values' => array(
+											array(
+												'id'    => 'val-yes',
+												'value_key' => 'yes',
+												'label' => 'Yes',
+											),
+											array(
+												'id'    => 'val-no',
+												'value_key' => 'no',
+												'label' => 'No',
+											),
+										),
+									),
+									array(
+										'id'         => 'opt-b',
+										'type'       => 'text_field',
+										'value_kind' => 'text',
+										'label'      => 'Engraving Text',
+									),
+								),
+							),
+						),
+						'rules'       => ! $with_rule ? array() : array(
+							array(
+								'id'          => 'r-1',
+								'target_type' => 'option',
+								'target_id'   => 'opt-b',
+								'action'      => 'hide',
+								'match_type'  => 'all',
+								'conditions'  => array(
+									array(
+										'option_id' => 'opt-a',
+										'operator'  => 'equals',
+										'value'     => 'yes',
+									),
+								),
+								'sort_order'  => 10,
+							),
+						),
+					),
+				),
+			),
+			'W/"order-rules-' . ( $with_rule ? 'on' : 'off' ) . '"'
+		);
+	}
+
+	/**
 	 * A configuration whose single option this build cannot price.
 	 *
 	 * `tiered` has no evaluator in any phase — `per_char` and `percentage` are

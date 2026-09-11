@@ -520,6 +520,29 @@
 	 * @return {?number} Total in minor units, or null.
 	 */
 	function selectedTotal( root ) {
+		/*
+		 * 🔴 **A `set_price` rule makes this estimate unknowable, so it refuses.**
+		 *
+		 * The amount a rule sets never reaches the page — `action_value` is
+		 * deliberately withheld, because a price on the storefront is a second
+		 * source of truth for a number AC4 makes server-authoritative. So the
+		 * browser can see *that* a rule sets a price and never *what* it sets.
+		 *
+		 * Measured by the 17-11 exit audit: a value authored at 5.00 with a rule
+		 * setting 25.00 showed **+£5.00** on the page while the server charged
+		 * **£25.00**. The disclaimer beneath — *"the final price is confirmed at
+		 * checkout"* — softens that and does not make the number less wrong.
+		 *
+		 * ⚠️ **Refused for the whole block, not just the affected option.** A
+		 * rule may target a group, and a partial total is the failure mode worth
+		 * avoiding: it looks right. This is the same line `PRICEABLE` already
+		 * draws for `percentage`, `per_char`, `per_unit` and `tiered` — the
+		 * estimate shows nothing rather than something it cannot stand behind.
+		 */
+		if ( setsAPrice( root ) ) {
+			return null;
+		}
+
 		var chosen = pricedControls( root );
 		var total = 0;
 		var i;
@@ -539,6 +562,31 @@
 		}
 
 		return total;
+	}
+
+	/**
+	 * Whether any rule on this product sets a price.
+	 *
+	 * Asked of the rules the page was given rather than of the current answers,
+	 * and deliberately: whether a rule *fires* depends on what the customer has
+	 * chosen so far, so an estimate that appeared and vanished as they answered
+	 * would be worse than one that never appeared. A product whose merchant
+	 * prices through rules shows no running estimate at all.
+	 *
+	 * @param {Element} root The options container.
+	 * @return {boolean}
+	 */
+	function setsAPrice( root ) {
+		var rules = rulesFor( root );
+		var i;
+
+		for ( i = 0; i < rules.length; i++ ) {
+			if ( 'set_price' === rules[ i ].action ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

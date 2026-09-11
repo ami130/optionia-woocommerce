@@ -128,7 +128,23 @@ function expectedStates(testCase) {
 }
 
 describe('the storefront evaluator against the shared fixture', () => {
+  /**
+   * The rows this run actually executed.
+   *
+   * 🔴 **Counted here, not read back off the fixture.** The assertion below used
+   * to compare `FIXTURE.rule_cases.length` with `FIXTURE.rule_case_count` —
+   * which is the file agreeing with itself, and true however few cases ran.
+   * Measured by the 17-11 audit: gutting the provider to `it.each([])` left this
+   * suite reporting **2 passed** and every gate green.
+   *
+   * The PHP suite never had the hole: `assertCount` there reads
+   * `provide_rule_cases()`, the real provider. This is the same guarantee, kept
+   * the only way a `it.each` can — a tally the cases themselves increment.
+   */
+  const executed = [];
+
   it.each(FIXTURE.rule_cases.map((c) => [c.name, c]))('%s', (_name, testCase) => {
+    executed.push(testCase.name);
     const outcome = evaluate(testCase.rules, testCase.answers, optionsUnder(testCase));
 
     expect(outcome.refused !== null).toBe(testCase.expect_refused);
@@ -147,6 +163,12 @@ describe('the storefront evaluator against the shared fixture', () => {
    * exactly that in the pricing suite.
    */
   it('executes every declared case', () => {
+    /*
+     * ⚠️ **Both halves, and the first is the one that matters.** The fixture
+     * must declare what it holds *and* this run must have executed all of it —
+     * a truncated provider satisfies the second comparison and fails the first.
+     */
+    expect(executed).toHaveLength(FIXTURE.rule_case_count);
     expect(FIXTURE.rule_cases).toHaveLength(FIXTURE.rule_case_count);
   });
 

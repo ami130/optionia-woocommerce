@@ -132,6 +132,20 @@ final class Assets {
 	 * show/hide only. The estimate already refuses to price four of five types
 	 * rather than disagree with the server; this keeps that line.
 	 *
+	 * 📌 **The worst case is 3.1 MB, and nothing measures it.** A set may hold
+	 * `AUTHORING_LIMITS.rulesPerSet` = **200** rules, each with up to
+	 * `MAX_CONDITIONS_BYTES` = **16 KB** of conditions — so a legal, publishable
+	 * configuration could inline 3.1 MB into every product page.
+	 *
+	 * Recorded rather than capped, deliberately (17-11). Realistic usage is
+	 * ~39 KB at 200 bytes a rule, and no merchant reaches the bound by accident:
+	 * it takes two hundred rules each carrying sixteen kilobytes of operands. A
+	 * threshold invented without a real case is a guess, and a guess that refuses
+	 * a publish is worse than a measurement nobody needed.
+	 *
+	 * ⚠️ **What would change this**: a merchant report, or Phase 28's performance
+	 * work measuring real documents. Either gives a number to cap at.
+	 *
 	 * @param int                              $product_id The product these rules belong to.
 	 * @param array<int, array<string, mixed>> $sets       The sets assigned to it.
 	 */
