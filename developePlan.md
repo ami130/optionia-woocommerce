@@ -20324,6 +20324,110 @@ the one place a customer could still see a number the server will change. For
 focus management sane"*. `hidden` is correct and accessible; a transition is
 presentation and belongs with **21c**, where option styling lives.
 
+#### 🔍 The 17-9 audit — four findings, one of them blocking
+
+Probed against **real rendered markup from all fifteen templates**, not the
+hand-written fixtures the stage's own tests use. That is what found them: every
+17-9 test drives markup written by the same hand that wrote the code.
+
+##### 🔴 F4 — BLOCKING: a hidden text field still submitted, and the server refused it
+
+Hiding a typed option cleared the field but left it **enabled**, so the form
+still submitted `opt-b=""`. The resolver reads that as *a value supplied for a
+rule-hidden option*:
+
+```text
+opt-b=''      -> REFUSED hidden_by_rule
+opt-b absent  -> ACCEPTED
+```
+
+**A customer who followed the UI exactly could not add to cart.** The stage's own
+purpose — stop offering a field the server would refuse — defeated by the gap
+between *looks hidden* and *submits nothing*.
+
+⚠️ **Radios and checkboxes were never affected**, because an unchecked input does
+not submit — and that is exactly why the tests missed it. Every visibility test
+uses a radio to *trigger* the rule and asserts `hidden` on the target. **Zero
+tests asserted what the form submits**: `grep -c "FormData|disabled"` over the
+suite returned 0.
+
+**Fixed** by disabling hidden controls, marked with `data-optionia-rule-disabled`
+so `revealAll()` re-enables only what a rule disabled — never a merchant's own
+disabled field, never an upload in flight.
+
+##### 🔴 F2 — a forged hidden field steered rule evaluation
+
+A `hidden` option's value comes from the merchant's configuration, and
+`resolve()` has discarded the posted value since Phase 14 — measured then against
+a payload that stored `FORGED-BY-CUSTOMER` over the merchant's `campaign-a`.
+
+**Rule evaluation ran before that substitution**, so the raw request reached the
+conditions:
+
+```text
+posted opt-h=FORGED -> the rule's condition matched FORGED -> REFUSED
+```
+
+It failed closed, so nobody bought anything cheaper — but a customer was deciding
+an input the entire type exists to keep out of their hands. **Fixed** with
+`rule_answers()`, which substitutes `default_value` before evaluation, so rules
+and pricing now read one value rather than two.
+
+##### 🔴 F1 — the browser could not see a hidden field at all, and the first fix was not enough
+
+`hidden.php` renders a bare `<input>` with no option wrapper, so `answersIn()`
+never saw it: the browser evaluated a rule on a hidden field against **nothing**
+while the server evaluated it against a forged string. Same rule, same page, two
+answers — F2's mirror image.
+
+🔴 **Adding `data-optionia-option` to the input did not fix it.** The runtime does
+`option.querySelector(...)`, and when the option element **is** the control a
+descendant search finds nothing. Caught by the new test failing after the
+template change — the second defect inside one finding, and the reason a fix
+needs its own test rather than a reading.
+
+##### 🟡 F3 — a range is always answered, and nothing said so
+
+An `<input type="range">` has no empty state: a browser clamps a blank `value` to
+the midpoint and submits it untouched. Measured on the real template — `min=10
+max=50` reports **30** on first paint — so `is_empty` can never hold for a range
+and a rule reading one fires from page load.
+
+⚠️ **Left as it is, deliberately.** Both ends read 30 and both decide the same
+way, so this is *agreement*, not divergence. Treating it as absent in the browser
+would **create** the divergence. Documented at the selector so the next reader
+does not "correct" it into one.
+
+##### What the four had in common
+
+**17-9 tested visibility and never tested submission.** F4 and F3 are both *the
+DOM says one thing, the form says another*; F1 and F2 are both *the browser and
+the server read the same field differently*.
+
+The stage proved the evaluator decides correctly (46 shared cases) and the page
+reacts correctly (9 visibility tests) — and never that **the two ends produce the
+same answer for one interaction**. That round trip is where all four lived.
+
+`tests/js/rule-round-trip.test.js` is the missing class, added here: it drives the
+DOM and asserts the **payload**, which is the only thing the server ever sees.
+Reverting F4 fails **four** of its tests.
+
+##### Mutation results — five mutants, five killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| G1 | hidden controls not disabled | round-trip ×4 |
+| G2 | `revealAll()` does not re-enable | `submits again once the rule stops firing` |
+| G3 | the option-is-the-control branch removed | `reads a hidden field…` |
+| G4 | hidden fields cleared and disabled anyway | `never clears or disables a hidden field` |
+| G5 | rules read the raw request again (PHP) | `test_a_forged_hidden_field_does_not_fire_a_rule` |
+
+##### Still open
+
+📌 **No cap on rule count per set.** Conditions are capped at 20 per rule; the
+number of rules is unbounded, and 17-9 now inlines them into every product page.
+A backend concern rather than this stage's — for **17-11**.
+
 ### M17.1 — Rule model
 
 ```text
