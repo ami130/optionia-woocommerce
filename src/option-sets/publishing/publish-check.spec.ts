@@ -79,9 +79,16 @@ function rule(overrides: Partial<PublishContext['rules'][number]> = {}) {
     disabledReason: null,
     conditions: [{ optionId: 'option-1', operator: 'is_not_empty' }],
     matchType: 'all',
-    /* `show` is answer-affecting, so a test wanting an edge gets one by default. */
-    action: 'show',
-    /* No payload: `show` is one of the four actions that act on their own. */
+    /*
+     * `hide` is answer-affecting, so a test wanting an edge gets one by default.
+     *
+     * ✏️ **Was `show` until ADR-056 withdrew it.** `hide` is now the *only*
+     * action that moves an answer — which is why the cycle tests failed the
+     * moment `show` left `ANSWER_AFFECTING_ACTIONS`: they had been relying on
+     * this default to build their edges.
+     */
+    action: 'hide',
+    /* No payload: `hide` is one of the actions that act on their own. */
     actionValue: null,
     ...overrides,
   };
@@ -1338,16 +1345,30 @@ describe('pre-publish checks', () => {
     });
 
     /**
-     * A price and a default are different questions about one option, and
-     * answering both is ordinary — only two answers to the *same* question
-     * conflict.
+     * ✏️ **This asserted that a price and a *default* coexist on one target** —
+     * different questions about one option, and only two answers to the *same*
+     * question conflict.
+     *
+     * 🔴 **ADR-055 withdrew `set_default`, and the test went vacuous without
+     * failing.** `PublishContext.rules[].action` is typed `string`, so nothing
+     * caught it: it kept passing because a withdrawn action carries no payload
+     * to conflict with, which is not what it was written to prove. Found by the
+     * final Phase 17 audit.
+     *
+     * Repointed at what still exists — two prices on two targets — so it once
+     * again fails if keying by target is ever dropped.
      */
-    it('allows a price and a default on one target', () => {
+    it('allows a price on each of two targets', () => {
       const findings = rulePayloadsDoNotConflict.validate(
         context({
           rules: [
             priced('r1', 500),
-            rule({ id: 'r2', action: 'set_default', actionValue: { valueKey: 'large' } }),
+            rule({
+              id: 'r2',
+              targetId: 'option-2',
+              action: 'set_price',
+              actionValue: { amountMinor: 500 },
+            }),
           ],
         }),
       );

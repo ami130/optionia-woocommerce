@@ -4831,3 +4831,86 @@ again.
 rule-set default is **display only** and contributes no delta until the customer
 touches the control. That preserves ADR-051 and makes the action meaningful — and
 it is a Phase 21 question, alongside the server-quoted estimate.
+
+---
+
+## ADR-056 — `show` is withdrawn: nothing is hidden for it to reveal
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M17.1, M17.11b
+
+### Context
+
+M17.1 pairs `show` with `hide`, which reads as obviously symmetrical. It is not.
+The final Phase 17 audit measured `show` in every path it can take, and it
+changes nothing in all of them:
+
+| Scenario | Result |
+|---|---|
+| *"Show X when Y"*, alone | X is accepted **whether or not the rule fires** |
+| `show` and `hide` on one target | refused **both times** — ADR-052 gives `hide` the win |
+
+Its entire implementation, identically in all three evaluators:
+
+```php
+case 'show':
+    // `hide` wins: never clear a hide another rule set.
+    break;
+```
+
+**There is no state for it to act on.** An option is either published and
+visible, or not published at all:
+
+- Nothing renders an option hidden by default. There is no `hiddenUnless` flag
+  and never has been.
+- `isEnabled: false` is not that flag — a disabled option is **filtered out of
+  the published document**, so no rule can reveal it. It is a merchant's on/off
+  switch, not a starting state.
+- When something *is* hidden, it was hidden by a rule — and ADR-052 settles that
+  pair in `hide`'s favour, deliberately and for a reason that has not changed.
+
+🔴 **The shared fixture shows this structurally.** `show` appears in exactly two
+of forty-six cases, both paired with `hide`, because a lone `show` produces no
+state to assert.
+
+### Decision
+
+**`show` is withdrawn**, on the same terms and for the same reason as ADR-055:
+an action that is specified, evaluated by three engines and applied nowhere is
+worse than an absent one.
+
+🔴 **And this one was aggravated: the rule builder offered it.** `set_default`
+was at least unauthorable — the picker filtered it out. A merchant selecting
+**"Show"** got a rule that saved, published and did nothing, which is silent and
+indistinguishable from a bug.
+
+⚠️ **Withdrawn rather than given meaning, and that is the harder half of this
+decision.** `show` becomes real the moment something is hidden by default, and
+there are two credible ways to get there:
+
+1. A merchant-authored *"hidden unless a rule shows it"* flag on an option.
+2. Letting `show` override `hide` under a stated precedence.
+
+The second is refused outright: ADR-052 chose `hide` because *"a hidden field
+cannot be filled, so hiding is the answer a customer can always act on"*, and
+reversing it would let an unrelated rule expose an option a merchant meant to
+hide — 16c's defect with a rule in front of it.
+
+The first is a real feature and **not one this phase specified**. Shipping an
+action now, against a flag that does not exist, is how `set_default` came to be
+evaluated three times over for nothing.
+
+### Consequences
+
+**`hide` alone is complete.** Every configuration expressible as *"show X when
+Y"* is expressible as *"hide X when NOT Y"*, using the nine operators' negative
+forms — `not_equals`, `is_empty`, `not_in`. Nothing a merchant could author is
+lost; one of two ways to say the same thing is.
+
+⚠️ **A stored `show` row degrades to a rule that does nothing**, which is exactly
+what it did before — every evaluator ignores an action it does not know (AC4). No
+migration, and no behaviour change for any existing store.
+
+📌 **If it returns, it returns with the flag.** `show` and a
+*hidden-by-default* option are one feature, not two, and neither is meaningful
+without the other. That is a Phase 18 question at the earliest — it changes the
+option model, which is that phase's subject.

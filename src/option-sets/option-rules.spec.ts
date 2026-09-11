@@ -21,7 +21,7 @@ describe('OptionRulesService', () => {
   const validInput = {
     targetType: RuleTargetType.OPTION,
     targetId: optionId,
-    action: RuleAction.SHOW,
+    action: RuleAction.HIDE,
     matchType: RuleMatchType.ALL,
     conditions: [{ optionId, operator: 'equals', value: 'yes' }],
   };

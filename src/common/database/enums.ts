@@ -188,7 +188,17 @@ export type RuleDisabledReason =
   (typeof RuleDisabledReason)[keyof typeof RuleDisabledReason];
 
 export const RuleAction = {
-  SHOW: 'show',
+  /*
+   * ✏️ **A seventh action was here and is withdrawn (ADR-056)**, alongside the
+   * sixth below. It read as `hide`'s obvious opposite and was not: nothing is
+   * hidden by default for it to reveal, and where something *is* hidden,
+   * ADR-052 gives `hide` the win. Measured in all three evaluators — it changed
+   * nothing in every path it could take.
+   *
+   * `hide X when NOT Y` says everything it said, using the operators' negative
+   * forms. Its name is deliberately unquoted here: the vocabulary parity gate
+   * reads this object by grepping for quoted values.
+   */
   HIDE: 'hide',
   REQUIRE: 'require',
   UNREQUIRE: 'unrequire',

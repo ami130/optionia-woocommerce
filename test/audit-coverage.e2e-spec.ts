@@ -168,13 +168,23 @@ describe('audit coverage (e2e)', () => {
       await post(`/option-sets/${set}/rules`, {
         targetType: 'option',
         targetId: option,
-        action: 'show',
+        /* Any real action; `show` was withdrawn by ADR-056. */
+        action: 'hide',
         matchType: 'all',
         conditions: [{ optionId: option, operator: 'equals', value: 'v' }],
       }),
       'rule',
     );
-    await patch(`/rules/${rule}`, { action: 'hide' });
+    /*
+     * ⚠️ **Must differ from what the rule was created with**, or the patch is a
+     * no-op and the audit row carries an empty diff — which
+     * `records a diff on every row` then fails on.
+     *
+     * Measured: creating and patching both as `hide` left that assertion with
+     * zero changed keys. The fixture creates `hide` (ADR-056 withdrew `show`),
+     * so the update has to move it somewhere else.
+     */
+    await patch(`/rules/${rule}`, { action: 'require' });
     await post(`/option-sets/${set}/rules/reorder`, { rules: [{ id: rule, sortOrder: 20 }] });
     await del(`/rules/${rule}`);
 

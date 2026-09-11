@@ -41,7 +41,6 @@
 
 /** Every action a rule may take. */
 export const RULE_ACTIONS = [
-  'show',
   'hide',
   'require',
   'unrequire',
@@ -312,10 +311,6 @@ function resolve(
     switch (rule.action) {
       case 'hide':
         states.set(rule.targetId, { ...state, hidden: true });
-        break;
-      case 'show':
-        /* `hide` wins: never clear a hide that another rule set. */
-        states.set(rule.targetId, state);
         break;
       case 'require':
         states.set(rule.targetId, { ...state, required: true });

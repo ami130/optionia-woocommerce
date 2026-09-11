@@ -729,7 +729,16 @@ function conditionOptionIds(conditions: readonly unknown[]): readonly string[] {
  * hide that changes what a later condition reads. With it gone, only visibility
  * moves an answer, which is why the set is now two members rather than three.
  */
-const ANSWER_AFFECTING_ACTIONS: ReadonlySet<string> = new Set(['show', 'hide']);
+/*
+ * ✏️ **Two actions have left this set.** `set_default` went with ADR-055 and
+ * `show` with ADR-056, so only `hide` remains — it is the one action that moves
+ * an answer, by clearing it.
+ *
+ * ⚠️ **A one-member set is still a set.** Naming it keeps the question visible
+ * — *which actions change what a later condition reads?* — where an inlined
+ * `=== 'hide'` would read as an implementation detail and lose the reason.
+ */
+const ANSWER_AFFECTING_ACTIONS: ReadonlySet<string> = new Set(['hide']);
 
 /**
  * Rules that depend on each other in a loop cannot settle (M17.3).

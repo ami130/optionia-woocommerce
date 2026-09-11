@@ -494,7 +494,17 @@ describe('option sets (e2e)', () => {
         [optionId, groupId],
       );
 
-      /* Targets the option, and its condition names that same option. */
+      /*
+       * Targets the option, and its condition names that same option.
+       *
+       * ⚠️ **Inserted as SQL, with an action the API no longer accepts.**
+       * `show` was withdrawn by ADR-056, so this row cannot be authored through
+       * the API — which is exactly the case worth covering here: rows written
+       * before a withdrawal still exist, and duplicating a set must carry them
+       * verbatim rather than dropping or rewriting them. A storefront then
+       * ignores the action, as every evaluator does for one it does not know
+       * (AC4).
+       */
       await dataSource.query(
         `INSERT INTO option_rules (id, optionSetId, targetType, targetId, action, conditions,
                                    matchType, sortOrder, isEnabled, disabledReason,
@@ -521,7 +531,7 @@ describe('option sets (e2e)', () => {
 
       const [rule] = rules;
 
-      /* What the rule DOES is carried verbatim. */
+      /* What the rule DOES is carried verbatim — a withdrawn action included. */
       expect(rule.action).toBe('show');
       expect(rule.matchType).toBe('all');
       expect(Number(rule.isEnabled)).toBe(1);

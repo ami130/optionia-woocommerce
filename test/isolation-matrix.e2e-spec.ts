@@ -81,7 +81,8 @@ describe('tenant isolation matrix (e2e)', () => {
       await post(tokenA, `/option-sets/${owned.set}/rules`, {
         targetType: 'option',
         targetId: owned.option,
-        action: 'show',
+        /* Any real action; `show` was withdrawn by ADR-056. */
+        action: 'hide',
         matchType: 'all',
         conditions: [{ optionId: owned.option, operator: 'equals', value: 'a' }],
       }),

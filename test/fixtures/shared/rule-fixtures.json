@@ -54,7 +54,7 @@
       }
     },
     {
-      "name": "hide beats show when both fire — rules given hide first",
+      "name": "a withdrawn action cannot undo a hide — hide given first",
       "rules": [
         {
           "id": "r1",
@@ -95,7 +95,7 @@
       }
     },
     {
-      "name": "hide beats show when both fire — rules given show first",
+      "name": "a withdrawn action cannot undo a hide — the withdrawn one given first",
       "rules": [
         {
           "id": "r1",

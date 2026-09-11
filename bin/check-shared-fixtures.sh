@@ -719,7 +719,7 @@ fi
 # measured; both decide whether a field is hidden, and ADR-051 makes a hidden
 # field one that is not charged.
 RULES="$FIXTURE_DIR/rule-fixtures.json"
-EXPECTED_RULES_SHA='fa9e456f216576d9326c21800a856f65b639152a172acd176d20320fe73ab585'
+EXPECTED_RULES_SHA='cad047c8c2b9ba2f765966820d43b9f989012d5cf750e9e504305dff4a290ff3'
 
 if [ ! -f "$RULES" ]; then
   fail "shared rule fixture missing at $RULES"
