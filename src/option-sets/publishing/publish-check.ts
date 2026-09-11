@@ -148,6 +148,82 @@ export const rulesHaveTargets: PublishValidator = {
 };
 
 /**
+ * A rule whose conditions are not a list can never fire (K3).
+ *
+ * 🔴 **Safe, silent, and invisible until now.** `conditions` is a JSON column,
+ * and a row written before M17.1 settled its shape may hold an **object** where
+ * a list belongs. Every reader guards with `Array.isArray` and falls back to
+ * `[]` — so the document publishes cleanly, the storefront renders normally, and
+ * the rule simply never applies. Nothing failed, and nothing said so.
+ *
+ * ⚠️ **A warning, not a blocker, and the reasoning is `rulesHaveTargets`'s.**
+ * The storefront is already consistent: a rule that never fires is a rule that
+ * changes nothing. Blocking would refuse a publish over a row the merchant did
+ * not write and cannot see. But *"a rule that silently stopped working is the
+ * thing they would otherwise discover from a customer"* — so they are told.
+ *
+ * Found by the 17-5 audit, carried through three stages, closed in 17-11.
+ */
+/**
+ * Whether every condition on a rule is a shape an evaluator can read.
+ *
+ * ⚠️ **Two malformations, not one.** `conditions` may not be a list at all — the
+ * pre-M17.1 shape K3 was raised about — or it may be a list containing junk. The
+ * second is the subtler of the two and was missed when K3 was first closed:
+ * `conditionOptionIds()` skips a non-object entry silently, so a rule with one
+ * good condition and one broken one published with **no finding at all**.
+ *
+ * 🔴 **Neither is a correctness defect**, and that is exactly why they need a
+ * warning. All three evaluators treat an unreadable condition as one that never
+ * holds — pinned by four shared-fixture cases — so the storefront is safe and
+ * the rule simply does less than the merchant wrote. Safe, silent, and
+ * discovered from a customer is the failure this reports.
+ */
+function everyConditionIsReadable(conditions: unknown): boolean {
+  if (!Array.isArray(conditions)) {
+    return false;
+  }
+
+  /*
+   * ⚠️ **`typeof condition === 'object'` was here and is gone.** Mutation showed
+   * it guarded nothing reachable: with `!Array.isArray` and the two field checks
+   * in place, the only value it uniquely rejects is a **function** carrying
+   * `optionId` and `operator` — and a function cannot survive a JSON column.
+   *
+   * `condition !== null` stays because `null?.optionId` is `undefined` rather
+   * than a throw, so without it a null entry would read as merely missing its
+   * fields — true, and a worse explanation than "this is not a condition".
+   *
+   * An array **can** carry those fields and reach here, which is why that guard
+   * remains and has its own test.
+   */
+  return conditions.every(
+    (condition) =>
+      condition !== null &&
+      !Array.isArray(condition) &&
+      typeof (condition as { optionId?: unknown }).optionId === 'string' &&
+      typeof (condition as { operator?: unknown }).operator === 'string',
+  );
+}
+
+export const ruleConditionsAreAList: PublishValidator = {
+  name: 'rule-conditions-are-a-list',
+  validate({ rules }) {
+    return rules
+      .filter((rule) => rule.isEnabled && !everyConditionIsReadable(rule.conditions))
+      .map((rule) => ({
+        severity: PublishSeverity.WARNING,
+        code: 'RULE_CONDITIONS_MALFORMED',
+        subject: `rule:${rule.id}`,
+        message:
+          'A rule has one or more conditions in a shape this version cannot read, so it ' +
+          'will not apply as written. Open it in the rule builder and save it again to ' +
+          'repair it.',
+      }));
+  },
+};
+
+/**
  * A set assigned to nothing reaches no product.
  *
  * A warning rather than a blocker: publishing to nothing is wasteful, not
@@ -956,6 +1032,7 @@ export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   rulesHaveNoCycles,
   setPriceDoesNotFightOptionPricing,
   rulePayloadsDoNotConflict,
+  ruleConditionsAreAList,
   setHasAssignments,
   patternsAreSafe,
 ];

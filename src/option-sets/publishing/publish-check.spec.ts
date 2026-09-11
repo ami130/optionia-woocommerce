@@ -10,6 +10,7 @@ import {
   runPublishChecks,
   ruleTargetsAreInThisSet,
   rulesHaveNoCycles,
+  ruleConditionsAreAList,
   rulePayloadsDoNotConflict,
   setPriceDoesNotFightOptionPricing,
   type PublishContext,
@@ -713,6 +714,169 @@ describe('pre-publish checks', () => {
     });
   });
 
+  describe('rules whose conditions are the wrong shape (K3)', () => {
+    /**
+     * 🔴 **Safe, silent, and invisible for three stages.**
+     *
+     * `conditions` is a JSON column, and a row written before M17.1 settled its
+     * shape may hold an object where a list belongs. Every reader guards with
+     * `Array.isArray` and falls back to `[]`, so the set publishes cleanly and
+     * the rule simply never applies. Nothing failed, and nothing said so —
+     * which is what a warning is for.
+     */
+    it('warns about a rule whose conditions are not a list', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              conditions: { optionId: 'option-1', operator: 'is_empty' } as never,
+            }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+      expect(findings[0]!.severity).toBe(PublishSeverity.WARNING);
+    });
+
+    /**
+     * 🔴 **A list containing junk is the subtler half, and it was missed.**
+     *
+     * K3 was first closed by checking `!Array.isArray` alone — so a rule with
+     * one good condition and one broken one published with **no finding**.
+     * `conditionOptionIds()` skips a non-object entry silently, which is safe
+     * and says nothing.
+     *
+     * The shared fixture pins the evaluator's behaviour here in all three
+     * languages (four cases). What was missing was telling the merchant.
+     */
+    it('warns about a list that contains an unreadable condition', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [
+            rule({
+              conditions: [
+                { optionId: 'option-1', operator: 'is_empty' },
+                'garbage',
+              ] as never,
+            }),
+          ],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+    });
+
+    /**
+     * 🔴 An **array** carrying the right fields is still not a condition.
+     *
+     * Exotic, and reachable: `conditions` is a JSON column, so nothing at the
+     * database layer refuses `[["x"], …]` with properties attached. The field
+     * checks alone would call it usable — `optionId` and `operator` are both
+     * strings on it.
+     *
+     * ⚠️ **Written because mutation showed the shape guards were unproven.**
+     * Loosening `typeof condition === 'object'` failed no test, because every
+     * case then covered was rejected by the `optionId` check instead. Two guards
+     * with no input between them is the redundancy this codebase keeps paying
+     * for — except here there *is* an input between them, and this is it.
+     */
+    it('warns about a condition that is an array wearing the right fields', () => {
+      const arrayish = Object.assign(['x'], { optionId: 'option-1', operator: 'is_empty' });
+
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [rule({ conditions: [arrayish] as never })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+    });
+
+    /**
+     * ⚠️ A condition missing `optionId` reads as junk too. It names nothing, so
+     * no evaluator can look an answer up for it.
+     */
+    it('warns about a condition with no optionId', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [rule({ conditions: [{ operator: 'is_empty' }] as never })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+    });
+
+    /**
+     * ⚠️ A `null` entry is not a condition either.
+     *
+     * `null` survives JSON perfectly well, and `null?.optionId` is `undefined`
+     * rather than a throw — so without the explicit guard it would read as a
+     * condition merely *missing* its fields. True, and a worse explanation than
+     * "this is not a condition".
+     */
+    it('warns about a null condition', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [rule({ conditions: [null] as never })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+    });
+
+    /**
+     * ⚠️ A condition with no `operator` names a subject and asks nothing of it.
+     *
+     * The mirror of the missing-`optionId` case, and needed for the same reason:
+     * every evaluator dispatches on the operator, so one that is absent takes
+     * the default branch and the condition never holds.
+     */
+    it('warns about a condition with no operator', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [rule({ conditions: [{ optionId: 'option-1' }] as never })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).toEqual(['RULE_CONDITIONS_MALFORMED']);
+    });
+
+    /**
+     * The control. Without it, a validator that warned about every rule would
+     * satisfy the test above.
+     */
+    it('says nothing about a well-formed rule', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({ tree: twoGroupTree(), rules: [rule({})] }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+
+    /**
+     * ⚠️ A disabled rule is not published, so its shape cannot matter — and
+     * warning about one would tell a merchant to repair something that already
+     * affects nothing.
+     */
+    it('says nothing about a disabled rule', () => {
+      const findings = ruleConditionsAreAList.validate(
+        context({
+          tree: twoGroupTree(),
+          rules: [rule({ isEnabled: false, conditions: {} as never })],
+        }),
+      );
+
+      expect(findings).toEqual([]);
+    });
+  });
+
   describe('rules that form a cycle', () => {
     it('accepts a single rule', () => {
       expect(rulesHaveNoCycles.validate(context({ rules: [rule()] }))).toEqual([]);
@@ -1205,6 +1369,7 @@ describe('pre-publish checks', () => {
         'rules-have-no-cycles',
         'set-price-does-not-fight-option-pricing',
         'rule-payloads-do-not-conflict',
+        'rule-conditions-are-a-list',
         'set-has-assignments',
         'patterns-are-safe',
       ]);

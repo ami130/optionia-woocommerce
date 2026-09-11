@@ -14,6 +14,18 @@
  * with the same result. The backend had no equivalent, which is why an
  * evaluator with no caller went unnoticed.
  *
+ *
+ * ⚠️ **A type-only import counts as a caller, and that is a known hole.**
+ * `import type { X } from './x'` matches the same `from '…'` pattern as a value
+ * import, so a module whose *runtime* use disappears while its types are still
+ * imported reads as alive. Measured by the 17-11 audit: converting a real import
+ * to `import type` and stubbing the call left this gate green.
+ *
+ * Not fixed, deliberately: telling the two apart means parsing TypeScript rather
+ * than reading it, and a gate that needs a compiler is a gate that breaks when
+ * the compiler moves. The stronger guarantee is the one the tests give — a
+ * module whose behaviour nothing exercises fails its own suite.
+ *
  * ## What counts as reachable
  *
  * Imported by a file under `src/` that is not itself a spec. A module reached

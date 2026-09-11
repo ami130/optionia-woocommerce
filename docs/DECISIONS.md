@@ -4507,6 +4507,22 @@ resolver → `cart_item_data` → session → order meta → fulfilment output, 
 Phase 12 found real defects at three of those hops. A test asserting the resolver
 drops the value proves the first hop only.
 
+✏️ **There is a sixth hop, found by the 17-11 audit: the analytics report.**
+`Reporting\OrderPayload` sends selections to the cloud, and it reads
+`Keys::META_SELECTIONS` — the same order meta the fulfilment output reads. So it
+inherits whatever guarantee the fourth hop has rather than needing its own, which
+is why it was never a defect. Named here because a chain listed one link short is
+a chain somebody will believe they have walked.
+
+⚠️ **And the guarantee is not what this ADR first implied.** `OrderLineItem`
+copies the frozen cart line and never re-resolves, so nothing at that hop can
+*strip* a hidden option. A line that carried one — because the merchant published
+the rule after the customer added it — is refused wholesale by
+`CheckoutValidator` and never becomes an order at all. Proven in
+`test_a_line_hidden_by_a_later_rule_cannot_reach_an_order`, after a first attempt
+proved nothing: it never submitted the option, so the order was clean whether
+rules existed or not, and passed with rule evaluation **disabled entirely**.
+
 **M17.4's server-side rejection is the enforcement half of decision 2**, and the
 two are deliberately different mechanisms: rejection refuses a *submitted* value
 for a hidden option (a forged or stale payload), while this decision governs a
@@ -4681,3 +4697,63 @@ mutates nothing is the lesser oddity.
 📌 **A fourth implementation is still the right answer the day the dashboard must
 work offline**, which it does not today and has no requirement to. Recorded so
 that reversing this needs a reason rather than a preference.
+
+---
+
+## ADR-054 — The storefront estimate refuses when a rule sets a price
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M17.9, M17.11
+
+### Context
+
+M17.9 put rule evaluation in the browser and deliberately withheld
+`action_value`: an amount on the storefront is a second source of truth for a
+number AC4 makes server-authoritative. So the page can see *that* a rule sets a
+price and never *what* it sets.
+
+The running estimate reads `data-optionia-price` — the **authored** amount. When
+a `set_price` rule replaces it (ADR-049), the two disagree. Measured by the 17-11
+exit audit:
+
+```text
+browser shows:  +£5.00   (the authored price on the chosen value)
+server charges: £25.00   (base £10 + the rule's £25)
+```
+
+A disclaimer sits beneath the estimate — *"Estimated options total. The final
+price is confirmed at checkout."* It is true, and it does not make the number
+less wrong.
+
+### Decision
+
+**The estimate shows nothing when any rule on the product sets a price.**
+
+**1. This is the line `selectedTotal()` already draws.** It returns `null` for
+`percentage`, `per_char`, `per_unit` and `tiered` — every type it cannot compute
+— and `refresh()` then hides the estimate rather than showing a partial total.
+*"A partial total is the failure mode worth avoiding: it looks right."* A price a
+rule will replace is the same category, reached a different way.
+
+**2. Asked of the rules, not of the answers.** Whether a rule *fires* depends on
+what the customer has chosen so far, so an estimate that appeared and vanished as
+they answered would be worse than one that never appeared. A product whose
+merchant prices through rules shows no running estimate at all.
+
+**3. The alternative — sending the amounts — was rejected.** It would put a
+price on the page for the browser to add up, which is exactly what AC4 exists to
+prevent, and it would need the browser to reimplement `set_price_for()`'s
+refusal rules (ADR-049) to know when *not* to apply one. A fourth place that
+computes a price is a fourth place that can disagree.
+
+### Consequences
+
+⚠️ **A merchant using `set_price` loses the estimate for that product.** That is
+a real cost, and the honest one: the alternative is a number the customer will
+see change at checkout. M17.10 does not offer `set_price` in the rule builder
+yet, so no merchant reaches this today except through the API.
+
+📌 **The fix for both is the same and is not this phase's**: a server-quoted
+estimate, which Phase 21's live preview is already scheduled to build. When it
+lands, this refusal becomes unnecessary rather than wrong — and
+`common/money/line-total.ts`, exempted in the backend's reachability gate with a
+fuse naming Phase 21, is what would compute it.

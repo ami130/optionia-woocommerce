@@ -60,9 +60,23 @@ pass() {
 # builds fail, which is the entire point.
 EXPECTED_SHA='ba3e24692eadae8e5d8052a96abe8214f85d2b8634cc9edb118e0311119c5ed2'
 
-# Where this repository keeps the suites that execute the fixture. Not derived
-# from FIXTURE: the backend colocates specs with source, so the two trees differ.
+# Where this repository keeps the suites that execute the fixture. **A
+# space-separated list**, not one path: the plugin runs the shared rule fixture
+# in PHP under `tests/unit` and in JavaScript under `tests/js`. Not derived from
+# FIXTURE: the backend colocates specs with source, so the two trees differ.
 SUITE_ROOT="src"
+# How many local suites must execute the shared RULE fixture.
+#
+# 🔴 **Two in the plugin, because it evaluates rules in two languages.**
+# `Engine\RuleEvaluator` (PHP) decides what a customer may submit and
+# `assets/js/rules.js` decides what their page shows — and M17.9 added the second
+# without this gate noticing. Measured by the 17-11 exit audit: deleting the
+# JavaScript fixture run left every gate green, because "at least one reader"
+# was satisfied by the PHP suite alone.
+#
+# A floor of one asks *"does anyone execute this?"*. The question worth asking is
+# *"does every evaluator in this repository execute it?"*.
+RULE_SUITE_FLOOR=1
 
 # A gate that finds no fixture passes for the wrong reason.
 FIXTURE_DIR="test/fixtures/shared"
@@ -596,7 +610,17 @@ count_readers() {
   # $1 the fixture field a suite must read to execute a case. Quoted either way,
   # since PHP writes $case['base_minor'] and TypeScript writes c.base_minor or
   # destructures it.
-  grep -rlE "['\"'\''.]$1['\"'\'']?" "$SUITE_ROOT" 2>/dev/null \
+  #
+  # 🔴 **SUITE_ROOT is a LIST, and it became one because a suite went unseen.**
+  # M17.9 added a third evaluator, in the browser, with its own fixture run under
+  # `tests/js` — and this gate searched `tests/unit` alone. Measured by the 17-11
+  # exit audit: deleting `tests/js/rule-fixtures.test.js` left every gate green,
+  # still reporting "rule cases are executed here".
+  #
+  # A gate that counts readers in one of two trees answers a narrower question
+  # than the one it prints.
+  # shellcheck disable=SC2086
+  grep -rlE "['\"'\''.]$1['\"'\'']?" $SUITE_ROOT 2>/dev/null \
     | grep -vE '/fixtures/' | wc -l | tr -d ' '
 }
 
@@ -623,7 +647,8 @@ CURRENCY_READERS=$(count_readers currency_cases)
 # suites mention `case_count`, so a hollow reader plus any one of them satisfied
 # two independent greps while nothing tied them together. The guarantee is that
 # one file both runs the cases and checks how many it ran.
-COUNT_ASSERTIONS=$(grep -rlE '\bbase_minor\b' "$SUITE_ROOT" 2>/dev/null \
+# shellcheck disable=SC2086 -- SUITE_ROOT is a list of trees; see count_readers.
+COUNT_ASSERTIONS=$(grep -rlE '\bbase_minor\b' $SUITE_ROOT 2>/dev/null \
   | grep -vE '/fixtures/' \
   | xargs grep -lE 'case_count' 2>/dev/null | wc -l | tr -d ' ')
 
@@ -724,8 +749,8 @@ else
   RULE_READERS=$(count_readers rule_cases)
   PASS_READERS=$(count_readers expect_passes)
 
-  if [ "$RULE_READERS" -lt 1 ]; then
-    fail "no local suite reads rule_cases -- the $R_ACTUAL rule case(s) are executed by the other language only"
+  if [ "$RULE_READERS" -lt "$RULE_SUITE_FLOOR" ]; then
+    fail "only $RULE_READERS of $RULE_SUITE_FLOOR local suite(s) read rule_cases -- an evaluator here is not executing the shared cases"
     printf '        A rule set evaluated in one language proves that language agrees with\n'
     printf '        itself. Whether a customer sees the same form on the storefront as the\n'
     printf '        cloud validated is exactly what a shared fixture is for.\n'
@@ -735,7 +760,7 @@ else
     printf '        behaviour are the failures that matter, and neither is visible in a\n'
     printf '        final state.\n'
   else
-    pass "rule cases are executed here, including their pass counts"
+    pass "all $RULE_SUITE_FLOOR local evaluator suite(s) execute the rule cases, with their pass counts"
   fi
 fi
 
