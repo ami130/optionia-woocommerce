@@ -56,19 +56,31 @@ export const RULE_OPERATORS = [
 ] as const;
 export type RuleOperator = (typeof RULE_OPERATORS)[number];
 
+/* -------------------------------------------------------------------------
+ * The five operand shapes
+ *
+ * 🔴 **The API has five condition schemas, not one.** `ruleConditionSchema` is a
+ * discriminated union keyed on the operator, and each branch accepts a different
+ * `value`: absent, a list, a number, a string, or any scalar. The builder picks
+ * its input control from these, so a missing grouping is a text box where the
+ * API demands a number — a 400 the merchant discovers at submit.
+ *
+ * ✏️ **Two of the five were missing until the builder needed them**, and the
+ * parity gate could not see it: it compared the four flat lists and nothing
+ * else. It now compares the groupings too.
+ * ---------------------------------------------------------------------- */
+
 /**
  * Operators that take **no** operand.
  *
- * ⚠️ **Mirrored from `UNARY_RULE_OPERATORS`, and the builder must honour it.**
- * Offering a value field for `is_empty` invites a merchant to fill one in, and
- * the schema is `.strict()` — the extra key is a 400, not an ignored field.
+ * ⚠️ **Offering a value field for `is_empty` is a 400, not an ignored field.**
+ * The schema is `.strict()`, so an extra key is refused outright — the builder
+ * must not render one.
  */
 export const UNARY_OPERATORS: readonly RuleOperator[] = ['is_empty', 'is_not_empty'];
 
 /**
- * Operators whose operand is a **list**.
- *
- * The builder collects several values for these and one for the rest.
+ * Operators whose operand is a **list**, capped at `MAX_OPERAND_LIST_LENGTH`.
  */
 export const LIST_OPERATORS: readonly RuleOperator[] = ['in', 'not_in'];
 
@@ -76,10 +88,58 @@ export const LIST_OPERATORS: readonly RuleOperator[] = ['in', 'not_in'];
  * Operators that compare **numbers**.
  *
  * ⚠️ Text has no ordering PHP and JavaScript agree on, so these are numeric
- * only — the schema refuses a string operand, and the builder should ask for a
- * number rather than let a merchant discover that at submit.
+ * only — the schema refuses a string operand, and the builder asks for a number
+ * rather than letting a merchant discover that at submit.
+ *
+ * Named for what it means to a merchant; the API calls the same pair
+ * `ORDERING_RULE_OPERATORS`, and the parity gate maps one to the other.
  */
 export const NUMERIC_OPERATORS: readonly RuleOperator[] = ['greater_than', 'less_than'];
+
+/**
+ * Operators whose operand is a **string**, and only a string.
+ *
+ * `contains` asks about text. A number would have to be stringified to compare,
+ * and the two languages disagree about how — so the schema refuses one.
+ */
+export const SUBSTRING_OPERATORS: readonly RuleOperator[] = ['contains'];
+
+/**
+ * Operators that accept **any scalar**: a string, a number or a boolean.
+ *
+ * The widest branch, and the default the builder falls back to.
+ */
+export const EQUALITY_OPERATORS: readonly RuleOperator[] = ['equals', 'not_equals'];
+
+/**
+ * What kind of input one operator needs.
+ *
+ * 🔴 **One function, so the builder and any validation cannot disagree.** Asking
+ * "is this unary?" in one place and "is this a list?" in another is how a form
+ * comes to render a text box for `in` — the shape M11.1a records, where two
+ * places computed the same thing separately.
+ */
+export type OperandShape = 'none' | 'list' | 'number' | 'text' | 'scalar';
+
+export function operandShape(operator: RuleOperator): OperandShape {
+  if (UNARY_OPERATORS.includes(operator)) {
+    return 'none';
+  }
+
+  if (LIST_OPERATORS.includes(operator)) {
+    return 'list';
+  }
+
+  if (NUMERIC_OPERATORS.includes(operator)) {
+    return 'number';
+  }
+
+  if (SUBSTRING_OPERATORS.includes(operator)) {
+    return 'text';
+  }
+
+  return 'scalar';
+}
 
 /** How each operator reads in a sentence: *"Engraving **is** Yes"*. */
 export const OPERATOR_PHRASING: Readonly<Record<RuleOperator, string>> = {

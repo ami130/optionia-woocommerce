@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { OptionPreview } from '@/components/option-sets/option-preview';
+import { RulesPanel } from '@/components/option-sets/rules-panel';
 import { ProductPicker } from '@/components/products/product-picker';
 import { useSession } from '@/components/providers/session-provider';
 import { ConflictAwareError, ErrorState, FullPageLoading } from '@/components/layout/states';
@@ -126,6 +127,17 @@ export default function OptionSetEditorPage() {
       </div>
 
       {canEdit ? <AddGroup setId={setId} onAdded={reload} /> : null}
+
+      {/*
+       * Rules sit below the groups because they act **on** them: a merchant
+       * cannot write "hide Engraving Text" before Engraving Text exists, and the
+       * target picker is built from what is above it.
+       *
+       * ⚠️ Shown to a viewer as well, read-only. A rule decides what a customer
+       * sees, so someone diagnosing a storefront needs to read them without
+       * being able to change them.
+       */}
+      <RulesPanel set={set} canEdit={canEdit} />
 
       {/*
        * Assignment is a property of the set, so it sits with the set's own

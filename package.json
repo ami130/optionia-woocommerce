@@ -10,6 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "check:reachable": "node bin/check-reachable.mjs",
+    "check": "npm run check:reachable && npm run lint && npm run typecheck && npm run test",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui"
   },
