@@ -213,10 +213,6 @@ final class RuleEvaluatorTest extends TestCase {
 				$stated['price_minor'] = $state['price_minor'];
 			}
 
-			if ( null !== $state['default_value_key'] ) {
-				$stated['default_value_key'] = $state['default_value_key'];
-			}
-
 			/*
 			 * Projected only when true, like `hidden`: a case saying nothing
 			 * about a conflict asserts there is none.

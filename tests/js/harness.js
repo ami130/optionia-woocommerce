@@ -94,6 +94,17 @@ export async function loadStorefront(html, options = {}) {
   if (options.settings !== false) {
     dom.window.optioniaSettings = {
       currency: { ...DEFAULT_CURRENCY, ...(options.currency ?? {}) },
+
+      /*
+       * What a rule did, for a screen reader. Localised by `Assets.php` because
+       * JavaScript cannot call `__()`, so a runtime without these says nothing —
+       * which is why they are here rather than defaulted in the script.
+       */
+      rules: {
+        shown: 'Some options are now available.',
+        hidden: 'Some options no longer apply and have been removed.',
+        both: 'The available options have changed.',
+      },
     };
 
     if (options.upload !== false) {

@@ -105,6 +105,24 @@ final class Assets {
 			array(
 				'currency' => $this->currency_settings(),
 				'upload'   => $this->upload_settings(),
+
+				/*
+				 * What a rule did, for a screen reader (M17.5).
+				 *
+				 * 🔴 **Counts, not names.** A message naming options would have
+				 * to read labels back out of the DOM, where they sit beside the
+				 * required marker and its screen-reader text — so the runtime
+				 * would be parsing markup it also renders. A count is accurate
+				 * whatever the labels contain, and it is what a customer needs:
+				 * *something changed, and how much*.
+				 *
+				 * Translated here because JavaScript cannot call `__()`.
+				 */
+				'rules'    => array(
+					'shown'  => __( 'Some options are now available.', 'optionia' ),
+					'hidden' => __( 'Some options no longer apply and have been removed.', 'optionia' ),
+					'both'   => __( 'The available options have changed.', 'optionia' ),
+				),
 			)
 		);
 	}

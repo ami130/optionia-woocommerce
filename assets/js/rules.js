@@ -324,11 +324,15 @@
 	
 				default:
 					/*
-					 * `set_price` and `set_default` reach this switch and do
-					 * nothing, deliberately. Pricing is the server's (AC4), and a
-					 * default is what M17.5 calls a rendering decision this stage
-					 * does not take. An action a newer build authored lands here
-					 * too, and is ignored rather than fatal.
+					 * `set_price` reaches this switch and does nothing,
+					 * deliberately: pricing is the server's (AC4), and the
+					 * amount is not even sent to the page.
+					 *
+					 * An action a newer build authored lands here too, and is
+					 * ignored rather than fatal — which is also what a stored
+					 * `set_default` row now does, since ADR-055 withdrew that
+					 * action. A rule whose action nothing recognises changes
+					 * nothing, in all three languages.
 					 */
 					break;
 			}

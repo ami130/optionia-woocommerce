@@ -275,6 +275,86 @@ describe('rule-driven visibility', () => {
     expect(window.document.querySelector('[data-optionia="estimate"]').textContent).toContain('5');
   });
 
+  /**
+   * 🔴 Focus does not stay on a field a rule has just hidden.
+   *
+   * Measured before this: a customer typing in an option when a rule hid it kept
+   * focus on an element that was then `hidden` **and** `disabled` — an invisible
+   * tab stop, and a screen reader with nothing to announce. M17.5 asks to "keep
+   * focus management sane", and there was no focus code at all, only comments
+   * about it.
+   */
+  it('moves focus out of an option it is hiding', async () => {
+    const { window } = await loadStorefront(page(), {
+      rules: [rule('option', 'opt-b', 'hide', 'opt-a', 'equals', 'yes')],
+    });
+
+    const typed = window.document.querySelector('input[type="text"]');
+    typed.focus();
+
+    expect(window.document.activeElement).toBe(typed);
+
+    const yes = window.document.querySelector('input[value="yes"]');
+    yes.checked = true;
+    fire(window, yes, 'change');
+
+    expect(window.document.activeElement).not.toBe(typed);
+  });
+
+  /**
+   * ⚠️ ...and does not steal focus when the customer is elsewhere.
+   *
+   * A rule usually fires because a *different* option was answered, so taking
+   * focus from the control they just used would be its own defect. Without this
+   * control, a `blur()` on every pass would satisfy the test above.
+   */
+  it('leaves focus alone when the hidden option did not have it', async () => {
+    const { window } = await loadStorefront(page(), {
+      rules: [rule('option', 'opt-b', 'hide', 'opt-a', 'equals', 'yes')],
+    });
+
+    const yes = window.document.querySelector('input[value="yes"]');
+    yes.focus();
+    yes.checked = true;
+    fire(window, yes, 'change');
+
+    expect(window.document.activeElement).toBe(yes);
+  });
+
+  /**
+   * 🔴 A rule says what it did, for a customer who cannot see it happen.
+   *
+   * Silence is indistinguishable from nothing having happened. The region is
+   * `screen-reader-text` rather than `hidden`, because a hidden live region is
+   * removed from the accessibility tree and never announced.
+   */
+  it('announces that options were removed', async () => {
+    /*
+     * The live region, inside the block. `page()` is a fragment shaped like the
+     * real partial; the partial itself emits this region, and
+     * `frontend-contract.test.js` pins that the templates and the runtime agree
+     * on its name.
+     */
+    const markup = page().replace(
+      /<\/div>\s*$/,
+      '<p data-optionia="rule-status" role="status" aria-live="polite"></p></div>',
+    );
+
+    const { window } = await loadStorefront(markup, {
+      rules: [rule('option', 'opt-b', 'hide', 'opt-a', 'equals', 'yes')],
+    });
+
+    const status = window.document.querySelector('[data-optionia="rule-status"]');
+
+    expect(status.textContent).toBe('');
+
+    const yes = window.document.querySelector('input[value="yes"]');
+    yes.checked = true;
+    fire(window, yes, 'change');
+
+    expect(status.textContent).not.toBe('');
+  });
+
   /** One product's rules must not reach another's controls. */
   it('ignores rules published for a different product', async () => {
     const { window } = await loadStorefront(page(), {

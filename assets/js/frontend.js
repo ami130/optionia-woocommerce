@@ -352,6 +352,8 @@
 
 		revealAll( root );
 
+		var hiddenBefore = countHidden( root );
+
 		Object.keys( states ).forEach( function ( targetId ) {
 			if ( ! states[ targetId ].hidden ) {
 				return;
@@ -368,6 +370,53 @@
 				hideTarget( targets[ i ] );
 			}
 		} );
+
+		announceRules( root, hiddenBefore, countHidden( root ) );
+	}
+
+	/**
+	 * How many things a rule currently hides in this block.
+	 *
+	 * Counted from the DOM rather than from the evaluator's states, because a
+	 * target may cover several controls — a group hides every option inside it —
+	 * and what a customer notices is how many *things went away*.
+	 *
+	 * @param {Element} root The options container.
+	 * @return {number}
+	 */
+	function countHidden( root ) {
+		return root.querySelectorAll( '[data-optionia-hidden]' ).length;
+	}
+
+	/**
+	 * Say what a rule did, for a customer who cannot see it happen (M17.5).
+	 *
+	 * 🔴 **Silence is indistinguishable from nothing having happened.** A rule
+	 * rearranges the form under someone using a screen reader, and until this
+	 * there was no announcement at all — `announce()` exists but writes to an
+	 * upload's status element and is not reusable here.
+	 *
+	 * ⚠️ **Says nothing when nothing changed**, which is most `change` events. A
+	 * live region rewritten with the same text on every keystroke is one a screen
+	 * reader either repeats or learns to ignore.
+	 *
+	 * @param {Element} root   The options container.
+	 * @param {number}  before How many controls were hidden before this pass.
+	 * @param {number}  after  How many are hidden now.
+	 */
+	function announceRules( root, before, after ) {
+		if ( before === after ) {
+			return;
+		}
+
+		var status = root.querySelector( '[data-optionia="rule-status"]' );
+		var strings = ( window.optioniaSettings || {} ).rules;
+
+		if ( ! status || ! strings ) {
+			return;
+		}
+
+		status.textContent = after > before ? strings.hidden : strings.shown;
 	}
 
 	/**
@@ -429,8 +478,61 @@
 			return;
 		}
 
+		/*
+		 * 🔴 **Focus is moved out before the element is hidden, not after.**
+		 *
+		 * Measured before this: a customer typing in a field when a rule hides
+		 * it kept focus on an element that was then `hidden` **and** `disabled` —
+		 * an invisible tab stop, and a screen reader with nothing to announce.
+		 * M17.5 asks to *"keep focus management sane"*, and until this there was
+		 * no focus code at all, only comments about it.
+		 *
+		 * ⚠️ **Ordered deliberately.** Blurring after `hidden = true` moves focus
+		 * to `<body>`, which loses the customer's place entirely; moving it to
+		 * the options block first keeps them where they were working. The block
+		 * takes focus programmatically only — `tabindex="-1"` — so this adds no
+		 * tab stop of its own.
+		 */
+		moveFocusOut( element );
+
 		element.hidden = true;
 		clearWithin( element );
+	}
+
+	/**
+	 * Move focus out of an element about to be hidden.
+	 *
+	 * Does nothing when focus is elsewhere, which is the common case: a rule
+	 * usually fires because the customer answered a *different* option, and
+	 * stealing focus from the control they just used would be its own defect.
+	 *
+	 * @param {Element} element The element about to be hidden.
+	 */
+	function moveFocusOut( element ) {
+		var active = element.ownerDocument.activeElement;
+
+		if ( ! active || ! element.contains( active ) ) {
+			return;
+		}
+
+		var block = element.closest( '[data-optionia="options"]' );
+
+		if ( ! block ) {
+			active.blur();
+
+			return;
+		}
+
+		/*
+		 * `-1` rather than `0`: the block is a destination for focus, never a
+		 * stop on the way through the form. A customer tabbing past the options
+		 * should reach the next control, not this container.
+		 */
+		if ( ! block.hasAttribute( 'tabindex' ) ) {
+			block.setAttribute( 'tabindex', '-1' );
+		}
+
+		block.focus();
 	}
 
 	/**
@@ -1133,11 +1235,22 @@
 	 * customer picks a different size. There is nothing to recompute, so a
 	 * listener would re-run the same arithmetic on the same inputs.
 	 *
-	 * Two things make it necessary, and both are scheduled. Percentage pricing
-	 * needs the *variation's* base price, which changes on every switch — that
-	 * waits on `docs/PRICING-SPEC.md` (M11.1). Show/hide rules re-evaluate
-	 * against the chosen variation — that is Phase 17. Whichever lands first
-	 * adds the listeners, and the guard in `bind` is already there for it.
+	 * ✏️ **Phase 17 landed, and the listeners are still not needed.** This note
+	 * used to say *"show/hide rules re-evaluate against the chosen variation —
+	 * that is Phase 17; whichever lands first adds the listeners"*. Checked when
+	 * the phase closed, rather than assumed:
+	 *
+	 * - A condition reads an **Optionia option id**, never a WooCommerce
+	 *   variation attribute, so no rule can depend on which variation is chosen.
+	 * - `option_sets_for_product()` is keyed by the **parent** product, so every
+	 *   variation of one product has the same rules.
+	 * - Percentage pricing shows no estimate at all — `selectedTotal()` returns
+	 *   null for anything but `fixed` — so nothing to recompute there either.
+	 *
+	 * ⚠️ **What would change it**: a condition that can read a variation
+	 * attribute, or an estimate that knows a variation's base price. The first is
+	 * unscheduled; the second is Phase 21's server-quoted preview. The guard in
+	 * `bind` stays ready for whichever arrives.
 	 */
 	function init() {
 		var blocks = document.querySelectorAll( '[data-optionia="options"]' );

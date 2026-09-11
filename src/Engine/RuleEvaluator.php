@@ -260,11 +260,10 @@ final class RuleEvaluator {
 			$action    = isset( $rule['action'] ) && is_string( $rule['action'] ) ? $rule['action'] : '';
 
 			$state = $states[ $target_id ] ?? array(
-				'hidden'            => false,
-				'required'          => null,
-				'price_minor'       => null,
-				'default_value_key' => null,
-				'price_conflict'    => false,
+				'hidden'         => false,
+				'required'       => null,
+				'price_minor'    => null,
+				'price_conflict' => false,
 			);
 
 			switch ( $action ) {
@@ -328,31 +327,6 @@ final class RuleEvaluator {
 					}
 					break;
 
-				case 'set_default':
-					/*
-					 * 📌 **Resolved here and read by nothing, until 17-9.**
-					 *
-					 * A default is a *rendering* decision — which value a form
-					 * shows before the customer touches it — and the renderer is
-					 * 17-9's subject. `SelectionResolver` deliberately does not
-					 * apply it: substituting a default for an answer the customer
-					 * never gave would charge them for a choice they did not
-					 * make, which is the shape ADR-051 forbids for hidden
-					 * options.
-					 *
-					 * ⚠️ **DELETE THIS NOTE IN 17-9**, when the renderer reads
-					 * it. If nothing reads it by the end of Phase 17, this is
-					 * dead output and the action should be reconsidered rather
-					 * than left computed — the standard this file already holds
-					 * `Pricing` and this very class to.
-					 */
-					$key = $rule['action_value']['value_key'] ?? null;
-
-					if ( is_string( $key ) && '' !== $key ) {
-						$state['default_value_key'] = $key;
-					}
-					break;
-
 				default:
 					// An action a newer build authored. Ignored, never fatal (AC4).
 					break;
@@ -369,10 +343,9 @@ final class RuleEvaluator {
 		 */
 		foreach ( array_keys( $already_hidden ) as $target_id ) {
 			$state           = $states[ $target_id ] ?? array(
-				'required'          => null,
-				'price_minor'       => null,
-				'default_value_key' => null,
-				'price_conflict'    => false,
+				'required'       => null,
+				'price_minor'    => null,
+				'price_conflict' => false,
 			);
 			$state['hidden'] = true;
 

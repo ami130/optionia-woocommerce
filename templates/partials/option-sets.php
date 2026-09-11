@@ -61,5 +61,24 @@ if ( array() === $optionia_groups ) {
 	 */
 	?>
 	<p class="optionia-estimate" data-optionia="estimate" role="status" aria-live="polite" hidden></p>
+	<?php
+	/*
+	 * 🔴 **What a rule did, for a customer who cannot see it happen (M17.5).**
+	 *
+	 * A rule showing or hiding an option changes the form under someone using a
+	 * screen reader, and silence is indistinguishable from nothing having
+	 * happened. Measured before this existed: options appeared and vanished with
+	 * no announcement at all.
+	 *
+	 * ⚠️ **`screen-reader-text`, not `hidden`.** A `hidden` live region is
+	 * removed from the accessibility tree, so nothing in it is ever announced —
+	 * the estimate above can be `hidden` because a sighted customer reads it, and
+	 * this one exists solely to be spoken.
+	 *
+	 * `polite` rather than `assertive`: the customer is mid-form, and a rule
+	 * firing is information rather than an interruption.
+	 */
+	?>
+	<p class="screen-reader-text" data-optionia="rule-status" role="status" aria-live="polite"></p>
 	<p class="optionia-estimate__note"><?php esc_html_e( 'Estimated options total. The final price is confirmed at checkout.', 'optionia' ); ?></p>
 </div>
