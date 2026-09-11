@@ -49,9 +49,30 @@ if ( '' === $optionia_default ) {
 
 unset( $optionia_option );
 ?>
+<?php
+/*
+ * 🔴 **`data-optionia-option` is on the input itself, and M17.9 needs it.**
+ *
+ * Every other type wraps its controls in a `<div data-optionia-option>`; a
+ * hidden field has nothing to show, so wrapping it would put an empty box in
+ * the layout. `file_input.php` carries the attribute on its own element for the
+ * same reason, and this follows it.
+ *
+ * ⚠️ **Without it the storefront runtime cannot see this field at all.** A rule
+ * reading a hidden field — *"apply when the campaign tag is `spring`"* — would
+ * evaluate against nothing in the browser while the server evaluates against
+ * the merchant's configured value, and the page would show an option the server
+ * has hidden. Found by the 17-9 audit.
+ *
+ * The value is the merchant's `default_value`, which is the same thing
+ * `SelectionResolver::rule_answers()` substitutes server-side — so both ends
+ * read one value, not two.
+ */
+?>
 <input
 	type="hidden"
 	name="<?php echo esc_attr( $optionia_field ); ?>"
 	value="<?php echo esc_attr( $optionia_default ); ?>"
 	data-optionia="value"
+	data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"
 />

@@ -144,6 +144,25 @@
 				continue;
 			}
 
+			/*
+			 * 🔴 **The option element may BE the control, not contain one.**
+			 *
+			 * Every visible type wraps its controls in a `<div
+			 * data-optionia-option>`, so `querySelector` finds them. A hidden
+			 * field has nothing to show and carries the attribute on the input
+			 * itself — as `file_input` does — and a descendant search over it
+			 * finds nothing at all. Measured: the runtime read no answer for a
+			 * hidden field, so a rule on it fired on the server and not on the
+			 * page.
+			 */
+			if ( option.matches( '[data-optionia="value"]' ) ) {
+				if ( '' !== option.value ) {
+					answers[ id ] = option.value;
+				}
+
+				continue;
+			}
+
 			var checked = option.querySelector( 'input[type="radio"][data-optionia="value"]:checked, input[type="checkbox"][data-optionia="value"]:checked' );
 
 			if ( checked ) {
@@ -178,6 +197,22 @@
 			var typed = option.querySelector(
 				'input[data-optionia="value"]:not([type="radio"]):not([type="checkbox"]), textarea[data-optionia="value"]'
 			);
+
+			/*
+			 * ⚠️ **A range is ALWAYS answered, and that is deliberate.**
+			 *
+			 * An `<input type="range">` has no empty state: a browser clamps a
+			 * blank `value` to the midpoint of `min`/`max` and submits that
+			 * whether or not the customer touched the slider. Measured on the
+			 * real template — `min=10 max=50` reports **30** on first paint.
+			 *
+			 * So `is_empty` can never hold for a range, and a rule reading one
+			 * fires from the moment the page loads. That is the **agreeing**
+			 * behaviour: the server receives the same 30 and decides the same
+			 * way. Treating it as absent here would be the divergence, not the
+			 * fix — recorded by the 17-9 audit so the next reader does not
+			 * "correct" it into one.
+			 */
 
 			if ( typed && '' !== typed.value ) {
 				answers[ id ] = typed.value;
@@ -356,6 +391,19 @@
 				hiddenNow[ i ].disabled = false;
 			}
 		}
+
+		/*
+		 * Re-enable only the controls a rule disabled — never one the merchant
+		 * disabled, and never one an upload has in flight. The attribute is the
+		 * record of what this runtime did, and removing it as we go keeps that
+		 * record true.
+		 */
+		var disabled = root.querySelectorAll( '[data-optionia-rule-disabled]' );
+
+		for ( i = 0; i < disabled.length; i++ ) {
+			disabled[ i ].removeAttribute( 'data-optionia-rule-disabled' );
+			disabled[ i ].disabled = false;
+		}
 	}
 
 	/**
@@ -397,13 +445,53 @@
 		for ( i = 0; i < controls.length; i++ ) {
 			var control = controls[ i ];
 
-			if ( 'radio' === control.type || 'checkbox' === control.type ) {
-				control.checked = false;
-
+			/*
+			 * 🔴 **A hidden field is never cleared and never disabled.** Its
+			 * value comes from the merchant's configuration, not the customer —
+			 * a batch code, a fulfilment route — and the server substitutes that
+			 * same `default_value` whatever arrives (`rule_answers()`). Clearing
+			 * it here would drop merchant data from the order for a rule that
+			 * has nothing to do with it, and disabling it would stop the field
+			 * submitting at all.
+			 *
+			 * It is also not a control the customer can see being hidden, so
+			 * there is nothing to keep consistent with the page.
+			 */
+			if ( 'hidden' === control.type ) {
 				continue;
 			}
 
-			control.value = '';
+			if ( 'radio' === control.type || 'checkbox' === control.type ) {
+				control.checked = false;
+			} else {
+				control.value = '';
+			}
+
+			/*
+			 * 🔴 **Disabled, not merely emptied — and this is what makes the
+			 * page and the server agree.**
+			 *
+			 * A cleared text field still submits, as `name=""`. The server reads
+			 * that as *a value supplied for a rule-hidden option* and refuses
+			 * the line with `hidden_by_rule` — so a customer who followed the UI
+			 * exactly could not add to cart. Measured: `opt-b=''` is **REFUSED**
+			 * where an absent `opt-b` is accepted.
+			 *
+			 * A disabled control submits **nothing at all**, which is the state
+			 * the resolver calls "legitimately absent". Radios and checkboxes
+			 * never had the problem — an unchecked input does not submit — but
+			 * they are disabled too, so every hidden control behaves one way
+			 * rather than two.
+			 *
+			 * ⚠️ **Marked with an attribute, so `revealAll()` only re-enables
+			 * what THIS disabled.** A merchant's own `disabled` control, or one
+			 * an upload puts in flight, must stay disabled when a rule stops
+			 * firing.
+			 */
+			if ( ! control.disabled ) {
+				control.setAttribute( 'data-optionia-rule-disabled', '' );
+				control.disabled = true;
+			}
 		}
 	}
 

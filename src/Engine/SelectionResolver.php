@@ -469,7 +469,7 @@ final class SelectionResolver {
 		 */
 		$rules       = self::index_rules( $option_sets );
 		$containment = self::index_containment( $option_sets );
-		$evaluation  = RuleEvaluator::evaluate( $rules, $selections, $containment );
+		$evaluation  = RuleEvaluator::evaluate( $rules, self::rule_answers( $options, $selections ), $containment );
 
 		if ( null !== $evaluation['refused'] ) {
 			return Result::error( self::ERROR_RULES_UNSETTLED );
@@ -1450,6 +1450,64 @@ final class SelectionResolver {
 		}
 
 		return $amount;
+	}
+
+	/**
+	 * The answers rules are evaluated against, which are not quite the selections.
+	 *
+	 * 🔴 **A hidden field's value comes from the merchant, never the request.**
+	 *
+	 * `is_hidden()` marks the one type whose value the *configuration* supplies:
+	 * a batch code, a fulfilment route, a campaign tag. The pricing branch below
+	 * already discards what the customer posted for one and substitutes
+	 * `default_value` — measured in Phase 14, where a naive implementation stored
+	 * `FORGED-BY-CUSTOMER` over the merchant's own `campaign-a`.
+	 *
+	 * Rule evaluation ran **before** that substitution and so read the raw
+	 * request, which meant a customer could post any value they liked for a
+	 * hidden field and steer which options the server treated as hidden.
+	 * Measured by the 17-9 audit: posting `opt-h=FORGED` fired a rule whose
+	 * condition read `FORGED`, and the line was refused. It failed closed, so it
+	 * bought nobody a cheaper price — but a customer was deciding an input the
+	 * whole type exists to keep out of their hands.
+	 *
+	 * ⚠️ **It also made the two ends disagree.** The storefront runtime cannot
+	 * see a hidden field at all — the template renders a bare `<input>` with no
+	 * option wrapper — so the browser evaluated the same rule against *nothing*
+	 * while the server evaluated it against a forged string. Same rule, same
+	 * page, two answers. Substituting here settles both halves at once: the
+	 * server now reads exactly what the merchant configured, and the browser
+	 * reading nothing is the one remaining gap, closed separately by publishing
+	 * the default to the page.
+	 *
+	 * @param array<string, array<string, mixed>> $options    Every option, keyed by id.
+	 * @param array<string, mixed>                $selections The raw request.
+	 * @return array<string, mixed>
+	 */
+	private static function rule_answers( array $options, array $selections ): array {
+		$answers = $selections;
+
+		foreach ( $options as $option_id => $option ) {
+			if ( ! self::is_hidden( $option ) ) {
+				continue;
+			}
+
+			$configured = self::clean_text( (string) ( $option['default_value'] ?? '' ) );
+
+			if ( '' === $configured ) {
+				/*
+				 * Nothing configured is nothing answered — and the customer's
+				 * posted value is still discarded, which is the point.
+				 */
+				unset( $answers[ $option_id ] );
+
+				continue;
+			}
+
+			$answers[ $option_id ] = $configured;
+		}
+
+		return $answers;
 	}
 
 	/**

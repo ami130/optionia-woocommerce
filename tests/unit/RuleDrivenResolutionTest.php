@@ -754,6 +754,116 @@ final class RuleDrivenResolutionTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 A forged hidden field cannot steer rule evaluation.
+	 *
+	 * A `hidden` option's value comes from the merchant's configuration — a
+	 * batch code, a campaign tag — and `resolve()` has discarded what the
+	 * customer posted for one since Phase 14, measured then against a payload
+	 * that stored `FORGED-BY-CUSTOMER` over the merchant's own value.
+	 *
+	 * ⚠️ **Rule evaluation ran before that substitution**, so the raw request
+	 * reached the conditions and a customer could decide which options the
+	 * server treated as hidden. It failed closed — nobody bought anything
+	 * cheaper — but the whole point of the type is that this input is not
+	 * theirs. Found by the 17-9 audit.
+	 */
+	public function test_a_forged_hidden_field_does_not_fire_a_rule(): void {
+		$result = SelectionResolver::resolve(
+			self::sets_with_hidden_rule( 'batch-77', 'FORGED' ),
+			array(
+				'opt-h' => 'FORGED',
+				'opt-b' => 'extra',
+			)
+		);
+
+		$this->assertTrue( $result->is_ok(), 'The rule reads the merchant default, not the request.' );
+	}
+
+	/**
+	 * ...and the merchant's own value fires it.
+	 *
+	 * The control. Without it, a resolver that ignored hidden fields entirely
+	 * would pass the test above while making the whole feature inert.
+	 */
+	public function test_the_merchant_default_does_fire_a_hidden_field_rule(): void {
+		$result = SelectionResolver::resolve(
+			self::sets_with_hidden_rule( 'batch-77', 'batch-77' ),
+			array(
+				'opt-h' => 'FORGED',
+				'opt-b' => 'extra',
+			)
+		);
+
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame( SelectionResolver::ERROR_HIDDEN_BY_RULE, $result->get_errors()[0]['code'] );
+	}
+
+	/**
+	 * A hidden field with nothing configured answers nothing.
+	 *
+	 * The posted value is still discarded — otherwise an unconfigured hidden
+	 * field would be a free-text channel into rule evaluation.
+	 */
+	public function test_an_unconfigured_hidden_field_answers_nothing(): void {
+		$sets = self::sets_with_hidden_rule( '', 'FORGED' );
+
+		$result = SelectionResolver::resolve(
+			$sets,
+			array(
+				'opt-h' => 'FORGED',
+				'opt-b' => 'extra',
+			)
+		);
+
+		$this->assertTrue( $result->is_ok() );
+	}
+
+	/**
+	 * One hidden field carrying a default, and a rule reading it.
+	 *
+	 * @param string $configured What the merchant configured, or '' for none.
+	 * @param string $operand    What the rule's condition compares against.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function sets_with_hidden_rule( string $configured, string $operand ): array {
+		$hidden = array(
+			'id'   => 'opt-h',
+			'type' => 'hidden',
+		);
+
+		if ( '' !== $configured ) {
+			$hidden['default_value'] = $configured;
+		}
+
+		return array(
+			array(
+				'id'     => 'set-1',
+				'groups' => array(
+					array(
+						'id'      => 'group-a',
+						'options' => array(
+							$hidden,
+							array(
+								'id'     => 'opt-b',
+								'type'   => 'radio',
+								'values' => array(
+									array(
+										'id'        => 'val-extra',
+										'value_key' => 'extra',
+									),
+								),
+							),
+						),
+					),
+				),
+				'rules'  => array(
+					self::rule( 'r-1', 'hide', 'option', 'opt-b', 'opt-h', 'equals', $operand ),
+				),
+			),
+		);
+	}
+
+	/**
 	 * Two sets whose rules differ only in document order.
 	 *
 	 * @param bool $reversed Whether to emit the pair the other way round.
