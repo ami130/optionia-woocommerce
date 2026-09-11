@@ -20952,6 +20952,106 @@ Plus the withdrawal itself: every `set_default` test is **inverted rather than
 deleted**, so the action quietly returning is a failing test rather than a
 silent regression.
 
+#### 🔍 The last pass — the same defect, in an action merchants could reach
+
+Run after ADR-055, to confirm the withdrawal was complete. It was. **What it
+found instead was that `show` had the identical problem, and was worse.**
+
+##### 🔴 Z2 — `show` did nothing, and the builder offered it
+
+Measured in every path it can take:
+
+| Scenario | Result |
+|---|---|
+| *"Show X when Y"*, alone | X accepted **whether or not the rule fires** |
+| `show` and `hide` on one target | refused **both ways** — ADR-052 gives `hide` the win |
+
+Its whole implementation, identically in all three evaluators, was a `break`.
+
+🔴 **There is no state for it to act on.** Nothing renders an option hidden by
+default; `isEnabled: false` is not that flag, because a disabled option is
+**filtered out of the published document** and no rule can reveal what was never
+sent. So `show` was unreachable by construction, not by omission.
+
+⚠️ **Worse than `set_default`, which was at least unauthorable.** The picker
+filtered that one out. `show` sat in the builder labelled **"Show"**, and a
+merchant selecting it got a rule that saved, published and did nothing.
+
+**[ADR-056](../optioniaWooCommerceBackend/docs/DECISIONS.md) withdraws it**, on
+ADR-055's terms. The alternative — letting `show` override `hide` — is refused
+outright: ADR-052 chose `hide` because *"a hidden field cannot be filled"*, and
+reversing it would let an unrelated rule expose an option a merchant meant to
+hide. The other route, a *hidden-by-default* flag, is a Phase 18 question because
+it changes the option model.
+
+**Nothing a merchant could author is lost.** `hide X when NOT Y` says the same
+thing through `not_equals`, `is_empty` and `not_in`.
+
+##### 🔴 The fixture cases were reframed, not deleted — and immediately paid
+
+The two `hide beats show` cases now read *"a withdrawn action cannot undo a
+hide"*. Measured: re-adding a `show` branch that clears a hide **fails all three
+languages**. Deleting them would have left the property ADR-056 depends on
+unpinned.
+
+##### 🟡 Z1 — a test went vacuous without failing
+
+`allows a price and a default on one target` kept passing after ADR-055, because
+a withdrawn action carries no payload to conflict with — which is not what it was
+written to prove. **`PublishContext.rules[].action` is typed `string`**, so
+neither `tsc` nor the suite could see it.
+
+Repointed at two prices on two targets. Mutation confirms it now works: dropping
+the target from the conflict key fails it.
+
+##### ⚠️ One mutant survives, and it should
+
+Re-adding `show` to `ANSWER_AFFECTING_ACTIONS` breaks nothing — no test authors a
+`show` rule any more. That is the correct state for a withdrawn action, and the
+*evaluator* half is pinned by the reframed fixture cases above. Recorded so the
+survivor is a known one rather than a gap somebody rediscovers.
+
+##### 🔴 The withdrawal broke 90 e2e tests, and that is the good news
+
+The first full run after removing `show` reported **90 failures across two e2e
+suites** — far past anything a flake produces. The message was the opposite of
+the M30.11 signature:
+
+```text
+400 {"code":"VALIDATION_FAILED", … "action must be one of: hide, require, unrequire, set_price."}
+```
+
+⚠️ **A `details` array naming the field is exactly the discriminator this project
+recorded as separating a real regression from the flake**, and it worked: two e2e
+fixtures built their rules with `action: 'show'` and the API now refuses it. Both
+were generic — *"create a rule so there is one to probe"* — and repointing them at
+`hide` was the whole fix.
+
+🔴 **A third site was subtler and is deliberately left alone.**
+`option-sets-http.e2e-spec.ts` inserts a `show` rule **as raw SQL**, bypassing
+validation, and asserts a duplicated set carries the action verbatim. That is now
+the *only* coverage of a case that matters: rows written before a withdrawal
+still exist, and duplication must carry them rather than dropping or rewriting
+them. Kept, with a note saying why it cannot be authored through the API.
+
+🔴 **And one failure was a real regression the repoint caused.** With the fixture
+creating `hide`, a later `patch(action: 'hide')` became a **no-op** — so the
+audit row carried an empty diff and `records a diff on every row` failed.
+Confirmed against a stash: **21/21 before, 20/21 after**. The patch now moves the
+rule to `require`, and the fixture says why it must differ from what was created.
+
+That is the kind of coupling a withdrawal exposes: a test fixture's *default*
+action was load-bearing in one suite, and the *difference* between two actions
+was load-bearing in another.
+
+##### What the cycle tests revealed about themselves
+
+Removing `show` from the edge set failed **four cycle tests at once** — they had
+been building their edges from the helper's default action, which was `show`.
+The default is now `hide`, the only action left that moves an answer. A test
+fixture's default is a dependency like any other, and this is the first time one
+has been visible.
+
 ### 🏁 Phase 17 complete — all ten exit criteria met
 
 ### M17.1 — Rule model
@@ -20964,6 +21064,19 @@ THEN <action> ON <target>
 Conditions: `equals`, `not_equals`, `contains`, `greater_than`, `less_than`, `is_empty`,
 `is_not_empty`, `in`, `not_in`. Targets: option, group, value. Actions: `show`, `hide`,
 `require`, `unrequire`, `set_price`, `set_default`.
+
+✏️ **Two of those six were withdrawn as Phase 17 closed**, and the milestone text
+is left as written so the change is visible rather than tidied away:
+
+| Action | Outcome |
+|---|---|
+| `set_default` | withdrawn — **[ADR-055](../optioniaWooCommerceBackend/docs/DECISIONS.md)**. A rule-set default bills a customer for a value they never confirmed, which ADR-051 §3 refuses. |
+| `show` | withdrawn — **[ADR-056](../optioniaWooCommerceBackend/docs/DECISIONS.md)**. Nothing is hidden by default for it to reveal, and where something is, ADR-052 gives `hide` the win. |
+
+🔴 **Both were specified, evaluated by three engines, and applied nowhere.**
+Neither was a scoping cut: each was blocked by a decision already taken
+elsewhere, which is why both are withdrawn rather than deferred. `hide X when NOT
+Y` says everything `show` said, using the operators' negative forms.
 
 ### M17.2 — Evaluator (both languages)
 
