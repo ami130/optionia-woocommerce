@@ -5119,3 +5119,124 @@ quietly become a fifth thing that publishes and renders as `inline`.
 **No migration.** Existing rows carry `inline` and `false`, which is what they
 render as today — so the first merchant to change one sees a change, and every
 other storefront is untouched.
+
+---
+
+## ADR-060 — A stage that moves a fence must move the wall behind it
+
+**Status:** accepted · **Phase 18, Stage 18-1**
+
+### Context
+
+Stage 18-1 taught `SelectionResolver` to accept an array for an option
+declaring `cardinality: many`. That is correct, necessary, and the foundation
+M18.2 builds on.
+
+It also opened a live overcharge, and the stage's own audit found it.
+
+Before 18-1, a `many` document reached the resolver's scalar gate, hit
+`ERROR_NOT_SCALAR`, and the line was refused. Nobody designed that refusal — it
+was fail-closed by accident, a side effect of the plugin never having read
+`cardinality` at all. 18-1 replaced the gate with an acceptance path, and the
+accident stopped protecting anybody.
+
+What is behind it, measured:
+
+- `CartItemData::deltas_by_option()` pairs `resolved` with `deltas`
+  **positionally**, and returns `array()` when the counts disagree.
+- A `many` option produces **one** selection carrying **two** deltas. The counts
+  disagree by arithmetic, not by accident.
+- `trusted_deltas()` then fails its `array_key_exists` check and returns `null`.
+- **The line prices live.** This is the 16c mechanism, which historically quoted
+  85.00 and charged 130.00.
+
+Two smaller consequences followed from the same shape: the cart line rendered
+the raw option id and the word `"Array"`, because `$label['option']` was NULL
+and `(string)` on an array coerces.
+
+**Reachable without anybody authoring a multi-select.** AC4 makes the published
+document *input*, not authority, and the plugin validates no `cardinality` on
+the cached document. A published `many`, or a tampered cache, reaches this path
+directly. The dashboard not yet offering multi-select is not a control.
+
+### Decision
+
+**A `many` option is refused at the resolver until M18.2 can carry one**, with
+its own error code `ERROR_MANY_UNSUPPORTED`.
+
+**Refused on the option's declaration, not on the payload's shape.** A `many`
+option answered with a single scalar prices correctly today, and a narrower
+fence reading the payload would let it through — so a merchant's multi-select
+would work until the first customer ticked a second box. A fence that holds for
+some customers is not a fence. This is the mutant the fence test kills.
+
+**A parameter, `$allow_many`, rather than a filter.** A filter is a supported
+extension point, and a third-party plugin switching this on would re-open live
+pricing in a store nobody was watching. The parameter is reachable only from PHP
+that already holds the class. All five production callers take the default;
+`MultiSelectResolutionTest` passes `true` to prove the resolution logic waiting
+behind the fence.
+
+**Its own error code, not `ERROR_NOT_SCALAR`.** The old code would tell a
+merchant reading a log that a customer sent a malformed payload, when in fact
+they published an option this build cannot sell. The customer-facing message is
+the existing generic one — *"that selection is not available"* — which is
+accurate here and needs no new string for a guard due to be deleted.
+
+**Separately, and permanently:** chosen values are sorted into the **merchant's
+authored order**. WooCommerce hashes `cart_item_data` to derive a line key, so
+`["red","blue"]` and `["blue","red"]` split one product into two cart lines.
+`CartItemData`'s `ksort()` does not cover this — it sorts option *ids*, the
+outer map, and says nothing about values within one option. Normalised in the
+resolver because that is where the order originates; fixing it downstream would
+leave `resolved` and the order meta disagreeing with the cart key.
+
+### Consequences
+
+**The fence has two halves, and both are needed.** The resolver refuses a `many`
+document; `Renderer::option_markup()` also declines to render one. Without the
+second, the storefront still draws the checkboxes and the customer discovers the
+refusal only at add-to-cart, in a generic message they cannot act on. That
+method already had the precedent: an unknown option type renders nothing,
+because *"rendering a fallback control would be worse than rendering none — a
+customer could select a value the plugin does not understand and the server
+would price it wrong."* This is the same sentence with a different cause.
+
+**Skipped, not rendered-disabled.** A visibly disabled control tells a customer
+the merchant meant to offer something; skipping says the product has one fewer
+option, which is what is actually true for this build.
+
+**M18.2's first act is to delete the fence** — the constant, the guard, the
+parameter, the renderer's skip, and `MultiSelectFenceTest`. One exception:
+`test_a_many_result_would_break_positional_pairing` is **rewritten, not
+dropped**. "Can a multi-select line still be paired?" outlives the fence, and if
+M18.2 makes the pairing key-based, that test is how it is proven.
+
+`PriceConfigDeltaTest` asserts the resolver's parameter list **exactly**, so the
+fence could not be added without declaring it there. That gate was written to
+stop the resolver learning about cart quantity, and it caught an unrelated
+signature change on the first run — which is the argument for an exact list over
+a "does not contain quantity" check.
+
+**A fenced option must be ABSENT, not IMPOSSIBLE — and this was found by
+composition, not by either half's tests.** With the renderer skipping a `many`
+option and the resolver still reading `is_required`, a merchant who marked one
+required made the product **unbuyable**: the customer saw *"Please choose all
+required options"* with nothing to choose, and no amount of clicking fixed it.
+Both halves were individually correct. The required pass now skips a fenced
+option before `is_required` is read — the same position, and for the same
+reason, as the rule-hidden skip immediately above it, which ADR-052 put there
+because *"the alternative is a dead end for the customer."* Placing it before
+the `$ruled` lookup also means a runtime `require` rule cannot resurrect the
+dead end.
+
+**The general rule this records:** a stage that replaces a refusal with an
+acceptance has moved a fence, and must check what the fence was holding back
+before deciding it was decorative. An accidental refusal is still a refusal, and
+the code downstream has been relying on it.
+
+**And its corollary, which cost more to find:** a guard added in two places must
+be tested as a *pair*. Unit tests that exercise each half separately will both
+pass while the composition strands the customer. The assertion that caught this
+was on the product being sellable, not on an error code — an error-code
+assertion would have been satisfied by the dead end.
