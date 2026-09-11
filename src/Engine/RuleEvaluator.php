@@ -271,10 +271,6 @@ final class RuleEvaluator {
 					$state['hidden'] = true;
 					break;
 
-				case 'show':
-					// `hide` wins: never clear a hide another rule set.
-					break;
-
 				case 'require':
 					$state['required'] = true;
 					break;
