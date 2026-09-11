@@ -52,12 +52,23 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-11 — the adversarial
-suite and the exit-criteria audit. Every other stage is done.**
+**[Phase 18](#phase-18--option-groups--ordering) — option groups and ordering.**
 
-**Done:** 17-0 (five ADRs) through **17-10**, each with its own audit, plus
-**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
-deciding prices, in both languages identically.
+✅ **Phase 17 is complete**: 17-0 (seven ADRs) through **17-11**, each with its
+own audit, plus **M17.4a**, and three whole-phase passes afterwards. All ten exit
+criteria met.
+
+⚠️ **Two of its six actions were withdrawn rather than shipped** — `set_default`
+(ADR-055) and `show` (ADR-056), each blocked by a decision already taken
+elsewhere rather than by effort. The rule vocabulary now contains **four actions,
+all of which work**, which is the first point in the phase where nothing in it
+does nothing.
+
+📌 **Phase 18 inherits one of those shapes.** `display_type` — `inline`,
+`accordion`, `tabs`, `stepped` — is on the group entity, published in the config
+document, and **read by nothing**: every group renders as a plain fieldset.
+M18.2 is the milestone that gives it a consumer, and until then it is the same
+"specified, carried, applied nowhere" state those two ADRs withdrew actions for.
 
 ✅ **17-7 was absorbed, not skipped**, and this marker pointed at it for two
 stages after it was finished. Its three obligations all shipped inside other
