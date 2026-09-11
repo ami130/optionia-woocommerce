@@ -928,7 +928,18 @@ built before any of these endpoints.
 | `POST /option-sets/:id/rules` · `PATCH /rules/:id` · `DELETE /rules/:id` | `option_sets:edit` | `[built]` |
 | `POST /option-sets/:id/rules/reorder` | `option_sets:edit` | `[built]` |
 | `GET /option-sets/:id/rules` · `GET /rules/:id` | `option_sets:view` | `[built]` |
+| `POST /option-sets/:id/rules/test` | `option_sets:view` | `[built]` |
 
+> **`rules/test` is a read, and `option_sets:view` is deliberate.** It answers
+> *"what would a customer see, given these answers?"* — nothing is stored,
+> nothing is charged — so a viewer may test what an editor authored. It reads the
+> merchant's **draft**, not the published snapshot, because a rule being tested
+> has usually not been published yet (ADR-053).
+>
+> ⚠️ **`POST` for a request that mutates nothing.** The answers map can carry an
+> operand up to 5000 characters against any number of options, past what a query
+> string should hold.
+>
 > **Rules are nested under the SET, not a group.** A rule's conditions may name
 > options in any group, and its target may be a group, an option or a value
 > anywhere in the set — so a group is the wrong parent, and nesting under one

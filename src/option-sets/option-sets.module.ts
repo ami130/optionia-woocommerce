@@ -33,6 +33,7 @@ import { OptionRule } from './entities/option-rule.entity';
 import { OptionRulesController } from './option-rules.controller';
 import { OptionRulesRepository } from './option-rules.repository';
 import { OptionRulesService } from './option-rules.service';
+import { RuleTesterService } from './rule-tester.service';
 import { PresentationalItem } from './entities/presentational-item.entity';
 import { PresentationalItemsController } from './presentational-items.controller';
 import { PresentationalItemsRepository } from './presentational-items.repository';
@@ -93,6 +94,7 @@ import { OptionTypeValidator } from './types/option-type.validator';
     OptionValuesService,
     OptionRulesRepository,
     OptionRulesService,
+    RuleTesterService,
     PresentationalItemsRepository,
     PresentationalItemsService,
     OptionTypeValidator,

@@ -4603,3 +4603,81 @@ needs the payloads, which arrived with M17.4's `actionValue` column, but it is a
 **M17.4a** rather than left to be rediscovered — a conflicting pair publishes
 today, and the evaluator will resolve `show`/`hide` correctly while
 `set_price` conflicts remain undefined until that check exists.
+
+---
+
+## ADR-053 — The rule tester is a server endpoint, not a fourth evaluator
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M17.6
+
+### Context
+
+M17.6 asks for a **rule tester**: a merchant enters answers and sees which
+options a customer would be shown. Answering that means evaluating rules — and
+the dashboard cannot reach an evaluator that already exists.
+
+Three repositories, no workspace and no root `package.json`. The dashboard's
+`tsconfig` maps `@/*` to `./src/*` and nothing else, so
+`common/rules/rule-evaluator.ts` is not importable from it. Measured, not
+assumed.
+
+So the tester is built one of two ways:
+
+| | |
+|---|---|
+| **A fourth implementation** in the dashboard | held to the shared fixture, like the other three |
+| **A server endpoint** the dashboard calls | evaluation stays where it already lives |
+
+### Decision
+
+**The tester is a `POST` endpoint on the API.** The dashboard sends answers and
+renders what comes back; it evaluates nothing.
+
+**1. The question the tester exists to answer is "what will the server do?"**
+A merchant testing a rule wants the storefront's answer, and the honest way to
+get it is to ask the thing that decides. A fourth implementation would answer
+*"what would a fourth implementation do?"* — correct only for as long as it
+agrees, which is precisely the property that needs proving rather than assuming.
+
+**2. Three implementations is already the number this project pays for.** 16d
+was two languages disagreeing at a boundary. 17-9 added the third deliberately,
+because AC3 forbids the storefront asking a server — a constraint the dashboard
+does **not** have. Adding a fourth where no constraint demands it spends the same
+cost for nothing.
+
+**3. It gives the TypeScript evaluator a production caller.** `evaluateRules` is
+imported today by **its own two spec files and nothing else** — the same "pending
+rather than dead" state `Engine\RuleEvaluator` was in before M17.8.
+
+🔴 **And unlike the plugin, nothing here would have said so.** The plugin's
+`check-architecture.sh` asserts *"every class is reachable from production
+code"*, and that fuse has produced exactly this evidence twice — `Pricing` in
+Stage 6, `RuleEvaluator` in 17-8. The backend has **no equivalent gate**, which
+is why an evaluator with no caller sat unnoticed through four stages.
+
+**4. The endpoint evaluates show/hide and required only.** It does not preview
+prices. AC4 makes price server-authoritative at *add-to-cart*, and what a
+`set_price` rule does to a quoted total is the open question M17.9 left for
+17-11. A tester that answered it would settle it by accident.
+
+### Consequences
+
+⚠️ **The tester reads the merchant's DRAFT, not the published snapshot.** A
+merchant testing a rule they have not published yet must see that rule's effect —
+so the endpoint evaluates live rows. That is the opposite of the config document,
+which is assembled from published snapshots precisely so it cannot ship unpublished
+edits, and the difference is deliberate: one answers *"what would happen if I
+published this?"*, the other *"what is happening now?"*.
+
+**It is a read, and it is capability-gated as one.** Evaluating rules changes
+nothing, so `OPTION_SETS_VIEW` is the right guard — a viewer may test what an
+editor authored.
+
+⚠️ **`POST`, not `GET`, and the reason is the body.** Answers are a map of
+option id to value, which can carry a 5000-character operand (the schema's
+`MAX_OPERAND_LENGTH`) — past what a query string should hold. A `POST` that
+mutates nothing is the lesser oddity.
+
+📌 **A fourth implementation is still the right answer the day the dashboard must
+work offline**, which it does not today and has no requirement to. Recorded so
+that reversing this needs a reason rather than a preference.

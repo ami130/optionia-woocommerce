@@ -130,8 +130,22 @@ export class OptionSetSerializer {
        * reads them back in it; the published projection is the one place they
        * are rewritten for a PHP reader, which is what keeps the two conventions
        * from leaking into each other.
+       *
+       * ⚠️ **Cast through `unknown`, because the column is typed loosely and the
+       * projection is not (M17.10).** `OptionRule.conditions` is
+       * `Record<string, unknown>[]` — the shape a JSON column has before
+       * anything validates it. What is *stored* is narrower: every write goes
+       * through `ruleConditionsSchema`, which is `.strict()`.
+       *
+       * 🔴 **Nothing downstream trusts the narrowing anyway.** Both evaluators
+       * treat an unknown operator as `false` and a malformed condition as one
+       * that never fires, because AC4 makes a document input rather than
+       * authority. The type is a contract for the **dashboard's builder**, which
+       * had none, rather than a claim about what the database contains.
        */
-      conditions: Array.isArray(rule.conditions) ? rule.conditions : [],
+      conditions: Array.isArray(rule.conditions)
+        ? (rule.conditions as unknown as AuthoringRule['conditions'])
+        : [],
       actionValue: rule.actionValue,
       sortOrder: rule.sortOrder,
       isEnabled: rule.isEnabled,

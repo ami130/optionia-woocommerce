@@ -26,8 +26,10 @@ import {
   ReorderOptionRulesDto,
   UpdateOptionRuleDto,
 } from './dto/option-rule.dto';
+import { TestRulesDto } from './dto/test-rules.dto';
 import type { OptionRule } from './entities/option-rule.entity';
 import { OptionRulesService } from './option-rules.service';
+import { RuleTesterService, type RuleTestResult } from './rule-tester.service';
 
 /**
  * Conditional rule routes, nested under an option set.
@@ -47,7 +49,37 @@ import { OptionRulesService } from './option-rules.service';
 @ApiBearerAuth('tenant')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class OptionRulesController {
-  constructor(private readonly service: OptionRulesService) {}
+  constructor(
+    private readonly service: OptionRulesService,
+    private readonly tester: RuleTesterService,
+  ) {}
+
+  /**
+   * "What would a customer see, given these answers?" (M17.6, ADR-053).
+   *
+   * 🔴 **`OPTION_SETS_VIEW`, not `EDIT`.** Evaluating rules changes nothing —
+   * nothing is stored, nothing is charged — so a viewer may test what an editor
+   * authored. Guarding it as a write would refuse the person most likely to be
+   * checking whether a configuration behaves.
+   *
+   * ⚠️ **It reads the merchant's DRAFT.** A rule being tested has usually not
+   * been published, and a tester that could not see it would answer a question
+   * nobody asked. Deliberately the opposite of the config document, which is
+   * built from published snapshots so it cannot ship unpublished edits.
+   *
+   * ⚠️ **`POST` for a read**, because the answers map can carry operands far past
+   * what a query string should hold. ADR-053 records the trade.
+   */
+  @Post('option-sets/:id/rules/test')
+  @HttpCode(HttpStatus.OK)
+  @RequireCapability(Capability.OPTION_SETS_VIEW)
+  @ApiErrors(200, 400, 401, 403, 404, 429)
+  async test(
+    @Param('id', ParseUUIDPipe) optionSetId: string,
+    @Body() dto: TestRulesDto,
+  ): Promise<RuleTestResult> {
+    return this.tester.test(optionSetId, dto.answers);
+  }
 
   @Get('option-sets/:id/rules')
   @RequireCapability(Capability.OPTION_SETS_VIEW)

@@ -225,6 +225,14 @@ describe('tenant isolation matrix (e2e)', () => {
         matchType: 'all',
         conditions: [{ optionId: owned.option, operator: 'is_empty' }],
       })],
+    /*
+     * ⚠️ **A read that takes a body still leaks a set if it is unscoped.** The
+     * tester answers "what would a customer see" for one set, so tenant B asking
+     * about tenant A's set is tenant B learning that set's structure — which
+     * options exist, and which its rules control.
+     */
+    ['POST /v1/option-sets/:id/rules/test', () =>
+      post(tokenB, `/option-sets/${owned.set}/rules/test`, { answers: {} })],
     ['GET /v1/rules/:id', () => get(tokenB, `/rules/${owned.rule}`)],
     ['PATCH /v1/rules/:id', () => patch(tokenB, `/rules/${owned.rule}`, { action: 'hide' })],
     ['DELETE /v1/rules/:id', () => del(tokenB, `/rules/${owned.rule}`)],

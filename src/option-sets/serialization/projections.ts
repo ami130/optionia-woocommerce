@@ -1,3 +1,5 @@
+import type { RuleCondition } from '../types/rule-condition.schema';
+
 /**
  * The two projections of the option model (M7.2b).
  *
@@ -151,7 +153,23 @@ export interface AuthoringRule {
   readonly targetId: string;
   readonly action: string;
   readonly matchType: string;
-  readonly conditions: readonly unknown[];
+  /**
+   * The rule's conditions, typed.
+   *
+   * ✏️ **Was `readonly unknown[]` until M17.10.** The column is a JSON blob and
+   * this projection described it as one — which is honest about the *storage*
+   * and useless to the **dashboard**, which has to render a condition builder
+   * against it. A builder with no contract is one that discovers the shape by
+   * trial.
+   *
+   * 🔴 **Narrower than the column, and safe to be.** Every write goes through
+   * `ruleConditionsSchema`, which is `.strict()` — so a stored condition is
+   * `{ optionId, operator, value? }` by construction. A row predating that check
+   * could be shaped otherwise (K3, still open), and the evaluator survives it:
+   * an unknown operator is `false` and a malformed condition never fires, because
+   * AC4 makes a document input rather than authority.
+   */
+  readonly conditions: readonly RuleCondition[];
   readonly actionValue: Record<string, unknown> | null;
   readonly sortOrder: number;
   readonly isEnabled: boolean;
