@@ -20123,6 +20123,56 @@ Plus the fixture mutant: restoring the old value mapping in the **declared** map
 fails the new case with `3 passes, expected 1` — the cascade F1 described, now
 pinned in a file both languages execute.
 
+#### 🔍 The follow-up sweep — mutating every new guard, not only the fixed ones
+
+Run after the six findings above were closed and all three suites were green.
+**Method: mutate each guard the stage added and see which survive.** Four did.
+
+##### 🔴 A redundancy the F1 fix created
+
+Fixing the containment map made `hidden_options()`'s `target_type` check **dead**:
+removing it broke no test, while removing the map fix broke two. Two mechanisms
+for one fact is the shape that let two mutants survive in 17-4 — *each hid the
+other's absence* — so the redundant half went.
+
+`hidden_options()` no longer walks the rules at all; it reads the states and lets
+`$containment` decide, which is one mechanism and a shorter function.
+
+⚠️ **`TARGET_OPTION` and `TARGET_GROUP` went with it**, since nothing asked the
+question any more. No gate catches an unused private constant, so they would have
+sat there looking load-bearing. `TARGET_VALUE` survives — `hidden_values()` asks
+the opposite question, and the map cannot answer it.
+
+##### 🟡 Three guards that were load-bearing and simply unproven
+
+| Guard | Why no test reached it |
+|---|---|
+| `hidden_values()` reads `target_type` | every fixture used distinct ids, so a hidden **group** could not collide with a value |
+| `unrequire` lifts an authored `is_required` | the decision was documented in a comment and pinned by nothing |
+| a value's `set_price` beats the option's | **no test targeted a `value` with `set_price` at all** |
+
+The id-collision case is worth stating plainly: ids are UUIDv7, so a group id
+never equals a value id by accident — but **AC4 makes the document input rather
+than authority**, and a forged one can carry whatever ids it likes. Without the
+type check, such a payload refuses a choice the customer may legitimately make.
+That is a security boundary, and it now has a test.
+
+🔴 **The `unrequire` survivor is the one that mattered most.** It was already
+recorded as *"a decision, not a specification"* and carried to 17-11 — but an
+undecided behaviour that is **also unproven** is one nobody can tell has changed.
+Rewriting the branch so an authored `is_required` always wins broke no test. It
+is pinned now, with its control, so 17-11 changes a test rather than discovering
+a silent drift.
+
+##### What this round says about the previous one
+
+The six findings were all *behaviour*. These four are all *evidence* — guards
+that were right, or newly redundant, but not held up by anything. **Fixing a
+defect can create a survivor**: the F1 fix was correct and made a neighbouring
+guard vacuous in the same commit, and only mutating afterwards showed it.
+
+Mutation after the fix, not only before it, is the practice this round adds.
+
 ### M17.1 — Rule model
 
 ```text
