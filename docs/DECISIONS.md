@@ -4757,3 +4757,77 @@ estimate, which Phase 21's live preview is already scheduled to build. When it
 lands, this refusal becomes unnecessary rather than wrong — and
 `common/money/line-total.ts`, exempted in the backend's reachability gate with a
 fuse naming Phase 21, is what would compute it.
+
+---
+
+## ADR-055 — `set_default` is withdrawn, not deferred
+
+**Status:** accepted · **Date:** 2026-09-11 · **Milestone:** M17.1, M17.11a
+
+### Context
+
+M17.1 lists six rule actions. Five are reachable end to end. `set_default` is
+**computed by all three evaluators and consumed by nothing** — the only readers
+are test projections.
+
+Its own fuse, written in M17.10, said what to do about that:
+
+> *"⚠️ DELETE THIS NOTE IN 17-9, when the renderer reads it. If nothing reads it
+> by the end of Phase 17, this is **dead output and the action should be
+> reconsidered** rather than left computed."*
+
+Phase 17 ended. Nothing reads it. This is that reconsideration.
+
+### The decision is forced by ADR-051, not by scope
+
+`set_default` pre-selects a value the customer did not choose. A value carries a
+price. Measured on the shipped resolver:
+
+```text
+a pre-selected value is charged: 5000  (base 1000 + a 4000 option)
+```
+
+ADR-051 §3 refuses exactly this shape for a re-shown field — *"restoring means the
+storefront holds a value the customer cannot see, cannot edit, and did not
+re-confirm, and then charges for it the moment a rule flips"*. A default set by a
+rule is the same object arriving by a different route: **state the customer did
+not confirm, which bills them.**
+
+⚠️ **The two cannot both be right.** A storefront that clears a re-shown field
+because ADR-051 says so, and then repopulates it because a `set_default` rule
+says so, has two mechanisms disagreeing about one field — and the customer is
+charged by whichever runs last.
+
+### Decision
+
+**`set_default` is removed from the rule vocabulary**: the enum, both schemas,
+all three evaluators, the dashboard mirror and the cross-repo parity gate.
+
+**1. Removed rather than left unbuilt.** An action that is specified, evaluated
+three times over and applied nowhere is worse than an absent one: a merchant
+reading the API contract can author it, the write succeeds, the publish succeeds,
+and the storefront does nothing. Silent, and indistinguishable from a bug.
+
+**2. The merchant-authored default already exists and is untouched.**
+`is_default` on a value pre-selects it in `radio.php` and `dropdown.php` today.
+What is withdrawn is the *rule-driven* variant, not the feature.
+
+**3. Withdrawn, not deferred, because the blocker is a decision rather than
+effort.** Reinstating it requires ADR-051 to change — specifically, an answer to
+*"may a rule cause a charge the customer never confirmed?"*. That is a product
+question, and a `📌 later` on it would read as scheduled work when what it needs
+is a different decision.
+
+### Consequences
+
+⚠️ **The API's `RuleAction` enum loses a member, and stored rows may carry it.**
+Both evaluators already treat an unrecognised action as one that does nothing —
+*"an action a newer build authored. Ignored, never fatal (AC4)"* — so an existing
+`set_default` row degrades to a rule that changes nothing, which is what it did
+before. `ruleActionValueSchema` no longer accepts it, so it cannot be authored
+again.
+
+📌 **If it returns, it returns with a price policy.** The obvious one: a
+rule-set default is **display only** and contributes no delta until the customer
+touches the control. That preserves ADR-051 and makes the action meaningful — and
+it is a Phase 21 question, alongside the server-quoted estimate.

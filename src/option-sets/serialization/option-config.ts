@@ -263,14 +263,14 @@ function toPublishedActionValue(
   switch (action) {
     case RuleAction.SET_PRICE:
       return { amount_minor: actionValue.amountMinor };
-    case RuleAction.SET_DEFAULT:
-      return { value_key: actionValue.valueKey };
     default:
       /*
-       * The four actions that act on their own. A payload here is a row written
-       * before M17.4's per-action validation, and dropping it is right: nothing
-       * reads it, and carrying it forward would preserve a merchant's mistaken
-       * belief that they configured something.
+       * Every action that acts on its own — and, since ADR-055, a stored
+       * `set_default` row too. A payload here is either a row written before
+       * M17.4's per-action validation or one whose action has been withdrawn,
+       * and dropping it is right in both cases: nothing reads it, and carrying
+       * it forward would preserve a merchant's mistaken belief that they
+       * configured something.
        */
       return null;
   }

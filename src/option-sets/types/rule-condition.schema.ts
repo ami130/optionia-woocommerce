@@ -314,23 +314,6 @@ const setPriceValue = z
   })
   .strict();
 
-/** The value a `set_default` rule preselects. */
-const setDefaultValue = z
-  .object({
-    /*
-     * A **value key**, not a value id. The published document identifies a
-     * choice by its key within an option, and a rule that named an id would be
-     * the only thing in the document that does — a second identifier for one
-     * thing, and a second way for the two evaluators to disagree.
-     */
-    valueKey: z
-      .string()
-      .trim()
-      .min(1, 'A default must name the value it selects.')
-      .max(100, 'A value key is at most 100 characters.'),
-  })
-  .strict();
-
 /**
  * Validate a rule's payload against the action that will use it.
  *
@@ -343,8 +326,6 @@ export function ruleActionValueSchema(action: string): z.ZodType {
   switch (action) {
     case 'set_price':
       return setPriceValue;
-    case 'set_default':
-      return setDefaultValue;
     default:
       /*
        * ⚠️ **`null` and `undefined` both accepted, nothing else.** An action
@@ -360,4 +341,4 @@ export function ruleActionValueSchema(action: string): z.ZodType {
 }
 
 /** The actions that require a payload, and cannot be authored without one. */
-export const ACTIONS_REQUIRING_A_VALUE: readonly string[] = ['set_price', 'set_default'];
+export const ACTIONS_REQUIRING_A_VALUE: readonly string[] = ['set_price'];

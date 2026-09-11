@@ -254,7 +254,7 @@
       }
     },
     {
-      "name": "set_default carries the value key it acts with",
+      "name": "a withdrawn action changes nothing, whatever payload it carries",
       "rules": [
         {
           "id": "r1",
@@ -277,11 +277,7 @@
       "answers": {},
       "expect_passes": 1,
       "expect_refused": false,
-      "expect_states": {
-        "0199b8c2-0000-7000-8000-00000000000a": {
-          "default_value_key": "large"
-        }
-      }
+      "expect_states": {}
     },
     {
       "name": "a set_price rule with no amount is ignored, not charged as zero",

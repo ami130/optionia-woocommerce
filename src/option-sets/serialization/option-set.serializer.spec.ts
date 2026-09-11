@@ -386,12 +386,29 @@ describe('OptionSetSerializer', () => {
         expect(published?.action_value).toEqual({ amount_minor: 500 });
       });
 
-      it('renames set_default’s value key', () => {
+      /**
+       * 🔴 **A withdrawn action publishes no payload (ADR-055).**
+       *
+       * `set_default` was specified in M17.1, evaluated by all three engines and
+       * applied by nothing — and it could not be built without contradicting
+       * ADR-051 §3, because a pre-selected value carries a price the customer
+       * never confirmed.
+       *
+       * A stored row still exists in the wild. It reaches the storefront as a
+       * rule whose action no evaluator knows, which every evaluator already
+       * ignores (AC4) — so the honest thing is to drop the payload rather than
+       * publish a `value_key` nothing will read.
+       */
+      it('publishes no payload for a withdrawn action', () => {
         const [published] = serializer.toPublished(
-          tree({ rules: [rule({ action: 'set_default', actionValue: { valueKey: 'large' } })] }),
+          tree({
+            rules: [
+              rule({ action: 'set_default' as never, actionValue: { valueKey: 'large' } }),
+            ],
+          }),
         ).rules;
 
-        expect(published?.action_value).toEqual({ value_key: 'large' });
+        expect(published?.action_value).toBeUndefined();
       });
 
       /**

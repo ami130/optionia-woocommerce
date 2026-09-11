@@ -46,7 +46,6 @@ export const RULE_ACTIONS = [
   'require',
   'unrequire',
   'set_price',
-  'set_default',
 ] as const;
 export type RuleActionName = (typeof RULE_ACTIONS)[number];
 
@@ -94,7 +93,6 @@ export interface TargetState {
   readonly hidden: boolean;
   readonly required: boolean | null;
   readonly priceMinor: number | null;
-  readonly defaultValueKey: string | null;
   /**
    * Set when two rules set **different** prices on this target.
    *
@@ -301,7 +299,6 @@ function resolve(
       hidden: false,
       required: null,
       priceMinor: null,
-      defaultValueKey: null,
       priceConflict: false,
     };
 
@@ -368,28 +365,6 @@ function resolve(
 
         break;
       }
-      case 'set_default': {
-        /*
-         * 📌 **Resolved here and read by nothing, until 17-9.**
-         *
-         * A default is a rendering decision — which value a form shows before
-         * the customer touches it — and the renderer is 17-9's subject. The
-         * resolver deliberately does not apply it: substituting a default for an
-         * answer the customer never gave would charge them for a choice they did
-         * not make, the shape ADR-051 forbids for hidden options.
-         *
-         * ⚠️ **DELETE THIS NOTE IN 17-9.** If nothing reads it by the end of
-         * Phase 17, this is dead output and the action should be reconsidered
-         * rather than left computed.
-         */
-        const key = rule.actionValue?.valueKey;
-
-        if (typeof key === 'string' && key !== '') {
-          states.set(rule.targetId, { ...state, defaultValueKey: key });
-        }
-
-        break;
-      }
       default:
         /* An action a newer build authored. Ignored, never fatal (AC4). */
         break;
@@ -422,8 +397,7 @@ function resolve(
       ...(states.get(targetId) ?? {
         required: null,
         priceMinor: null,
-        defaultValueKey: null,
-        priceConflict: false,
+          priceConflict: false,
       }),
       hidden: true,
     });

@@ -149,10 +149,6 @@ describe('shared rule fixture', () => {
         stated.price_minor = state.priceMinor;
       }
 
-      if (state.defaultValueKey !== null) {
-        stated.default_value_key = state.defaultValueKey;
-      }
-
       /*
        * Projected only when true, like `hidden`: a fixture case that says
        * nothing about a conflict is asserting there is none, and spelling

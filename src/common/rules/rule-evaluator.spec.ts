@@ -217,14 +217,23 @@ describe('evaluateRules', () => {
       expect(outcome.states.get(A)?.priceMinor).toBe(500);
     });
 
-    it('carries the value key a set_default rule acts with', () => {
+    /**
+     * ✏️ **This asserted that `set_default` carried its value key.** It did.
+     *
+     * ADR-055 withdrew the action: it was evaluated by all three engines and
+     * applied by nothing, and it could not be applied without contradicting
+     * ADR-051 §3 — a pre-selected value carries a price the customer never
+     * confirmed. Inverted rather than deleted, because a stored row still
+     * reaches storefronts and must resolve to *nothing at all*.
+     */
+    it('resolves a withdrawn action to no state whatever', () => {
       const outcome = evaluateRules(
-        [rule({ action: 'set_default', actionValue: { valueKey: 'large' } })],
+        [rule({ action: 'set_default' as never, actionValue: { valueKey: 'large' } })],
         {},
         selfMap,
       );
 
-      expect(outcome.states.get(A)?.defaultValueKey).toBe('large');
+      expect(outcome.states.get(A)).toBeUndefined();
     });
 
     /**

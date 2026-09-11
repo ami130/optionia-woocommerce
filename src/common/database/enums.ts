@@ -193,7 +193,24 @@ export const RuleAction = {
   REQUIRE: 'require',
   UNREQUIRE: 'unrequire',
   SET_PRICE: 'set_price',
-  SET_DEFAULT: 'set_default',
+  /*
+   * ✏️ **A sixth action was here and is withdrawn (ADR-055).**
+   *
+   * ⚠️ Its name is deliberately not spelled out below: `check-rule-vocabulary-parity.sh`
+   * reads this object by grepping for quoted values, and a mention inside a
+   * comment is indistinguishable from a member. Measured — the gate reported the
+   * two repositories disagreeing because this note quoted the string.
+   *
+   * It was specified in M17.1, evaluated by all three engines, and applied by
+   * nothing. Removing it rather than leaving it unbuilt, because the blocker is
+   * a **decision** and not effort: a rule-set default pre-selects a value the
+   * customer did not choose, and a value carries a price — which is the shape
+   * ADR-051 §3 refuses for a re-shown field. Measured: a pre-selected 40.00
+   * option is charged.
+   *
+   * An existing row degrades to a rule that does nothing, which is what it did
+   * before — both evaluators ignore an action they do not know (AC4).
+   */
 } as const;
 export type RuleAction = (typeof RuleAction)[keyof typeof RuleAction];
 

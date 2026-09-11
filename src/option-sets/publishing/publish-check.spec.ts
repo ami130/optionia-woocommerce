@@ -1042,20 +1042,29 @@ describe('pre-publish checks', () => {
       expect(findings).toEqual([]);
     });
 
-    it('treats set_default as an edge, because it writes an answer', () => {
+    /**
+     * ✏️ **This test asserted that `set_default` forms an edge.** It did, and
+     * correctly — it was the one action besides show and hide that *writes* an
+     * answer a later condition reads.
+     *
+     * ADR-055 withdrew the action, so it no longer affects any answer and is no
+     * longer an edge. Kept as the inverse rather than deleted: a withdrawn
+     * action quietly becoming an edge again is exactly the drift worth catching.
+     */
+    it('treats a withdrawn action as no edge at all', () => {
       const findings = rulesHaveNoCycles.validate(
         context({
           tree: twoGroupTree(),
           rules: [
             rule({
               id: 'r1',
-              action: 'set_default',
+              action: 'set_default' as never,
               targetId: 'option-1',
               conditions: [{ optionId: 'option-2', operator: 'is_empty' }],
             }),
             rule({
               id: 'r2',
-              action: 'set_default',
+              action: 'set_default' as never,
               targetId: 'option-2',
               conditions: [{ optionId: 'option-1', operator: 'is_empty' }],
             }),
@@ -1063,7 +1072,7 @@ describe('pre-publish checks', () => {
         }),
       );
 
-      expect(findings.map((finding) => finding.code)).toEqual(['RULES_FORM_A_CYCLE']);
+      expect(findings).toEqual([]);
     });
 
     /**
@@ -1289,17 +1298,26 @@ describe('pre-publish checks', () => {
       ).toEqual([]);
     });
 
-    it('blocks two set_default rules that disagree about the value', () => {
+    /**
+     * ✏️ **This asserted that two disagreeing `set_default` rules were blocked.**
+     * They were, and rightly: `large` versus `small` has no principled winner,
+     * the same reasoning ADR-052 gives for `set_price`.
+     *
+     * ADR-055 withdrew the action, so nothing can author such a pair and a
+     * stored one publishes a rule that does nothing. Inverted rather than
+     * deleted, so a withdrawn action quietly regaining a payload is caught.
+     */
+    it('says nothing about a withdrawn action, whatever its stored payload', () => {
       const findings = rulePayloadsDoNotConflict.validate(
         context({
           rules: [
-            rule({ id: 'r1', action: 'set_default', actionValue: { valueKey: 'large' } }),
-            rule({ id: 'r2', action: 'set_default', actionValue: { valueKey: 'small' } }),
+            rule({ id: 'r1', action: 'set_default' as never, actionValue: { valueKey: 'large' } }),
+            rule({ id: 'r2', action: 'set_default' as never, actionValue: { valueKey: 'small' } }),
           ],
         }),
       );
 
-      expect(findings.map((finding) => finding.code)).toEqual(['RULE_PAYLOADS_CONFLICT']);
+      expect(findings).toEqual([]);
     });
 
     /**

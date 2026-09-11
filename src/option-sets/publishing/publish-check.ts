@@ -723,7 +723,13 @@ function conditionOptionIds(conditions: readonly unknown[]): readonly string[] {
  * it is still not an edge, because money is an output of evaluation rather than
  * an input to it. Severity and graph position are different questions.
  */
-const ANSWER_AFFECTING_ACTIONS: ReadonlySet<string> = new Set(['show', 'hide', 'set_default']);
+/*
+ * ✏️ **`set_default` was in this set until ADR-055 withdrew the action.** It
+ * belonged here because it *writes* an answer — the one action besides show and
+ * hide that changes what a later condition reads. With it gone, only visibility
+ * moves an answer, which is why the set is now two members rather than three.
+ */
+const ANSWER_AFFECTING_ACTIONS: ReadonlySet<string> = new Set(['show', 'hide']);
 
 /**
  * Rules that depend on each other in a loop cannot settle (M17.3).
@@ -1022,7 +1028,7 @@ export const rulePayloadsDoNotConflict: PublishValidator = {
 };
 
 /** The actions that carry a payload, and so can disagree about a value. */
-const PAYLOAD_ACTIONS: ReadonlySet<string> = new Set(['set_price', 'set_default']);
+const PAYLOAD_ACTIONS: ReadonlySet<string> = new Set(['set_price']);
 
 export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   setHasContent,
