@@ -52,7 +52,12 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering) — option groups and ordering.**
+**[Phase 18](#phase-18--option-groups--ordering), stage 18-1 — multi-select:
+the template, the request, and the resolver's array branch.**
+
+✅ **18-0 is done** — three ADRs, no code. Multi-select is built first (ADR-057),
+nesting is deferred to M18.1a (ADR-058), and the two unread group fields are
+delivered rather than withdrawn (ADR-059).
 
 ✅ **Phase 17 is complete**: 17-0 (seven ADRs) through **17-11**, each with its
 own audit, plus **M17.4a**, and three whole-phase passes afterwards. All ten exit
@@ -21210,6 +21215,138 @@ presentation config (columns, swatch sizing, label placement, help text).
 
 **Exit:** merchants can structure a complex product into legible sections; ordering
 persists and renders identically in dashboard, preview, and storefront.
+
+### Phase 18 — execution plan
+
+**Seven stages**, ordered by what the 18-0 decisions imply rather than by
+milestone number. Multi-select first because every later stage inherits the shape
+it lands on; nesting absent because ADR-058 deferred it.
+
+| # | Stage | Repo | Closes |
+|---|---|---|---|
+| **18-0** | **Three decisions** — ADR-057, ADR-058, ADR-059 | — | ✅ done |
+| 18-1 | Multi-select: template `[]`, request, resolver array branch | plugin | ADR-057 |
+| 18-2 | Multi-select through cart, labels, order, analytics | plugin | ADR-057 |
+| 18-3 | `MANY` joins the registry; multi-select fixture cases | backend + shared | M14.1 |
+| 18-4 | Group display types rendered and authorable | plugin + dashboard | M18.2, ADR-059 |
+| 18-5 | Group presentation config, following the option `display` precedent | all three | M18.5 |
+| 18-6 | Drag-and-drop ordering over the existing endpoints | dashboard | M18.3 |
+| 18-7 | Group-level selection rules | backend + plugin | M18.4 |
+| 18-8 | Adversarial suite + exit-criteria audit | all | — |
+
+#### Why multi-select is three stages and not one
+
+🔴 **The registry note sets the bar: `MANY` joins the list when the *whole* path
+works.** 18-1 and 18-2 build it; 18-3 opens the gate. Splitting the build from
+the gate is what keeps the fence honest — a resolver that accepts arrays is not
+the same as a system that sells them, and Phase 17 ended by withdrawing two
+actions that had exactly that gap.
+
+⚠️ **18-2 is the risky one.** The cart item key is derived textually from
+`cart_item_data`, and `deltas_by_option()` pairs `resolved` with `deltas`
+positionally — the pairing 16c's defect turned on. Budget adversarial review
+there specifically; it is where a regression reaches a cart total.
+
+#### What this phase must not repeat
+
+| Prior defect | Guard here |
+|---|---|
+| A field published and read by nothing (ADR-055, ADR-056) | 18-4 renders **and** authors `display_type` in one stage |
+| A gate that could not see a third evaluator (17-11) | 18-3's fixture cases land with the registry change |
+| `deltas_by_option()` returning empty on a count mismatch (16c) | 18-2's pairing changes shape, proven at the order |
+| Two mechanisms for one fact (17-4, 17-11a) | `is_collapsible` is ignored for every type but `inline` |
+
+### ✅ Stage 18-0 complete — three decisions, 2026-09-11
+
+**No code.** Three questions that change *what gets built*, settled before
+anything is, on the pattern 17-0 established — deciding them afterwards would
+mean undoing work.
+
+| ADR | Decision |
+|---|---|
+| **[ADR-057](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | **Multi-select is built first**, and M18.4 is sequenced behind it |
+| **[ADR-058](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | **Nesting is deferred** to M18.1a, and is *not* the same change as hidden-by-default |
+| **[ADR-059](../optioniaWooCommerceBackend/docs/DECISIONS.md)** | **`display_type` and `is_collapsible` are delivered**, with their overlap resolved |
+
+#### 🔴 The analysis was wrong about multi-select, and the code said so
+
+The Phase 18 pre-flight called multi-select a gap. It is a **deferral with a
+working fence**, and the type registry says so in a note written when it was
+made:
+
+> *"Declaring `MANY` here would make the API **accept** a multi-select that
+> `Engine\SelectionResolver` then refuses… `MANY` joins this array in the stage
+> that builds the array path through resolver, cart, labels and order — not
+> before."*
+
+Verified rather than taken on trust: `assertValidOption` answers
+`INCOMPATIBLE_AXIS` for `cardinality: many`, a checkbox resolves one value, and
+an array is refused `ERROR_NOT_SCALAR`. **Fail-closed, deliberately.**
+
+⚠️ **It reaches further back than the resolver.** `checkbox.php` names inputs
+`optionia[opt-id]`, **not `[]`** — so a browser sends only the last checked box
+whatever the server would accept. The path is template → request → resolver →
+deltas → cart → labels → order → analytics.
+
+🔴 **Two hazards are named now rather than met later.** The cart item key is
+derived textually from `cart_item_data`, so an array in DOM order would split one
+product into two lines — selections must be sorted before freezing. And
+`deltas_by_option()` pairs `resolved` with `deltas` **positionally**, which is
+what 16c's defect turned on; a multi-value option contributes several deltas for
+one key, so that pairing changes shape rather than tolerating arrays.
+
+#### 🔴 M18.1 is mentioned exactly once in the whole plan
+
+In the phase's own summary line. **No competitive teardown names nesting, no
+merchant scenario records it, and no milestone depends on it** — while it would
+reshape `OptionSetTree.groups`, which **21 sites read**.
+
+Deferred to **M18.1a**, and the second half of that decision matters as much: it
+is **not** the same change as the *hidden-by-default* state ADR-056 parked here.
+They share only the phrase "the option model" — one is the tree's shape across 21
+walkers, the other is a boolean on an option. Bundling them would make a cheap
+change wait on an expensive one nobody asked for.
+
+⚠️ **The exit criterion survives the deferral.** *"Merchants can structure a
+complex product into legible sections"* is met by M18.2 — accordion, tabs and
+stepped are what make twelve options legible, and they work on the flat groups
+that already exist.
+
+#### 🟡 Two published fields, and the question Phase 17 taught us to ask
+
+`display_type` and `is_collapsible` are modelled, migrated, accepted by both DTOs
+and **published** — and neither authorable nor rendered. That is precisely the
+shape ADR-055 and ADR-056 withdrew two rule actions for.
+
+**Delivered rather than withdrawn, and the difference is stated**: nothing blocks
+them. `set_default` needed ADR-051 to change; `show` had no state to act on;
+these need a template and some CSS. *"Pending"* is a claim that was wrong twice in
+Phase 17, so it is made here with the evidence attached.
+
+🔴 **Their overlap is resolved before it is built.** `is_collapsible` carries **no
+docblock** — in this codebase, a field added without its reasoning. `display_type`
+is the layout; `is_collapsible` means *"an inline group can be folded"* and is
+**ignored for every other type**, so a merchant cannot author
+`accordion` + `is_collapsible: false` and expect something no rendering can
+satisfy.
+
+### 📌 M18.1a — Group nesting, deferred
+
+**Deferred 2026-09-11 by [ADR-058](../optioniaWooCommerceBackend/docs/DECISIONS.md).**
+
+Nesting would change `OptionSetTree.groups` from a flat array to a tree, and
+**21 sites read it**: the serializer, the publish validators, `idsIn()`, the
+renderer, and the plugin's `index_containment()` — which rule evaluation depends
+on.
+
+**What it needs before it is built:** a merchant asking for it. M18.1 is named
+once in this plan and nowhere else, which is not enough to justify reshaping the
+structure every other part of the system walks.
+
+⚠️ **Carried with it:** the *hidden-by-default* option state ADR-056 parked in
+this phase. Separate change, separate decision — recorded together only so
+neither is lost.
+
 
 ---
 
