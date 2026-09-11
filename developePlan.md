@@ -52,12 +52,25 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-7 — the evaluator's
-own iteration cap, and where it is enforced.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-9 — the frontend
+runtime: show/hide in the browser, and the value policy that goes with it.**
 
-**Done:** 17-0 (four ADRs) through **17-6** and **17-8**, each with its own
-audit, plus **M17.4a** — closed after a final cross-stage pass found that
-`sortOrder` was deciding prices, in both languages identically.
+**Done:** 17-0 (four ADRs) through **17-8**, each with its own audit, plus
+**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
+deciding prices, in both languages identically.
+
+✅ **17-7 was absorbed, not skipped**, and this marker pointed at it for two
+stages after it was finished. Its three obligations all shipped inside other
+stages: the cap itself (`MAX_PASSES` / `MAX_RULE_PASSES`, both **10**) in 17-4
+and 17-6; refusal-on-reaching-it as a **shared-fixture case** both languages
+execute; and enforcement independent of publish as `ERROR_RULES_UNSETTLED` in
+17-8. Verified by reading the code, not the record.
+
+🔴 **17-9 is where rules meet the browser, and nothing of that exists yet.**
+`Assets.php` localises **currency and upload settings only** — no rules reach the
+page. So today a rule-hidden option is *still rendered*, the customer can fill it
+in, and the server refuses it at add-to-cart. The server is stricter than the
+page, and that window stays open until this stage lands.
 
 ✅ **Both remaining Phase 17 criteria closed in 17-8:** a rule-hidden option is
 now **rejected server-side** (`ERROR_HIDDEN_BY_RULE`) and is **neither charged
@@ -73,6 +86,23 @@ ignored, `set_price` still resolved by *last writer wins*, so **document order**
 decided the price (1700 versus 1500 on the same pair). The publish gate blocks
 that pair, but AC4 makes the document input rather than authority. Conflicting
 amounts now **cancel** in both languages and are reported, never charged.
+
+⚠️ **O1 — a cap refusal tells the customer to do something that cannot help.**
+Found while confirming 17-7. `ERROR_RULES_UNSETTLED` is raised with
+**`field => null`**, because a cascade that never settles is not about any one
+option — but `CheckoutValidator::message()` skips errors with no field, so all
+four of its buckets stay empty and it falls through to *"one of the products in
+your cart uses an option that is no longer available. Please remove it and choose
+again."*
+
+Both halves are wrong: no option was removed, and **removing the line cannot fix
+it** — the merchant's rules are what did not settle. The behaviour is otherwise
+correct and fail-closed: add-to-cart refuses, the cart reverts to base price, and
+both paths log `rules_unsettled`. Only the wording misleads.
+
+📌 **Fold into 17-9**, which is already touching this surface, or 17-11. Small
+and contained: one branch in `message()`, on the same terms as the rule-hidden
+case 17-8 added.
 
 ⚠️ **K3 is still open** (from the 17-5 audit): a pre-M17.1 row whose
 `conditions` is an object publishes as a rule that **never fires** — safe,
