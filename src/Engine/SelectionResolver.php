@@ -540,8 +540,26 @@ final class SelectionResolver {
 			 * shape that makes a naive `(string)` cast emit a notice and coerce
 			 * to "Array". Phase 4 confirmed WooCommerce repels it; this refuses
 			 * it explicitly rather than relying on that.
+			 *
+			 * 🔴 **A multi-select posts an array, and only a multi-select may.**
+			 *
+			 * `cardinality: many` is the merchant's declaration that this option
+			 * takes several answers, and `checkbox.php` names its inputs `[]`
+			 * only for that case. An array arriving for any other option is the
+			 * probe this gate was written for, and is still refused.
+			 *
+			 * ⚠️ **Normalised to a list here, once**, so every branch below reads
+			 * one shape. The alternative — each branch asking "array or scalar?"
+			 * — is the same question answered in six places, which is how two of
+			 * them come to answer it differently.
 			 */
-			if ( ! is_scalar( $raw_value ) ) {
+			$is_many = self::takes_many( $options[ $option_id ] );
+
+			if ( $is_many && is_array( $raw_value ) ) {
+				$chosen_keys = array_values( $raw_value );
+			} elseif ( is_scalar( $raw_value ) ) {
+				$chosen_keys = array( $raw_value );
+			} else {
 				$errors[] = array(
 					'code'   => self::ERROR_NOT_SCALAR,
 					'field'  => $option_id,
@@ -550,6 +568,60 @@ final class SelectionResolver {
 
 				continue;
 			}
+
+			/*
+			 * 🔴 **Every entry must itself be a scalar.** `[['nested']]` is the
+			 * same probe one level down, and an array reaching `(string)` below
+			 * emits a notice and coerces to "Array" — which would then be looked
+			 * up as a value key and reported as merely unknown.
+			 */
+			foreach ( $chosen_keys as $chosen_key ) {
+				if ( ! is_scalar( $chosen_key ) ) {
+					$errors[] = array(
+						'code'   => self::ERROR_NOT_SCALAR,
+						'field'  => $option_id,
+						'params' => array(),
+					);
+
+					continue 2;
+				}
+			}
+
+			/*
+			 * ⚠️ **An empty array is an unanswered option, not an error.**
+			 * A multi-select with nothing ticked posts nothing at all in a
+			 * browser; an empty array is what a script or a stale payload sends,
+			 * and treating it as absent is what makes the two agree. The required
+			 * pass then reports it if the merchant demanded an answer.
+			 */
+			if ( array() === $chosen_keys ) {
+				continue;
+			}
+
+			/*
+			 * 🔴 **Duplicates collapse, and the first occurrence wins.**
+			 *
+			 * `[red, red]` is one choice sent twice — a double-submit or a forged
+			 * payload — and charging for it twice is the shape a customer
+			 * disputes. `array_unique` over the *string* forms, because `'1'` and
+			 * `1` are the same answer to a form.
+			 */
+			$seen         = array();
+			$deduplicated = array();
+
+			foreach ( $chosen_keys as $chosen_key ) {
+				$as_string = (string) $chosen_key;
+
+				if ( isset( $seen[ $as_string ] ) ) {
+					continue;
+				}
+
+				$seen[ $as_string ] = true;
+				$deduplicated[]     = $chosen_key;
+			}
+
+			$chosen_keys = $deduplicated;
+			$raw_value   = $chosen_keys[0];
 
 			/*
 			 * 🔴 **Text is the first value a *customer* supplies, and that
@@ -1098,8 +1170,37 @@ final class SelectionResolver {
 				continue;
 			}
 
+			$values = self::index_values( $options[ $option_id ] );
+
+			/*
+			 * 🔴 **Every chosen key is validated before ANY is priced.**
+			 *
+			 * A multi-select carrying one good key and one bad one must be
+			 * refused whole, not half-accepted — a line that priced `red` and
+			 * silently dropped `blue` is the shape M11.5 exists to prevent, and
+			 * the customer would see a total they cannot account for.
+			 */
+			$unknown = false;
+
+			foreach ( $chosen_keys as $chosen_key ) {
+				if ( ! isset( $values[ (string) $chosen_key ] ) ) {
+					$unknown = true;
+
+					break;
+				}
+			}
+
+			if ( $unknown ) {
+				$errors[] = array(
+					'code'   => self::ERROR_UNKNOWN_VALUE,
+					'field'  => $option_id,
+					'params' => array(),
+				);
+
+				continue;
+			}
+
 			$value_key = (string) $raw_value;
-			$values    = self::index_values( $options[ $option_id ] );
 
 			if ( ! isset( $values[ $value_key ] ) ) {
 				$errors[] = array(
@@ -1124,12 +1225,28 @@ final class SelectionResolver {
 			 * matching on it would let a rule hiding `large` in one option hide
 			 * `large` in every other. The published value carries an `id` from
 			 * M17.8 for exactly this lookup.
+			 *
+			 * ⚠️ **Checked for EVERY chosen value, not just the first.** A
+			 * multi-select may carry a rule-hidden value in any position, and a
+			 * guard reading `$chosen_keys[0]` would accept a payload whose
+			 * second entry names a choice the customer's own answers removed.
 			 */
-			$value_id = isset( $values[ $value_key ]['id'] ) && is_scalar( $values[ $value_key ]['id'] )
-				? (string) $values[ $value_key ]['id']
-				: '';
+			$hit_hidden = false;
 
-			if ( '' !== $value_id && isset( $hidden_value[ $value_id ] ) ) {
+			foreach ( $chosen_keys as $chosen_key ) {
+				$candidate    = $values[ (string) $chosen_key ];
+				$candidate_id = isset( $candidate['id'] ) && is_scalar( $candidate['id'] )
+					? (string) $candidate['id']
+					: '';
+
+				if ( '' !== $candidate_id && isset( $hidden_value[ $candidate_id ] ) ) {
+					$hit_hidden = true;
+
+					break;
+				}
+			}
+
+			if ( $hit_hidden ) {
 				$errors[] = array(
 					'code'   => self::ERROR_HIDDEN_BY_RULE,
 					'field'  => $option_id,
@@ -1140,39 +1257,85 @@ final class SelectionResolver {
 			}
 
 			/*
-			 * ADR-049: a `set_price` rule **replaces** the value's own price
-			 * rather than adding to it — see `set_price_for()` for why adding
-			 * was rejected, and for the option-level case it refuses.
+			 * 🔴 **One delta per CHOSEN VALUE, and one entry per OPTION for
+			 * everything else.** The two shapes are different on purpose.
+			 *
+			 * `deltas` is a positional list the caller pairs with `resolved` —
+			 * so a multi-select contributing three prices contributes three
+			 * entries, and `CartItemData::deltas_by_option()` has to pair them
+			 * by option rather than by position. That pairing is what 16c's
+			 * defect turned on, and M18.2 is the stage that reshapes it.
+			 *
+			 * `labels` and `sku_suffixes` stay keyed by option id, because the
+			 * cart line, the order meta and the fulfilment output all name an
+			 * option once. Several values become several entries *within* one.
 			 */
-			$ruled_price = self::set_price_for(
-				$options[ $option_id ],
-				$evaluation['states'],
-				$option_id,
-				$value_id,
-				$unpriced
-			);
+			$chosen_labels   = array();
+			$chosen_suffixes = array();
 
-			if ( false === $ruled_price ) {
-				// A refused rule price contributes nothing; see `set_price_for()`.
-				$deltas[] = 0;
-			} else {
-				$deltas[] = null === $ruled_price
-					? self::delta_for( $values[ $value_key ], $base_minor, $unpriced )
-					: $ruled_price;
-			}
-			$weight_grams += self::weight_for( $values[ $value_key ] );
-			$suffix        = self::sku_suffix_for( $values[ $value_key ] );
+			foreach ( $chosen_keys as $chosen_key ) {
+				$key   = (string) $chosen_key;
+				$value = $values[ $key ];
 
-			if ( '' !== $suffix ) {
-				$sku_suffixes[ $option_id ] = $suffix;
+				/*
+				 * ADR-049: a `set_price` rule **replaces** the value's own price
+				 * rather than adding to it — see `set_price_for()` for why
+				 * adding was rejected, and for the option-level case it refuses.
+				 *
+				 * Asked per value, because a rule may target one value of a
+				 * multi-select and must not reprice its siblings.
+				 */
+				$ruled = self::set_price_for(
+					$options[ $option_id ],
+					$evaluation['states'],
+					$option_id,
+					isset( $value['id'] ) && is_scalar( $value['id'] ) ? (string) $value['id'] : '',
+					$unpriced
+				);
+
+				if ( false === $ruled ) {
+					// A refused rule price contributes nothing; see `set_price_for()`.
+					$deltas[] = 0;
+				} else {
+					$deltas[] = null === $ruled
+						? self::delta_for( $value, $base_minor, $unpriced )
+						: $ruled;
+				}
+
+				$weight_grams += self::weight_for( $value );
+				$suffix        = self::sku_suffix_for( $value );
+
+				if ( '' !== $suffix ) {
+					$chosen_suffixes[] = $suffix;
+				}
+
+				$chosen_labels[] = self::labels_for( $options[ $option_id ], $value );
 			}
-			$labels[ $option_id ] = self::labels_for( $options[ $option_id ], $values[ $value_key ] );
+
+			if ( array() !== $chosen_suffixes ) {
+				/*
+				 * ⚠️ **Joined, not listed.** A SKU suffix is one string per
+				 * option by the time it reaches an order line, and the caller
+				 * concatenates them — see the note on `sku_suffixes` in the
+				 * return. Several values give one suffix built from all of them,
+				 * in the order the merchant authored the values.
+				 */
+				$sku_suffixes[ $option_id ] = implode( '', $chosen_suffixes );
+			}
+
+			/*
+			 * One label at `one`, a list at `many`. The cart and order renderers
+			 * name an option once and print what was chosen for it, so the shape
+			 * follows what they display rather than what the loop produced.
+			 */
+			$labels[ $option_id ] = $is_many ? $chosen_labels : $chosen_labels[0];
 			$set_id               = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
 			if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
 				$set_ids[] = $set_id;
 			}
-			$chosen[ $option_id ] = $value_key;
+
+			$chosen[ $option_id ] = $is_many ? array_map( 'strval', $chosen_keys ) : $value_key;
 		}
 
 		/*
@@ -1755,6 +1918,30 @@ final class SelectionResolver {
 			'option' => '' !== $option_label ? $option_label : (string) ( $option['id'] ?? '' ),
 			'value'  => '' !== $value_label ? $value_label : (string) ( $value['value_key'] ?? '' ),
 		);
+	}
+
+	/**
+	 * Whether this option accepts several answers.
+	 *
+	 * 🔴 **Read from `cardinality`, which the cloud publishes and the plugin had
+	 * never consulted.** M14.1 makes `one | many` a first-class axis, independent
+	 * of how an option is drawn — so a `checkbox` is a yes/no toggle at `one` and
+	 * a multi-select at `many`, and nothing else in the document says which.
+	 *
+	 * ⚠️ **Anything unrecognised is `one`**, which is the safe direction: a
+	 * document from a newer cloud naming a cardinality this build does not know
+	 * gets the single-value path, where every downstream structure already works.
+	 * Treating an unknown as `many` would hand an array to nine consumers that
+	 * expect a scalar.
+	 *
+	 * @param array<string, mixed> $option One published option.
+	 */
+	private static function takes_many( array $option ): bool {
+		$cardinality = isset( $option['cardinality'] ) && is_scalar( $option['cardinality'] )
+			? (string) $option['cardinality']
+			: '';
+
+		return 'many' === $cardinality;
 	}
 
 	/**

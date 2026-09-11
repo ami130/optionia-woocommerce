@@ -2,24 +2,34 @@
 /**
  * A checkbox option: one choice from several, drawn as checkboxes.
  *
- * ## Why this is a `[ONE]` type today, and looks like a radio
+ * ## One type, two shapes, decided by `cardinality`
  *
  * M14.1 describes `checkbox` as `one | many` — a yes/no toggle at `one`, a
- * multi-select at `many`. Only `one` is registered, because
- * `Engine\SelectionResolver` requires a **scalar** selection and answers
- * `ERROR_NOT_SCALAR` for the array a multi-select posts. Registering `many`
- * before that path exists would let a merchant author an option the storefront
- * refuses at add-to-cart.
+ * multi-select at `many` — and this template is the one place that branches on
+ * it, exactly as its earlier note said it would.
  *
- * So each input carries the **same** `name`, exactly as a radio group does: the
- * browser submits one value, and the resolver receives the scalar it requires.
- * When the array path lands, the `many` case gets `name="…[]"` and this template
- * branches on cardinality — the one place it will need to.
+ * | | `one` | `many` |
+ * |---|---|---|
+ * | field name | `optionia[opt-id]` | `optionia[opt-id][]` |
+ * | posts | a scalar | an array |
+ * | `required` | on each input | **never** — see below |
+ *
+ * 🔴 **The `[]` is not cosmetic.** Without it every box shares one key and PHP
+ * keeps only the last, so a customer checking two is charged for one and
+ * nothing fails. That was the behaviour before M18.1, and it was reachable by
+ * any merchant who gave a `one` checkbox two values.
  *
  * ⚠️ **A checkbox is not self-deselecting.** Unlike a radio, clicking a checked
- * box unchecks it, so a `[ONE]` group can legitimately submit *nothing*. That is
- * correct for an optional option and refused by `required` for a mandatory one —
- * which is why `required` sits on every input rather than on the fieldset.
+ * box unchecks it, so a group can legitimately submit *nothing*. At `one` that
+ * is correct for an optional option and refused by `required` for a mandatory
+ * one, which is why the attribute sits on the input rather than the fieldset.
+ *
+ * 🔴 **At `many` the attribute is dropped entirely**, because HTML's `required`
+ * on a checkbox means *this box*, not *one of these*. Measured on two required
+ * boxes sharing a name: checking one leaves the group invalid, because the
+ * browser demands both. `SelectionResolver` still answers `ERROR_REQUIRED` for
+ * an unanswered required option, so what is lost is an early message, never the
+ * rule.
  *
  * Overridable at `{theme}/woocommerce/optionia/options/checkbox.php`.
  *
@@ -42,8 +52,40 @@ if ( '' === $optionia_id || array() === $optionia_values ) {
 	return;
 }
 
-$optionia_field    = (string) ( $optionia['field_name'] ?? 'optionia' ) . '[' . $optionia_id . ']';
+/*
+ * 🔴 **`many` posts an ARRAY, and the `[]` is what makes that true.**
+ *
+ * Without it every box shares one key, and PHP keeps only the **last** — so a
+ * customer checking two is charged for one, with nothing failing. Measured
+ * before this branch existed: `optionia[opt-a]=red&optionia[opt-a]=blue` parses
+ * to `{"opt-a":"blue"}` and the resolver reports success on half the answer.
+ *
+ * ⚠️ **`one` keeps the bare name deliberately.** A yes/no toggle submits a
+ * scalar, and wrapping it in an array would make every single-value checkbox a
+ * one-element list for the resolver, the cart key and the order meta to carry.
+ */
+$optionia_many  = 'many' === (string) ( $optionia_option['cardinality'] ?? 'one' );
+$optionia_field = (string) ( $optionia['field_name'] ?? 'optionia' ) . '[' . $optionia_id . ']'
+	. ( $optionia_many ? '[]' : '' );
+
+/*
+ * 🔴 **`required` cannot sit on a `many` input, and the reason is HTML's.**
+ *
+ * `required` on a checkbox means *this box must be checked* — not *one of this
+ * group*. Measured on two required boxes sharing a name: checking one leaves
+ * the group **invalid**, because the browser demands both. A required
+ * multi-select would be unsubmittable.
+ *
+ * At `one` it is still correct and still needed: a checkbox is not
+ * self-deselecting, so a lone box can legitimately submit nothing, and
+ * `required` is what refuses that for a mandatory option.
+ *
+ * ⚠️ **The server enforces it either way.** `SelectionResolver` answers
+ * `ERROR_REQUIRED` for an unanswered required option whatever the browser did —
+ * so dropping the attribute at `many` loses an early message, never the rule.
+ */
 $optionia_required = ! empty( $optionia_option['is_required'] );
+$optionia_mark     = $optionia_required && ! $optionia_many;
 
 /*
  * Guidance blocks and the `aria-describedby` that points at them, from the one
@@ -140,7 +182,7 @@ $optionia_describe = OptionView::described_by( $optionia_option );
 						data-optionia-price="<?php echo esc_attr( (string) $optionia_pminor ); ?>"
 					<?php endif; ?>
 					<?php checked( ! empty( $optionia_value['is_default'] ) ); ?>
-					<?php echo $optionia_required ? ' required' : ''; ?>
+					<?php echo $optionia_mark ? ' required' : ''; ?>
 				/>
 				<span class="optionia-value__label"><?php echo esc_html( (string) ( $optionia_value['label'] ?? $optionia_key ) ); ?></span>
 			</label>
