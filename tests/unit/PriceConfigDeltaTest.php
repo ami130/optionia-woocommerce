@@ -901,8 +901,18 @@ final class PriceConfigDeltaTest extends TestCase {
 
 		$reflection = new \ReflectionMethod( SelectionResolver::class, 'resolve' );
 
+		/*
+		 * ⚠️ **An exact list, not a "does not contain quantity" check.** A
+		 * blacklist passes for every parameter nobody thought to forbid; this
+		 * makes any signature change a decision somebody has to write down here.
+		 *
+		 * 📌 **`allow_many` is temporary and M18.2 removes it** — along with the
+		 * fence it opens, which refuses a `cardinality: many` document until the
+		 * cart can carry one. When that parameter goes, this list shortens back
+		 * to four.
+		 */
 		$this->assertSame(
-			array( 'option_sets', 'selections', 'base_minor', 'today' ),
+			array( 'option_sets', 'selections', 'base_minor', 'today', 'allow_many' ),
 			array_map(
 				static fn( \ReflectionParameter $p ): string => $p->getName(),
 				$reflection->getParameters()

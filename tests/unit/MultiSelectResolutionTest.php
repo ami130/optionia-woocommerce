@@ -41,7 +41,9 @@ final class MultiSelectResolutionTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000
+			1000,
+			null,
+			true
 		);
 
 		$this->assertTrue( $result->is_ok() );
@@ -60,7 +62,10 @@ final class MultiSelectResolutionTest extends TestCase {
 	public function test_resolved_carries_a_list_only_for_many(): void {
 		$many = SelectionResolver::resolve(
 			self::sets( 'many' ),
-			array( 'opt-a' => array( 'red', 'blue' ) )
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			0,
+			null,
+			true
 		);
 
 		$this->assertSame( array( 'opt-a' => array( 'red', 'blue' ) ), $many->value()['resolved'] );
@@ -115,7 +120,10 @@ final class MultiSelectResolutionTest extends TestCase {
 	public function test_a_nested_array_is_refused(): void {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
-			array( 'opt-a' => array( 'red', array( 'x' ) ) )
+			array( 'opt-a' => array( 'red', array( 'x' ) ) ),
+			0,
+			null,
+			true
 		);
 
 		$this->assertFalse( $result->is_ok() );
@@ -132,7 +140,9 @@ final class MultiSelectResolutionTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'ghost' ) ),
-			1000
+			1000,
+			null,
+			true
 		);
 
 		$this->assertFalse( $result->is_ok() );
@@ -149,7 +159,9 @@ final class MultiSelectResolutionTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'red' ) ),
-			1000
+			1000,
+			null,
+			true
 		);
 
 		$this->assertTrue( $result->is_ok() );
@@ -167,7 +179,9 @@ final class MultiSelectResolutionTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array() ),
-			1000
+			1000,
+			null,
+			true
 		);
 
 		$this->assertTrue( $result->is_ok() );
@@ -186,7 +200,7 @@ final class MultiSelectResolutionTest extends TestCase {
 
 		$sets[0]['groups'][0]['options'][0]['is_required'] = true;
 
-		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => array() ) );
+		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => array() ), 0, null, true );
 
 		$this->assertFalse( $result->is_ok() );
 		$this->assertSame( SelectionResolver::ERROR_REQUIRED, $result->get_errors()[0]['code'] );
@@ -236,7 +250,10 @@ final class MultiSelectResolutionTest extends TestCase {
 			array(
 				'opt-t' => 'yes',
 				'opt-a' => array( 'red', 'blue' ),
-			)
+			),
+			0,
+			null,
+			true
 		);
 
 		$this->assertFalse( $result->is_ok() );
@@ -257,7 +274,7 @@ final class MultiSelectResolutionTest extends TestCase {
 		$sets[0]['groups'][0]['options'][0]['values'][0]['weight_delta_grams'] = 500;
 		$sets[0]['groups'][0]['options'][0]['values'][1]['weight_delta_grams'] = 250;
 
-		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => array( 'red', 'blue' ) ) );
+		$result = SelectionResolver::resolve( $sets, array( 'opt-a' => array( 'red', 'blue' ) ), 0, null, true );
 
 		$this->assertSame( 750, $result->value()['weight_delta_grams'] );
 	}

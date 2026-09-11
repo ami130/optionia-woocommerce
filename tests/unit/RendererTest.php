@@ -909,10 +909,12 @@ final class RendererTest extends TestCase {
 	 * field their template reads, and three near-identical fixtures would drift
 	 * the way the two type lists did.
 	 *
-	 * @param string               $type   Presentation to render.
-	 * @param array<string, mixed> $extras Extra keys merged into the first value.
+	 * @param string               $type          Presentation to render.
+	 * @param array<string, mixed> $extras        Extra keys merged into the first value.
+	 * @param array<string, mixed> $option_extras Extra keys merged into the option itself,
+	 *                                            for option-level fields like `cardinality`.
 	 */
-	private function cache_typed( string $type, array $extras = array() ): void {
+	private function cache_typed( string $type, array $extras = array(), array $option_extras = array() ): void {
 		( new Repository( new Logger( new Settings() ) ) )->store(
 			array(
 				'schema_version' => 1,
@@ -933,25 +935,28 @@ final class RendererTest extends TestCase {
 								'id'      => 'group-a',
 								'label'   => 'Customization',
 								'options' => array(
-									array(
-										'id'          => 'opt-t',
-										'key'         => 'finish',
-										'type'        => $type,
-										'label'       => 'Finish',
-										'is_required' => true,
-										'values'      => array(
-											array_merge(
-												array(
-													'value_key' => 'lux',
-													'label'     => 'Luxury',
+									array_merge(
+										array(
+											'id'          => 'opt-t',
+											'key'         => 'finish',
+											'type'        => $type,
+											'label'       => 'Finish',
+											'is_required' => true,
+											'values'      => array(
+												array_merge(
+													array(
+														'value_key' => 'lux',
+														'label'     => 'Luxury',
+													),
+													$extras
 												),
-												$extras
-											),
-											array(
-												'value_key' => 'std',
-												'label' => 'Standard',
+												array(
+													'value_key' => 'std',
+													'label' => 'Standard',
+												),
 											),
 										),
+										$option_extras
 									),
 								),
 							),
@@ -1775,15 +1780,16 @@ final class RendererTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **A checkbox group is `[ONE]` today, so it submits a scalar.**
+	 * 🔴 **A checkbox at `cardinality: one` submits a scalar.**
 	 *
-	 * `Engine\SelectionResolver` requires a scalar and answers `ERROR_NOT_SCALAR`
-	 * for an array. Every input therefore shares one `name` with no `[]` suffix —
-	 * a `name="…[]"` here would post an array the resolver refuses at
-	 * add-to-cart, after the merchant had already published it.
+	 * Every input shares one `name` with no `[]` suffix, because
+	 * `Engine\SelectionResolver` answers `ERROR_NOT_SCALAR` for an array at
+	 * this cardinality — a `name="…[]"` here would post something the resolver
+	 * refuses at add-to-cart, after the merchant had already published it.
 	 *
-	 * When the array path lands, this assertion changes with it. Until then it is
-	 * what keeps the template and the engine agreeing.
+	 * ⚠️ **M18.1 added the array path, and it did NOT change this case.**
+	 * `checkbox.php` branches on `cardinality`, and `one` is still the default
+	 * and still the only shape this build sells — see the fence below.
 	 */
 	public function test_a_checkbox_group_posts_a_scalar(): void {
 		$this->cache_typed( 'checkbox' );
@@ -1792,6 +1798,45 @@ final class RendererTest extends TestCase {
 
 		$this->assertStringContainsString( 'type="checkbox"', $markup );
 		$this->assertStringNotContainsString( '[]"', $markup, 'A [ONE] checkbox must not post an array.' );
+	}
+
+	/**
+	 * 🔴 **A `many` option renders NOTHING until M18.2 can sell one.**
+	 *
+	 * The same reasoning the unknown-type case uses: a control a customer can
+	 * fill in and the server will refuse is worse than no control at all.
+	 * `SelectionResolver` fences `cardinality: many` behind
+	 * `ERROR_MANY_UNSUPPORTED` (ADR-060) because a `many` document breaks the
+	 * positional pairing in `deltas_by_option()` and **the line prices live**.
+	 *
+	 * Without this guard the checkboxes still render: the customer ticks two
+	 * boxes and add-to-cart refuses with a generic "that selection is not
+	 * available" they have no way to act on.
+	 *
+	 * 📌 **M18.2 deletes this test with the guard.**
+	 */
+	public function test_a_multi_select_option_is_not_rendered(): void {
+		$this->cache_typed( 'checkbox', array(), array( 'cardinality' => 'many' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( 'type="checkbox"', $markup );
+		$this->assertStringNotContainsString( 'value="lux"', $markup );
+	}
+
+	/**
+	 * ⚠️ The control: the fence reads `cardinality`, not the type.
+	 *
+	 * Without this, "a many option renders nothing" would be satisfied by a
+	 * renderer that had stopped rendering checkboxes altogether.
+	 */
+	public function test_a_single_value_checkbox_still_renders(): void {
+		$this->cache_typed( 'checkbox', array(), array( 'cardinality' => 'one' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'type="checkbox"', $markup );
+		$this->assertStringContainsString( 'value="lux"', $markup );
 	}
 
 	/** A colour swatch paints a valid hex and keeps the label beside it. */
