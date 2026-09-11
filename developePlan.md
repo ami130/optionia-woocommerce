@@ -20856,6 +20856,102 @@ because a chain listed short is one somebody believes they have walked.
 | Q6 | `operator` check dropped | `warns about a condition with no operator` |
 | Q7 | `typeof object` dropped | **survived — the guard was removed instead** |
 
+#### 🔍 The whole-phase audit — four findings, and one action withdrawn
+
+All eight milestones re-checked against shipped code rather than the record. The
+ten exit criteria all held. **What the criteria did not ask was whether every
+action M17.1 promises actually works.**
+
+##### 🔴 P4 — `set_default` was specified, evaluated three times, and applied nowhere
+
+The only readers were test projections. **Its own fuse had already said what to
+do**, and had been ignored:
+
+> *"⚠️ DELETE THIS NOTE IN 17-9. If nothing reads it by the end of Phase 17, this
+> is dead output and the action should be **reconsidered** rather than left
+> computed."*
+
+🔴 **The reconsideration found a blocker, not a backlog item.** A rule-set default
+pre-selects a value the customer did not choose, and a value carries a price.
+Measured on the shipped resolver:
+
+```text
+a pre-selected value is charged: 5000  (base 1000 + a 4000 option)
+```
+
+That is the exact shape **ADR-051 §3 refuses** for a re-shown field — *"state the
+customer did not confirm, which bills them"*. Two mechanisms would disagree about
+one field, and the customer would be charged by whichever ran last.
+
+**[ADR-055](../optioniaWooCommerceBackend/docs/DECISIONS.md) withdraws the
+action** from the enum, both schemas, all three evaluators, the dashboard mirror
+and the parity gate. Withdrawn rather than deferred because the blocker is a
+*decision*, not effort: reinstating it requires ADR-051 to change.
+
+⚠️ **A stored row degrades to a rule that does nothing** — every evaluator
+already ignores an action it does not know (AC4), so this needs no migration. The
+fixture case that asserted `set_default` now asserts exactly that.
+
+🔴 **The parity gate caught my own comment.** Writing *"`SET_DEFAULT:
+'set_default'` was here"* in the enum made the gate report the repositories
+disagreeing — it reads quoted values, and cannot tell a member from a mention.
+The note stays; the quoted literal does not, and says why.
+
+##### 🔴 P1 — focus was stranded on a hidden, disabled field
+
+M17.5 asks to *"keep focus management sane"*. Every mention of focus in
+`frontend.js` was a **comment**; there was no focus code. Measured:
+
+```text
+FOCUS before=target  after=target  hidden=true  disabled=true
+```
+
+A customer typing when a rule fires keeps focus on an invisible, disabled
+element — a dead tab stop, and a screen reader with nothing to say. Focus now
+moves to the options block **before** the hide, because blurring afterwards sends
+it to `<body>` and loses their place entirely. The block takes focus
+programmatically only (`tabindex="-1"`), so it adds no tab stop of its own.
+
+##### 🔴 P2 — nothing was announced when the form changed
+
+`announce()` existed and writes to an *upload's* status element — not reusable.
+Rules rearranged the page in silence, which is indistinguishable from nothing
+having happened.
+
+A `role="status" aria-live="polite"` region now carries it, as
+`screen-reader-text` rather than `hidden`: **a hidden live region is removed from
+the accessibility tree and never announced.** Counts rather than names, because
+naming options means reading labels back out of markup the runtime also renders —
+and a count is accurate whatever a label contains.
+
+⚠️ **`frontend-contract.test.js` caught the half-done change**, reporting a role
+the rendered pages never emit. That is the test written after the dropdown £0
+bug, doing exactly its job on a different defect.
+
+##### 🟡 P3 — a prediction that came true and turned out not to matter
+
+`init()`'s docblock said *"Show/hide rules re-evaluate against the chosen
+variation — that is Phase 17. Whichever lands first adds the listeners."* Phase 17
+landed; the listeners did not.
+
+**Checked rather than assumed**: conditions read only Optionia option ids,
+`option_sets_for_product()` is keyed by the **parent** product, and percentage
+pricing shows no estimate at all. Nothing depends on a variation, so there is
+nothing to re-evaluate. The comment is stale, not the code.
+
+##### Mutation results — four mutants, four killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| R1 | focus never moved | `moves focus out of an option it is hiding` |
+| R2 | focus stolen when elsewhere | `leaves focus alone when the hidden option did not have it` |
+| R3 | nothing announced | `announces that options were removed` |
+| R4 | announced on every pass | the same, via its `before === after` guard |
+
+Plus the withdrawal itself: every `set_default` test is **inverted rather than
+deleted**, so the action quietly returning is a failing test rather than a
+silent regression.
+
 ### 🏁 Phase 17 complete — all ten exit criteria met
 
 ### M17.1 — Rule model
@@ -22324,6 +22420,23 @@ Observed across four phases, with a consistent signature:
 Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
+
+⚠️ **Seventeen and eighteen came from the whole-phase audit**, back to back, and
+together they are the clearest demonstration of the signature so far.
+
+The seventeenth landed in the worst possible place: **`rule tester (e2e) › reads
+the draft`**, the one test covering work changed in that very run. The eighteenth,
+on the immediate re-run, was **four failures in `concurrency.e2e-spec.ts`** —
+*more* than before, which is not how a flake is supposed to behave.
+
+🔴 **Both were the same fault:** `POST /v1/option-sets` answering an empty-bodied
+**404** during fixture setup. Isolated: **6 of 6**, then **28 of 28**.
+
+⚠️ **What actually discriminates is the body, not the count and not isolation.**
+A real `forbidNonWhitelisted` rejection carries a `details` array naming the
+field; these carry `{}`. A failure landing inside the change's blast radius, then
+a *worse* result on re-run, is exactly the shape that would convince someone they
+had broken something.
 
 ⚠️ **Sixteen occurrences by Stage 17-11a**, and the sixteenth is the first where
 a suite **failed in isolation too** — `cascade.e2e-spec.ts`, 3 of 32, after the
