@@ -52,12 +52,21 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering), stage 18-1 — multi-select:
-the template, the request, and the resolver's array branch.**
+**[Phase 18](#phase-18--option-groups--ordering), stage 18-2 — multi-select
+through the cart, labels, order and analytics.**
 
-✅ **18-0 is done** — three ADRs, no code. Multi-select is built first (ADR-057),
-nesting is deferred to M18.1a (ADR-058), and the two unread group fields are
-delivered rather than withdrawn (ADR-059).
+✅ **18-0 and 18-1 are done.** Three ADRs, then the array path through the
+resolver: `checkbox.php` branches on `cardinality`, and the resolver accepts,
+deduplicates, validates and prices a list.
+
+🔴 **18-1's analysis found two defects that were live, not pending.** Every
+checkbox shared one field name, so PHP kept only the last — a customer checking
+two boxes was **charged for one with nothing failing**. And `required` sat on
+every input, which HTML reads as *"check all of them"*.
+
+⚠️ **18-2 is the risky stage.** Nine consumers still expect a scalar, and
+`deltas_by_option()` pairs `resolved` with `deltas` **positionally**, returning
+empty on a count mismatch — 16c's defect, which quoted 85.00 and charged 130.00.
 
 ✅ **Phase 17 is complete**: 17-0 (seven ADRs) through **17-11**, each with its
 own audit, plus **M17.4a**, and three whole-phase passes afterwards. All ten exit
@@ -21329,6 +21338,95 @@ is the layout; `is_collapsible` means *"an inline group can be folded"* and is
 **ignored for every other type**, so a merchant cannot author
 `accordion` + `is_collapsible: false` and expect something no rendering can
 satisfy.
+
+### ✅ Stage 18-1 complete — the array path through the resolver, 2026-09-11
+
+**The first of ADR-057's three stages**, and the analysis that preceded it found
+**two defects live today** rather than two risks for later.
+
+| Added | Where |
+|---|---|
+| `cardinality` branching, `[]` naming, `required` fix | `templates/options/checkbox.php` |
+| Array acceptance, dedup, whole-option validation | `Engine/SelectionResolver.php` |
+| `takes_many()` — the plugin's first read of `cardinality` | same |
+| 11 tests | `tests/unit/MultiSelectResolutionTest.php` |
+
+#### 🔴 W3 — a customer checking two boxes was charged for one, and nothing failed
+
+Every checkbox shared one field name — `optionia[opt-a]`, no `[]` — and **PHP
+keeps only the last duplicate key**. Measured:
+
+```text
+optionia[opt-a]=red&optionia[opt-a]=blue  parses to  {"opt-a":"blue"}
+resolver: ok total=1200            ← "red" vanished, success reported
+```
+
+⚠️ **This was reachable without multi-select.** Nothing stopped a merchant giving
+a `one` checkbox two values, and the template rendered them all sharing a name.
+It was not a Phase 18 risk; it was shipping.
+
+#### 🔴 W2 — `required` on every box demanded ALL of them
+
+HTML's `required` on a checkbox means *this box*, not *one of this group*.
+Measured on two required boxes sharing a name: checking one leaves the group
+**invalid**.
+
+Invisible at `one`, where a group is a single box. The moment `many` renders two,
+**a required multi-select becomes unsubmittable** — so the attribute is dropped
+at `many` and the server's `ERROR_REQUIRED` carries the rule, which it did
+anyway.
+
+#### What the resolver now does, and the four decisions inside it
+
+| Input | Result | Why |
+|---|---|---|
+| `['red','blue']` at `many` | **1300**, two deltas | one delta per chosen value |
+| `['red','red']` | **1100**, one delta | a double-submit is one choice, and charging twice is what a customer disputes |
+| `[]` | accepted, nothing answered | a browser posts nothing for an untouched multi-select; the required pass still refuses it |
+| `['red','ghost']` | **refused whole** | a line pricing `red` and dropping `ghost` charges a total the customer cannot account for |
+| `['red',['x']]` | `ERROR_NOT_SCALAR` | the original probe one level down — reaching `(string)` would coerce to `"Array"` and be reported as merely unknown |
+| an array at `one` | `ERROR_NOT_SCALAR` | `cardinality` is the merchant's declaration, not a guess from the payload's shape |
+
+🔴 **An unrecognised cardinality is treated as `one`**, deliberately. A document
+from a newer cloud naming something this build does not know takes the
+single-value path — treating it as `many` would hand an array to **nine
+consumers** that expect a scalar.
+
+#### 🔴 The hidden-value guard read only the first entry
+
+Found while wiring the loop: `ERROR_HIDDEN_BY_RULE` was checked against
+`$value_key` — position zero — so a payload whose *second* entry named a
+rule-hidden choice would have been accepted, and its price charged. Now checked
+across every chosen value.
+
+#### What 18-1 deliberately does not do
+
+📌 **Nine consumers still expect a scalar** — `CartItemData`, `CartTotals`,
+`CartDisplay`, `OrderLineItem`, `OrderAgain`, `CheckoutValidator`,
+`CartItemPayload`, `AddToCartRequest` and `UploadPromoter`. Carrying the array
+through them is **18-2**, and `deltas_by_option()` is the hazard there: it pairs
+`resolved` with `deltas` **positionally** and returns empty on a count mismatch,
+which is 16c's defect exactly.
+
+📌 **`MANY` is still not in the registry.** ADR-057 sets the bar — it joins when
+the *whole* path works, not when the resolver accepts an array. That is **18-3**,
+and it is what keeps the fence honest.
+
+#### Mutation results — five mutants, five killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| M1 | `takes_many()` always true | `an array is refused for a single-value option` |
+| M2 | only the first value priced | `every chosen value is charged` |
+| M3 | duplicates not collapsed | `a duplicate value is charged once` |
+| M4 | unknown keys checked at position 0 only | `one unknown value refuses the whole option` |
+| M5 | hidden-value check at position 0 only | `a hidden value is caught in a later position` |
+
+⚠️ **M4 killed by a fatal, not a clean refusal** — the mutant reaches an
+undefined key rather than reporting one. That proves the pre-validation loop is
+load-bearing and shows the pricing loop trusts it, which is the right division
+but worth knowing.
+
 
 ### 📌 M18.1a — Group nesting, deferred
 
