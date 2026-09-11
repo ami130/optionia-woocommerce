@@ -53,10 +53,11 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 ## ▶ THE NEXT THING TO DO
 
 **[Phase 17](#phase-17--conditional-logic-engine), stage 17-10 — the rule
-builder UI in the dashboard: plain-language summaries and a tester.**
+builder *screen*. Its vocabulary, summaries, tester and gates are built; the
+authoring UI that uses them is the remaining slice.**
 
-**Done:** 17-0 (four ADRs) through **17-9**, each with its own audit, plus
-**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
+**Done:** 17-0 (five ADRs) through **17-9**, and 17-10's foundations, each with
+its own audit, plus **M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
 deciding prices, in both languages identically.
 
 ✅ **17-7 was absorbed, not skipped**, and this marker pointed at it for two
@@ -109,6 +110,12 @@ both paths log `rules_unsettled`. Only the wording misleads.
 📌 **Fold into 17-9**, which is already touching this surface, or 17-11. Small
 and contained: one branch in `message()`, on the same terms as the rule-hidden
 case 17-8 added.
+
+🔴 **The TypeScript evaluator had no production caller from M17.4 to M17.10**,
+and the backend had no gate that could say so — the plugin has had one since
+Stage 6 and it has fired twice. `bin/check-reachable.ts` is now that gate, and
+writing it found two more pending modules (`line-total`, `price-config-delta`),
+both exempted by name with a fuse naming Phase 21.
 
 ⚠️ **K3 is still open** (from the 17-5 audit): a pre-M17.1 row whose
 `conditions` is an object publishes as a rule that **never fires** — safe,
@@ -20428,6 +20435,131 @@ Reverting F4 fails **four** of its tests.
 number of rules is unbounded, and 17-9 now inlines them into every product page.
 A backend concern rather than this stage's — for **17-11**.
 
+### ✅ Stage 17-10 — the rule vocabulary, summaries and tester, 2026-09-11
+
+**The first Phase 17 stage whose subject is the dashboard.** Rule CRUD has been
+waiting since 17-2; nothing had ever called it.
+
+| Added | Where |
+|---|---|
+| **ADR-053** — the tester is a server endpoint | `docs/DECISIONS.md` |
+| `POST /option-sets/:id/rules/test` | `option-rules.controller.ts` |
+| `RuleTesterService` | `option-sets/rule-tester.service.ts` |
+| **`bin/check-reachable.ts`** — the backend's first dead-code gate | backend `bin/` |
+| **`bin/check-rule-vocabulary-parity.sh`** — the sixth cross-repo gate | parent `bin/` |
+| `lib/rules/vocabulary.ts` — the four enums, mirrored and gated | dashboard |
+| `lib/rules/summary.ts` — rules as sentences | dashboard |
+| Rule types + client functions | `lib/option-sets/api.ts` |
+| 11 backend tests, 7 dashboard tests | both |
+
+#### 🔴 The TypeScript evaluator had no production caller, and nothing said so
+
+`evaluateRules` was imported by **its own two spec files and nothing else**, from
+M17.4 until this stage. Not dead — M17.6's tester is its caller — but nothing
+could tell *pending* from *dead*.
+
+⚠️ **The plugin has had that gate since Stage 6 and it has fired twice**:
+`Pricing`'s exemption removed in Stage 6, `RuleEvaluator`'s in 17-8, each time
+proving the class was pending. **The backend had no equivalent.**
+
+`bin/check-reachable.ts` is now that gate, and writing it found **two more**:
+`common/money/line-total.ts` and `price-config-delta.ts` — the cloud's half of
+the shared pricing contract, built in Phase 11, still waiting for Phase 21's live
+preview. Both exempted **by name with a fuse** naming the phase that removes them.
+
+🔴 **Three of its first four reports were legitimate and one was not.** Entities
+and migrations are loaded by **glob** (`data-source.ts` registers
+`entities: [__dirname + '/../**' + '/*.entity{.ts,.js}']`), and seeds are npm
+entry points. Verified in the code rather than assumed, and encoded as *reached
+by something other than an import* — deliberately separate from the exemption
+list, which is for modules that genuinely have no caller yet.
+
+#### The tester, and why it is not a fourth evaluator
+
+ADR-053. Three implementations already exist, and the third was added
+deliberately in 17-9 **because AC3 forbids the storefront asking a server**. The
+dashboard has no such constraint, so a fourth would be spent for nothing — and a
+merchant testing a rule wants *the storefront's answer*, which only the thing
+that decides can give.
+
+⚠️ **It reads the merchant's DRAFT**, the deliberate opposite of the config
+document. A rule being tested has usually not been published, and a tester that
+could not see it would answer a question nobody asked.
+
+🔴 **It reports no price.** What a `set_price` rule does to a quoted total is the
+question 17-9 left for 17-11, and a tester that answered it would settle it by
+accident. The test asserts the **shape of the result object**, so adding a price
+field is a deliberate act rather than a quiet one.
+
+#### The sixth cross-repo gate
+
+Nine operators, six actions, three target types and two match types are now
+mirrored in the dashboard — and compared. The precedent is exact:
+
+> *"Measured 2026-09-03: adding `checkbox` to the picker passed all 305 frontend
+> tests and `tsc`, because nothing compared the two."*
+
+⚠️ **Exact equality, not a subset — and that is the difference from
+`check-option-type-parity.sh`.** A type may be registered long before the
+dashboard can author it. A rule operator has no such staging: the schema is
+`.strict()`, so one the dashboard invents is a 400, and one it omits is an
+operator a merchant simply cannot reach.
+
+The gate also asserts every operator has **plain-language phrasing**, because a
+summary that printed `not_in` would be the documentation this phase exists to
+make unnecessary. All three drift directions were mutation-verified.
+
+#### Two findings while building
+
+⚠️ **`AuthoringRule.conditions` was `readonly unknown[]`** — honest about a JSON
+column and useless to a builder that has to render against it. Now typed as
+`RuleCondition`, with the narrowing stated at both boundaries: what is *stored*
+is narrower because every write goes through a `.strict()` schema, and nothing
+downstream trusts that anyway (AC4).
+
+⚠️ **The dashboard's `AuthoringSet` carried no `rules` at all** — the API returns
+them and the client's type dropped them silently.
+
+#### Mutation results — eight mutants, eight killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| T1 | a value maps to its owning option | `hiding a value does not erase the answer a second rule reads` |
+| T2 | group and value kinds swapped | two kind tests |
+| T3 | disabled rules evaluated | `ignores a disabled rule` |
+| T4 | a refusal returns partial state | `returns empty lists and a reason` |
+| S1 | a missing label prints its id | `says a target was deleted` |
+| S2 | a value named without its option | `names a value target by its option` |
+| S3 | `matchType` ignored | `joins several conditions` |
+| S4 | a conditionless rule read as unconditional | `says a rule with no conditions never fires` |
+
+#### The e2e suite found what the unit tests could not
+
+⚠️ **Six e2e tests were added after the unit tests passed**, on the grounds that
+a service deciding correctly behind a route that rejects its body is a feature no
+merchant can reach. Writing them found two things unit tests cannot see: the
+option fixture used `type` where the DTO takes `presentation`, and **every
+assertion needed `body.data`** — the API wraps responses in `{ data, meta }`, so
+a test reading `body.hiddenOptionIds` compares `undefined` against its
+expectation and fails whatever the endpoint actually did. Measured on a route
+that was working correctly throughout.
+
+🔴 **T1 survived the first run.** The value-containment guard — the one M17.8's
+audit added to the plugin and the tester repeats — was unproven, because no test
+read an *erased answer*. The test that kills it asserts the **second** rule's
+target, not the value's own option: the corruption happens a layer below where
+the kinds are reported.
+
+⚠️ **T2's first two attempts reported "0 tests", which is a compile failure and
+not a kill** — the project's own discipline. Rewritten to swap two valid kinds
+rather than remove one.
+
+#### Still open
+
+📌 **The builder UI itself.** This stage shipped the vocabulary, the summaries,
+the tester and the gates that hold them — the *authoring screen* is the next
+slice, and it now has a contract to render against rather than `unknown[]`.
+
 ### M17.1 — Rule model
 
 ```text
@@ -21880,6 +22012,13 @@ Observed across four phases, with a consistent signature:
 Every one reproduced in neither isolation nor a re-run. The signature points at
 **resource exhaustion** — connections, ports, or the shared MySQL — rather than
 at any suite's logic.
+
+⚠️ **Fifteen occurrences by Stage 17-10**, and the fifteenth is the first to hit
+**rate-limiting** rather than fixture setup: `auth endpoints › accepts a valid
+registration` and `auth rate limiting › never throttles the health endpoint`, two
+of 905. Both pass 31 of 31 in isolation. A throttle is by construction sensitive
+to how much else is running, so this is the same resource-exhaustion signature
+wearing the one costume that makes it *look* like a real assertion failure.
 
 ⚠️ **Fourteen occurrences by Stage 17-8.** The fourteenth is the cleanest
 demonstration of the signature so far: **3 failed, 901 passed**, all three in

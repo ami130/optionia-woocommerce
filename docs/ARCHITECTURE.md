@@ -116,6 +116,8 @@ a gate:
 | Both pricing engines agree | shared fixtures, run in both languages |
 | Every route is documented and tenant-scoped | `optioniaWooCommerceBackend` — `check:api`, isolation suite |
 | The dashboard's capability table matches the API's | `bin/check-capability-parity.sh` |
+| The dashboard's rule vocabulary matches the API's | `bin/check-rule-vocabulary-parity.sh` |
+| No backend module is reached only from its own tests | `optioniaWooCommerceBackend/bin/check-reachable.ts` |
 | The config document's keys are spelled the way PHP reads them | `bin/check-wire-keys.sh` |
 | A storefront never blocks on the SaaS | no synchronous call in any render path |
 
