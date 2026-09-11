@@ -68,6 +68,56 @@ every input, which HTML reads as *"check all of them"*.
 `deltas_by_option()` pairs `resolved` with `deltas` **positionally**, returning
 empty on a count mismatch — 16c's defect, which quoted 85.00 and charged 130.00.
 
+🔴 **18-1's audit found that 18-1 itself opened that defect, and a fence now
+holds it shut.** Before the stage, a `cardinality: many` document hit
+`ERROR_NOT_SCALAR` and the line was refused — fail-closed by accident. Teaching
+the resolver to accept an array was correct, but it moved the fence without
+moving the wall behind it: a `many` document then produced one selection
+carrying two deltas, `deltas_by_option()` returned `array()`, `trusted_deltas()`
+returned null, and **the line priced live**. Reachable without anybody authoring
+a multi-select, because AC4 makes the document input rather than authority and
+the plugin validates no `cardinality` on the cached document.
+
+📌 **18-2'S FIRST ACT IS TO DELETE THE FENCE — IN TWO PLACES.**
+
+In `SelectionResolver`: `ERROR_MANY_UNSUPPORTED`, the
+`if ( $is_many && ! $allow_many )` guard, the `$allow_many` parameter, and its
+entry in `PriceConfigDeltaTest`'s exact-signature list (which shortens back to
+four). `tests/unit/MultiSelectFenceTest.php` goes with them — except
+`test_a_many_result_would_break_positional_pairing`, which should be **rewritten
+rather than dropped**: "can a multi-select line still be paired?" outlives the
+fence, and if 18-2 makes the pairing key-based that test is how it is proven.
+
+In the resolver's **required pass**: the `takes_many()` skip that sits beside
+the rule-hidden one. 🔴 **Without it a required multi-select made the product
+unbuyable** — the renderer skipped the option, the resolver still demanded it,
+and the customer read "Please choose all required options" with nothing to
+choose. Found by composing the two halves, not by either half's own tests.
+
+In `Renderer::option_markup()`: the `cardinality === 'many'` skip, plus
+`test_a_multi_select_option_is_not_rendered` and
+`test_a_single_value_checkbox_still_renders`. **The storefront fence matters as
+much as the resolver's** — without it the checkboxes render, the customer ticks
+two boxes, and add-to-cart refuses with a generic "that selection is not
+available" they cannot act on. It follows the precedent already in that method:
+an unknown option type renders nothing, because a control the server will refuse
+is worse than no control. The `cache_typed( $type, $extras, $option_extras )`
+third parameter can stay; it is generally useful for option-level fields.
+
+⚠️ **A parameter, not a filter, and the reason is the point.** A filter is a
+supported extension point; a third-party plugin switching this on would re-open
+live pricing in a store nobody was watching. All five production callers take
+the default. Only `MultiSelectResolutionTest` passes `true`, to prove the
+resolution logic waiting behind the fence.
+
+✅ **Two smaller 18-1 findings are fixed outright, and stay fixed after 18-2.**
+A multi-value line rendered the raw option id and the word `"Array"` — `labels`
+now carries a list of real option/value names. And value order split one product
+into two cart lines: `["red","blue"]` and `["blue","red"]` hashed differently,
+because `CartItemData`'s `ksort()` sorts option *ids* and says nothing about
+values within one option. Chosen keys are now sorted into the **merchant's
+authored order** at the point the order originates.
+
 ✅ **Phase 17 is complete**: 17-0 (seven ADRs) through **17-11**, each with its
 own audit, plus **M17.4a**, and three whole-phase passes afterwards. All ten exit
 criteria met.
