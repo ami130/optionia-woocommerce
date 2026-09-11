@@ -52,12 +52,11 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 17](#phase-17--conditional-logic-engine), stage 17-10 — the rule
-builder *screen*. Its vocabulary, summaries, tester and gates are built; the
-authoring UI that uses them is the remaining slice.**
+**[Phase 17](#phase-17--conditional-logic-engine), stage 17-11 — the adversarial
+suite and the exit-criteria audit. Every other stage is done.**
 
-**Done:** 17-0 (five ADRs) through **17-9**, and 17-10's foundations, each with
-its own audit, plus **M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
+**Done:** 17-0 (five ADRs) through **17-10**, each with its own audit, plus
+**M17.4a** — closed after a final cross-stage pass found that `sortOrder` was
 deciding prices, in both languages identically.
 
 ✅ **17-7 was absorbed, not skipped**, and this marker pointed at it for two
@@ -20560,6 +20559,103 @@ rather than remove one.
 the tester and the gates that hold them — the *authoring screen* is the next
 slice, and it now has a contract to render against rather than `unknown[]`.
 
+### ✅ Stage 17-10 complete — the rule builder screen, 2026-09-11
+
+**The screen that closes Phase 17's last exit criterion.** Rule CRUD shipped in
+17-2 and nothing had ever called it: a merchant could not create a rule at all
+except through the API directly.
+
+| Added | Where |
+|---|---|
+| `RulesPanel` — list, build, test, and findings | `components/option-sets/rules-panel.tsx` |
+| `rule-targets.ts` — set-scoped pickers | same directory |
+| `lib/rules/schema.ts` — the four condition bounds, mirrored | dashboard |
+| Two missing operator groupings + `operandShape()` | `lib/rules/vocabulary.ts` |
+| **Grouping comparison** in the parity gate (4 → **9** checks) | parent `bin/` |
+| **`bin/check-reachable.mjs`** — the dashboard's reachability gate | dashboard |
+| 28 tests | `lib/rules/`, `components/option-sets/` |
+
+#### 🔴 L1 — a picker that could make a set unpublishable
+
+`assertTargetIsWhatItClaims` checks only that a target **exists** — anywhere in
+the tenant. Whether it belongs to *this* set is a publish-time check, and its
+severity is **`BLOCKER`**:
+
+```text
+RULE_TARGET_NOT_IN_SET · PublishSeverity.BLOCKER
+```
+
+So a picker offering any id would let a merchant save a rule successfully and
+then block publish for the whole set, curable only by finding and deleting that
+rule. `targetsIn()` is built from `set.groups` and nothing else, which makes the
+failure unreachable **by construction** rather than by a check somebody must
+remember.
+
+#### 🔴 L2 — the API has five operand shapes; the dashboard mirrored three
+
+`ruleConditionSchema` is a discriminated union of **five** branches, each
+accepting a different `value`: absent, a list, a number, a string, any scalar.
+`vocabulary.ts` carried `UNARY_`, `LIST_` and `NUMERIC_`; `SUBSTRING_` and
+`EQUALITY_` were missing.
+
+⚠️ **The parity gate could not see it** — it compared the four flat lists and
+nothing else. That is the option-type blindness one level down: the vocabulary
+agreed while the *shapes* did not, and a builder reading them would have rendered
+a text box where the API demands a number.
+
+The gate now makes **nine** comparisons. Teaching it to read the groupings meant
+teaching it two new syntaxes — the API writes them as arrays of `RuleOperator.X`
+**references** (no quoted values at all), the dashboard as type-annotated arrays
+ending `];` rather than `] as const;`. Its first run reported *"the parser is
+wrong, not the code"*, correctly, about itself.
+
+🔴 **`operandShape()` is one function on purpose.** Asking *"is this unary?"* in
+the builder and *"is this a list?"* in the validator is how a form comes to
+render a text box for `in` — the M11.1a shape, where two places computed the same
+thing separately and disagreed in front of the customer.
+
+#### L6 — the third repository to get a reachability gate, and the last to need one
+
+The plugin has had one since Stage 6 (fired twice); the backend gained one in
+17-10's first half, after its rule evaluator sat unreferenced from M17.4. The
+dashboard's three rule modules were in exactly that state until this screen
+imported them.
+
+**Built last, deliberately.** A gate whose first act is to flag correct code
+teaches people to ignore it — so it arrived once the screen was its caller. It
+immediately found something else: **`components/ui/label.tsx`**, a 20-line shadcn
+primitive from Phase 13 that nothing has ever imported. Every other primitive has
+between 1 and 15 consumers, so it was not a deliberate kit — it was dead, and it
+is deleted rather than exempted.
+
+#### Deliberately not offered
+
+📌 **`set_price` and `set_default` are absent from the action picker.** Both carry
+a payload the builder has no field for yet, and `set_price`'s interaction with a
+quoted total is the question 17-9 left open for 17-11. Offering an action that
+cannot be completed is worse than omitting one — and the vocabulary still lists
+all six, so the parity gate keeps watching them.
+
+#### Mutation results — eleven mutants, eleven killed
+
+| # | Mutant | Killed by |
+|---|---|---|
+| W1 | `contains` moved into the equality group | parity gate |
+| W2 | an operator leaves the unary group | parity gate |
+| X1 | unary operators accept a value | `refuses a value on an operator that takes none` |
+| X2 | ordering accepts a string | `refuses text where a number is required` |
+| X3 | the byte cap unenforced | `refuses conditions legal apart and too large together` |
+| X4 | the list cap unenforced | `refuses a list longer than the cap` |
+| Y1 | conditions may read groups and values | `offers options, never groups or values` |
+| Y2 | `choicesFor` returns value **ids** | `returns value keys, not value ids` |
+| Y3 | a value labelled without its option | `reads a value with the option that owns it` |
+| Z1 | a module loses its only caller | the new reachability gate |
+
+⚠️ **Y2 is the one worth keeping.** A condition compares against what the
+customer *submits* — the `value_key` the templates render into `input.value`, not
+the value id. Returning ids would have produced rules that validate, publish, and
+**silently never fire**.
+
 ### M17.1 — Rule model
 
 ```text
@@ -20657,7 +20753,7 @@ Engraving = Yes"*), conflict warnings, and a rule tester.
     implemented, and refused where it cannot be expressed                 (F1)
 [ ] Every condition schema is .strict()                                   (F6)
 [ ] Nested/cascading rules correct
-[ ] Merchants can author rules without documentation
+[x] Merchants can author rules without documentation           (17-10)
 ```
 
 ⚠️ **Five criteria added 2026-09-10** from the pre-flight analysis above. The
