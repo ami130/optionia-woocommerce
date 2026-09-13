@@ -1,7 +1,7 @@
 {
-  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included — the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. AN UNREADABLE CONDITION EVALUATES TO FALSE, NEVER SKIPPED. PHP's first evaluator used `continue`, so a rule with [valid-and-true, garbage] under `all` fired there and not in TypeScript — a disagreement about whether a field is hidden, which under ADR-051 is a disagreement about money. Skipping also made a rule MORE likely to fire the more corrupt its document was. TWO COERCION RULES ARE ALSO PINNED HERE BECAUSE THE LANGUAGES DISAGREE BY DEFAULT. (1) A boolean operand compares as 'true'/'false' — PHP's own (string) cast gives '1' and '', so a PHP evaluator must not use it. (2) A non-numeric answer never satisfies greater_than or less_than — PHP's (float) cast turns 'abc' into 0.0 and would make `less_than 5` fire. Both were measured, and neither was covered before M17.6. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052.",
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on rule_case_count, so an edit to one fails both builds until the other matches. EVERY CASE DECLARES expect_passes. A fixture asserting only the final state would repeat 16b's lesson, where the pricing fixture proved both ends and neither language proved the middle: for rules the interesting failures are cascade depth and cap behaviour, and neither is visible in a final state. Every rule carries the FULL published shape, `sort_order` included — the fixture is what the PHP evaluator is built against, so a key the real document always carries and this one omits would be a shape only one language has seen. `option-set.serializer.spec.ts` asserts the serializer's key set against this file so the two cannot drift. AN UNREADABLE CONDITION EVALUATES TO FALSE, NEVER SKIPPED. PHP's first evaluator used `continue`, so a rule with [valid-and-true, garbage] under `all` fired there and not in TypeScript — a disagreement about whether a field is hidden, which under ADR-051 is a disagreement about money. Skipping also made a rule MORE likely to fire the more corrupt its document was. TWO COERCION RULES ARE ALSO PINNED HERE BECAUSE THE LANGUAGES DISAGREE BY DEFAULT. (1) A boolean operand compares as 'true'/'false' — PHP's own (string) cast gives '1' and '', so a PHP evaluator must not use it. (2) A non-numeric answer never satisfies greater_than or less_than — PHP's (float) cast turns 'abc' into 0.0 and would make `less_than 5` fire. Both were measured, and neither was covered before M17.6. One case reaches the cap and expects a REFUSAL with no partial state (ADR-050), because a truncated pass is a wrong price that looks right. See M17.2, ADR-050 and ADR-052. MULTI-SELECT CASES WERE ADDED IN M18.3 BECAUSE ALL THREE EVALUATORS DISAGREED AND NOTHING ASKED. Before them, 0 of 46 cases used a LIST answer, so a `cardinality: many` option -- which M18.3 made authorable -- was evaluated by three implementations that returned three different answers, with every suite green. Measured with ['red','blue']: `contains 'red'` was false in PHP and in assets/js/rules.js and TRUE in rule-evaluator.ts, which used a bare String() and so also matched 'd,b' ACROSS THE SEPARATOR between two values -- a substring present in neither answer. ADR-062 decides the semantics: a condition asks about the answer's MEMBERS. `contains`, `in` and `not_in` ask whether ANY member matches; `equals` means the selection is EXACTLY that one value, so that it does not become a second spelling of `in [X]` and so `not_equals` stays a true negation; `greater_than` and `less_than` stay false because a list is not a number and guessing which member to compare would be a guess; `is_empty`/`is_not_empty` were already right. The separator case is the one that must never be deleted: it is the only case that distinguishes a correct member-wise implementation from a string-joining one.",
   "version": 1,
-  "rule_case_count": 46,
+  "rule_case_count": 63,
   "rule_cases": [
     {
       "name": "a rule that does not fire changes nothing",
@@ -1633,6 +1633,543 @@
           "hidden": true
         }
       }
+    },
+    {
+      "name": "multi-select: equals does not match one member of several",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": "red"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: equals matches a single-member selection",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "equals",
+              "value": "red"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: not_equals is the true negation",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_equals",
+              "value": "red"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: not_equals fires when the selection differs",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_equals",
+              "value": "red"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: contains matches any member",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "re"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: contains matches a later member",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "lu"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: contains matches no member",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "zz"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: contains must not match across the separator",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "contains",
+              "value": "d,b"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: in matches when any member is listed",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "in",
+              "value": [
+                "red",
+                "green"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: in matches a later member",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "in",
+              "value": [
+                "green",
+                "blue"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: in matches no member",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "in",
+              "value": [
+                "green",
+                "pink"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: not_in fires only when no member is listed",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_in",
+              "value": [
+                "red",
+                "green"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: not_in fires when no member is listed",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "not_in",
+              "value": [
+                "green",
+                "pink"
+              ]
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: an empty list is an unanswered option",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_empty"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": []
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: a list with members is answered",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "is_not_empty"
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {
+        "0199b8c2-0000-7000-8000-00000000000a": {
+          "hidden": true
+        }
+      }
+    },
+    {
+      "name": "multi-select: greater_than never matches a list",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "greater_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
+    },
+    {
+      "name": "multi-select: less_than never matches a list",
+      "rules": [
+        {
+          "id": "r1",
+          "target_type": "option",
+          "target_id": "0199b8c2-0000-7000-8000-00000000000a",
+          "action": "hide",
+          "match_type": "all",
+          "conditions": [
+            {
+              "option_id": "0199b8c2-0000-7000-8000-00000000000b",
+              "operator": "less_than",
+              "value": 5
+            }
+          ],
+          "sort_order": 10
+        }
+      ],
+      "answers": {
+        "0199b8c2-0000-7000-8000-00000000000b": [
+          "red",
+          "blue"
+        ]
+      },
+      "expect_passes": 1,
+      "expect_refused": false,
+      "expect_states": {}
     }
   ]
 }

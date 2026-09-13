@@ -127,7 +127,28 @@ export interface RuleOutcome {
  */
 export function conditionHolds(condition: EvaluableCondition, answers: Answers): boolean {
   const answer = answers[condition.optionId];
-  const supplied = answer !== undefined && answer !== null && answer !== '';
+
+  /*
+   * 🔴 **An EMPTY LIST is an unanswered option** (ADR-062). A multi-select with
+   * nothing ticked posts nothing in a browser; an empty array is what a script
+   * or a stale payload sends, and `SelectionResolver` already reads the two the
+   * same way. A rule disagreeing would hide a field the resolver still demanded.
+   */
+  const supplied =
+    answer !== undefined &&
+    answer !== null &&
+    answer !== '' &&
+    !(Array.isArray(answer) && answer.length === 0);
+
+  /*
+   * 🔴 **A condition asks about the answer's MEMBERS** (ADR-062).
+   *
+   * M18.3 made `cardinality: many` authorable, so one option's answer can be a
+   * list. Normalised once, here, so each operator asks its own question
+   * member-wise rather than six places each deciding what an array means.
+   */
+  const members: unknown[] = Array.isArray(answer) ? answer : [answer];
+  const isExactly = (value: unknown): boolean => members.length === 1 && sameScalar(members[0], value);
 
   switch (condition.operator) {
     case 'is_empty':
@@ -135,7 +156,13 @@ export function conditionHolds(condition: EvaluableCondition, answers: Answers):
     case 'is_not_empty':
       return supplied;
     case 'equals':
-      return supplied && sameScalar(answer, condition.value);
+      /*
+       * 🔴 **EXACTLY this one value, not "among them"** (ADR-062). `in [X]`
+       * already means *"X is among the answers"*, and two spellings of one
+       * question is the shape this phase set out not to repeat. It also keeps
+       * `not_equals` a true negation rather than a second `not_in [X]`.
+       */
+      return supplied && isExactly(condition.value);
     case 'not_equals':
       /*
        * ⚠️ **An unanswered option does NOT satisfy `not_equals`.** "Colour is
@@ -143,17 +170,45 @@ export function conditionHolds(condition: EvaluableCondition, answers: Answers):
        * blank as a match would fire the rule on a form the customer has not
        * begun. `is_empty` is how a merchant asks about absence.
        */
-      return supplied && !sameScalar(answer, condition.value);
+      return supplied && !isExactly(condition.value);
     case 'contains':
-      return supplied && typeof condition.value === 'string' && String(answer).includes(condition.value);
+      /*
+       * 🔴 **ANY member, and never the joined string — this line was the bug.**
+       *
+       * It read `String(answer).includes(...)`, and `String(['red','blue'])` is
+       * `"red,blue"` — so `contains 'red'` was **true here and false in the
+       * other two evaluators**, and `contains 'd,b'` matched **across the
+       * separator**, a substring present in neither answer. Under ADR-051 a
+       * disagreement about whether a field is hidden is a disagreement about
+       * money, and the rule tester (ADR-053) answers from this evaluator, so a
+       * merchant was shown one outcome and their customers got another.
+       *
+       * The shared fixture now pins the separator case in all three languages.
+       */
+      return (
+        supplied &&
+        typeof condition.value === 'string' &&
+        members.some((member) => asString(member).includes(condition.value as string))
+      );
     case 'greater_than':
       return compareNumeric(answer, condition.value, (a, b) => a > b);
     case 'less_than':
       return compareNumeric(answer, condition.value, (a, b) => a < b);
     case 'in':
-      return supplied && listOf(condition.value).some((entry) => sameScalar(answer, entry));
+      /*
+       * ⚠️ **Any member, not all.** `in ['red','green']` asks *"did they pick
+       * one of these?"*, so choosing red **and** blue satisfies it — and
+       * `not_in` fires only when **no** answer is listed.
+       */
+      return (
+        supplied &&
+        members.some((member) => listOf(condition.value).some((entry) => sameScalar(member, entry)))
+      );
     case 'not_in':
-      return supplied && !listOf(condition.value).some((entry) => sameScalar(answer, entry));
+      return (
+        supplied &&
+        !members.some((member) => listOf(condition.value).some((entry) => sameScalar(member, entry)))
+      );
     default:
       return false;
   }
@@ -416,10 +471,42 @@ function sameScalar(answer: unknown, operand: unknown): boolean {
   }
 
   if (typeof operand === 'boolean' || typeof answer === 'boolean') {
-    return String(answer) === String(operand);
+    return asString(answer) === asString(operand);
   }
 
-  return String(answer) === String(operand);
+  return asString(answer) === asString(operand);
+}
+
+/**
+ * A value as the string all three evaluators agree on.
+ *
+ * 🔴 **An object or array is the empty string, NEVER its stringification.**
+ * This function exists because a bare `String()` did not say so: `String(
+ * ['red','blue'])` is `"red,blue"`, which made `contains 'red'` true here and
+ * false in `Engine\RuleEvaluator` and `assets/js/rules.js`, and made
+ * `contains 'd,b'` match **across the separator** between two answers.
+ *
+ * ⚠️ **Written out rather than left to `String()`, so the agreement is visible
+ * at the place it is made** — the same words `assets/js/rules.js` uses, because
+ * it made the same choice first and this file did not.
+ *
+ * A boolean is `'true'`/`'false'` in all three, which PHP's own `(string)` cast
+ * does not give — the reason that rule is pinned in the shared fixture.
+ */
+function asString(value: unknown): string {
+  if (value === true) {
+    return 'true';
+  }
+
+  if (value === false) {
+    return 'false';
+  }
+
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return typeof value === 'object' ? '' : String(value);
 }
 
 /**

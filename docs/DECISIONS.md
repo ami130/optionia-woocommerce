@@ -5375,3 +5375,112 @@ The type registry's own comment claims *"`Engine\SelectionResolver` in the
 plugin never reads `type` at all"*. That is **outdated** — it reads `type` at
 three sites (`is_hidden()`, `date_format()`, and one more) — so the cross-check
 is cheap. The comment should be corrected when the guard lands.
+
+---
+
+## ADR-062 — A rule condition reads a multi-select answer by asking about its members
+
+**Status:** accepted · **Phase 18, Stage 18-3**
+
+### Context
+
+M18.3 let a `checkbox` declare `cardinality: many`, so a customer's answer to
+one option can now be a **list**. Every rule condition was written against a
+scalar, and nothing in three evaluators or 46 shared fixture cases had ever
+asked what a list should mean.
+
+**The three evaluators disagree, and every suite is green over it.** Measured
+with the answer `['red','blue']`:
+
+| Condition | PHP | storefront JS | TypeScript |
+|---|---|---|---|
+| `equals 'red'` | false | false | false |
+| `contains 'red'` | false | false | **true** |
+| `contains 'd,b'` | false | false | **true** |
+
+`Engine\RuleEvaluator` and `assets/js/rules.js` both yield `''` for an array —
+the JavaScript one deliberately, with a comment saying the agreement is
+*"written out rather than left to `String()` so the agreement is visible at the
+place it is made."* `common/rules/rule-evaluator.ts` has no array guard and uses
+bare `String()`, which yields `"red,blue"` — so `contains 'd,b'` matches **across
+the separator between two values**, a substring that exists in neither answer.
+
+Under ADR-051 a disagreement about whether a field is hidden is a disagreement
+about money, and the rule tester (ADR-053) answers from the TypeScript
+evaluator — so a merchant would be *shown* one outcome and their customers would
+get another.
+
+**And the behaviour all three share is wrong on its own.** Measured, answer
+`['red','blue']`:
+
+| Operator | Today | Why it is wrong |
+|---|---|---|
+| `equals 'red'` | false | — but see the decision; this one stays false |
+| `not_equals 'red'` | **true** | The customer *did* choose red |
+| `contains 're'` | false | Both chosen values contain it |
+| `in ['red','green']` | false | Red is in the list |
+| `not_in ['red','green']` | **true** | Red is in the list |
+| `is_empty` / `is_not_empty` | correct | Already right |
+| `greater_than` / `less_than` | false | Correct — a list is not a number |
+
+A merchant writing *"if Extras contains Red, show Engraving"* gets a rule that
+**never fires**: authored successfully, published successfully, silently dead.
+The two negative operators are worse than dead — they fire on exactly the
+customers they were meant to exclude.
+
+### Decision
+
+**A condition asks about the answer's members. Six operators change; three do
+not.**
+
+| Operator | Against a list |
+|---|---|
+| `equals X` | true when the selection is **exactly** `[X]` — one member, equal to X |
+| `not_equals X` | the negation of the above, for a supplied answer |
+| `contains X` | true when **any** member contains X as a substring |
+| `in [...]` | true when **any** member is in the operand list |
+| `not_in [...]` | true when **no** member is in the operand list |
+| `is_empty` / `is_not_empty` | unchanged — an empty list is an unanswered option |
+| `greater_than` / `less_than` | unchanged — **false**; a list is not a number |
+
+**`equals` means the whole selection, not any member, and that is the one
+choice here that could reasonably have gone the other way.** Two arguments
+settled it. First, `equals` and `in` would otherwise be the same operator: `in
+['red']` already means *"red is among the answers"*, and a vocabulary with two
+spellings of one question is the *"two mechanisms for one fact"* shape this phase
+listed as a thing not to repeat. Second, `not_equals` must remain a true
+negation — if `equals` were *any-member*, then `not_equals 'red'` would mean
+*"red is not among them"*, which is exactly `not_in ['red']`, and the collision
+doubles.
+
+**`greater_than` and `less_than` stay false rather than comparing a member.**
+A numeric comparison over several answers has no single obvious reading — the
+largest? the smallest? all of them? — and `checkbox` is the only type that can
+be `many`, so a numeric operand against one is already a merchant mistake. False
+is the existing behaviour and refuses to guess.
+
+**All three evaluators change together, held by shared fixture cases.** The
+existing 46 cases have **no list answer at all**, which is why this divergence
+survived. The new cases pin every operator above in both directions, and the
+fixture's SHA-256 gate means neither repository can adopt them alone.
+
+### Consequences
+
+**The TypeScript evaluator's `String()` is the bug, not the semantics.** Even
+after the member rules land, a bare `String()` on an array would make
+`contains` match across the separator — so `asString` gains an explicit array
+guard matching the other two, and the comment in `rules.js` about writing the
+agreement out rather than leaving it to `String()` is the reason.
+
+**No stored rule changes meaning for an existing store.** Until this stage no
+option could *be* `many`, so no condition has ever been evaluated against a
+list. Every change here is to behaviour that was unreachable.
+
+**The rule tester answers correctly by construction.** It runs the TypeScript
+evaluator (ADR-053) rather than a fourth implementation, so fixing that
+evaluator fixes what the merchant is shown.
+
+**`equals` against a multi-select is worth a dashboard hint later**, since
+*"exactly this one value"* is a fair thing to misread as *"this value is among
+them"*. Not built here — it is a phrasing change in the rule builder, and
+`summary.ts` is where it belongs. Recorded so it is not lost.
