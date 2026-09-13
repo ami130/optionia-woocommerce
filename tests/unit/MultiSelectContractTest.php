@@ -260,6 +260,149 @@ final class MultiSelectContractTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **`max_selections` is enforced, and it never was before M18.3a.**
+	 *
+	 * ADR-057 recorded these as *"authorable per option and enforced nowhere,
+	 * because there is nothing to count"* and said the multi-select stage would
+	 * make them mean something. M18.1 to M18.3 built the whole array path and
+	 * left both rules unread — a merchant capping an option at two got three.
+	 *
+	 * ⚠️ **Server-side, though the browser could limit ticking.** AC4 makes the
+	 * request untrusted: a crafted payload carries twenty values for an option
+	 * capped at two, and each one is a price.
+	 */
+	public function test_more_values_than_max_selections_are_refused(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded( array( 'max_selections' => 1 ) ),
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			1000
+		);
+
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame(
+			SelectionResolver::ERROR_TOO_MANY,
+			$result->get_errors()[0]['code']
+		);
+	}
+
+	/**
+	 * 🔴 **`min_selections` is enforced, with its OWN code.**
+	 *
+	 * Distinct from `ERROR_REQUIRED` because the actions differ: a customer who
+	 * ticked one box for an option demanding two *answered* it, and telling
+	 * them to "choose all required options" sends them looking for a field they
+	 * already filled. The same reasoning `ERROR_TOO_SHORT` records for text.
+	 */
+	public function test_fewer_values_than_min_selections_are_refused(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded( array( 'min_selections' => 2 ) ),
+			array( 'opt-a' => array( 'red' ) ),
+			1000
+		);
+
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame(
+			SelectionResolver::ERROR_TOO_FEW,
+			$result->get_errors()[0]['code']
+		);
+	}
+
+	/**
+	 * 🔴 **Duplicates cannot satisfy a minimum.**
+	 *
+	 * The count is taken **after** deduplication, so `["red","red","red"]` is
+	 * one choice however it was submitted. Counting the raw payload would let a
+	 * customer meet a minimum of three by ticking one box thrice — billed once,
+	 * dressed as three — which is the shape M11.5 exists to prevent.
+	 */
+	public function test_duplicates_do_not_satisfy_a_minimum(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded( array( 'min_selections' => 3 ) ),
+			array( 'opt-a' => array( 'red', 'red', 'red' ) ),
+			1000
+		);
+
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame(
+			SelectionResolver::ERROR_TOO_FEW,
+			$result->get_errors()[0]['code']
+		);
+	}
+
+	/**
+	 * ⚠️ The control: a selection inside both bounds resolves and prices.
+	 *
+	 * Without it, the three assertions above would be satisfied by a resolver
+	 * that had started refusing every multi-select.
+	 */
+	public function test_a_selection_within_its_bounds_still_prices(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded(
+				array(
+					'min_selections' => 1,
+					'max_selections' => 2,
+				)
+			),
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			1000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1300, $result->value()['total_minor'] );
+	}
+
+	/**
+	 * ⚠️ **An untouched optional option is not "too few".**
+	 *
+	 * `min_selections` is not a second `is_required`: it speaks only once the
+	 * customer has chosen something. An empty answer is the required pass's
+	 * business, and reporting both would name one field twice.
+	 */
+	public function test_an_untouched_option_is_not_too_few(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded( array( 'min_selections' => 2 ) ),
+			array( 'opt-a' => array() ),
+			1000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1000, $result->value()['total_minor'] );
+	}
+
+	/**
+	 * ⚠️ **A malformed bound is no bound, not a refusal.**
+	 *
+	 * The document is input rather than authority (AC4). Refusing every
+	 * selection because a limit arrived as `"two"` would take a product off
+	 * sale over a typo in a field the customer cannot see — the same direction
+	 * `max_length()` takes for text.
+	 */
+	public function test_a_malformed_bound_is_ignored(): void {
+		$result = SelectionResolver::resolve(
+			self::bounded( array( 'max_selections' => 'two' ) ),
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			1000
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( 1300, $result->value()['total_minor'] );
+	}
+
+	/**
+	 * A configuration with the given selection bounds.
+	 *
+	 * @param array<string, mixed> $validation The option's validation rules.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private static function bounded( array $validation ): array {
+		$sets = self::sets( 'many' );
+
+		$sets[0]['groups'][0]['options'][0]['validation'] = $validation;
+
+		return $sets;
+	}
+
+	/**
 	 * One option with two values, at the cardinality a test asks for.
 	 *
 	 * @param string $cardinality What the option declares.

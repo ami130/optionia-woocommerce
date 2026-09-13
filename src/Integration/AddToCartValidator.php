@@ -604,6 +604,25 @@ final class AddToCartValidator {
 		}
 
 		/*
+		 * 🔴 **Two counts, two messages, because two different actions fix
+		 * them.** "Choose more" and "choose fewer" are opposite instructions,
+		 * and the generic *"that selection is not available"* would tell a
+		 * customer who ticked three boxes to go looking for something
+		 * unavailable rather than to untick one.
+		 *
+		 * ⚠️ **Still not naming the number.** The form shows the limit beside
+		 * the option, and a message repeating it is a second source of truth to
+		 * keep in step — the same reasoning the length messages record.
+		 */
+		if ( SelectionResolver::ERROR_TOO_FEW === $code ) {
+			return __( 'Please choose more options for this product before adding it to your cart.', 'optionia' );
+		}
+
+		if ( SelectionResolver::ERROR_TOO_MANY === $code ) {
+			return __( 'You have chosen more options than this product allows. Please remove some and try again.', 'optionia' );
+		}
+
+		/*
 		 * A different message, because a different action fixes it. The customer
 		 * cannot shorten "the" field — every field was individually acceptable
 		 * and the request as a whole was not, so the instruction has to be about

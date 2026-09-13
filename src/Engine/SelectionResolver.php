@@ -268,6 +268,31 @@ final class SelectionResolver {
 	public const ERROR_TOO_SHORT = 'too_short';
 
 	/**
+	 * Error code: fewer values chosen than the option's `min_selections`.
+	 *
+	 * 🔴 **Distinct from `ERROR_REQUIRED`, and the distinction is the message.**
+	 * A customer who ticked one box for an option demanding two *answered* it —
+	 * telling them to "choose all required options" sends them looking for a
+	 * field they already filled, which is the exact reasoning `ERROR_TOO_SHORT`
+	 * records for text.
+	 *
+	 * ⚠️ **`min_selections` is not a second `is_required`.** An unanswered
+	 * option is `required`'s business; this one only speaks once the customer
+	 * has chosen something, so an untouched optional multi-select stays valid.
+	 */
+	public const ERROR_TOO_FEW = 'too_few_selections';
+
+	/**
+	 * Error code: more values chosen than the option's `max_selections`.
+	 *
+	 * ⚠️ **Enforced server-side even though the browser could limit ticking.**
+	 * AC4 makes the request untrusted: a crafted payload can carry twenty values
+	 * for an option capped at two, and each one is a price. A cap the storefront
+	 * suggests and the server does not enforce is not a cap.
+	 */
+	public const ERROR_TOO_MANY = 'too_many_selections';
+
+	/**
 	 * Error code: text exceeded the option's `max_length`.
 	 *
 	 * A refusal, never a truncation. `clean_text()` records why: silently cutting
@@ -1254,6 +1279,57 @@ final class SelectionResolver {
 			}
 
 			/*
+			 * 🔴 **How many were chosen, against the merchant's limits.**
+			 *
+			 * ADR-057 noted these existed *"authorable per option and enforced
+			 * nowhere, because there is nothing to count"* and said the
+			 * multi-select stage would make them mean something. It did not —
+			 * M18.1 to M18.3 built the whole array path and left both rules
+			 * unread. This is that gap closed.
+			 *
+			 * ⚠️ **Counted AFTER deduplication and the unknown-value check**, so
+			 * the number is what the customer actually bought. Counting the raw
+			 * payload would let `["red","red","red"]` satisfy a minimum of three
+			 * — one choice billed once, dressed as three — and would report a
+			 * maximum breach for values that were about to be refused anyway.
+			 *
+			 * ⚠️ **Enforced server-side even though the browser could limit
+			 * ticking.** AC4 makes the request untrusted: a crafted payload can
+			 * carry twenty values for an option capped at two, and each one is a
+			 * price. A cap the storefront suggests and the server does not
+			 * enforce is not a cap.
+			 *
+			 * 🔴 **Applies at every cardinality.** A `one` option resolves to a
+			 * single-member list, so a `min_selections` of 2 on it is refused
+			 * rather than silently ignored — a merchant's limit that quietly
+			 * does nothing is the shape this phase withdrew two rule actions
+			 * for.
+			 */
+			$chosen_count = count( $chosen_keys );
+			$min_chosen   = self::selection_bound( $options[ $option_id ], 'min_selections' );
+			$max_chosen   = self::selection_bound( $options[ $option_id ], 'max_selections' );
+
+			if ( null !== $min_chosen && $chosen_count < $min_chosen ) {
+				$errors[] = array(
+					'code'   => self::ERROR_TOO_FEW,
+					'field'  => $option_id,
+					'params' => array( 'min' => $min_chosen ),
+				);
+
+				continue;
+			}
+
+			if ( null !== $max_chosen && $chosen_count > $max_chosen ) {
+				$errors[] = array(
+					'code'   => self::ERROR_TOO_MANY,
+					'field'  => $option_id,
+					'params' => array( 'max' => $max_chosen ),
+				);
+
+				continue;
+			}
+
+			/*
 			 * 🔴 **Sorted into the MERCHANT'S order, not the customer's.**
 			 *
 			 * WooCommerce derives a cart line's key by hashing `cart_item_data`,
@@ -2031,6 +2107,40 @@ final class SelectionResolver {
 			'option' => '' !== $option_label ? $option_label : (string) ( $option['id'] ?? '' ),
 			'value'  => '' !== $value_label ? $value_label : (string) ( $value['value_key'] ?? '' ),
 		);
+	}
+
+	/**
+	 * One of the option's selection-count limits, or null when it sets none.
+	 *
+	 * 🔴 **Read from `validation`, in the document's snake_case spelling.**
+	 * The backend publishes `min_selections` / `max_selections` through
+	 * `VALIDATION_KEYS`; they were **missing from that map until M18.3a** and
+	 * published camelCase, so a limit read here would have found nothing
+	 * whatever the merchant set. `bin/check-wire-keys.sh` now reads the option
+	 * schema as well as the map, so a key the schema accepts and the map omits
+	 * fails rather than passing unseen.
+	 *
+	 * ⚠️ **A non-integer or negative bound is no bound.** The document is input
+	 * rather than authority (AC4), and refusing every selection because a
+	 * limit arrived malformed would take a product off sale over a typo — the
+	 * same direction `max_length()` takes for text.
+	 *
+	 * @param array<string, mixed> $option One published option.
+	 * @param string               $key    `min_selections` or `max_selections`.
+	 * @return int|null The limit, or null when the option sets none.
+	 */
+	private static function selection_bound( array $option, string $key ): ?int {
+		$validation = isset( $option['validation'] ) && is_array( $option['validation'] )
+			? $option['validation']
+			: array();
+
+		$bound = $validation[ $key ] ?? null;
+
+		if ( ! is_int( $bound ) || $bound < 0 ) {
+			return null;
+		}
+
+		return $bound;
 	}
 
 	/**
