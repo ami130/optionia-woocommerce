@@ -902,6 +902,173 @@ final class RendererTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **`display_type` reaches the markup, which is the whole point of M18.4.**
+	 *
+	 * It has been stored, accepted by both DTOs and **published in the config
+	 * document** since Phase 5, and read by nothing: every group rendered as a
+	 * plain fieldset. ADR-059 chose to deliver it rather than withdraw it — the
+	 * shape ADR-055 and ADR-056 withdrew two rule actions for — on the grounds
+	 * that the distance between "carried" and "consumed" was work, not a
+	 * question. This is that work landing.
+	 */
+	public function test_a_group_carries_its_display_type(): void {
+		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'tabs' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'data-optionia-display="tabs"', $markup );
+		$this->assertStringContainsString( 'optionia-group--tabs', $markup );
+	}
+
+	/**
+	 * 🔴 **An accordion folds behind a `<summary>`, and starts closed.**
+	 *
+	 * `<details>`/`<summary>` rather than scripted panels: the control works
+	 * with no JavaScript, is keyboard-operable, and is announced as a
+	 * disclosure by screen readers without any ARIA of ours.
+	 */
+	public function test_an_accordion_renders_a_closed_disclosure(): void {
+		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'accordion' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( '<details class="optionia-group__fold"', $markup );
+		$this->assertStringContainsString( '<summary', $markup );
+		$this->assertStringNotContainsString( '__fold" open', $markup, 'An accordion starts folded.' );
+	}
+
+	/**
+	 * ⚠️ **A collapsible `inline` group folds but starts OPEN.**
+	 *
+	 * The difference is the only thing `is_collapsible` means (ADR-059): an
+	 * inline group is laid out plainly and *may* be folded away, so it is open
+	 * until the customer folds it. An accordion is folded by nature.
+	 */
+	public function test_a_collapsible_inline_group_starts_open(): void {
+		$this->cache_typed(
+			'radio',
+			array(),
+			array(),
+			array(
+				'display_type'   => 'inline',
+				'is_collapsible' => true,
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( '<details class="optionia-group__fold" open>', $markup );
+	}
+
+	/**
+	 * 🔴 **`is_collapsible` is IGNORED for every type but `inline`** (ADR-059).
+	 *
+	 * An accordion is already collapsible and a tab already hides its siblings,
+	 * so honouring the flag there would give two fields one job — and let a
+	 * merchant publish `tabs` with `is_collapsible: true` and get something
+	 * neither field describes.
+	 */
+	public function test_is_collapsible_is_ignored_for_tabs(): void {
+		$this->cache_typed(
+			'radio',
+			array(),
+			array(),
+			array(
+				'display_type'   => 'tabs',
+				'is_collapsible' => true,
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( '<details', $markup );
+		$this->assertStringContainsString( '<legend', $markup );
+	}
+
+	/**
+	 * 🔴 **`stepped` falls back to `inline`, and renders every option** (ADR-063).
+	 *
+	 * It ships in its own stage because a wizard needs a second reason for a
+	 * group to be hidden, and `frontend.js` recomputes visibility from scratch
+	 * on every change — so *"hidden by a rule"* and *"not the current step"*
+	 * would share one attribute and the first keystroke would reveal every step.
+	 *
+	 * ⚠️ **Falling back is not the ADR-055 defect.** Those fields were applied
+	 * *nowhere*, with no stage that would consume them. This one has a named
+	 * stage, three working siblings, and — critically — **the dashboard does
+	 * not offer it**, so no merchant can select a layout that silently behaves
+	 * like another.
+	 */
+	public function test_stepped_falls_back_to_inline_and_still_renders(): void {
+		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'stepped' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'data-optionia-display="inline"', $markup );
+		$this->assertStringContainsString( 'value="lux"', $markup, 'Every option must still render.' );
+	}
+
+	/**
+	 * ⚠️ **An unknown layout renders as `inline` rather than vanishing.**
+	 *
+	 * The document is input, not authority (AC4). A group that disappeared
+	 * because a newer cloud named a *presentation* this build has no stylesheet
+	 * for would lose the merchant a sale over a layout.
+	 */
+	public function test_an_unknown_display_type_renders_as_inline(): void {
+		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'carousel_from_2027' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'data-optionia-display="inline"', $markup );
+		$this->assertStringContainsString( 'value="lux"', $markup );
+	}
+
+	/**
+	 * 🔴 **`data-optionia-group` stays on the `<fieldset>`, whatever the layout.**
+	 *
+	 * The rule runtime sets `hidden` on the element carrying that attribute
+	 * (`frontend.js`, `hideTarget()`). If a fold moved it inside the
+	 * `<details>`, a rule hiding the group would hide its *contents* while the
+	 * heading stayed on the page — a legend for options nobody can reach.
+	 */
+	public function test_a_folded_group_still_carries_its_rule_target(): void {
+		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'accordion' ) );
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertSame(
+			1,
+			preg_match( '/<fieldset[^>]*data-optionia-group="group-a"/s', $markup ),
+			'A rule targets the fieldset, so the attribute must be on it.'
+		);
+	}
+
+	/**
+	 * ⚠️ **A group with no label is never folded.**
+	 *
+	 * `<summary>` is the control that opens a `<details>`, so a group with no
+	 * heading would render an empty, unlabelled click target — worse than not
+	 * folding at all.
+	 */
+	public function test_a_group_with_no_label_is_not_folded(): void {
+		$this->cache_typed(
+			'radio',
+			array(),
+			array(),
+			array(
+				'display_type' => 'accordion',
+				'label'        => '',
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( '<details', $markup );
+		$this->assertStringContainsString( 'value="lux"', $markup );
+	}
+
+	/**
 	 * Cache one option of any type, with optional per-value extras.
 	 *
 	 * Generalised from `cache_dropdown` rather than copied three more times:
@@ -913,8 +1080,10 @@ final class RendererTest extends TestCase {
 	 * @param array<string, mixed> $extras        Extra keys merged into the first value.
 	 * @param array<string, mixed> $option_extras Extra keys merged into the option itself,
 	 *                                            for option-level fields like `cardinality`.
+	 * @param array<string, mixed> $group_extras  Extra keys merged into the group, for
+	 *                                            group-level fields like `display_type`.
 	 */
-	private function cache_typed( string $type, array $extras = array(), array $option_extras = array() ): void {
+	private function cache_typed( string $type, array $extras = array(), array $option_extras = array(), array $group_extras = array() ): void {
 		( new Repository( new Logger( new Settings() ) ) )->store(
 			array(
 				'schema_version' => 1,
@@ -931,34 +1100,37 @@ final class RendererTest extends TestCase {
 							),
 						),
 						'groups'      => array(
-							array(
-								'id'      => 'group-a',
-								'label'   => 'Customization',
-								'options' => array(
-									array_merge(
-										array(
-											'id'          => 'opt-t',
-											'key'         => 'finish',
-											'type'        => $type,
-											'label'       => 'Finish',
-											'is_required' => true,
-											'values'      => array(
-												array_merge(
-													array(
-														'value_key' => 'lux',
-														'label'     => 'Luxury',
+							array_merge(
+								array(
+									'id'      => 'group-a',
+									'label'   => 'Customization',
+									'options' => array(
+										array_merge(
+											array(
+												'id'     => 'opt-t',
+												'key'    => 'finish',
+												'type'   => $type,
+												'label'  => 'Finish',
+												'is_required' => true,
+												'values' => array(
+													array_merge(
+														array(
+															'value_key' => 'lux',
+															'label'     => 'Luxury',
+														),
+														$extras
 													),
-													$extras
-												),
-												array(
-													'value_key' => 'std',
-													'label' => 'Standard',
+													array(
+														'value_key' => 'std',
+														'label' => 'Standard',
+													),
 												),
 											),
+											$option_extras
 										),
-										$option_extras
 									),
 								),
+								$group_extras
 							),
 						),
 						'rules'       => array(),

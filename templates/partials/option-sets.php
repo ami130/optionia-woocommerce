@@ -24,21 +24,70 @@ if ( array() === $optionia_groups ) {
 }
 ?>
 <div class="optionia-options" data-optionia="options" data-optionia-product="<?php echo esc_attr( (string) ( $optionia['product_id'] ?? '' ) ); ?>">
-	<?php foreach ( $optionia_groups as $optionia_group ) : ?>
-		<fieldset class="optionia-group" data-optionia="group" data-optionia-group="<?php echo esc_attr( (string) ( $optionia_group['id'] ?? '' ) ); ?>">
-			<?php if ( '' !== (string) ( $optionia_group['label'] ?? '' ) ) : ?>
-				<legend class="optionia-group__label"><?php echo esc_html( (string) $optionia_group['label'] ); ?></legend>
-			<?php endif; ?>
+	<?php
+	foreach ( $optionia_groups as $optionia_group ) :
+		$optionia_type  = (string) ( $optionia_group['display_type'] ?? 'inline' );
+		$optionia_fold  = 'accordion' === $optionia_type || ! empty( $optionia_group['is_collapsible'] );
+		$optionia_title = (string) ( $optionia_group['label'] ?? '' );
+		$optionia_desc  = (string) ( $optionia_group['description'] ?? '' );
 
-			<?php if ( '' !== (string) ( $optionia_group['description'] ?? '' ) ) : ?>
-				<p class="optionia-group__description"><?php echo esc_html( (string) $optionia_group['description'] ); ?></p>
-			<?php endif; ?>
-
+		/*
+		 * 🔴 **A folded group needs a heading to fold behind.** `<summary>` is
+		 * the control that opens a `<details>`, so a group with no label would
+		 * render an empty, unlabelled click target — worse than not folding.
+		 * Falls back to laying it out plainly, which is what it did before.
+		 */
+		$optionia_fold = $optionia_fold && '' !== $optionia_title;
+		?>
+		<fieldset
+			class="optionia-group optionia-group--<?php echo esc_attr( $optionia_type ); ?>"
+			data-optionia="group"
+			data-optionia-group="<?php echo esc_attr( (string) ( $optionia_group['id'] ?? '' ) ); ?>"
+			data-optionia-display="<?php echo esc_attr( $optionia_type ); ?>"
+		>
 			<?php
-			// Built by the renderer from each option's own type template, which
-			// escapes its own output.
-			echo $optionia_group['options']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-			?>
+			/*
+			 * 🔴 **`data-optionia-group` stays on the `<fieldset>`, whatever the
+			 * layout.** The rule runtime sets `hidden` on the element carrying
+			 * that attribute, so moving it inside a `<details>` would let a rule
+			 * hide a group's *contents* while its heading stayed on the page —
+			 * a fieldset legend for options nobody can reach.
+			 *
+			 * ⚠️ **A `<legend>` must be the first child of its `<fieldset>`**,
+			 * which is why the folded branch does not use one: `<summary>` is
+			 * the heading there, and a `<legend>` inside `<details>` would be
+			 * neither valid nor announced as the group's name.
+			 */
+			if ( $optionia_fold ) :
+				?>
+				<details class="optionia-group__fold"<?php echo 'accordion' === $optionia_type ? '' : ' open'; ?>>
+					<summary class="optionia-group__label optionia-group__summary"><?php echo esc_html( $optionia_title ); ?></summary>
+
+					<?php if ( '' !== $optionia_desc ) : ?>
+						<p class="optionia-group__description"><?php echo esc_html( $optionia_desc ); ?></p>
+					<?php endif; ?>
+
+					<?php
+					// Built by the renderer from each option's own type template,
+					// which escapes its own output.
+					echo $optionia_group['options']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+					?>
+				</details>
+			<?php else : ?>
+				<?php if ( '' !== $optionia_title ) : ?>
+					<legend class="optionia-group__label"><?php echo esc_html( $optionia_title ); ?></legend>
+				<?php endif; ?>
+
+				<?php if ( '' !== $optionia_desc ) : ?>
+					<p class="optionia-group__description"><?php echo esc_html( $optionia_desc ); ?></p>
+				<?php endif; ?>
+
+				<?php
+				// Built by the renderer from each option's own type template,
+				// which escapes its own output.
+				echo $optionia_group['options']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+				?>
+			<?php endif; ?>
 		</fieldset>
 	<?php endforeach; ?>
 

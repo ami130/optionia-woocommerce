@@ -64,6 +64,21 @@ final class Renderer {
 	private const SUPPORTED_TYPES = array( 'simple', 'variable' );
 
 	/**
+	 * The group layouts this build has a rendering for.
+	 *
+	 * 🔴 **Three of `GroupDisplayType`'s four values** (ADR-063). `stepped` is
+	 * published and enumerated but ships in its own stage, because a wizard
+	 * collides with the rule runtime's visibility model rather than merely
+	 * costing more work.
+	 *
+	 * ⚠️ **A whitelist, so an unknown value falls back to `inline`** rather
+	 * than rendering nothing. The document is input, not authority (AC4), and a
+	 * group that vanished because its *presentation* was unfamiliar would lose
+	 * a sale over a stylesheet.
+	 */
+	private const DRAWN_DISPLAY_TYPES = array( 'inline', 'accordion', 'tabs' );
+
+	/**
 	 * Configuration cache.
 	 *
 	 * @var Repository
@@ -242,10 +257,24 @@ final class Renderer {
 				 * a group.
 				 */
 				$groups[] = array(
-					'id'          => isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '',
-					'label'       => isset( $group['label'] ) ? (string) $group['label'] : '',
-					'description' => isset( $group['description'] ) ? (string) $group['description'] : '',
-					'options'     => $markup,
+					'id'             => isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '',
+					'label'          => isset( $group['label'] ) ? (string) $group['label'] : '',
+					'description'    => isset( $group['description'] ) ? (string) $group['description'] : '',
+					'display_type'   => self::display_type_of( $group ),
+
+					/*
+					 * 🔴 **Only an `inline` group may be folded** (ADR-059).
+					 *
+					 * An accordion is already collapsible and a tab already
+					 * hides its siblings, so honouring the flag there would give
+					 * two fields one job — and let a merchant publish
+					 * `accordion` with `is_collapsible: false`, a contradiction
+					 * no rendering can satisfy. Resolved here rather than in the
+					 * template, so one answer reaches every consumer.
+					 */
+					'is_collapsible' => 'inline' === self::display_type_of( $group )
+						&& ! empty( $group['is_collapsible'] ),
+					'options'        => $markup,
 				);
 			}
 		}
@@ -364,6 +393,36 @@ final class Renderer {
 		}
 
 		return $markup;
+	}
+
+	/**
+	 * A group's layout, as one of the values this build can draw.
+	 *
+	 * 🔴 **Anything unrecognised renders as `inline`**, which is the safe
+	 * direction and the same one `SelectionResolver::takes_many()` takes for an
+	 * unknown cardinality. A document from a newer cloud naming a layout this
+	 * build has no template for must still render its options — a group that
+	 * vanished because its *presentation* was unfamiliar would lose the
+	 * merchant a sale over a stylesheet.
+	 *
+	 * ⚠️ **`stepped` is deliberately in that fallback** (ADR-063). It is a
+	 * published value with a stage of its own, not an unknown one: a wizard
+	 * needs a second reason for a group to be hidden, and `frontend.js`
+	 * recomputes visibility from scratch on every change — so *"hidden because
+	 * a rule fired"* and *"hidden because this is not the current step"* would
+	 * share one attribute and the first keystroke would reveal every step.
+	 *
+	 * The dashboard does not offer `stepped` while this is true, so a merchant
+	 * cannot select a layout that silently behaves like another.
+	 *
+	 * @param array<string, mixed> $group One published group.
+	 */
+	private static function display_type_of( array $group ): string {
+		$type = isset( $group['display_type'] ) && is_scalar( $group['display_type'] )
+			? (string) $group['display_type']
+			: '';
+
+		return in_array( $type, self::DRAWN_DISPLAY_TYPES, true ) ? $type : 'inline';
 	}
 
 	/**

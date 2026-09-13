@@ -54,6 +54,73 @@
 }
 
 /* -------------------------------------------------------------------------
+ * Group layouts (M18.4, ADR-059 and ADR-063)
+ *
+ * Three of `GroupDisplayType`'s four values are drawn here. `stepped` ships in
+ * its own stage and falls back to `inline`, because a wizard needs a second
+ * reason for a group to be hidden and the rule runtime recomputes visibility
+ * from scratch on every change.
+ *
+ * EVERY LAYOUT KEEPS EVERY OPTION REACHABLE WITHOUT JAVASCRIPT. This form
+ * decides what a customer is charged, so a layout that hid an option from
+ * someone with no JS would hide a price, not a decoration. That rules out a
+ * scripted tab interface: `tabs` is drawn as labelled panels, which is a
+ * weaker visual than true tabs and a stronger guarantee.
+ * ---------------------------------------------------------------------- */
+
+/* A folded group -- `accordion`, or `inline` with `is_collapsible`. */
+.optionia-group__fold {
+	border: 1px solid rgba( 0, 0, 0, 0.12 );
+	border-radius: 3px;
+	padding: 0.75em 1em;
+}
+
+.optionia-group__summary {
+	cursor: pointer;
+
+	/*
+	 * `list-item` keeps the native disclosure triangle, which is the affordance
+	 * telling a customer the group opens. Removing it is a common accordion
+	 * style and it leaves no visible cue that anything is hidden.
+	 */
+	display: list-item;
+	margin-bottom: 0;
+}
+
+.optionia-group__fold[open] .optionia-group__summary {
+	margin-bottom: 0.75em;
+}
+
+/*
+ * `tabs`, drawn as labelled panels.
+ *
+ * A real tab interface needs JavaScript, ARIA roles and roving focus -- and
+ * hides every panel but one, which is precisely what must not happen to an
+ * option that carries a price. Panels give the merchant the visual separation
+ * they asked for while every control stays in the document and in the tab
+ * order.
+ */
+.optionia-group--tabs {
+	border: 1px solid rgba( 0, 0, 0, 0.12 );
+	border-radius: 3px;
+	padding: 1em;
+}
+
+.optionia-group--tabs > .optionia-group__label {
+	/*
+	 * Reads as a tab strip: the label sits on the panel's top edge rather than
+	 * above it.
+	 */
+	margin: -1em -1em 1em;
+	padding: 0.6em 1em;
+	background: rgba( 0, 0, 0, 0.04 );
+	border-bottom: 1px solid rgba( 0, 0, 0, 0.12 );
+	float: none;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+/* -------------------------------------------------------------------------
  * One option
  * ---------------------------------------------------------------------- */
 
