@@ -216,6 +216,80 @@ final class MultiSelectResolutionTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **A `set_price` rule reprices ONE value of a multi-select, not all.**
+	 *
+	 * ADR-049 makes `set_price` *replace* a value's own price rather than add to
+	 * it, and `set_price_for()` is asked **per value** precisely so a rule
+	 * targeting one choice does not reprice its siblings. Nothing tested that
+	 * against a multi-select until M18.2 — the composition existed and was
+	 * unprotected.
+	 *
+	 * ⚠️ **Asserted on the summed number.** `red` keeps its authored 1.00 and
+	 * `blue` is repriced to 50.00, so the option contributes 5100. A resolver
+	 * that applied the rule to every chosen value would report 10000, and one
+	 * that applied it to none would report 300 — both are single-number
+	 * mistakes this catches.
+	 */
+	public function test_a_set_price_rule_reprices_only_its_own_value(): void {
+		$sets = self::sets( 'many' );
+
+		$sets[0]['groups'][0]['options'][] = array(
+			'id'     => 'opt-t',
+			'type'   => 'radio',
+			'values' => array(
+				array(
+					'id'        => 'val-yes',
+					'value_key' => 'yes',
+				),
+			),
+		);
+
+		$sets[0]['rules'] = array(
+			array(
+				'id'           => 'r1',
+				'target_type'  => 'value',
+				'target_id'    => 'v2',
+				'action'       => 'set_price',
+				'action_value' => array(
+					'type'         => 'fixed',
+					'amount_minor' => 5000,
+				),
+				'match_type'   => 'all',
+				'conditions'   => array(
+					array(
+						'option_id' => 'opt-t',
+						'operator'  => 'equals',
+						'value'     => 'yes',
+					),
+				),
+				'sort_order'   => 10,
+			),
+		);
+
+		$result = SelectionResolver::resolve(
+			$sets,
+			array(
+				'opt-t' => 'yes',
+				'opt-a' => array( 'red', 'blue' ),
+			),
+			1000,
+			null,
+			true
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame(
+			5100,
+			$result->value()['deltas']['opt-a'],
+			'Only the targeted value is repriced; its sibling keeps its own price.'
+		);
+		$this->assertSame(
+			1000 + array_sum( $result->value()['deltas'] ),
+			$result->value()['total_minor']
+		);
+	}
+
+	/**
 	 * 🔴 A rule-hidden value is caught in ANY position, not just the first.
 	 *
 	 * A guard reading `$chosen_keys[0]` would accept a payload whose second
