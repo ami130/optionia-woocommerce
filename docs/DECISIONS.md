@@ -5240,3 +5240,122 @@ be tested as a *pair*. Unit tests that exercise each half separately will both
 pass while the composition strands the customer. The assertion that caught this
 was on the product being sellable, not on an error code — an error-code
 assertion would have been satisfied by the dead end.
+
+---
+
+## ADR-061 — `deltas` becomes keyed by option id, and the positional pairing goes away
+
+**Status:** accepted · **Phase 18, Stage 18-2**
+
+### Context
+
+`SelectionResolver` returns `deltas` as a **positional list** — one entry per
+priced *value* — while `resolved` is keyed **one entry per option**. For
+single-value options those counts coincide, and every consumer was built on that
+coincidence.
+
+Measured:
+
+| Document | `resolved` | `deltas` | Coincide? |
+|---|---|---|---|
+| 1 option, 1 value | 1 | 1 | yes |
+| 1 `many` option, 2 values | 1 | 2 | **no** |
+| 1 `many` (2 values) + 1 `one` | 2 | 3 | **no** |
+
+Two consumers pair them positionally, in **independent implementations**:
+`CartItemData::deltas_by_option()` and `CartDisplay` (an inline `array_combine`).
+Both guard with `count() !== count()` and return empty on a mismatch. That guard
+is what makes ADR-060's fence necessary: an empty pairing is frozen onto the
+line, `trusted_deltas()` finds no key, and **the line prices live** — 16c's
+defect, which quoted 85.00 and charged 130.00.
+
+**Relaxing the count check is actively worse than the fence.** Measured with
+`many(red,blue) + one(red)` and deltas `[100,200,100]`:
+
+```
+naive positional pairing: {"opt-a":100,"opt-z":200}
+  opt-a should be 300, got 100
+  opt-z should be 100, got 200
+  frozen total 300 vs real 400 -> undercharge of 100 minor
+```
+
+Prices leak **between options**, and the wrong total is then signed and frozen,
+so it survives every later verification. A fail-closed refusal is strictly
+better than a confidently wrong freeze.
+
+### Decision
+
+**`deltas` becomes `array<string, int>` — keyed by option id, one entry per
+option, summed across that option's chosen values.** The positional list, and
+both pairings built on it, are deleted.
+
+Three pieces of evidence decided this over the alternatives.
+
+**1. The stored shape is already keyed, so nothing migrates.**
+`CartItemPayload::frozen_deltas()` reads `foreach ( $deltas as $option_id =>
+$delta )` — the *frozen* payload has always been `array<option_id, int>`. The
+positional list exists only in the brief window between the resolver returning
+and `CartItemData` storing. Measured: for a single-value line the stored array
+is byte-identical before and after this change, so **`sign()` produces the same
+signature and carts in flight are untouched**. An earlier draft of this decision
+warned that changing the delta shape would break every signature; that was
+wrong, and the measurement is why it is recorded here rather than acted on.
+
+**2. Summed-per-option is the only shape the existing trust gate accepts.**
+`frozen_deltas()` requires `is_int( $delta )` for every entry and returns `null`
+otherwise. Measured: `{"opt-a":300}` passes; `{"opt-a":[100,200]}` returns null,
+which means the line prices live. Storing a per-value list would re-open the
+exact defect this stage exists to close.
+
+**3. Every consumer wants the summed figure.** `CartTotals` sums them.
+`CartDisplay` renders **one row per option** with one price beside it
+(`with_price( $value, $deltas[ $option_id ] )`). `OrderLineItem` records one
+meta entry per option. No consumer asks "what did the second chosen value cost?"
+
+**The count guard stays, and becomes meaningful again.** `count( $resolved )
+!== count( $deltas )` is currently an arithmetic coincidence; once both are
+keyed by option id it is a real invariant, and a mismatch is a genuine bug
+rather than an expected shape. Keeping it fail-closed preserves the property
+that a payload this build cannot pair is never frozen.
+
+### Consequences
+
+**`labels` keeps its per-option key but its value becomes a list for `many`.**
+That is already true as of 18-1, and three sites read `$label['option']` /
+`$label['value']` as if it were a single object: `OrderLineItem`,
+`CheckoutValidator` and `CartDisplay`. Measured at `OrderLineItem`, a `many`
+line writes `name='opt-a'  value='Array'` **with a PHP warning** — into the
+merchant's fulfilment record, which reaches packing slips, emails, CSV export
+and refund tooling. Each site joins the list for display; none of them changes
+shape.
+
+**Coverage comes first, before any of this is written.** `cardinality` appears
+in four test files, none of them a downstream consumer suite — no
+`CartItemData`, `CartDisplay`, `OrderLineItem`, `CartTotals` or
+`CheckoutValidator` test exercises a multi-value selection. That blind spot is
+exactly what let 18-1 ship a live overcharge with a green suite, and writing
+18-2's fix before the net is in place would repeat it.
+
+**The fence comes down last, not first.** ADR-060 lists three deletion sites and
+this stage removes them — but only once the path genuinely works, which is
+ADR-057's bar: `MANY` joins the registry when the *whole* path works, not when
+one stage in it does.
+
+### What this decision does not settle
+
+**Type/cardinality agreement is a separate guard, and it is real.** The resolver
+keys on `cardinality` alone and never asks whether the *type* can take several
+answers. Measured: a `radio` at `many` accepts Small **and** Large on one line
+and charges for both. `dropdown`, `date` and `file` behave the same; `text`
+fails closed by a different path.
+
+It is unreachable through the dashboard today — the backend registry allows
+`MANY` for **no type at all** — so this is a crafted-payload path under AC4,
+where the document is input rather than authority. **But 18-3 is the stage that
+adds `MANY` to the registry**, and if it lands before this guard the exposure
+becomes ordinary. The guard belongs in 18-2, ahead of it.
+
+The type registry's own comment claims *"`Engine\SelectionResolver` in the
+plugin never reads `type` at all"*. That is **outdated** — it reads `type` at
+three sites (`is_hidden()`, `date_format()`, and one more) — so the cross-check
+is cheap. The comment should be corrected when the guard lands.
