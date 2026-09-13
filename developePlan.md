@@ -21617,10 +21617,10 @@ sort is load-bearing for line deduplication, not cosmetic.
 |---|---|---|
 | 1 | **F4: coverage first.** Multi-select cases in all five consumer suites, against current fenced behaviour | They pass trivially now, and become the net for everything after. Skipping this repeats 18-1 exactly. |
 | 2 | ✅ **F2: `deltas` becomes `array<string, int>`** — done 2026-09-13 | One assembly point. Both pairings deleted; `array_combine` is gone from `src/`. |
-| 3 | **F1 + F3 together** — pairing and labelling at every site | Three label sites, two pairing sites. Splitting them leaves display and total disagreeing. |
-| 4 | **F5: type/cardinality cross-check** | Must precede 18-3. |
-| 5 | **F7, F9** — remaining consumers (**F6 withdrawn**) | Lower blast radius. |
-| 6 | **Delete the fence** (ADR-060's three sites) | Last, not first: ADR-057's bar is that the *whole* path works. |
+| 3 | ✅ **F1 + F3** — one shared reader for all three label sites — done 2026-09-13 | Three consumers each read the shape their own way; now they ask once. |
+| 4 | ✅ **F5: type/cardinality cross-check** — done 2026-09-13 | Landed before 18-3, as required. |
+| 5 | ✅ **F7, F9** — done 2026-09-13 (**F6 withdrawn**) | Reorder replays; upload coupling documented. |
+| 6 | ⏸ **Delete the fence** — **deferred to 18-3, deliberately** | ADR-057 splits build from gate: 18-2 builds the path, **18-3 opens it**. Removing the fence here would sell a `many` document before the registry authorises the type. |
 
 #### ✅ Step 2 complete — `deltas` is keyed by option id, 2026-09-13
 
@@ -21737,6 +21737,68 @@ picking output was correct for multi-select before this stage started.
 📌 **Recorded rather than quietly deleted**, because a withdrawn finding is
 itself worth knowing: it is the second time in this phase that an empty result
 from a thin fixture read as a defect.
+
+#### ✅ Steps 3–5 complete — labels, the type guard, and the last consumers, 2026-09-13
+
+**F3 is closed, measured end-to-end with the fence lifted:**
+
+```
+CART ROW:   Extras: "Red, Blue (+3.00)"
+ORDER META: Extras => 'Red, Blue'      opt-a => NULL
+```
+
+No `"Array"`, no raw option id. Before this step, lifting the fence produced
+`Array to string conversion` **errors**; it now produces only clean failures
+from the fence tests themselves.
+
+🔴 **One shared reader replaced three.** `Support\OptionLabel` — `name()` and
+`value()` — is now the single answer for `CartDisplay`, `OrderLineItem` and
+`CheckoutValidator`, which each had their own idiom for the same question.
+`CartItemPayload`'s docblock already said this kind of question must get one
+answer; labels now do.
+
+⚠️ **A list is told from a single pair by `option`, not `is_array()`** — both
+shapes *are* arrays, so testing for an array answers the wrong question.
+
+⚠️ **The existing `CartDisplay` suite caught a third shape I had missed.**
+`{option, value: ['Red','Large']}` — an array inside a single pair's value — is
+not what this plugin writes, but another plugin filtering the payload can
+produce it, and the **block cart discards a whole row** whose value is not
+scalar. The guard existed in `CartDisplay::text()` and would have been silently
+lost for the other two consumers. It moved into `OptionLabel` with its own test.
+
+🔴 **F5 closed with a whitelist, and the measurement is why it matters.** Before:
+every type accepted `many`, so a `radio` sold **Small and Large on one line**
+(`ok=true total=1500`). After: `MANY_CAPABLE_TYPES` holds `checkbox` alone, and
+`dropdown`, `date_picker`, `file_input`, `text_field` and an unknown type from a
+newer cloud are all refused. A whitelist, so an unrecognised type takes the
+single-value path — the same safe direction an unknown cardinality takes.
+
+🔴 **F7 was silent data loss and now replays.** `OrderAgain` dropped a
+multi-select answer on reorder with no error and nothing logged; a customer
+reordering got a line with those options *missing*. It now replays the list,
+while still dropping an option whose list holds a **nested** array — whole, not
+half, because half a selection is the M11.5 shape.
+
+📌 **F9 is safe by design rather than coercion now.** `file_input` can never
+declare `many`, so one option carries one token — the shape every upload path
+reads. Documented in `UploadTokens` with the classes that must change if that
+ever stops being true, because the coupling is otherwise invisible.
+
+#### ⏸ Why the fence is still standing
+
+**ADR-057 splits the build from the gate on purpose**, and this plan says so:
+*"18-1 and 18-2 build it; 18-3 opens the gate. Splitting the build from the gate
+is what keeps the fence honest — a resolver that accepts arrays is not the same
+as a system that sells them."*
+
+Every consumer now handles multi-select correctly — proven by lifting the fence
+as a mutant and measuring the real cart row and order meta. But the backend
+registry still allows `MANY` for **no type at all**, so removing the fence here
+would let a document sell a multi-select the authoring layer never authorised.
+
+📌 **18-3 removes it**, as its own act, alongside the registry change and the
+shared fixture cases. ADR-060's deletion list is unchanged and still accurate.
 
 #### Exit criteria
 
