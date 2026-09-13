@@ -196,9 +196,9 @@ publish, because storefronts must re-fetch after one.
 | `id` | string | UUID. |
 | `label` | string | Shown to the customer. |
 | `description` | string | **Omitted when unset.** |
-| `display_type` | string | `inline` · `accordion` · `tab` · `modal` |
+| `display_type` | string | `inline` · `accordion` · `tabs` · `stepped`. **The plugin draws the first three**; `stepped` renders as `inline` until M18.4a (ADR-063), and an unrecognised value does too. |
 | `sort_order` | int | Ascending. Gaps are normal and intentional. |
-| `is_collapsible` | bool | |
+| `is_collapsible` | bool | Whether an **`inline`** group can be folded away. **Ignored for every other type** (ADR-059): an accordion is already collapsible and a tab already sets its group apart. |
 | `options` | array | |
 | `items` | array | Headings, paragraphs, dividers — presentation only, no cart data. |
 
@@ -208,9 +208,9 @@ publish, because storefronts must re-fetch after one.
 |---|---|---|
 | `id` | string | UUID. Order selections reference the **`key`**, not this. |
 | `key` | string | Stable identifier. Immutable after first publish, because order meta stores it. |
-| `type` | string | The presentation. `radio` is the only type in Phase 7. |
+| `type` | string | The presentation. Fifteen types ship; the registry in `type-registry.ts` is the authority. |
 | `value_kind` | string | What the option produces: `choice` · `text` · `number` · `file` · `date` · `colour` |
-| `cardinality` | string | `one` · `many` |
+| `cardinality` | string | `one` · `many`. **`many` is accepted for `checkbox` alone** (M18.3); the plugin keeps its own copy of that list in `SelectionResolver::MANY_CAPABLE_TYPES`, because AC4 makes this document input rather than authority. Immutable after creation. |
 | `label` | string | |
 | `description`, `placeholder`, `help_text` | string | **Omitted when unset.** |
 | `is_required` | bool | |

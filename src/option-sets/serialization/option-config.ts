@@ -73,6 +73,27 @@ const VALIDATION_KEYS: Readonly<Record<string, string>> = {
   allowedWeekdays: 'allowed_weekdays',
   leadTimeDays: 'lead_time_days',
   maxAdvanceDays: 'max_advance_days',
+
+  /*
+   * Selection counts (M5.4b, published from M18.3a).
+   *
+   * 🔴 **These were missing, and the omission was silent.** `rename()` falls
+   * through with `keys[key] ?? key`, so a stored `minSelections` published as
+   * `minSelections` — camelCase on a wire that is snake_case by contract.
+   * Measured: `{ minSelections: 1, maxSelections: 3, maxLength: 200 }` produced
+   * `{"minSelections":1,"maxSelections":3,"max_length":200}`.
+   *
+   * ⚠️ **`bin/check-wire-keys.sh` could not catch it**, unlike the four rules
+   * it did catch in transit. That gate reads the right-hand side of *this map*,
+   * so a key absent from the map is invisible to it — a key it never sees
+   * cannot be judged camelCase. Its own header names the hazard: a new rule
+   * "would ship camelCase silently unless someone remembers to add it here."
+   *
+   * The gate now also reads the option validation schema, so a key the schema
+   * accepts and this map omits fails rather than passing unseen.
+   */
+  minSelections: 'min_selections',
+  maxSelections: 'max_selections',
 };
 
 /** Stored key → document key, for every display affordance the plugin reads. */
