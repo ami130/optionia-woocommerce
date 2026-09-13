@@ -22001,6 +22001,57 @@ was needed — the gap was entirely dashboard-side.
 ✏️ **One stale hint corrected**: `checkbox` read *"Tick boxes — one choice for
 now"*, which stopped being true at 18-3.
 
+#### 🔍 Post-stage audit — one real defect, found and fixed, 2026-09-13
+
+Run against rendered markup and the live rule runtime rather than against the
+stage's own tests.
+
+🔴 **An accordion holding a REQUIRED option was an unbuyable product.**
+Measured in a DOM: a `required` control inside a closed `<details>` reports
+`willValidate: true` and `form.checkValidity() === false`, while `details.open`
+is `false` — **the browser refuses to submit over a field the customer cannot
+see or reach**. Chrome and Firefox usually expand the disclosure to show the
+message; *usually* is not a guarantee to stake an add-to-cart on.
+
+⚠️ **M18.4 is what made it reachable.** `is_required` has been authorable since
+Phase 5 and `display_type` became authorable in this stage, so the combination
+became selectable in the dashboard for the first time. And it is a *real* HTML
+attribute, not merely `aria-required` — `radio.php`, `checkbox.php`,
+`color_swatch.php` and `image_swatch.php` all emit it.
+
+📌 **The same dead end ADR-060 recorded, reached from a third direction.** There
+the renderer skipped an option the resolver still demanded. The rule is the same:
+**what the page shows and what submission requires must agree.**
+
+✅ **Fixed by opening rather than un-folding.** The merchant still gets their
+accordion; it starts open, the way a collapsible `inline` group already does.
+Refusing to fold would discard a choice they made.
+
+The full matrix, verified — the only closed state is the safe one:
+
+| Layout | collapsible | required | Result |
+|---|---|---|---|
+| `inline` | ✗ | — | no fold |
+| `inline` | ✓ | any | folds, **open** |
+| `accordion` | — | ✗ | folds, **closed** |
+| `accordion` | — | ✓ | folds, **open** |
+| `tabs` | any | any | no fold |
+| `stepped` | ✓ | any | folds, open (as `inline`) |
+
+#### ✅ Two JS tests the suite was missing
+
+`rule-visibility.test.js` had no folded-group markup at all — M18.4 introduced a
+wrapper between the group and its controls for the first time, and nothing
+exercised it. Added and mutation-proven:
+
+- **Hiding a folded group hides its summary too** — the constraint the whole
+  markup was designed around.
+- **A control nested inside the fold is still cleared.** `clearWithin()` uses
+  `querySelectorAll`, which is depth-unlimited — but that was a property of the
+  selector, not an intention anyone had written down. A value left behind on a
+  hidden option is a price the customer cannot see being charged. Mutating the
+  selector to stop at direct children kills both this test and an existing one.
+
 #### Mutation results — three mutants, three killed
 
 | Mutant | Killed by |
