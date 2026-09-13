@@ -21576,7 +21576,7 @@ chosen value cost.
 | F4 | No downstream test exercises `many` | 🔴 | five consumer suites |
 | F5 | `many` accepted for **every** type, incl. `radio` | 🟠 | `SelectionResolver` |
 | F7 | Reorder silently drops multi-select lines | 🟠 | `OrderAgain:147` |
-| F6 | `sku_suffixes` empty for multi-select | 🟠 | `SelectionResolver` |
+| ~~F6~~ | ~~`sku_suffixes` empty for multi-select~~ — **WITHDRAWN, false finding** | ✅ | verified working |
 | F9 | File tokens safe by coercion, not intent | 🟡 | `UploadTokens` |
 | F8 | Cart key nesting — **verified working** | ✅ | no action |
 | F10 | Request boundary — **verified sound** | ✅ | no action |
@@ -21619,7 +21619,7 @@ sort is load-bearing for line deduplication, not cosmetic.
 | 2 | ✅ **F2: `deltas` becomes `array<string, int>`** — done 2026-09-13 | One assembly point. Both pairings deleted; `array_combine` is gone from `src/`. |
 | 3 | **F1 + F3 together** — pairing and labelling at every site | Three label sites, two pairing sites. Splitting them leaves display and total disagreeing. |
 | 4 | **F5: type/cardinality cross-check** | Must precede 18-3. |
-| 5 | **F7, F6, F9** — remaining consumers | Lower blast radius. |
+| 5 | **F7, F9** — remaining consumers (**F6 withdrawn**) | Lower blast radius. |
 | 6 | **Delete the fence** (ADR-060's three sites) | Last, not first: ADR-057's bar is that the *whole* path works. |
 
 #### ✅ Step 2 complete — `deltas` is keyed by option id, 2026-09-13
@@ -21680,6 +21680,63 @@ mechanism moved.
 ✅ **The TypeScript twin needs no change.** `common/money/line-total.ts` exposes
 `sumDeltas( baseMinor, readonly number[] )` — pure arithmetic, agnostic to how
 the caller keys them. `array_sum()` over a keyed map gives the same answer.
+
+#### 🔍 Step 2 self-audit — one false finding, one real gap, 2026-09-13
+
+Run after the commit, against running code rather than against the summaries.
+
+**✅ What held.** Five edge cases of the new sum, each measured: all-free values
+record `0` rather than omitting it; negatives sum to a discount; mixed signs
+summing to zero still record `0`; an unpriceable value still reports through
+`unpriced` so the freeze is skipped; two percentages compound against the base
+correctly. `resolved` and `deltas` counts agree in every case.
+
+**✅ No cross-repo contract was touched**, checked rather than assumed. The
+shared `pricing-fixtures.json` *does* carry a `deltas` key — but it is a list of
+amounts fed to `Pricing::sum_deltas()` / `sumDeltas()`, pure arithmetic, and has
+nothing to do with the resolver's output map. `foreach` over a keyed map
+iterates values, so both remain correct. No JS or template reads deltas at all.
+
+**✏️ One finding withdrawn.** F6 was wrong — see above.
+
+**🔴 One real gap found and closed.** A `set_price` rule targeting **one value**
+of a multi-select had **no test anywhere**. ADR-049 makes `set_price` replace a
+value's own price, and `set_price_for()` is asked per value precisely so a rule
+does not reprice a value's siblings — but nothing proved that against a
+multi-select. Measured: `red` keeps 1.00, `blue` is repriced to 50.00, option
+contributes 5100, total consistent.
+
+Now covered by `test_a_set_price_rule_reprices_only_its_own_value`, which kills
+a mutant (hoisting the value id out of the per-value call) that **no other
+multi-select test catches**.
+
+⚠️ **One of my own mutants was badly designed.** `$deltas[ $option_id . '' ]` is
+the same key, so its survival proved nothing about the tests. A genuinely wrong
+key — keying by `$value_key` — dies in both `PriceConfigDeltaTest` and
+`CartDisplayTest`. Recorded because "mutant survived" is only evidence when the
+mutant actually changes behaviour.
+
+#### ✏️ F6 withdrawn — `sku_suffixes` was never broken
+
+**My finding was wrong, and the probe that produced it was at fault.** The
+fixture I measured with carried no `sku_suffix` keys at all, so an empty result
+was the correct answer to a question I had not actually asked.
+
+Measured properly, with suffixes authored:
+
+```
+sku_suffixes (many, both): {"opt-a":"-RD-BL"}
+sku_suffixes (reversed):   {"opt-a":"-RD-BL"}
+stable across click order? true
+```
+
+✅ **It concatenates every chosen value's suffix and is stable across click
+order**, because 18-1's authored-order sort runs before the join. The warehouse
+picking output was correct for multi-select before this stage started.
+
+📌 **Recorded rather than quietly deleted**, because a withdrawn finding is
+itself worth knowing: it is the second time in this phase that an empty result
+from a thin fixture read as a defect.
 
 #### Exit criteria
 
