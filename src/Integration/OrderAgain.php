@@ -138,13 +138,47 @@ final class OrderAgain {
 		$selections = array();
 
 		foreach ( $decoded as $option_id => $value_key ) {
+			if ( ! is_scalar( $option_id ) ) {
+				continue;
+			}
+
 			/*
-			 * Both halves must be scalar. A non-scalar reaching the cart would
-			 * be refused by `SelectionResolver` anyway, but it would also be
-			 * hashed into the cart item key on the way -- so it is dropped here,
-			 * where the shape is still ours to control.
+			 * 🔴 **A multi-select answer is a list, and it is replayed.**
+			 *
+			 * ⚠️ **Until M18.2 this dropped it silently.** The comment here said
+			 * a non-scalar "would be refused by `SelectionResolver` anyway" --
+			 * true until M18.1 taught the resolver to accept an array for
+			 * `cardinality: many`. After that the claim was stale and the drop
+			 * was **silent data loss**: a customer reordering a past
+			 * multi-select purchase got a line with those options *missing*,
+			 * with no error and nothing in the log.
+			 *
+			 * 🔴 **Every entry is checked, not just the outer value.** A nested
+			 * array would be hashed into the cart item key on the way to a
+			 * refusal -- the original reason this method validates at all -- so
+			 * a list carrying one is dropped whole rather than half-replayed.
+			 * Half a selection is the M11.5 shape: a line the customer cannot
+			 * account for.
 			 */
-			if ( ! is_scalar( $option_id ) || ! is_scalar( $value_key ) ) {
+			if ( is_array( $value_key ) ) {
+				$replayed = array();
+
+				foreach ( $value_key as $entry ) {
+					if ( ! is_scalar( $entry ) ) {
+						continue 2;
+					}
+
+					$replayed[] = (string) $entry;
+				}
+
+				if ( array() !== $replayed ) {
+					$selections[ (string) $option_id ] = $replayed;
+				}
+
+				continue;
+			}
+
+			if ( ! is_scalar( $value_key ) ) {
 				continue;
 			}
 

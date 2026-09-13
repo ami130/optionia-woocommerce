@@ -230,6 +230,89 @@ final class MultiSelectFenceTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **A `radio` declaring `many` is refused — one shirt, not two sizes.**
+	 *
+	 * Measured before this guard: `ok=true total=1500`. A radio is
+	 * single-choice *by definition*, and `cardinality` alone never asked what
+	 * the type could do — so a crafted payload bought Small **and** Large on one
+	 * line and was charged for both.
+	 *
+	 * ⚠️ **Unreachable through the dashboard today is not the same as safe.**
+	 * The backend registry allows `MANY` for no type at all, so this needs a
+	 * crafted payload or a mis-published document — but AC4 makes the document
+	 * input rather than authority, and **M18.3 adds `MANY` to the registry**.
+	 * The guard lands first.
+	 */
+	public function test_a_radio_declaring_many_is_refused(): void {
+		$sets = self::sets( 'many' );
+
+		$sets[0]['groups'][0]['options'][0]['type'] = 'radio';
+
+		$result = SelectionResolver::resolve(
+			$sets,
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			1000,
+			null,
+			true
+		);
+
+		$this->assertFalse(
+			$result->is_ok(),
+			'A radio must not accept two answers, whatever its cardinality says.'
+		);
+	}
+
+	/**
+	 * 🔴 **Every type outside the whitelist is refused, not just `radio`.**
+	 *
+	 * ⚠️ **A whitelist, so an unrecognised type takes the SINGLE-value path** —
+	 * the same safe direction an unknown cardinality takes. A blacklist would
+	 * pass every type nobody thought to forbid, and `file_input` at `many` is
+	 * the worst of those: it bypasses every upload-token path, each of which
+	 * reads one token per option.
+	 */
+	public function test_only_checkbox_may_take_several_answers(): void {
+		foreach ( array( 'dropdown', 'date_picker', 'file_input', 'text_field', 'a_type_from_a_newer_cloud' ) as $type ) {
+			$sets = self::sets( 'many' );
+
+			$sets[0]['groups'][0]['options'][0]['type'] = $type;
+
+			$result = SelectionResolver::resolve(
+				$sets,
+				array( 'opt-a' => array( 'red', 'blue' ) ),
+				1000,
+				null,
+				true
+			);
+
+			$this->assertFalse(
+				$result->is_ok(),
+				$type . ' must not take several answers.'
+			);
+		}
+	}
+
+	/**
+	 * ⚠️ The control: `checkbox` at `many` still resolves.
+	 *
+	 * Without it, both assertions above would be satisfied by a whitelist that
+	 * had become empty — which refuses multi-select entirely rather than
+	 * refusing the wrong types.
+	 */
+	public function test_checkbox_is_on_the_whitelist(): void {
+		$result = SelectionResolver::resolve(
+			self::sets( 'many' ),
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			1000,
+			null,
+			true
+		);
+
+		$this->assertTrue( $result->is_ok() );
+		$this->assertSame( array( 'opt-a' => 300 ), $result->value()['deltas'] );
+	}
+
+	/**
 	 * One option with two values, at the cardinality a test asks for.
 	 *
 	 * @param string $cardinality What the option declares.

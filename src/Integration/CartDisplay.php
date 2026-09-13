@@ -69,6 +69,7 @@ use Optionia\Engine\SelectionResolver;
 use Optionia\Support\Keys;
 use Optionia\Support\BasePrice;
 use Optionia\Support\Money;
+use Optionia\Support\OptionLabel;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -158,8 +159,22 @@ final class CartDisplay {
 			$option_id = (string) $option_id;
 			$label     = $labels[ $option_id ] ?? null;
 
-			$name  = $this->text( is_array( $label ) ? ( $label['option'] ?? null ) : null, $option_id );
-			$value = $this->text( is_array( $label ) ? ( $label['value'] ?? null ) : null, (string) $value_key );
+			/*
+			 * 🔴 **Read through `OptionLabel`, which knows both stored shapes.**
+			 *
+			 * `$label['option']` is `null` when the label is a *list* — the
+			 * `cardinality: many` shape — so this fell back to the option id,
+			 * and `(string) $value_key` on the selection array coerced to the
+			 * literal `"Array"`. Measured: this method reached
+			 * `Array to string conversion` on a multi-select line.
+			 *
+			 * ⚠️ **One row per option, whatever its cardinality**, so
+			 * `Extras: Red, Blue (+3.00)` is a single row carrying the option's
+			 * summed contribution. `OrderLineItem` and `CheckoutValidator` read
+			 * the same way through the same class.
+			 */
+			$name  = OptionLabel::name( $label, $option_id );
+			$value = OptionLabel::value( $label, $value_key );
 
 			$rows[] = $this->row( $name, $this->with_price( $value, $deltas[ $option_id ] ?? null ) );
 		}

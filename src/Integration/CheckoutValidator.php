@@ -77,6 +77,7 @@ use Optionia\Config\Repository;
 use Optionia\Engine\SelectionResolver;
 use Optionia\Support\Keys;
 use Optionia\Support\Logger;
+use Optionia\Support\OptionLabel;
 use Optionia\Upload\UploadTokenCheck;
 
 defined( 'ABSPATH' ) || exit;
@@ -529,8 +530,23 @@ final class CheckoutValidator {
 	private function name_for( string $option_id, array $labels, array $option_sets ): string {
 		$label = $labels[ $option_id ] ?? null;
 
-		if ( is_array( $label ) && isset( $label['option'] ) && is_scalar( $label['option'] ) && '' !== (string) $label['option'] ) {
-			return (string) $label['option'];
+		/*
+		 * 🔴 **Read through `OptionLabel`, which knows both stored shapes.**
+		 *
+		 * This used to read `$label['option']` directly, which is `null` when
+		 * the label is a *list* — the `cardinality: many` shape — so a
+		 * multi-select option fell through to the live configuration and, for a
+		 * deleted option, all the way to the raw id. A customer blocked at
+		 * checkout would read a slug instead of the option's name.
+		 *
+		 * ⚠️ **The three-tier fallback is unchanged**, only its first tier:
+		 * `''` from the snapshot still falls through to the live label and then
+		 * to the id, because tiers 2 and 3 answer cases the snapshot cannot.
+		 */
+		$snapshot = OptionLabel::name( $label, '' );
+
+		if ( '' !== $snapshot ) {
+			return $snapshot;
 		}
 
 		$live = $this->live_label( $option_id, $option_sets );

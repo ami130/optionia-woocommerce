@@ -61,6 +61,7 @@ namespace Optionia\Integration;
 
 use Optionia\Support\Keys;
 use Optionia\Support\Money;
+use Optionia\Support\OptionLabel;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -171,12 +172,23 @@ final class OrderLineItem {
 			$option_id = (string) $option_id;
 			$label     = $labels[ $option_id ] ?? null;
 
-			$name  = is_array( $label ) && isset( $label['option'] ) && is_scalar( $label['option'] ) && '' !== (string) $label['option']
-				? (string) $label['option']
-				: $option_id;
-			$value = is_array( $label ) && isset( $label['value'] ) && is_scalar( $label['value'] ) && '' !== (string) $label['value']
-				? (string) $label['value']
-				: (string) $value_key;
+			/*
+			 * 🔴 **Read through `OptionLabel`, which knows both stored shapes.**
+			 *
+			 * This used to read `$label['option']` directly. That is `null` when
+			 * the label is a *list* — the `cardinality: many` shape M18.1
+			 * introduced — so a multi-select line fell back to the raw option id
+			 * and coerced the value array to the string `"Array"`, with a PHP
+			 * notice. Measured: `name='opt-a'  value='Array'`.
+			 *
+			 * ⚠️ **This is the merchant's fulfilment record.** It reaches
+			 * packing slips, order emails, CSV export and refund tooling, and it
+			 * is permanent — so a wrong value here outlives the cart it came
+			 * from. Two other consumers asked the same question their own way;
+			 * all three now ask it once.
+			 */
+			$name  = OptionLabel::name( $label, $option_id );
+			$value = OptionLabel::value( $label, $value_key );
 
 			/*
 			 * Not truncated, and deliberately so: an engraving can be 200

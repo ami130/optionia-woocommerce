@@ -87,6 +87,21 @@ final class UploadTokens {
 		$tokens = array();
 
 		foreach ( $selections as $option_id => $value ) {
+			/*
+			 * ⚠️ **A multi-select answer is a list and holds no token.**
+			 *
+			 * `is_token()` tests a 64-character hex string, so an array is
+			 * false and a `cardinality: many` option is skipped. That was true
+			 * by coercion before M18.2 and is true by *design* after it:
+			 * `SelectionResolver::MANY_CAPABLE_TYPES` holds `checkbox` alone,
+			 * so `file_input` can never declare `many` — one option, one token,
+			 * which is the shape every upload path reads.
+			 *
+			 * 📌 **If M18.3 or later ever grants `many` to a file type, this is
+			 * one of the places that must change**, along with
+			 * `UploadPromoter`, `UploadTokenCheck` and the `unusable()` report.
+			 * Recorded here because the coupling is otherwise invisible.
+			 */
 			if ( self::is_token( $value ) ) {
 				$tokens[ (string) $option_id ] = (string) $value;
 			}

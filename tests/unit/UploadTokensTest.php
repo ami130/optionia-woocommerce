@@ -92,6 +92,32 @@ final class UploadTokensTest extends TestCase {
 	}
 
 	/** Anything that is not a selection map yields nothing. */
+	/**
+	 * 🔴 **A multi-select answer carries no token and is skipped.**
+	 *
+	 * ⚠️ **Safe by DESIGN after M18.2, not by coercion.**
+	 * `SelectionResolver::MANY_CAPABLE_TYPES` holds `checkbox` alone, so
+	 * `file_input` can never declare `cardinality: many` — one option, one
+	 * token, which is the shape every upload path reads.
+	 *
+	 * Asserted anyway, because the coupling is invisible: if a later stage ever
+	 * grants `many` to a file type, this test is where that shows up rather
+	 * than in a customer's missing artwork.
+	 */
+	public function test_a_list_answer_carries_no_token(): void {
+		$token = str_repeat( 'a', 64 );
+
+		$this->assertSame(
+			array( 'opt-f' => $token ),
+			UploadTokens::in_selections(
+				array(
+					'opt-f' => $token,
+					'opt-m' => array( 'red', 'blue' ),
+				)
+			)
+		);
+	}
+
 	public function test_a_non_map_yields_nothing(): void {
 		$this->assertSame( array(), UploadTokens::in_selections( 'not a map' ) );
 		$this->assertSame( array(), UploadTokens::in_selections( null ) );

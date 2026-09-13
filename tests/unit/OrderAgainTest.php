@@ -220,29 +220,60 @@ final class OrderAgainTest extends TestCase {
 	}
 
 	/**
-	 * Non-scalar members are dropped rather than carried into the cart key.
+	 * 🔴 **A multi-select answer is replayed, not silently dropped.**
 	 *
-	 * They would be hashed into the cart item key on the way, so they are
-	 * dropped here, where the shape is still ours to control.
-	 *
-	 * ⚠️ **The original reason for this test has expired.** It read
-	 * *"`SelectionResolver` would refuse them anyway"* — true until M18.1, which
-	 * taught the resolver to accept an array for an option declaring
-	 * `cardinality: many`. The drop is still correct, but it is no longer a
-	 * belt-and-braces guard over a refusal: it is now the **only** thing
-	 * standing between a multi-select order and a malformed cart key.
-	 *
-	 * 🔴 **And it is silent data loss.** A customer reordering a past
-	 * multi-select purchase gets a line with those options **missing**, with no
-	 * error and nothing in the log. Fail-closed, but not fail-visible.
-	 *
-	 * 📌 **M18.2 step 5 (F7) must carry the array through** rather than drop it,
-	 * once the cart can hold one. Until then this test pins the safe behaviour,
-	 * not the desirable one.
+	 * ⚠️ **This test asserted the opposite until M18.2.** Its reason —
+	 * *"`SelectionResolver` would refuse them anyway"* — expired at M18.1, which
+	 * taught the resolver to accept an array for `cardinality: many`. After
+	 * that the drop was **silent data loss**: a customer reordering a past
+	 * multi-select purchase got a line with those options *missing*, with no
+	 * error and nothing in the log.
 	 */
-	public function test_non_scalar_members_are_dropped(): void {
+	public function test_a_multi_select_answer_is_replayed(): void {
 		$item = optionia_test_order_item();
-		$item->add_meta_data( Keys::META_SELECTIONS, '{"opt-a":"lux","opt-b":["array"]}', true );
+		$item->add_meta_data( Keys::META_SELECTIONS, '{"opt-a":"lux","opt-b":["red","blue"]}', true );
+
+		$rebuilt = ( new OrderAgain() )->rebuild( array(), $item );
+
+		$this->assertSame(
+			array(
+				'opt-a' => 'lux',
+				'opt-b' => array( 'red', 'blue' ),
+			),
+			$rebuilt[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]
+		);
+	}
+
+	/**
+	 * 🔴 **A NESTED array is still dropped, and the whole option with it.**
+	 *
+	 * The original reason this method validates at all: a non-scalar would be
+	 * hashed into the cart item key on the way to a refusal. A list carrying one
+	 * is dropped whole rather than half-replayed — half a selection is the M11.5
+	 * shape, a line the customer cannot account for.
+	 */
+	public function test_a_nested_array_drops_the_whole_option(): void {
+		$item = optionia_test_order_item();
+		$item->add_meta_data( Keys::META_SELECTIONS, '{"opt-a":"lux","opt-b":["red",["nested"]]}', true );
+
+		$rebuilt = ( new OrderAgain() )->rebuild( array(), $item );
+
+		$this->assertSame(
+			array( 'opt-a' => 'lux' ),
+			$rebuilt[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]
+		);
+	}
+
+	/**
+	 * An empty list answers nothing, and carries no key into the cart.
+	 *
+	 * A multi-select with nothing ticked; the resolver treats an empty array as
+	 * an unanswered option, and a key holding one would hash into the cart item
+	 * key for no reason.
+	 */
+	public function test_an_empty_list_carries_no_selection(): void {
+		$item = optionia_test_order_item();
+		$item->add_meta_data( Keys::META_SELECTIONS, '{"opt-a":"lux","opt-b":[]}', true );
 
 		$rebuilt = ( new OrderAgain() )->rebuild( array(), $item );
 

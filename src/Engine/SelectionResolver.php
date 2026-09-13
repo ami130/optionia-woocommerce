@@ -124,6 +124,32 @@ final class SelectionResolver {
 	public const ERROR_MANY_UNSUPPORTED = 'many_unsupported';
 
 	/**
+	 * The option types that may legitimately take several answers.
+	 *
+	 * 🔴 **Mirrors the backend's type registry, which is the authority.** There,
+	 * each type declares `cardinality: [ONE]` or `[NONE]`, and a payload naming
+	 * anything else is refused at authoring time. **No type declares `MANY`
+	 * yet** — M18.3 is the stage that grants it, and `checkbox` is the type it
+	 * grants it to.
+	 *
+	 * ⚠️ **The plugin needs its own copy because AC4 makes the published
+	 * document input, not authority.** A crafted payload or a document from a
+	 * cloud that got this wrong reaches the resolver without passing the
+	 * registry, and `Renderer` only draws `[]` inputs for `checkbox` — so any
+	 * other type at `many` is an answer no form on the storefront could have
+	 * produced.
+	 *
+	 * Measured before this list existed: a `radio` at `many` accepted **Small
+	 * and Large on one line** and charged for both.
+	 *
+	 * 📌 **Kept in step with `type-registry.ts` by hand, not by a gate.** A
+	 * cross-repo gate would be better; it is not written because the list has
+	 * one entry and M18.3 is the next thing to touch it. If it grows past two,
+	 * gate it.
+	 */
+	private const MANY_CAPABLE_TYPES = array( 'checkbox' );
+
+	/**
 	 * The longest text accepted when the merchant sets no limit.
 	 *
 	 * 🔴 **An unconfigured option must not mean unbounded input.** Measured: a
@@ -2138,7 +2164,44 @@ final class SelectionResolver {
 			? (string) $option['cardinality']
 			: '';
 
-		return 'many' === $cardinality;
+		if ( 'many' !== $cardinality ) {
+			return false;
+		}
+
+		/*
+		 * 🔴 **The TYPE must also be able to take several answers.**
+		 *
+		 * `cardinality` alone is not enough. Measured before this guard: a
+		 * `radio` declaring `many` accepted **Small and Large on one line** and
+		 * charged for both — one shirt in two sizes. `dropdown`, `date_picker`
+		 * and `file_input` behaved the same way, and a `file_input` at `many`
+		 * additionally bypasses every upload-token path, which reads one token
+		 * per option.
+		 *
+		 * ⚠️ **Unreachable through the dashboard *today*, and that is not the
+		 * same as safe.** The backend registry currently allows `MANY` for no
+		 * type at all, so this needs a crafted payload or a mis-published
+		 * document — but AC4 makes the document *input*, not authority, and
+		 * **M18.3 is the stage that adds `MANY` to the registry**. The guard
+		 * lands first so that stage cannot open the hole by being correct about
+		 * one type.
+		 *
+		 * 🔴 **A whitelist, not a blacklist.** A type this build does not
+		 * recognise takes the single-value path, which is where every
+		 * downstream structure already works — the same safe direction the
+		 * unknown-cardinality case above takes. Adding a type here is a
+		 * decision somebody has to write down.
+		 */
+		return in_array( self::presentation_of( $option ), self::MANY_CAPABLE_TYPES, true );
+	}
+
+	/**
+	 * An option's presentation type, or an empty string when it names none.
+	 *
+	 * @param array<string, mixed> $option One published option.
+	 */
+	private static function presentation_of( array $option ): string {
+		return isset( $option['type'] ) && is_scalar( $option['type'] ) ? (string) $option['type'] : '';
 	}
 
 	/**
