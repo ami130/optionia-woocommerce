@@ -55,6 +55,20 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 **[Phase 18](#phase-18--option-groups--ordering), stage 18-2 — multi-select
 through the cart, labels, order and analytics.**
 
+📌 **Analysed 2026-09-13; ADR-061 settles the design and the execution plan is
+written.** Ten findings, four blocking. Start at **step 1: coverage**, not at
+the code — `cardinality` appears in no consumer test suite, and that blind spot
+is what let 18-1 ship a live overcharge with a green suite.
+
+🔴 **The obvious fix is worse than the fence.** Relaxing the count guard leaks
+prices *between* options and freezes the wrong total under a valid signature —
+measured at a 100-minor undercharge. `deltas` becomes keyed by option id
+instead.
+
+✅ **No migration, measured:** the *stored* shape has always been keyed, so a
+single-value line's payload and signature are byte-identical before and after.
+Carts in flight are untouched.
+
 ✅ **18-0 and 18-1 are done.** Three ADRs, then the array path through the
 resolver: `checkbox.php` branches on `cardinality`, and the resolver accepts,
 deduplicates, validates and prices a list.
@@ -21285,7 +21299,7 @@ it lands on; nesting absent because ADR-058 deferred it.
 |---|---|---|---|
 | **18-0** | **Three decisions** — ADR-057, ADR-058, ADR-059 | — | ✅ done |
 | 18-1 | Multi-select: template `[]`, request, resolver array branch | plugin | ADR-057 |
-| 18-2 | Multi-select through cart, labels, order, analytics | plugin | ADR-057 |
+| 18-2 | Multi-select through cart, labels, order, analytics | plugin | ADR-057, **ADR-061** |
 | 18-3 | `MANY` joins the registry; multi-select fixture cases | backend + shared | M14.1 |
 | 18-4 | Group display types rendered and authorable | plugin + dashboard | M18.2, ADR-059 |
 | 18-5 | Group presentation config, following the option `display` precedent | all three | M18.5 |
@@ -21495,6 +21509,128 @@ structure every other part of the system walks.
 this phase. Separate change, separate decision — recorded together only so
 neither is lost.
 
+---
+
+### ▶ Stage 18-2 — multi-select through the cart, the order and the display
+
+**Decided by ADR-061.** Analysed 2026-09-13; every finding below is measured
+against running code, not inferred.
+
+#### The one sentence this stage turns on
+
+`resolved` is keyed **one entry per option**; `deltas` is a positional list with
+**one entry per priced value**. For single-value options those counts coincide,
+and every consumer was built on that coincidence.
+
+| Document | `resolved` | `deltas` | Coincide? |
+|---|---|---|---|
+| 1 option, 1 value | 1 | 1 | ✅ |
+| 1 `many` option, 2 values | 1 | 2 | ❌ |
+| 1 `many` (2 vals) + 1 `one` | 2 | 3 | ❌ |
+
+So 18-2 is **not** "add array support to nine files." It is changing the pairing
+contract between the resolver and everything downstream.
+
+#### 🔴 Why the obvious fix is worse than the fence
+
+Relaxing `count( $resolved ) !== count( $deltas )` leaks prices **between
+options**. Measured with `many(red,blue) + one(red)`, deltas `[100,200,100]`:
+
+```
+naive positional pairing: {"opt-a":100,"opt-z":200}
+  opt-a should be 300, got 100
+  opt-z should be 100, got 200
+  frozen total 300 vs real 400 -> undercharge of 100 minor
+```
+
+The wrong total is then **signed and frozen**, so it survives every later
+verification. A fail-closed refusal beats a confidently wrong freeze.
+
+#### ✅ Three measurements that settled the design
+
+📌 **No migration, and no signature break.** `CartItemPayload::frozen_deltas()`
+already reads `foreach ( $deltas as $option_id => $delta )` — the *stored* shape
+has always been keyed. Positional pairing exists only between the resolver
+returning and `CartItemData` storing. Measured: for a single-value line the
+stored array is byte-identical before and after, so `sign()` is unchanged and
+**carts in flight are untouched**. An earlier draft of this analysis warned the
+opposite; it was wrong, and the measurement is why.
+
+📌 **Summed-per-option is the only shape the trust gate accepts.**
+`frozen_deltas()` requires `is_int( $delta )` per entry. Measured:
+`{"opt-a":300}` passes; `{"opt-a":[100,200]}` returns `null` — which means the
+line prices live, re-opening the exact defect this stage closes.
+
+📌 **Every consumer wants the summed figure.** `CartTotals` sums them;
+`CartDisplay` renders **one row per option** with one price beside it;
+`OrderLineItem` writes one meta entry per option. Nothing asks what the second
+chosen value cost.
+
+#### The issue list
+
+| # | Issue | Severity | Site |
+|---|---|---|---|
+| F2 | Count-relaxation mis-assigns prices across options, then freezes and signs the wrong total | 🔴 | both pairing sites |
+| F1 | **Two** independent positional pairings, not one | 🔴 | `CartItemData::deltas_by_option()`, `CartDisplay` inline |
+| F3 | Order meta writes `"Array"` + a PHP warning | 🔴 | `OrderLineItem`, `CheckoutValidator`, `CartDisplay` |
+| F4 | No downstream test exercises `many` | 🔴 | five consumer suites |
+| F5 | `many` accepted for **every** type, incl. `radio` | 🟠 | `SelectionResolver` |
+| F7 | Reorder silently drops multi-select lines | 🟠 | `OrderAgain:147` |
+| F6 | `sku_suffixes` empty for multi-select | 🟠 | `SelectionResolver` |
+| F9 | File tokens safe by coercion, not intent | 🟡 | `UploadTokens` |
+| F8 | Cart key nesting — **verified working** | ✅ | no action |
+| F10 | Request boundary — **verified sound** | ✅ | no action |
+
+🔴 **F1 — the plan previously named one pairing site; there are two.**
+`CartDisplay:231-238` reimplements `array_combine( array_keys( $resolved ),
+$amounts )` independently. Fixing only the named one leaves the *displayed
+breakdown* wrong while the charged total is right, or the reverse.
+`CartItemPayload`'s own docblock says this question is "asked in three places
+and must get one answer."
+
+🔴 **F3 is the merchant's fulfilment record, not a cosmetic glitch.** Measured
+at `OrderLineItem`: `name='opt-a'  value='Array'`, with
+`Warning: Array to string conversion`. That reaches packing slips, emails, CSV
+export and refund tooling, and it is permanent.
+
+🔴 **F4 is how 18-1 shipped a live overcharge with a green suite.**
+`cardinality` appears in four test files — the two multi-select suites,
+`RendererTest`, `PriceConfigDeltaTest` — and **none** of the consumer suites.
+
+🟠 **F5 — a `radio` at `many` charges for Small AND Large on one line.**
+Measured `ok=true total=1500`. Unreachable through the dashboard today because
+the backend registry allows `MANY` for **no type at all** — a crafted-payload
+path under AC4. ⚠️ **But 18-3 is the stage that adds `MANY` to the registry**,
+so this guard must land *before* it. The registry comment claiming the resolver
+"never reads `type` at all" is **outdated** — it reads `type` at three sites —
+so the cross-check is cheap.
+
+✅ **F8, verified rather than assumed.** `CartItemKey::recompute()` uses
+`http_build_query()`, which flattens nesting correctly:
+`opt-a%5B0%5D=red&opt-a%5B1%5D=blue`. Distinct from the scalar form, no
+collision — **and order changes the key**, which confirms 18-1's authored-order
+sort is load-bearing for line deduplication, not cosmetic.
+
+#### Execution order — and the order matters more than usual
+
+| Step | Work | Why here |
+|---|---|---|
+| 1 | **F4: coverage first.** Multi-select cases in all five consumer suites, against current fenced behaviour | They pass trivially now, and become the net for everything after. Skipping this repeats 18-1 exactly. |
+| 2 | **F2: `deltas` becomes `array<string, int>`**, summed per option; delete both pairings; keep the count guard | One assembly point (`SelectionResolver:1574`). The guard stops being a coincidence and becomes a real invariant. |
+| 3 | **F1 + F3 together** — pairing and labelling at every site | Three label sites, two pairing sites. Splitting them leaves display and total disagreeing. |
+| 4 | **F5: type/cardinality cross-check** | Must precede 18-3. |
+| 5 | **F7, F6, F9** — remaining consumers | Lower blast radius. |
+| 6 | **Delete the fence** (ADR-060's three sites) | Last, not first: ADR-057's bar is that the *whole* path works. |
+
+#### Exit criteria
+
+- [ ] Every consumer suite has a named multi-value test that fails without the fix
+- [ ] `deltas` is keyed by option id at the single assembly point; no `array_combine` on it remains
+- [ ] A single-value line's stored payload and signature are **proven byte-identical** to before
+- [ ] Cart total, displayed breakdown and order meta agree for a multi-select line
+- [ ] A `radio` at `many` is refused
+- [ ] ADR-060's three fence sites are gone, and `MultiSelectFenceTest`'s pairing test is **rewritten, not deleted**
+- [ ] Mutation-proven: every guard killed by a named failing test
 
 ---
 
