@@ -384,38 +384,6 @@ final class Renderer {
 			return '';
 		}
 
-		/*
-		 * 🔴 **A multi-select is skipped until M18.2 can sell one**, for exactly
-		 * the reason the unknown-type case above is skipped: a control a
-		 * customer can fill in and the server will refuse is worse than no
-		 * control at all.
-		 *
-		 * `SelectionResolver` fences `cardinality: many` behind
-		 * `ERROR_MANY_UNSUPPORTED` (ADR-060), because a `many` document breaks
-		 * the positional pairing in `deltas_by_option()` and the line prices
-		 * live. Without this, the storefront would still render the checkboxes:
-		 * the customer ticks two boxes, and add-to-cart refuses with a generic
-		 * "that selection is not available" they cannot act on.
-		 *
-		 * ⚠️ **Skipped, not rendered-disabled.** A visibly disabled control
-		 * tells a customer the merchant meant to offer something; skipping says
-		 * the product has one fewer option, which is what is actually true for
-		 * this build.
-		 *
-		 * 📌 **M18.2 deletes this block** along with the resolver's guard.
-		 */
-		if ( 'many' === (string) ( $option['cardinality'] ?? 'one' ) ) {
-			$this->logger->debug(
-				'Multi-select option skipped; this build cannot carry one through the cart.',
-				array(
-					'type'      => $type,
-					'option_id' => isset( $option['id'] ) ? (string) $option['id'] : '',
-				)
-			);
-
-			return '';
-		}
-
 		$markup = $this->templates->render(
 			'options/' . sanitize_key( $type ) . '.php',
 			array(

@@ -90,40 +90,6 @@ final class SelectionResolver {
 	public const ERROR_UNPRICEABLE = 'unpriceable';
 
 	/**
-	 * Error code: a multi-select answer arrived before the cart could carry one.
-	 *
-	 * 🔴 **Temporary, and it removes itself in Stage 18-2.** Stage 18-1 taught
-	 * the resolver to accept several answers for one option; nine consumers
-	 * downstream — the cart line, its label, the order meta, analytics — still
-	 * expect a single scalar. Between the two stages a `many` document is a
-	 * document this build can resolve and cannot sell.
-	 *
-	 * ✅ **The pricing half of this is FIXED as of M18.2 step 2 (ADR-061).**
-	 * `deltas` is now keyed by option id and summed across an option's chosen
-	 * values, so a multi-select pairs correctly and the freeze holds. Before
-	 * that, `deltas_by_option()` paired positionally: one selection carrying two
-	 * deltas was a count mismatch, the pairing returned `array()`,
-	 * `trusted_deltas()` found no key, and **the line priced live** — the 16c
-	 * mechanism, which quoted 85.00 and charged 130.00.
-	 *
-	 * ⚠️ **The fence still stands, because the LABELS are not carried yet.** A
-	 * multi-value line renders the raw option id and the word `"Array"` in the
-	 * cart and, worse, in the **order meta** a merchant fulfils from —
-	 * `$label['option']` is NULL for a list and `(string)` on an array coerces.
-	 * Step 3 fixes that, and step 6 removes this constant.
-	 *
-	 * 🔴 **Reachable now, not hypothetically.** `AC4` makes the document input
-	 * rather than authority, and the plugin validates no `cardinality` on the
-	 * cached document — so a published `many`, or a tampered cache, reaches this
-	 * path without anybody authoring a multi-select in the dashboard.
-	 *
-	 * Before 18-1 this exact payload hit `ERROR_NOT_SCALAR` and the line was
-	 * refused. 18-1 moved the fence without moving the wall behind it; this puts
-	 * the wall back until 18-2 builds the real one.
-	 */
-	public const ERROR_MANY_UNSUPPORTED = 'many_unsupported';
-
-	/**
 	 * The option types that may legitimately take several answers.
 	 *
 	 * 🔴 **Mirrors the backend's type registry, which is the authority.** There,
@@ -479,9 +445,6 @@ final class SelectionResolver {
 	 * @param int                              $base_minor  The product's own price, in minor units.
 	 * @param ?string                          $today       Today in the **store's** timezone as
 	 *                                                      `Y-m-d`, or null.
-	 * @param bool                             $allow_many  Test-only: resolve a `many` option
-	 *                                                      instead of refusing it. M18.2 removes
-	 *                                                      this parameter and the guard it opens.
 	 *
 	 * 🔴 **The engine has no clock, and this is why.** `lead_time_days` and
 	 * `max_advance_days` are relative to *today*, and "today" is a question about
@@ -499,23 +462,6 @@ final class SelectionResolver {
 	 * `min_date`, `max_date`, `blackout_dates`, `allowed_weekdays` — need no
 	 * clock and always apply.
 	 *
-	 * ## `$allow_many` exists so a fence can be tested from behind it
-	 *
-	 * 🔴 **Defaults to refusing, and every production caller takes the
-	 * default.** `ERROR_MANY_UNSUPPORTED` explains why a `many` document must
-	 * not reach the cart before Stage 18-2: the frozen price is discarded and
-	 * the line prices live.
-	 *
-	 * ⚠️ **A parameter rather than a filter, deliberately.** A filter is a
-	 * supported extension point, and a third-party plugin switching this on
-	 * would re-open the live-pricing defect in a store nobody was watching.
-	 * This is reachable only from PHP that already has the class, and it is one
-	 * argument for 18-2 to delete along with the guard.
-	 *
-	 * `MultiSelectResolutionTest` passes `true` to prove the resolution logic
-	 * 18-2 will unfence; `MultiSelectFenceTest` passes nothing to prove the
-	 * fence itself holds for every caller that ships.
-	 *
 	 * @return Result Ok with `array{deltas, resolved, total_minor, unpriced, labels, set_ids}`,
 	 *                where `deltas` is keyed by option id and summed across that
 	 *                option's chosen values (ADR-061), or errors.
@@ -524,8 +470,7 @@ final class SelectionResolver {
 		array $option_sets,
 		array $selections,
 		int $base_minor = 0,
-		?string $today = null,
-		bool $allow_many = false
+		?string $today = null
 	): Result {
 		$options = self::index_options( $option_sets );
 		$errors  = array();
@@ -637,37 +582,6 @@ final class SelectionResolver {
 			 * them come to answer it differently.
 			 */
 			$is_many = self::takes_many( $options[ $option_id ] );
-
-			/*
-			 * 🔴 **Refused until Stage 18-2 teaches the cart to carry it.**
-			 *
-			 * See `ERROR_MANY_UNSUPPORTED` for the measurement. In short: one
-			 * selection carrying two deltas is a count mismatch in
-			 * `deltas_by_option()`, the frozen price is discarded, and the line
-			 * prices live — the customer is charged a number nobody quoted.
-			 *
-			 * ⚠️ **Refused on the option's declaration, not on the payload's
-			 * shape.** A `many` option answered with a bare scalar resolves to a
-			 * single-entry list and prices correctly today — but it is the same
-			 * option, one tick away from the broken case, and letting it through
-			 * would mean a merchant's multi-select worked until a customer
-			 * ticked twice. A fence that holds for some customers is not a
-			 * fence.
-			 *
-			 * 🔴 **Stage 18-2 deletes this block as its first act.** That is why
-			 * it is written as one contiguous guard rather than spread through
-			 * the branches below: it is meant to be removable in a single cut,
-			 * and `MultiSelectResolutionTest` proves what is waiting behind it.
-			 */
-			if ( $is_many && ! $allow_many ) {
-				$errors[] = array(
-					'code'   => self::ERROR_MANY_UNSUPPORTED,
-					'field'  => $option_id,
-					'params' => array(),
-				);
-
-				continue;
-			}
 
 			if ( $is_many && is_array( $raw_value ) ) {
 				$chosen_keys = array_values( $raw_value );
@@ -1556,30 +1470,6 @@ final class SelectionResolver {
 			 * because the alternative is a dead end for the customer.
 			 */
 			if ( isset( $rule_hidden[ $option_id ] ) ) {
-				continue;
-			}
-
-			/*
-			 * 🔴 **A fenced multi-select cannot be required, for the same reason
-			 * a hidden option cannot be: it is not on the page.**
-			 *
-			 * `Renderer::option_markup()` skips a `cardinality: many` option
-			 * (ADR-060), so the customer never sees it. Demanding it anyway
-			 * makes the product **unbuyable** — "Please choose all required
-			 * options" with nothing to choose, and no amount of clicking fixes
-			 * it. Measured: `many` + `is_required` + unanswered returned
-			 * `ERROR_REQUIRED` for a field that was never rendered.
-			 *
-			 * ⚠️ **This is the composition the unit tests missed.** Each half of
-			 * the fence was right alone — the renderer treats the option as
-			 * absent, the resolver treated it as present-and-mandatory — and
-			 * only together did they produce a dead end. The `many` guard above
-			 * refuses an *answered* fenced option; this makes an *unanswered*
-			 * one simply absent, which is what the storefront already shows.
-			 *
-			 * 📌 **M18.2 deletes this with the rest of the fence.**
-			 */
-			if ( self::takes_many( $option ) && ! $allow_many ) {
 				continue;
 			}
 

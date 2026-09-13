@@ -1013,33 +1013,38 @@ final class OrderLineItemTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **A multi-select writes NO order meta while the fence stands.**
+	 * 🔴 **A multi-select writes its real name and every chosen value.**
 	 *
-	 * ⚠️ **This is the merchant's fulfilment record**, not a display surface.
-	 * It reaches packing slips, order emails, CSV export and refund tooling, and
-	 * it is permanent — so a wrong value here outlives the cart it came from.
+	 * ⚠️ **This is the merchant's fulfilment record**, not a display surface:
+	 * packing slips, order emails, CSV export, refund tooling — and permanent,
+	 * so a wrong value here outlives the cart it came from.
 	 *
-	 * Measured without the fence, by replicating this method's naming logic
-	 * against a `many` label shape:
-	 *
-	 * ```
-	 * Warning: Array to string conversion
-	 * order meta -> name='opt-a'  value='Array'
-	 * ```
-	 *
-	 * `$label['option']` is NULL for a list, so the name falls back to the raw
-	 * option id; `(string)` on the array coerces to `"Array"`. Two defects in
-	 * one line of output.
-	 *
-	 * 📌 **M18.2 step 3 inverts this**, and must write `Extras` / `Red, Blue`.
+	 * 🔴 **This asserted the opposite until M18.3.** While the fence stood
+	 * nothing was written; before the fence it wrote `name='opt-a'` and
+	 * `value='Array'`, **with a PHP notice**, because `$label['option']` is
+	 * null for a list and `(string)` on an array coerces.
 	 */
-	public function test_a_multi_select_writes_no_order_meta_while_fenced(): void {
+	public function test_a_multi_select_writes_every_chosen_value(): void {
 		$item = optionia_test_order_item();
 
 		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( array( 'red', 'blue' ) ) );
 
-		$this->assertNull( $item->get_meta( 'Extras' ) );
+		$this->assertSame( 'Red, Blue', $item->get_meta( 'Extras' ) );
 		$this->assertNull( $item->get_meta( 'opt-a' ), 'An id must never appear where a label belongs.' );
+	}
+
+	/**
+	 * 🔴 **The order meta never contains the string "Array".**
+	 *
+	 * Asserted separately from the exact text, because this is the defect and a
+	 * later change to the separator must not be able to take the guard with it.
+	 */
+	public function test_order_meta_never_coerces_an_array(): void {
+		$item = optionia_test_order_item();
+
+		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( array( 'red', 'blue' ) ) );
+
+		$this->assertStringNotContainsString( 'Array', (string) $item->get_meta( 'Extras' ) );
 	}
 
 	/**

@@ -428,23 +428,39 @@ final class CartDisplayTest extends TestCase {
 	// --- Helpers -------------------------------------------------------------
 
 	/**
-	 * 🔴 **A multi-select line shows no rows while the fence stands.**
+	 * 🔴 **A multi-select is ONE row, naming every chosen value and one price.**
 	 *
-	 * ⚠️ **This suite holds the SECOND positional pairing.**
-	 * `CartDisplay::deltas_for()` reimplements `array_combine( array_keys(
-	 * $resolved ), $amounts )` independently of
-	 * `CartItemData::deltas_by_option()`. The plan named only the latter for a
-	 * long time; fixing one and not the other leaves the customer's *displayed
-	 * breakdown* disagreeing with the price they are *charged*.
+	 * ⚠️ **This asserted the opposite until M18.3.** While the fence stood the
+	 * line showed nothing; before the fence it showed the raw option id and the
+	 * word `"Array"`, because `$label['option']` is null for a list and
+	 * `(string)` on an array coerces. Measured here now: `Extras` /
+	 * `Red, Blue (+3.00)`.
 	 *
-	 * `CartItemPayload`'s own docblock says this question is "asked in three
-	 * places and must get one answer". This test is the display's half.
-	 *
-	 * 📌 **M18.2 step 3 inverts this**, and the inversion must land in the same
-	 * change as the totals one or the two halves disagree again.
+	 * 🔴 **One row, not two**, and one summed price beside it — the reason
+	 * ADR-061 keyed `deltas` by option and summed across values rather than
+	 * keeping a per-value list. A per-value list would have no row to render
+	 * itself into.
 	 */
-	public function test_a_multi_select_line_shows_nothing_while_fenced(): void {
-		$this->assertSame( array(), $this->many_rows( array( 'red', 'blue' ) ) );
+	public function test_a_multi_select_is_one_row_naming_every_value(): void {
+		$rows = $this->many_rows( array( 'red', 'blue' ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'Extras', $rows[0]['key'] );
+		$this->assertSame( 'Red, Blue (+3.00)', $rows[0]['value'] );
+	}
+
+	/**
+	 * 🔴 **The row never contains the string "Array".**
+	 *
+	 * Asserted separately from the exact text because this is the defect, and a
+	 * later change to the separator or the price format should not be able to
+	 * take the guard with it.
+	 */
+	public function test_a_multi_select_row_never_coerces_an_array(): void {
+		$rows = $this->many_rows( array( 'red', 'blue' ) );
+
+		$this->assertStringNotContainsString( 'Array', $rows[0]['value'] );
+		$this->assertStringNotContainsString( 'opt-a', $rows[0]['key'] );
 	}
 
 	/**

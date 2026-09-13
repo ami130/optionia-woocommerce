@@ -912,13 +912,13 @@ final class PriceConfigDeltaTest extends TestCase {
 		 * blacklist passes for every parameter nobody thought to forbid; this
 		 * makes any signature change a decision somebody has to write down here.
 		 *
-		 * 📌 **`allow_many` is temporary and M18.2 removes it** — along with the
-		 * fence it opens, which refuses a `cardinality: many` document until the
-		 * cart can carry one. When that parameter goes, this list shortens back
-		 * to four.
+		 * ✅ **Back to four.** M18.2 added a fifth, `allow_many`, so the
+		 * multi-select fence could be tested from behind it; M18.3 removed the
+		 * fence and the parameter together. This gate caught the addition on
+		 * its first run, which is the argument for an exact list.
 		 */
 		$this->assertSame(
-			array( 'option_sets', 'selections', 'base_minor', 'today', 'allow_many' ),
+			array( 'option_sets', 'selections', 'base_minor', 'today' ),
 			array_map(
 				static fn( \ReflectionParameter $p ): string => $p->getName(),
 				$reflection->getParameters()

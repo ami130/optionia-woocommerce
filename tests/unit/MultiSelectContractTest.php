@@ -1,6 +1,6 @@
 <?php
 /**
- * The multi-select fence (M18.1, removed by M18.2).
+ * What a multi-select must satisfy to be sellable (M18.3).
  *
  * @package Optionia
  */
@@ -13,75 +13,33 @@ use Optionia\Engine\SelectionResolver;
 use PHPUnit\Framework\TestCase;
 
 /**
- * A `many` document is refused until the cart can carry one.
+ * The standing contract for an option that takes several answers.
  *
- * 🔴 **This file is the wall behind the fence M18.1 moved.** Before that stage
- * a `cardinality: many` document hit `ERROR_NOT_SCALAR` and the line was
- * refused — fail-closed by accident. M18.1 taught the resolver to accept an
- * array, which is correct and necessary, but nine consumers downstream still
- * expect a scalar. Between the two stages, accepting is the dangerous direction.
+ * 🔴 **This file was `MultiSelectFenceTest`, and most of it outlived the
+ * fence.** ADR-060 fenced `cardinality: many` off between M18.1 and M18.3,
+ * because the resolver could accept an array the cart could not carry. M18.3
+ * removed that fence — and these tests stayed, because they never really
+ * asserted the fence: they assert the properties that made removing it safe.
  *
- * ⚠️ **`MultiSelectResolutionTest` is its mirror.** That file passes
- * `$allow_many = true` to prove the resolution logic M18.2 will unfence; this
- * one passes nothing, which is what all five production callers pass.
+ * ⚠️ **Three tests did go with it.** Two asserted a `many` option was refused
+ * outright. The third was **inverted rather than deleted**, and that inversion
+ * is the clearest record of what the fence cost: while it stood, the renderer
+ * skipped the option and the resolver still demanded it, so a merchant marking
+ * one required made the product **unbuyable**.
  *
- * 🔴 **M18.2 deletes this whole file**, along with the guard and the parameter.
- * If it is still here when the cart carries multi-select, it is testing a fence
- * around an open gate.
+ * What remains is the contract: a multi-select pairs by option, its values sort
+ * into the merchant's authored order, only `checkbox` may take several answers,
+ * and a required one must be answered.
  *
  * @covers \Optionia\Engine\SelectionResolver
  */
-final class MultiSelectFenceTest extends TestCase {
+final class MultiSelectContractTest extends TestCase {
 
 	/**
-	 * 🔴 A `many` option is refused by default, with its own code.
+	 * ⚠️ The control: a single-value option prices normally.
 	 *
-	 * The code matters as much as the refusal. `ERROR_NOT_SCALAR` would tell a
-	 * merchant reading a log that a customer sent a malformed payload, when in
-	 * fact they published an option this build cannot sell.
-	 */
-	public function test_a_many_option_is_refused_by_default(): void {
-		$result = SelectionResolver::resolve(
-			self::sets( 'many' ),
-			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000
-		);
-
-		$this->assertFalse( $result->is_ok() );
-		$this->assertSame(
-			SelectionResolver::ERROR_MANY_UNSUPPORTED,
-			$result->get_errors()[0]['code']
-		);
-	}
-
-	/**
-	 * 🔴 **Refused even when the payload is a harmless single scalar.**
-	 *
-	 * The case that tempts a narrower guard. A `many` option answered with one
-	 * value prices correctly today — so a fence reading the *payload* would let
-	 * it through, and the merchant's multi-select would work until the first
-	 * customer ticked a second box. The guard reads the option's declaration
-	 * instead, which is the thing that does not vary per request.
-	 */
-	public function test_a_many_option_is_refused_even_for_a_single_answer(): void {
-		$result = SelectionResolver::resolve(
-			self::sets( 'many' ),
-			array( 'opt-a' => 'red' ),
-			1000
-		);
-
-		$this->assertFalse( $result->is_ok() );
-		$this->assertSame(
-			SelectionResolver::ERROR_MANY_UNSUPPORTED,
-			$result->get_errors()[0]['code']
-		);
-	}
-
-	/**
-	 * ⚠️ The control: a `one` option is untouched by the fence.
-	 *
-	 * Without this, "many is refused" would be satisfied by a resolver that had
-	 * stopped pricing anything at all.
+	 * Without it, the multi-select assertions here would be satisfied by a
+	 * resolver that had stopped pricing anything at all.
 	 */
 	public function test_a_single_value_option_still_prices(): void {
 		$result = SelectionResolver::resolve(
@@ -117,9 +75,7 @@ final class MultiSelectFenceTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000,
-			null,
-			true
+			1000
 		);
 
 		$this->assertTrue( $result->is_ok() );
@@ -155,17 +111,13 @@ final class MultiSelectFenceTest extends TestCase {
 		$forward = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000,
-			null,
-			true
+			1000
 		);
 
 		$backward = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'blue', 'red' ) ),
-			1000,
-			null,
-			true
+			1000
 		);
 
 		$this->assertSame(
@@ -180,32 +132,33 @@ final class MultiSelectFenceTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **A fenced multi-select must not make the product UNBUYABLE.**
+	 * 🔴 **A required multi-select must be answered, like any other option.**
 	 *
-	 * The composition defect, and the reason each half of the fence needed
-	 * testing against the other. `Renderer::option_markup()` skips a `many`
-	 * option, so the customer never sees it — but the required pass still
-	 * demanded it, returning `ERROR_REQUIRED` for a field that was never
-	 * rendered. The customer reads "Please choose all required options" with
-	 * nothing to choose, and **no amount of clicking fixes it**.
+	 * ⚠️ **This test asserted the OPPOSITE while the fence stood**, and the
+	 * inversion is the point. Between M18.1 and M18.3 the renderer skipped a
+	 * `many` option while the required pass still demanded it — so a merchant
+	 * who marked one required made the product **unbuyable**: "Please choose all
+	 * required options" with nothing on the page to choose. Both halves of the
+	 * fence were individually correct; only together did they strand the
+	 * customer.
 	 *
-	 * ⚠️ **Both halves were right alone.** The renderer treated the option as
-	 * absent; the resolver treated it as present-and-mandatory. Only together
-	 * did they produce a dead end — which is why this assertion is on the
-	 * product being sellable, not on an error code.
+	 * M18.3 removed the fence, so the option is on the page and requiring it is
+	 * simply correct. Kept rather than deleted because the property it guards —
+	 * that what the storefront renders and what the resolver demands agree — is
+	 * what the dead end was made of.
 	 */
-	public function test_a_required_multi_select_does_not_block_the_product(): void {
+	public function test_a_required_multi_select_must_be_answered(): void {
 		$sets = self::sets( 'many' );
 
 		$sets[0]['groups'][0]['options'][0]['is_required'] = true;
 
 		$result = SelectionResolver::resolve( $sets, array(), 1000 );
 
-		$this->assertTrue(
-			$result->is_ok(),
-			'A skipped option must not be demanded; the product would be unbuyable.'
+		$this->assertFalse( $result->is_ok() );
+		$this->assertSame(
+			SelectionResolver::ERROR_REQUIRED,
+			$result->get_errors()[0]['code']
 		);
-		$this->assertSame( 1000, $result->value()['total_minor'] );
 	}
 
 	/**
@@ -251,9 +204,7 @@ final class MultiSelectFenceTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			$sets,
 			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000,
-			null,
-			true
+			1000
 		);
 
 		$this->assertFalse(
@@ -280,9 +231,7 @@ final class MultiSelectFenceTest extends TestCase {
 			$result = SelectionResolver::resolve(
 				$sets,
 				array( 'opt-a' => array( 'red', 'blue' ) ),
-				1000,
-				null,
-				true
+				1000
 			);
 
 			$this->assertFalse(
@@ -303,9 +252,7 @@ final class MultiSelectFenceTest extends TestCase {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'blue' ) ),
-			1000,
-			null,
-			true
+			1000
 		);
 
 		$this->assertTrue( $result->is_ok() );

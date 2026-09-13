@@ -171,6 +171,32 @@
 	}
 	
 	/**
+	 * Whether ANY of the customer's answers appears in the merchant's list.
+	 *
+	 * 🔴 **Any, not all** (ADR-062). `in ['red','green']` asks *"did they pick
+	 * one of these?"*, so a customer choosing red **and** blue satisfies it —
+	 * and `not_in` is its negation, firing only when **no** answer is listed.
+	 *
+	 * ⚠️ **A single answer is a one-member list**, so this is the same question
+	 * for both cardinalities rather than a branch.
+	 *
+	 * @param {Array} members The customer's answers, always as a list.
+	 * @param {*}     operand The merchant's list.
+	 * @return {boolean}
+	 */
+	function anyInList( members, operand ) {
+		var i;
+	
+		for ( i = 0; i < members.length; i++ ) {
+			if ( inList( members[ i ], operand ) ) {
+				return true;
+			}
+		}
+	
+		return false;
+	}
+	
+	/**
 	 * Whether one condition holds against the answers so far.
 	 *
 	 * ⚠️ **An unknown operator is false, never fatal.** The document is input rather
@@ -190,8 +216,30 @@
 		var operator = 'string' === typeof condition.operator ? condition.operator : '';
 	
 		var answer = Object.prototype.hasOwnProperty.call( answers, optionId ) ? answers[ optionId ] : null;
-		var supplied = null !== answer && undefined !== answer && '' !== answer;
+
+		/*
+		 * 🔴 **An EMPTY LIST is an unanswered option** (ADR-062). A multi-select
+		 * with nothing ticked posts nothing at all; an empty array is what a
+		 * script or a stale payload sends, and `SelectionResolver` reads the two
+		 * the same way. A rule disagreeing would hide a field the resolver still
+		 * demanded.
+		 */
+		var supplied = null !== answer && undefined !== answer && '' !== answer
+			&& ! ( Array.isArray( answer ) && 0 === answer.length );
 		var operand = Object.prototype.hasOwnProperty.call( condition, 'value' ) ? condition.value : null;
+
+		/*
+		 * 🔴 **A condition asks about the answer's MEMBERS** (ADR-062).
+		 *
+		 * M18.3 made `cardinality: many` authorable, so one option's answer can
+		 * be a list. Normalised once, here, so each operator asks its own
+		 * question member-wise rather than six places each deciding what an
+		 * array means.
+		 */
+		var members = Array.isArray( answer ) ? answer : [ answer ];
+		var isExactly = function ( value ) {
+			return 1 === members.length && sameScalar( members[ 0 ], value );
+		};
 	
 		switch ( operator ) {
 			case 'is_empty':
@@ -201,7 +249,14 @@
 				return supplied;
 	
 			case 'equals':
-				return supplied && sameScalar( answer, operand );
+				/*
+				 * 🔴 **EXACTLY this one value, not "among them"** (ADR-062).
+				 * `in [X]` already means *"X is among the answers"*, and two
+				 * spellings of one question is the shape this phase set out not
+				 * to repeat. It also keeps `not_equals` a true negation rather
+				 * than a second `not_in [X]`.
+				 */
+				return supplied && isExactly( operand );
 	
 			case 'not_equals':
 				/*
@@ -210,11 +265,26 @@
 				 * a blank as a match would fire the rule on a form the customer has
 				 * not begun.
 				 */
-				return supplied && ! sameScalar( answer, operand );
+				return supplied && ! isExactly( operand );
 	
 			case 'contains':
-				return supplied && 'string' === typeof operand
-					&& asString( answer ).indexOf( operand ) !== -1;
+				/*
+				 * ⚠️ **ANY member, never the joined string.** `asString()` here
+				 * already returns `''` for an object, so this file never had the
+				 * `"red,blue"` bug `rule-evaluator.ts` did — but it also never
+				 * matched a member. Both are now member-wise.
+				 */
+				if ( ! supplied || 'string' !== typeof operand ) {
+					return false;
+				}
+	
+				for ( var m = 0; m < members.length; m++ ) {
+					if ( asString( members[ m ] ).indexOf( operand ) !== -1 ) {
+						return true;
+					}
+				}
+	
+				return false;
 	
 			case 'greater_than':
 				return compareNumeric( answer, operand, function ( a, b ) {
@@ -227,10 +297,10 @@
 				} );
 	
 			case 'in':
-				return supplied && inList( answer, operand );
+				return supplied && anyInList( members, operand );
 	
 			case 'not_in':
-				return supplied && ! inList( answer, operand );
+				return supplied && ! anyInList( members, operand );
 	
 			default:
 				return false;

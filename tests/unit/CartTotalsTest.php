@@ -1102,39 +1102,49 @@ final class CartTotalsTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **A `many` option attaches NOTHING while the fence stands.**
+	 * 🔴 **A multi-select line attaches a payload carrying BOTH values.**
 	 *
-	 * ADR-060 refuses a multi-select at the resolver because one selection
-	 * carrying two deltas breaks the pairing, the freeze is discarded and **the
-	 * line prices live** — 16c's mechanism, which quoted 85.00 and charged
-	 * 130.00.
+	 * ⚠️ **This asserted the opposite until M18.3**, and the inversion is why
+	 * it was written before the fix rather than after. ADR-060 fenced
+	 * `cardinality: many` off while the cart could not carry it; this is the
+	 * measurement that the cart now can.
 	 *
-	 * ⚠️ **Asserted on the PAYLOAD, not on an error code.** What matters to a
-	 * cart is that no half-built Optionia state reaches the line: partial state
-	 * is what later code would trust.
-	 *
-	 * 📌 **M18.2 step 2 inverts this test**, and that is the point of writing it
-	 * now — the inversion is where the stage proves it changed something.
+	 * 🔴 **Asserted on the NUMBER.** 300 is 100 + 200. A resolver that keyed
+	 * correctly but priced only the first chosen value would produce a payload
+	 * of the right shape and the wrong amount — the silent shape M11.5 exists
+	 * to prevent.
 	 */
-	public function test_a_multi_select_attaches_no_payload_while_fenced(): void {
+	public function test_a_multi_select_attaches_both_values(): void {
 		$this->store_many_config();
 
-		$this->assertSame( array(), $this->attach_answer( array( 'red', 'blue' ) ) );
+		$attached = $this->attach_answer( array( 'red', 'blue' ) );
+
+		$this->assertSame(
+			array( 'opt-a' => array( 'red', 'blue' ) ),
+			$attached[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]
+		);
+		$this->assertSame(
+			array( 'opt-a' => 300 ),
+			$attached[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_DELTAS ]
+		);
 	}
 
 	/**
-	 * 🔴 **Fenced on the DECLARATION, even for a single scalar answer.**
+	 * ⚠️ **A `many` option answered with one value is still a list.**
 	 *
-	 * The case that tempts a narrower guard. A `many` option answered with one
-	 * value prices correctly today, so a fence reading the *payload* would let
-	 * it through — and the merchant's multi-select would work until the first
-	 * customer ticked a second box. Measured through the full stack, not just
-	 * the resolver.
+	 * The shape must follow the option's cardinality, not the count of what the
+	 * customer happened to tick — otherwise the same option produces two
+	 * different payload shapes and every consumer needs both branches.
 	 */
-	public function test_a_many_option_attaches_nothing_even_for_one_answer(): void {
+	public function test_a_many_option_stores_a_list_even_for_one_answer(): void {
 		$this->store_many_config();
 
-		$this->assertSame( array(), $this->attach_answer( 'red' ) );
+		$attached = $this->attach_answer( 'red' );
+
+		$this->assertSame(
+			array( 'opt-a' => array( 'red' ) ),
+			$attached[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]
+		);
 	}
 
 	/**

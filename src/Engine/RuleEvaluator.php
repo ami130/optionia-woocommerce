@@ -143,9 +143,35 @@ final class RuleEvaluator {
 			? $condition['operator']
 			: '';
 
-		$answer   = $answers[ $option_id ] ?? null;
-		$supplied = null !== $answer && '' !== $answer;
+		$answer = $answers[ $option_id ] ?? null;
+
+		/*
+		 * 🔴 **An EMPTY LIST is an unanswered option** (ADR-062).
+		 *
+		 * A multi-select with nothing ticked posts nothing in a browser, and an
+		 * empty array is what a script or a stale payload sends. Treating the
+		 * two the same is what makes `is_empty` mean one thing — and
+		 * `SelectionResolver` already takes that reading, so a rule disagreeing
+		 * with it would hide a field the resolver still demanded.
+		 */
+		$supplied = null !== $answer && '' !== $answer && array() !== $answer;
 		$operand  = $condition['value'] ?? null;
+
+		/*
+		 * 🔴 **A condition asks about the answer's MEMBERS** (ADR-062).
+		 *
+		 * M18.3 made `cardinality: many` authorable, so one option's answer can
+		 * be a list. Every operator below was written against a scalar, and a
+		 * list reaching them silently failed every value comparison: a merchant
+		 * writing *"if Extras contains Red, show Engraving"* got a rule that
+		 * never fired, and `not_equals`/`not_in` fired on exactly the customers
+		 * they were meant to exclude.
+		 *
+		 * ⚠️ **Normalised to a list once, here**, so each operator asks its own
+		 * question member-wise rather than six places each deciding what an
+		 * array means — which is how two of them come to decide differently.
+		 */
+		$members = is_array( $answer ) ? array_values( $answer ) : array( $answer );
 
 		switch ( $operator ) {
 			case 'is_empty':
@@ -155,7 +181,18 @@ final class RuleEvaluator {
 				return $supplied;
 
 			case 'equals':
-				return $supplied && self::same_scalar( $answer, $operand );
+				/*
+				 * 🔴 **EXACTLY this one value, not "among them"** (ADR-062).
+				 *
+				 * `in [X]` already means *"X is among the answers"*, and a
+				 * vocabulary with two spellings of one question is the *"two
+				 * mechanisms for one fact"* shape this phase set out not to
+				 * repeat. It also keeps `not_equals` a true negation: were
+				 * `equals` any-member, `not_equals X` would collide with
+				 * `not_in [X]` as well.
+				 */
+				return $supplied && 1 === count( $members )
+					&& self::same_scalar( $members[0], $operand );
 
 			case 'not_equals':
 				/*
@@ -164,11 +201,28 @@ final class RuleEvaluator {
 				 * treating a blank as a match would fire the rule on a form the
 				 * customer has not begun.
 				 */
-				return $supplied && ! self::same_scalar( $answer, $operand );
+				return $supplied && ! ( 1 === count( $members )
+					&& self::same_scalar( $members[0], $operand ) );
 
 			case 'contains':
-				return $supplied && is_string( $operand )
-					&& str_contains( self::as_string( $answer ), $operand );
+				/*
+				 * ⚠️ **ANY member, and never the joined string.** Joining would
+				 * make `contains 'd,b'` match `['red','blue']` across the
+				 * separator — a substring present in neither answer. That is
+				 * precisely what `rule-evaluator.ts` did with a bare `String()`,
+				 * and the shared fixture now pins the case.
+				 */
+				if ( ! $supplied || ! is_string( $operand ) ) {
+					return false;
+				}
+
+				foreach ( $members as $member ) {
+					if ( str_contains( self::as_string( $member ), $operand ) ) {
+						return true;
+					}
+				}
+
+				return false;
 
 			case 'greater_than':
 				return self::compare_numeric( $answer, $operand, static fn( $a, $b ) => $a > $b );
@@ -177,10 +231,10 @@ final class RuleEvaluator {
 				return self::compare_numeric( $answer, $operand, static fn( $a, $b ) => $a < $b );
 
 			case 'in':
-				return $supplied && self::in_list( $answer, $operand );
+				return $supplied && self::any_in_list( $members, $operand );
 
 			case 'not_in':
-				return $supplied && ! self::in_list( $answer, $operand );
+				return $supplied && ! self::any_in_list( $members, $operand );
 
 			default:
 				return false;
@@ -459,6 +513,31 @@ final class RuleEvaluator {
 
 		foreach ( $operand as $entry ) {
 			if ( self::same_scalar( $answer, $entry ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Whether ANY of the customer's answers appears in the operand list.
+	 *
+	 * 🔴 **Any, not all** (ADR-062). `in ['red','green']` asks *"did they pick
+	 * one of these?"*, so a customer choosing red **and** blue satisfies it —
+	 * and `not_in` is its negation, firing only when **no** answer is listed.
+	 * Before M18.3 the reverse held: a multi-select never satisfied `in`, and
+	 * `not_in` fired on exactly the customers it was meant to exclude.
+	 *
+	 * ⚠️ **A single answer is a one-member list**, so this is the same question
+	 * for both cardinalities rather than a branch.
+	 *
+	 * @param array<int, mixed> $members The customer's answers, always as a list.
+	 * @param mixed             $operand The operand, expected to be a list.
+	 */
+	private static function any_in_list( array $members, $operand ): bool {
+		foreach ( $members as $member ) {
+			if ( self::in_list( $member, $operand ) ) {
 				return true;
 			}
 		}

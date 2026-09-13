@@ -1801,34 +1801,32 @@ final class RendererTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **A `many` option renders NOTHING until M18.2 can sell one.**
+	 * 🔴 **A `many` checkbox renders, and its inputs post an array.**
 	 *
-	 * The same reasoning the unknown-type case uses: a control a customer can
-	 * fill in and the server will refuse is worse than no control at all.
-	 * `SelectionResolver` fences `cardinality: many` behind
-	 * `ERROR_MANY_UNSUPPORTED` (ADR-060) because a `many` document breaks the
-	 * positional pairing in `deltas_by_option()` and **the line prices live**.
+	 * ⚠️ **This asserted the opposite until M18.3.** ADR-060 had the renderer
+	 * skip a multi-select while the cart could not carry one, on the same
+	 * reasoning the unknown-type case uses: a control a customer can fill in and
+	 * the server will refuse is worse than no control. The cart carries one now.
 	 *
-	 * Without this guard the checkboxes still render: the customer ticks two
-	 * boxes and add-to-cart refuses with a generic "that selection is not
-	 * available" they have no way to act on.
-	 *
-	 * 📌 **M18.2 deletes this test with the guard.**
+	 * 🔴 **The `[]` suffix is the whole point.** Without it every box shares one
+	 * field name and PHP keeps only the last — a customer ticking two boxes is
+	 * charged for one, with nothing failing. Measured before M18.1.
 	 */
-	public function test_a_multi_select_option_is_not_rendered(): void {
+	public function test_a_multi_select_option_renders_array_inputs(): void {
 		$this->cache_typed( 'checkbox', array(), array( 'cardinality' => 'many' ) );
 
 		$markup = $this->render_for( 20, 'simple' );
 
-		$this->assertStringNotContainsString( 'type="checkbox"', $markup );
-		$this->assertStringNotContainsString( 'value="lux"', $markup );
+		$this->assertStringContainsString( 'type="checkbox"', $markup );
+		$this->assertStringContainsString( 'value="lux"', $markup );
+		$this->assertStringContainsString( '[]"', $markup, 'A [MANY] checkbox must post an array.' );
 	}
 
 	/**
-	 * ⚠️ The control: the fence reads `cardinality`, not the type.
+	 * ⚠️ The control: a single-value checkbox posts a scalar, not an array.
 	 *
-	 * Without this, "a many option renders nothing" would be satisfied by a
-	 * renderer that had stopped rendering checkboxes altogether.
+	 * The two cardinalities must produce different markup, or the `[]` suffix
+	 * above proves nothing.
 	 */
 	public function test_a_single_value_checkbox_still_renders(): void {
 		$this->cache_typed( 'checkbox', array(), array( 'cardinality' => 'one' ) );
