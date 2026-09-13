@@ -21874,11 +21874,65 @@ multi-select: a merchant writing *"if Extras contains Red, show Engraving"* gets
 a rule that **never fires** — authored successfully, silently dead. Worse,
 `not_equals 'red'` returns **true** for a customer who did select red.
 
-📌 **The semantics need deciding before any code**, which is an ADR, not a
-choice to make silently. Recommended: `contains` and `in` match if **any** chosen
-value matches; `equals` means the selection is **exactly** that one value. That
-is what a merchant writing the rule expects, and it makes `not_equals` correct
-again as its negation.
+#### ✅ Part two complete — three evaluators, one answer, 2026-09-13
+
+**ADR-062 decides the semantics**: a condition asks about the answer's
+**members**. `contains`, `in` and `not_in` ask whether **any** member matches;
+`equals` means the selection is **exactly** that one value; `greater_than` /
+`less_than` stay false; `is_empty` / `is_not_empty` were already right.
+
+🔴 **`equals` is the one choice that could have gone the other way.** Made
+*exactly*, not *any-member*, for two reasons: `in [X]` already means "X is among
+the answers", so any-member would give the vocabulary two spellings of one
+question — the *"two mechanisms for one fact"* shape this phase listed as a
+thing not to repeat — and it keeps `not_equals` a true negation rather than a
+second `not_in [X]`.
+
+✅ **17 shared fixture cases**, 46 → **63**, pinning every operator in both
+directions across all three evaluators. They failed **11 of 17 in PHP and 11 of
+17 in TypeScript** before the fix, which is the only reason to trust them.
+
+🔴 **The separator case is the one that must never be deleted.**
+`contains 'd,b'` against `['red','blue']` is the only case that tells a correct
+member-wise implementation from a string-joining one — it matched a substring
+present in **neither** answer.
+
+⚠️ **The root cause was a missing function.** `rule-evaluator.ts` had no
+`asString` at all and used bare `String()`. The other two evaluators both have
+one, and `assets/js/rules.js` says why in a comment: *"written out rather than
+left to `String()` so the agreement is visible at the place it is made."* That
+file made the choice first; the TypeScript one never did.
+
+✅ **Mutation-proven**: reverting `contains` to the joined string dies on the
+separator case; making `equals` any-member dies on two.
+
+#### ✅ Part three — the fence is down, 2026-09-13
+
+ADR-060's deletion list, executed in full: `ERROR_MANY_UNSUPPORTED`, the
+`! $allow_many` guard, the `$allow_many` parameter, the required-pass skip, the
+renderer's skip, and the `PriceConfigDeltaTest` signature entry — **back to four
+parameters**, which that gate caught on its first run.
+
+✅ **`MANY_CAPABLE_TYPES` stayed**, as ADR-060 was corrected to say. It is a
+standing guard, not a fence: `cardinality` alone never asked what the *type*
+could do.
+
+📌 **`MultiSelectFenceTest` became `MultiSelectContractTest`.** Seven of its ten
+tests never asserted the fence — they assert the properties that made removing
+it safe. Two refusal tests went; the third was **inverted rather than deleted**,
+because it is the clearest record of what the fence cost: while it stood, the
+renderer skipped the option and the resolver still demanded it, so marking one
+required made the product **unbuyable**.
+
+🔴 **The five "while fenced" tests from step 1 all inverted**, which is why they
+were written before the fix rather than after. Measured now:
+
+| Consumer | Before the fence | Now |
+|---|---|---|
+| Cart row | `opt-a: Array` | `Extras: Red, Blue (+3.00)` |
+| Order meta | `opt-a => 'Array'` + PHP notice | `Extras => 'Red, Blue'` |
+| Stored payload | freeze discarded, **line priced live** | `{"opt-a":300}`, signed |
+| Renderer | one shared field name, last value wins | `name="…[]"`, every box posts |
 
 ---
 
