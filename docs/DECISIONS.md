@@ -5206,8 +5206,24 @@ would price it wrong."* This is the same sentence with a different cause.
 the merchant meant to offer something; skipping says the product has one fewer
 option, which is what is actually true for this build.
 
-**M18.2's first act is to delete the fence** — the constant, the guard, the
-parameter, the renderer's skip, and `MultiSelectFenceTest`. One exception:
+**The fence outlived M18.2, deliberately — M18.3 removes it.** ADR-057 splits
+the build from the gate, and this is that split: M18.2 made every consumer
+handle multi-select correctly (proven by lifting the fence as a mutant and
+measuring the real cart row and order meta), but the backend registry still
+allows `MANY` for no type at all. Removing the fence before the registry
+authorises a type would sell a multi-select the authoring layer never approved.
+
+⚠️ **One part of the fence is now permanent and must NOT be deleted with the
+rest.** `SelectionResolver::MANY_CAPABLE_TYPES` — the type/cardinality
+cross-check — is not a temporary fence but a standing guard: `cardinality`
+alone never asked what the *type* could do, so a `radio` at `many` sold **Small
+and Large on one line**. It stays, and M18.3 adds `checkbox` to the registry to
+match it rather than removing it.
+
+**The deletion list** — the constant `ERROR_MANY_UNSUPPORTED`, the
+`! $allow_many` guard, the `$allow_many` parameter, the required-pass skip, the
+renderer's skip, the `PriceConfigDeltaTest` signature entry, and
+`MultiSelectFenceTest`. One exception:
 `test_a_many_result_would_break_positional_pairing` is **rewritten, not
 dropped**. "Can a multi-select line still be paired?" outlives the fence, and if
 M18.2 makes the pairing key-based, that test is how it is proven.
