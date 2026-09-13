@@ -21937,6 +21937,105 @@ were written before the fix rather than after. Measured now:
 
 ---
 
+### ✅ Stage 18-3a — closing what "the whole path" left out, 2026-09-13
+
+**Found by auditing 18-1 to 18-4 against the code rather than the summaries.**
+Four findings; all four fixed here.
+
+#### 🔴 F1 — a merchant could not create a multi-select at all
+
+**The dashboard had no way to set `cardinality`** — zero references in the whole
+frontend. So `OptionsService.create()` fell back to `definition.cardinality[0]`
+(`ONE`) for every option it made, and `cardinality` is absent from
+`OptionChanges`, so it is **immutable after creation**. There was no later
+escape.
+
+⚠️ **After four stages, multi-select was reachable only by direct API call.**
+The storefront could resolve, price, freeze, display and reorder several
+answers, and nothing the product could create would ever use it.
+
+📌 **ADR-057 set the bar as "the whole path" and its own text says *"a merchant
+would author it, publish…"*** — it assumed authoring existed. I read "whole
+path" as storefront-only, and the plan never scoped the dashboard half. That is
+the gap, and it was mine.
+
+✅ **Fixed**: `cardinality` on `createOption`, an `acceptsManyAnswers()` helper
+mirroring the API registry and the plugin's `MANY_CAPABLE_TYPES`, and a control
+shown for `checkbox` alone — warned as permanent, because it is.
+
+#### 🟠 F2 — `min_selections` / `max_selections` were enforced nowhere
+
+ADR-057 recorded them as *"authorable per option and enforced nowhere, because
+there is nothing to count"* and said the multi-select stage would **make them
+mean something**. It did not: 18-1 to 18-3 built the entire array path and left
+both rules unread. A merchant capping an option at two got three.
+
+✅ **Now enforced in the resolver**, with two error codes rather than one —
+*"choose more"* and *"choose fewer"* are opposite instructions, and the generic
+*"that selection is not available"* would send a customer who ticked three boxes
+looking for something unavailable.
+
+🔴 **Counted after deduplication**, so `["red","red","red"]` cannot satisfy a
+minimum of three — one choice billed once, dressed as three. **The new test is
+the only one of 1532 that catches dedup being disabled**; that guard was
+otherwise unprotected.
+
+#### 🟠 F3 — those same keys published as camelCase, invisibly
+
+Measured: `{ minSelections: 1, maxSelections: 3, maxLength: 200 }` published as
+`{"minSelections":1,"maxSelections":3,"max_length":200}`. They were **absent
+from `VALIDATION_KEYS`**, and `rename()` falls through with `keys[key] ?? key`.
+
+⚠️ **`check-wire-keys.sh` could not catch it**, unlike the four rules it caught
+in transit — it reads the right-hand side of *the map*, so a key absent from the
+map is invisible. Its own header promises *"this gate does not need anyone to
+remember"*; for this shape, it did.
+
+✅ **Fixed both the symptom and the hole.** The keys are mapped, and the gate now
+reads the **option schemas** too: a key a schema accepts and the map omits fails,
+with named exemptions for anything deliberately unpublished. Proven against the
+original defect and against a newly invented schema key.
+
+#### 🟡 F4 — the contract document described values that do not exist
+
+`CONFIG-CONTRACT.md` listed `display_type` as `inline · accordion · **tab** ·
+**modal**`. The enum is `inline · accordion · **tabs** · **stepped**`.
+
+⚠️ **Nothing broke, which is why it survived.** The plugin never believed the
+doc. The only casualty was the next person to trust it — and a document that
+describes a wire incorrectly is worse than one that says nothing, because it is
+read as authority.
+
+✅ **Corrected, and gated**: the check compares the doc's value list to the enum
+and names any value the doc invents. It catches the original drift verbatim.
+Also corrected two other stale claims: *"`radio` is the only type in Phase 7"*
+(fifteen ship) and the undocumented meaning of `is_collapsible`.
+
+#### 📌 M30.11 flake, occurrence nineteen
+
+The first backend run after these fixes reported **one** e2e failure —
+`assignments › advances configVersion on assign`, `expected 200, got 404`, with
+a bare 400 in fixture setup and no `details` array.
+
+⚠️ **Discriminated rather than assumed.** The recorded signature separates the
+flake from a real regression by the **body**: a genuine rejection carries a
+`details` array naming the field, as the `show` withdrawal's 90 failures did.
+This one carried none, the log showed no trace of any key this change touched,
+and the spec passed alone (24/24). A clean re-run confirmed it: **1075 + 911,
+exit 0.**
+
+#### Mutation results — five mutants, five killed
+
+| Mutant | Killed by |
+|---|---|
+| `minSelections` removed from the rename map | the new schema-coverage check |
+| a new schema key never mapped | the same check |
+| the doc's original wrong `display_type` line | the new contract check |
+| `max_selections` not enforced | `more values than max_selections are refused` |
+| dedup disabled | `duplicates do not satisfy a minimum` |
+
+---
+
 ### ✅ Stage 18-4 complete — `display_type` is read and authorable, 2026-09-13
 
 **The field stops being carried and applied nowhere**, which is what ADR-059
