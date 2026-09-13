@@ -21301,7 +21301,8 @@ it lands on; nesting absent because ADR-058 deferred it.
 | 18-1 | Multi-select: template `[]`, request, resolver array branch | plugin | ADR-057 |
 | 18-2 | Multi-select through cart, labels, order, analytics | plugin | ADR-057, **ADR-061** |
 | 18-3 | `MANY` joins the registry; multi-select fixture cases | backend + shared | M14.1 |
-| 18-4 | Group display types rendered and authorable | plugin + dashboard | M18.2, ADR-059 |
+| **18-4** | Group display types rendered **and** authorable — `inline`, `accordion`, `tabs` | plugin + dashboard | M18.2, ADR-059, **ADR-063** |
+| 18-4a | `stepped` — the wizard layout, split out by ADR-063 | plugin + dashboard | M18.4 |
 | 18-5 | Group presentation config, following the option `display` precedent | all three | M18.5 |
 | 18-6 | Drag-and-drop ordering over the existing endpoints | dashboard | M18.3 |
 | 18-7 | Group-level selection rules | backend + plugin | M18.4 |
@@ -21933,6 +21934,80 @@ were written before the fix rather than after. Measured now:
 | Order meta | `opt-a => 'Array'` + PHP notice | `Extras => 'Red, Blue'` |
 | Stored payload | freeze discarded, **line priced live** | `{"opt-a":300}`, signed |
 | Renderer | one shared field name, last value wins | `name="…[]"`, every box posts |
+
+---
+
+### ✅ Stage 18-4 complete — `display_type` is read and authorable, 2026-09-13
+
+**The field stops being carried and applied nowhere**, which is what ADR-059
+committed to and the entire reason it was not withdrawn alongside `set_default`
+and `show`.
+
+| Layout | Storefront | Picker |
+|---|---|---|
+| `inline` | plain fieldset, foldable when `is_collapsible` | ✅ |
+| `accordion` | `<details>`, starts **closed** | ✅ |
+| `tabs` | bordered panel with the label on its top edge | ✅ (as "Panel") |
+| `stepped` | falls back to `inline` | ❌ **deliberately** (ADR-063) |
+
+#### 🔴 Why `stepped` split out — a state collision, not effort
+
+ADR-059 said *"if `stepped` proves larger than the other three, it ships
+separately"*. It is larger, and the reason matters more than the size.
+
+`frontend.js` recomputes visibility from scratch on every change:
+`revealAll( root )` clears `data-optionia-hidden` from **everything**, then
+re-applies it to whatever the rule evaluator says is hidden now. Its own comment
+explains why, and the reasoning is right — *"tracking what to undo is a second
+source of truth for a fact the evaluator already answers completely."*
+
+⚠️ **A wizard needs a second reason for a group to be hidden**, and the rule
+evaluator cannot supply it. *"Hidden by a rule"* and *"not the current step"*
+would share one attribute, so **the first keystroke in any field would reveal
+every step at once**. Rules already target groups, so this is not hypothetical.
+
+📌 **Falling back is not the ADR-055 defect.** Those fields were applied
+*nowhere*, with no stage that would consume them. `stepped` has a named stage
+(**18-4a**), three working siblings, and — critically — **the dashboard does not
+offer it**, so no merchant can select a layout that silently behaves like
+another.
+
+#### ⚠️ Two constraints the markup had to satisfy
+
+🔴 **`data-optionia-group` stays on the `<fieldset>`, whatever the layout.** The
+rule runtime sets `hidden` on the element carrying that attribute. Moving it
+inside the `<details>` would let a rule hide a group's *contents* while its
+heading stayed on the page — a legend for options nobody can reach. Pinned by
+`test_a_folded_group_still_carries_its_rule_target`.
+
+🔴 **Every layout keeps every option reachable without JavaScript.** This form
+decides what a customer is charged, so a layout hiding an option from someone
+with no JS hides a *price*. That ruled out a scripted tab interface: `tabs` is
+drawn as a labelled panel — a weaker visual and a stronger guarantee — and
+`accordion` uses native `<details>`/`<summary>`, which is keyboard-operable and
+announced as a disclosure without any ARIA of ours.
+
+#### 📌 The dashboard half was larger than ADR-059 assumed
+
+There was **no group editor at all** — the page could create a group by label
+and delete it, nothing more. `AuthoringGroup` did not even carry `displayType`,
+though the serializer had been returning it since Phase 5. So 18-4 added the
+API client (`updateGroupDisplay`), the type, `GROUP_LAYOUTS`, and a picker
+component.
+
+✅ **`PATCH /groups/:id` already accepted both fields**, so no backend change
+was needed — the gap was entirely dashboard-side.
+
+✏️ **One stale hint corrected**: `checkbox` read *"Tick boxes — one choice for
+now"*, which stopped being true at 18-3.
+
+#### Mutation results — three mutants, three killed
+
+| Mutant | Killed by |
+|---|---|
+| `is_collapsible` honoured for every type | `is_collapsible is ignored for tabs` |
+| `stepped` drawn instead of falling back | `stepped falls back to inline and still renders` |
+| rule target moved inside the fold | `a folded group still carries its rule target` |
 
 ---
 
