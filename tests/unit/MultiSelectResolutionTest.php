@@ -48,7 +48,16 @@ final class MultiSelectResolutionTest extends TestCase {
 
 		$this->assertTrue( $result->is_ok() );
 		$this->assertSame( 1300, $result->value()['total_minor'] );
-		$this->assertCount( 2, $result->value()['deltas'] );
+
+		/*
+		 * 🔴 **One entry for the option, carrying BOTH values' prices** (ADR-061).
+		 *
+		 * Until M18.2 this asserted `assertCount( 2, ... )` — one delta per
+		 * chosen value — which was the positional shape that broke the pairing
+		 * downstream. The number is the stronger assertion anyway: 300 is
+		 * 100 + 200, and a resolver that priced only `red` would report 100.
+		 */
+		$this->assertSame( array( 'opt-a' => 300 ), $result->value()['deltas'] );
 	}
 
 	/**

@@ -98,16 +98,19 @@ final class SelectionResolver {
 	 * expect a single scalar. Between the two stages a `many` document is a
 	 * document this build can resolve and cannot sell.
 	 *
-	 * ⚠️ **Refusing is the only safe direction, and the audit measured why.**
-	 * `deltas_by_option()` pairs `resolved` with `deltas` positionally, so one
-	 * selection carrying two deltas is a count mismatch: it returns `array()`,
-	 * `trusted_deltas()` finds no key and returns `null`, and **the line prices
-	 * live** — the 16c mechanism, which historically quoted 85.00 and charged
-	 * 130.00. The customer is billed a price nobody showed them.
+	 * ✅ **The pricing half of this is FIXED as of M18.2 step 2 (ADR-061).**
+	 * `deltas` is now keyed by option id and summed across an option's chosen
+	 * values, so a multi-select pairs correctly and the freeze holds. Before
+	 * that, `deltas_by_option()` paired positionally: one selection carrying two
+	 * deltas was a count mismatch, the pairing returned `array()`,
+	 * `trusted_deltas()` found no key, and **the line priced live** — the 16c
+	 * mechanism, which quoted 85.00 and charged 130.00.
 	 *
-	 * A second measured consequence: the cart line renders the raw option id and
-	 * the word `"Array"`, because `$label['option']` is NULL and `(string)` on
-	 * an array coerces.
+	 * ⚠️ **The fence still stands, because the LABELS are not carried yet.** A
+	 * multi-value line renders the raw option id and the word `"Array"` in the
+	 * cart and, worse, in the **order meta** a merchant fulfils from —
+	 * `$label['option']` is NULL for a list and `(string)` on an array coerces.
+	 * Step 3 fixes that, and step 6 removes this constant.
 	 *
 	 * 🔴 **Reachable now, not hypothetically.** `AC4` makes the document input
 	 * rather than authority, and the plugin validates no `cardinality` on the
@@ -487,7 +490,9 @@ final class SelectionResolver {
 	 * 18-2 will unfence; `MultiSelectFenceTest` passes nothing to prove the
 	 * fence itself holds for every caller that ships.
 	 *
-	 * @return Result Ok with `array{deltas, resolved, total_minor, unpriced, labels, set_ids}`, or errors.
+	 * @return Result Ok with `array{deltas, resolved, total_minor, unpriced, labels, set_ids}`,
+	 *                where `deltas` is keyed by option id and summed across that
+	 *                option's chosen values (ADR-061), or errors.
 	 */
 	public static function resolve(
 		array $option_sets,
@@ -777,28 +782,33 @@ final class SelectionResolver {
 				$chosen[ $option_id ] = $configured;
 
 				/*
-				 * 🔴 **One delta per accepted selection, always.**
+				 * 🔴 **One entry per accepted option, always.**
 				 *
-				 * `CartItemData::deltas_by_option()` pairs `resolved` with
-				 * `deltas` **positionally**, and refuses to pair them at all when
-				 * the counts differ. Only the value branch appended a delta, so
-				 * any option without values -- text, date, number, file -- made
-				 * the counts disagree and the pairing return an empty array.
+				 * `CartItemPayload::trusted_deltas()` refuses the whole freeze
+				 * when any resolved option has no delta, so an option that
+				 * records nothing here discards the freeze for the entire line
+				 * and makes it price live.
 				 *
-				 * That array is then frozen and signed onto the cart line, and an
-				 * empty freeze covers no option, so `trusted_deltas()` rejects it
-				 * and the line prices live. Measured: a plain gift-message field
-				 * beside a 5.00 option quoted 85.00, the merchant republished at
-				 * 50.00, and the customer was charged **130.00** -- M12.4's price
-				 * freeze silently defeated by a free text field.
+				 * Measured when only the value branch recorded a delta: a plain
+				 * gift-message field beside a 5.00 option quoted 85.00, the
+				 * merchant republished at 50.00, and the customer was charged
+				 * **130.00** -- M12.4's price freeze silently defeated by a free
+				 * text field.
+				 *
+				 * ⚠️ **The mechanism changed at M18.2; the obligation did not.**
+				 * `deltas` used to be a positional list that `CartItemData`
+				 * paired against `resolved` by index, so a missing entry
+				 * *misaligned* every later option. ADR-061 keyed it by option id
+				 * instead, which removes the misalignment -- but a missing entry
+				 * still costs the line its freeze.
 				 *
 				 * Zero because these options price at the OPTION level, and this
 				 * build charges that only for the types in `PRICED_TYPES`; what it
 				 * cannot charge, `option_delta()` records for the merchant. A
-				 * delta is appended either way, because the
-				 * invariant is positional and an absent entry is not a zero.
+				 * delta is recorded either way, because every accepted option
+				 * must appear in the map and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta(
+				$deltas[ $option_id ] = self::option_delta(
 					$options[ $option_id ],
 					$chosen[ $option_id ],
 					$unpriced,
@@ -865,28 +875,33 @@ final class SelectionResolver {
 				$chosen[ $option_id ] = $candidate;
 
 				/*
-				 * 🔴 **One delta per accepted selection, always.**
+				 * 🔴 **One entry per accepted option, always.**
 				 *
-				 * `CartItemData::deltas_by_option()` pairs `resolved` with
-				 * `deltas` **positionally**, and refuses to pair them at all when
-				 * the counts differ. Only the value branch appended a delta, so
-				 * any option without values -- text, date, number, file -- made
-				 * the counts disagree and the pairing return an empty array.
+				 * `CartItemPayload::trusted_deltas()` refuses the whole freeze
+				 * when any resolved option has no delta, so an option that
+				 * records nothing here discards the freeze for the entire line
+				 * and makes it price live.
 				 *
-				 * That array is then frozen and signed onto the cart line, and an
-				 * empty freeze covers no option, so `trusted_deltas()` rejects it
-				 * and the line prices live. Measured: a plain gift-message field
-				 * beside a 5.00 option quoted 85.00, the merchant republished at
-				 * 50.00, and the customer was charged **130.00** -- M12.4's price
-				 * freeze silently defeated by a free text field.
+				 * Measured when only the value branch recorded a delta: a plain
+				 * gift-message field beside a 5.00 option quoted 85.00, the
+				 * merchant republished at 50.00, and the customer was charged
+				 * **130.00** -- M12.4's price freeze silently defeated by a free
+				 * text field.
+				 *
+				 * ⚠️ **The mechanism changed at M18.2; the obligation did not.**
+				 * `deltas` used to be a positional list that `CartItemData`
+				 * paired against `resolved` by index, so a missing entry
+				 * *misaligned* every later option. ADR-061 keyed it by option id
+				 * instead, which removes the misalignment -- but a missing entry
+				 * still costs the line its freeze.
 				 *
 				 * Zero because these options price at the OPTION level, and this
 				 * build charges that only for the types in `PRICED_TYPES`; what it
 				 * cannot charge, `option_delta()` records for the merchant. A
-				 * delta is appended either way, because the
-				 * invariant is positional and an absent entry is not a zero.
+				 * delta is recorded either way, because every accepted option
+				 * must appear in the map and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta(
+				$deltas[ $option_id ] = self::option_delta(
 					$options[ $option_id ],
 					$chosen[ $option_id ],
 					$unpriced,
@@ -1017,28 +1032,33 @@ final class SelectionResolver {
 				$chosen[ $option_id ] = $text;
 
 				/*
-				 * 🔴 **One delta per accepted selection, always.**
+				 * 🔴 **One entry per accepted option, always.**
 				 *
-				 * `CartItemData::deltas_by_option()` pairs `resolved` with
-				 * `deltas` **positionally**, and refuses to pair them at all when
-				 * the counts differ. Only the value branch appended a delta, so
-				 * any option without values -- text, date, number, file -- made
-				 * the counts disagree and the pairing return an empty array.
+				 * `CartItemPayload::trusted_deltas()` refuses the whole freeze
+				 * when any resolved option has no delta, so an option that
+				 * records nothing here discards the freeze for the entire line
+				 * and makes it price live.
 				 *
-				 * That array is then frozen and signed onto the cart line, and an
-				 * empty freeze covers no option, so `trusted_deltas()` rejects it
-				 * and the line prices live. Measured: a plain gift-message field
-				 * beside a 5.00 option quoted 85.00, the merchant republished at
-				 * 50.00, and the customer was charged **130.00** -- M12.4's price
-				 * freeze silently defeated by a free text field.
+				 * Measured when only the value branch recorded a delta: a plain
+				 * gift-message field beside a 5.00 option quoted 85.00, the
+				 * merchant republished at 50.00, and the customer was charged
+				 * **130.00** -- M12.4's price freeze silently defeated by a free
+				 * text field.
+				 *
+				 * ⚠️ **The mechanism changed at M18.2; the obligation did not.**
+				 * `deltas` used to be a positional list that `CartItemData`
+				 * paired against `resolved` by index, so a missing entry
+				 * *misaligned* every later option. ADR-061 keyed it by option id
+				 * instead, which removes the misalignment -- but a missing entry
+				 * still costs the line its freeze.
 				 *
 				 * Zero because these options price at the OPTION level, and this
 				 * build charges that only for the types in `PRICED_TYPES`; what it
 				 * cannot charge, `option_delta()` records for the merchant. A
-				 * delta is appended either way, because the
-				 * invariant is positional and an absent entry is not a zero.
+				 * delta is recorded either way, because every accepted option
+				 * must appear in the map and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta(
+				$deltas[ $option_id ] = self::option_delta(
 					$options[ $option_id ],
 					$chosen[ $option_id ],
 					$unpriced,
@@ -1128,28 +1148,33 @@ final class SelectionResolver {
 				$chosen[ $option_id ] = $date;
 
 				/*
-				 * 🔴 **One delta per accepted selection, always.**
+				 * 🔴 **One entry per accepted option, always.**
 				 *
-				 * `CartItemData::deltas_by_option()` pairs `resolved` with
-				 * `deltas` **positionally**, and refuses to pair them at all when
-				 * the counts differ. Only the value branch appended a delta, so
-				 * any option without values -- text, date, number, file -- made
-				 * the counts disagree and the pairing return an empty array.
+				 * `CartItemPayload::trusted_deltas()` refuses the whole freeze
+				 * when any resolved option has no delta, so an option that
+				 * records nothing here discards the freeze for the entire line
+				 * and makes it price live.
 				 *
-				 * That array is then frozen and signed onto the cart line, and an
-				 * empty freeze covers no option, so `trusted_deltas()` rejects it
-				 * and the line prices live. Measured: a plain gift-message field
-				 * beside a 5.00 option quoted 85.00, the merchant republished at
-				 * 50.00, and the customer was charged **130.00** -- M12.4's price
-				 * freeze silently defeated by a free text field.
+				 * Measured when only the value branch recorded a delta: a plain
+				 * gift-message field beside a 5.00 option quoted 85.00, the
+				 * merchant republished at 50.00, and the customer was charged
+				 * **130.00** -- M12.4's price freeze silently defeated by a free
+				 * text field.
+				 *
+				 * ⚠️ **The mechanism changed at M18.2; the obligation did not.**
+				 * `deltas` used to be a positional list that `CartItemData`
+				 * paired against `resolved` by index, so a missing entry
+				 * *misaligned* every later option. ADR-061 keyed it by option id
+				 * instead, which removes the misalignment -- but a missing entry
+				 * still costs the line its freeze.
 				 *
 				 * Zero because these options price at the OPTION level, and this
 				 * build charges that only for the types in `PRICED_TYPES`; what it
 				 * cannot charge, `option_delta()` records for the merchant. A
-				 * delta is appended either way, because the
-				 * invariant is positional and an absent entry is not a zero.
+				 * delta is recorded either way, because every accepted option
+				 * must appear in the map and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta(
+				$deltas[ $option_id ] = self::option_delta(
 					$options[ $option_id ],
 					$chosen[ $option_id ],
 					$unpriced,
@@ -1219,28 +1244,33 @@ final class SelectionResolver {
 				$chosen[ $option_id ] = $canonical;
 
 				/*
-				 * 🔴 **One delta per accepted selection, always.**
+				 * 🔴 **One entry per accepted option, always.**
 				 *
-				 * `CartItemData::deltas_by_option()` pairs `resolved` with
-				 * `deltas` **positionally**, and refuses to pair them at all when
-				 * the counts differ. Only the value branch appended a delta, so
-				 * any option without values -- text, date, number, file -- made
-				 * the counts disagree and the pairing return an empty array.
+				 * `CartItemPayload::trusted_deltas()` refuses the whole freeze
+				 * when any resolved option has no delta, so an option that
+				 * records nothing here discards the freeze for the entire line
+				 * and makes it price live.
 				 *
-				 * That array is then frozen and signed onto the cart line, and an
-				 * empty freeze covers no option, so `trusted_deltas()` rejects it
-				 * and the line prices live. Measured: a plain gift-message field
-				 * beside a 5.00 option quoted 85.00, the merchant republished at
-				 * 50.00, and the customer was charged **130.00** -- M12.4's price
-				 * freeze silently defeated by a free text field.
+				 * Measured when only the value branch recorded a delta: a plain
+				 * gift-message field beside a 5.00 option quoted 85.00, the
+				 * merchant republished at 50.00, and the customer was charged
+				 * **130.00** -- M12.4's price freeze silently defeated by a free
+				 * text field.
+				 *
+				 * ⚠️ **The mechanism changed at M18.2; the obligation did not.**
+				 * `deltas` used to be a positional list that `CartItemData`
+				 * paired against `resolved` by index, so a missing entry
+				 * *misaligned* every later option. ADR-061 keyed it by option id
+				 * instead, which removes the misalignment -- but a missing entry
+				 * still costs the line its freeze.
 				 *
 				 * Zero because these options price at the OPTION level, and this
 				 * build charges that only for the types in `PRICED_TYPES`; what it
 				 * cannot charge, `option_delta()` records for the merchant. A
-				 * delta is appended either way, because the
-				 * invariant is positional and an absent entry is not a zero.
+				 * delta is recorded either way, because every accepted option
+				 * must appear in the map and an absent entry is not a zero.
 				 */
-				$deltas[] = self::option_delta(
+				$deltas[ $option_id ] = self::option_delta(
 					$options[ $option_id ],
 					$chosen[ $option_id ],
 					$unpriced,
@@ -1374,21 +1404,38 @@ final class SelectionResolver {
 			}
 
 			/*
-			 * 🔴 **One delta per CHOSEN VALUE, and one entry per OPTION for
-			 * everything else.** The two shapes are different on purpose.
+			 * 🔴 **`deltas`, `labels` and `sku_suffixes` all key on the option.**
 			 *
-			 * `deltas` is a positional list the caller pairs with `resolved` —
-			 * so a multi-select contributing three prices contributes three
-			 * entries, and `CartItemData::deltas_by_option()` has to pair them
-			 * by option rather than by position. That pairing is what 16c's
-			 * defect turned on, and M18.2 is the stage that reshapes it.
+			 * They did not always agree. Until M18.2 `deltas` was a positional
+			 * list — one entry per chosen *value* — which `CartItemData` paired
+			 * against `resolved` by index. A multi-select made that pairing
+			 * unsatisfiable, and 16c's defect turned on exactly that mismatch.
+			 * ADR-061 keyed it, so all three now answer the same question the
+			 * same way.
 			 *
-			 * `labels` and `sku_suffixes` stay keyed by option id, because the
-			 * cart line, the order meta and the fulfilment output all name an
-			 * option once. Several values become several entries *within* one.
+			 * ⚠️ **Several values become several entries *within* one option,
+			 * never several options.** The cart line, the order meta and the
+			 * fulfilment output each name an option once.
 			 */
 			$chosen_labels   = array();
 			$chosen_suffixes = array();
+
+			/*
+			 * 🔴 **One entry per OPTION, summed across its chosen values.**
+			 *
+			 * ADR-061. A multi-select contributes several prices to a single
+			 * cart row, and every consumer wants that row's total: `CartTotals`
+			 * sums them, `CartDisplay` renders one row per option with one price
+			 * beside it, `OrderLineItem` writes one meta entry per option. None
+			 * asks what the second chosen value cost.
+			 *
+			 * ⚠️ **A summed int, not a per-value list, and the trust gate is
+			 * why.** `CartItemPayload::frozen_deltas()` requires `is_int()` for
+			 * every entry. Measured: `{"opt-a":300}` passes; `{"opt-a":[100,200]}`
+			 * returns null — and a null freeze means **the line prices live**,
+			 * which is the defect this stage exists to close.
+			 */
+			$option_total = 0;
 
 			foreach ( $chosen_keys as $chosen_key ) {
 				$key   = (string) $chosen_key;
@@ -1410,11 +1457,9 @@ final class SelectionResolver {
 					$unpriced
 				);
 
-				if ( false === $ruled ) {
+				if ( false !== $ruled ) {
 					// A refused rule price contributes nothing; see `set_price_for()`.
-					$deltas[] = 0;
-				} else {
-					$deltas[] = null === $ruled
+					$option_total += null === $ruled
 						? self::delta_for( $value, $base_minor, $unpriced )
 						: $ruled;
 				}
@@ -1439,6 +1484,17 @@ final class SelectionResolver {
 				 */
 				$sku_suffixes[ $option_id ] = implode( '', $chosen_suffixes );
 			}
+
+			/*
+			 * The option's whole contribution, recorded once.
+			 *
+			 * ⚠️ **Assigned even when it is zero.** A free choice still has to
+			 * appear in the map: `CartItemPayload::trusted_deltas()` refuses the
+			 * entire freeze when any resolved option is missing a delta, so an
+			 * omitted zero would discard the freeze for the *whole line* and
+			 * price it live. An absent entry is not a zero.
+			 */
+			$deltas[ $option_id ] = $option_total;
 
 			/*
 			 * One label at `one`, a list at `many`. The cart and order renderers
@@ -3460,13 +3516,14 @@ final class SelectionResolver {
 	 *
 	 * It replaced `record_option_pricing()`, which returned nothing. That was
 	 * correct while no option-level type could be charged, and it left the
-	 * accepting branches appending a selection without appending a delta --
-	 * breaking the positional pairing `CartItemData` depends on, and silently
-	 * defeating the price freeze for any line carrying a text field.
+	 * accepting branches recording a selection without recording a delta --
+	 * which silently defeated the price freeze for any line carrying a text
+	 * field, because `trusted_deltas()` refuses a freeze that covers fewer
+	 * options than the line resolved.
 	 *
-	 * Returning a delta makes the invariant *"one delta per accepted
-	 * selection"* true by construction rather than by five branches each
-	 * remembering to say so.
+	 * Returning a delta makes the invariant *"one entry per accepted option"*
+	 * true by construction rather than by five branches each remembering to say
+	 * so.
 	 *
 	 * @param array<string, mixed> $option   One published option.
 	 * @param string               $answer   What the customer supplied.

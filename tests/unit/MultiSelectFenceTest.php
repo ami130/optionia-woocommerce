@@ -95,21 +95,25 @@ final class MultiSelectFenceTest extends TestCase {
 	}
 
 	/**
-	 * 🔴 **The defect the fence exists to prevent, measured at its source.**
+	 * 🔴 **A multi-select line can be paired, which is what M18.2 changed.**
 	 *
-	 * `CartItemData::deltas_by_option()` pairs `resolved` with `deltas`
-	 * POSITIONALLY and returns `array()` when the counts disagree —
-	 * `trusted_deltas()` then finds no key, returns null, and **the line prices
-	 * live**. This is the 16c mechanism, which historically quoted 85.00 and
-	 * charged 130.00.
+	 * ⚠️ **Rewritten, not deleted — ADR-060 said it should be.** It used to
+	 * assert the *opposite*: that one selection carrying two deltas was a count
+	 * mismatch, so `deltas_by_option()` returned `array()`, `trusted_deltas()`
+	 * returned null and **the line priced live** — 16c's mechanism, which
+	 * historically quoted 85.00 and charged 130.00.
 	 *
-	 * Asserted here rather than in the cart because it is a property of the
-	 * SHAPE: one selection carrying two deltas is a count mismatch by
-	 * arithmetic, whatever the cart does with it. If M18.2 makes the pairing
-	 * key-based, this test should be rewritten, not deleted — the question
-	 * "can a multi-select line still be paired?" outlives the fence.
+	 * ADR-061 closed that by keying `deltas` on the option id and summing across
+	 * its chosen values. The question the old test asked — *"can a multi-select
+	 * line still be paired?"* — outlives the fence, so it is asked here in the
+	 * affirmative rather than dropped.
+	 *
+	 * 🔴 **Asserted on the NUMBER, not just the count.** 300 is 100 + 200; a
+	 * resolver that keyed correctly but priced only the first value would give
+	 * equal counts and a wrong total, which is exactly the silent shape this
+	 * whole stage exists to prevent.
 	 */
-	public function test_a_many_result_would_break_positional_pairing(): void {
+	public function test_a_many_result_pairs_by_option(): void {
 		$result = SelectionResolver::resolve(
 			self::sets( 'many' ),
 			array( 'opt-a' => array( 'red', 'blue' ) ),
@@ -123,12 +127,16 @@ final class MultiSelectFenceTest extends TestCase {
 		$selections = $result->value()['resolved'];
 		$deltas     = $result->value()['deltas'];
 
-		$this->assertCount( 1, $selections );
-		$this->assertCount( 2, $deltas );
-		$this->assertNotSame(
+		$this->assertSame(
 			count( $selections ),
 			count( $deltas ),
-			'Positional pairing survives only while these counts agree.'
+			'One entry per option on both sides, or the pairing cannot be keyed.'
+		);
+		$this->assertSame( array( 'opt-a' => 300 ), $deltas );
+		$this->assertSame(
+			1000 + array_sum( $deltas ),
+			$result->value()['total_minor'],
+			'The paired deltas must account for the whole line.'
 		);
 	}
 

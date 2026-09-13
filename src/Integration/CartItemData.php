@@ -176,16 +176,23 @@ final class CartItemData {
 		}
 
 		/*
-		 * Paired BEFORE sorting, and this order is not cosmetic.
+		 * Already keyed by option id -- no pairing to do, and that is the point.
 		 *
-		 * `SelectionResolver` returns deltas as a positional list in the order it
-		 * walked the selections -- which is the order they arrived in. Sorting the
-		 * selections first and pairing afterwards mismatches them: measured, a
-		 * customer submitting a 9000 option before a 100 option had the two
-		 * swapped, charging 100 for the expensive one. Nothing would have failed
-		 * loudly; the cart would simply have been wrong.
+		 * 🔴 **This used to pair positionally, and the order mattered.**
+		 * `SelectionResolver` returned deltas as a positional list in the order
+		 * it walked the selections, so this had to run BEFORE the `ksort()`
+		 * below: sorting first and pairing afterwards mismatched them. Measured
+		 * then, a customer submitting a 9000 option before a 100 option had the
+		 * two swapped, charging 100 for the expensive one -- nothing failed
+		 * loudly, the cart was simply wrong.
+		 *
+		 * ADR-061 removed that whole class of bug by keying `deltas` at the
+		 * source. A multi-select made the positional invariant unsatisfiable --
+		 * one selection carrying two deltas -- and the count guard then returned
+		 * an empty pairing, which froze onto the line and made it **price
+		 * live**. There is no ordering requirement left here to get wrong.
 		 */
-		$deltas = $this->deltas_by_option( $selections, $result->value()['deltas'] );
+		$deltas = $result->value()['deltas'];
 
 		// Constraint 1: deterministic order, or the same selection makes two lines.
 		ksort( $selections );
@@ -298,33 +305,5 @@ final class CartItemData {
 		);
 
 		return $data;
-	}
-
-	/**
-	 * Pair each resolved selection with the delta it contributed.
-	 *
-	 * `SelectionResolver` returns deltas as a positional list, in the order the
-	 * selections were walked, because that is all the arithmetic needs. A frozen
-	 * payload needs them keyed: it has to survive a configuration change, and
-	 * after one the position of an option in the walk is not a stable identity.
-	 *
-	 * **Call this before sorting.** The pairing is positional, so it is only
-	 * correct while `$selections` is still in the order the resolver walked it.
-	 *
-	 * The two arrays are the same length by construction -- one delta is appended
-	 * per accepted selection -- but that is an invariant of another class, so it
-	 * is checked rather than relied on. A mismatch stores nothing rather than
-	 * guessing at an alignment.
-	 *
-	 * @param array<string, string> $selections Option id to value key, in resolver order.
-	 * @param array<int, int>       $deltas     Positional deltas from the resolver.
-	 * @return array<string, int> Option id to minor units.
-	 */
-	private function deltas_by_option( array $selections, array $deltas ): array {
-		if ( count( $selections ) !== count( $deltas ) ) {
-			return array();
-		}
-
-		return array_combine( array_keys( $selections ), array_values( $deltas ) );
 	}
 }

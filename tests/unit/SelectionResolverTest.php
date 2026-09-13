@@ -30,7 +30,7 @@ final class SelectionResolverTest extends TestCase {
 		$result = SelectionResolver::resolve( self::sets(), array( 'opt-a' => 'front' ) );
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 500 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt-a' => 500 ), $result->value()['deltas'] );
 		$this->assertSame( array( 'opt-a' => 'front' ), $result->value()['resolved'] );
 	}
 
@@ -86,7 +86,7 @@ final class SelectionResolverTest extends TestCase {
 			$result->value()['total_minor'],
 			'The total must come from the cached config, never from the request.'
 		);
-		$this->assertSame( array( 500 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt-a' => 500 ), $result->value()['deltas'] );
 	}
 
 	/**
@@ -228,7 +228,7 @@ final class SelectionResolverTest extends TestCase {
 		$result = SelectionResolver::resolve( self::sets_optional(), array( 'opt-b' => 'plain' ) );
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt-b' => 0 ), $result->value()['deltas'] );
 	}
 
 	/**
@@ -241,7 +241,7 @@ final class SelectionResolverTest extends TestCase {
 		$result = SelectionResolver::resolve( self::sets_optional(), array( 'opt-b' => 'percent' ) );
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt-b' => 0 ), $result->value()['deltas'] );
 	}
 
 	/**

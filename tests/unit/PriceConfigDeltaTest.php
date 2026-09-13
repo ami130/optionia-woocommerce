@@ -99,7 +99,7 @@ final class PriceConfigDeltaTest extends TestCase {
 
 		$value = $result->value();
 
-		$this->assertSame( array( $expected ), $value['deltas'], $label );
+		$this->assertSame( array( 'opt' => $expected ), $value['deltas'], $label );
 
 		/*
 		 * The total is asserted as well as the delta.
@@ -191,7 +191,13 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 4000, 4000 ), $result->value()['deltas'] );
+		$this->assertSame(
+			array(
+				'a' => 4000,
+				'b' => 4000,
+			),
+			$result->value()['deltas']
+		);
 		$this->assertSame( 16000, $result->value()['total_minor'] );
 	}
 
@@ -313,7 +319,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertTrue( $result->is_ok(), 'An over-range percentage must not take the storefront down.' );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt' => 0 ), $result->value()['deltas'] );
 		$this->assertContains(
 			'percentage',
 			$result->value()['unpriced'],
@@ -424,7 +430,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		$result = SelectionResolver::resolve( self::text_document( $pricing ), array( 'opt' => $text ), 8000 );
 
 		$this->assertTrue( $result->is_ok(), $label . ' -- resolution failed' );
-		$this->assertSame( array( $expected ), $result->value()['deltas'], $label );
+		$this->assertSame( array( 'opt' => $expected ), $result->value()['deltas'], $label );
 
 		/*
 		 * The count and the delta must stay paired.
@@ -657,7 +663,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt' => 0 ), $result->value()['deltas'] );
 		$this->assertContains(
 			'per_char',
 			$result->value()['unpriced'],
@@ -732,7 +738,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		$result = SelectionResolver::resolve( self::number_document( $pricing ), array( 'opt' => $quantity ), 8000 );
 
 		$this->assertTrue( $result->is_ok(), $label . ' -- resolution failed' );
-		$this->assertSame( array( $expected ), $result->value()['deltas'], $label );
+		$this->assertSame( array( 'opt' => $expected ), $result->value()['deltas'], $label );
 
 		/*
 		 * 🔴 **The reporting half is asserted, not assumed.**
@@ -806,7 +812,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		$result = SelectionResolver::resolve( self::document_of( array( $option ) ), array( 'opt' => $answer ), 8000 );
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt' => 0 ), $result->value()['deltas'] );
 		$this->assertContains( 'per_unit', $result->value()['unpriced'] );
 	}
 
@@ -869,7 +875,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertTrue( $result->is_ok(), 'A huge quantity must not take the storefront down.' );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt' => 0 ), $result->value()['deltas'] );
 	}
 
 	/**
@@ -894,7 +900,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertSame(
-			array( 600 ),
+			array( 'opt' => 600 ),
 			SelectionResolver::resolve( $document, array( 'opt' => '3' ), 8000 )->value()['deltas'],
 			'Three units at 2.00 is 6.00, whatever the cart quantity.'
 		);
@@ -960,7 +966,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		$result = SelectionResolver::resolve( self::number_document( $pricing ), array( 'opt' => $quantity ), 8000 );
 
 		$this->assertTrue( $result->is_ok(), $label . ' -- resolution failed' );
-		$this->assertSame( array( $expected ), $result->value()['deltas'], $label );
+		$this->assertSame( array( 'opt' => $expected ), $result->value()['deltas'], $label );
 
 		if ( null === $unpriced ) {
 			$this->assertSame( array(), $result->value()['unpriced'], $label . ' -- nothing should be reported' );
@@ -1034,13 +1040,13 @@ final class PriceConfigDeltaTest extends TestCase {
 		);
 
 		$this->assertSame(
-			array( 500 ),
+			array( 'opt' => 500 ),
 			SelectionResolver::resolve( self::number_document( $reversed ), array( 'opt' => '5' ), 8000 )->value()['deltas'],
 			'Five metres at the 1-9 rate, whichever order the brackets were stored in.'
 		);
 
 		$this->assertSame(
-			array( 3000 ),
+			array( 'opt' => 3000 ),
 			SelectionResolver::resolve( self::number_document( $reversed ), array( 'opt' => '50' ), 8000 )->value()['deltas'],
 			'Fifty metres at the 50+ rate.'
 		);
@@ -1074,7 +1080,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		$result = SelectionResolver::resolve( self::document_of( array( $option ) ), array( 'opt' => 'HELLO' ), 8000 );
 
 		$this->assertTrue( $result->is_ok() );
-		$this->assertSame( array( 0 ), $result->value()['deltas'] );
+		$this->assertSame( array( 'opt' => 0 ), $result->value()['deltas'] );
 		$this->assertContains( 'tiered', $result->value()['unpriced'] );
 	}
 
@@ -1126,8 +1132,8 @@ final class PriceConfigDeltaTest extends TestCase {
 			$selection = array( 'opt' => $answer );
 		}
 
-		$got_a = SelectionResolver::resolve( $document, $selection, $base_a )->value()['deltas'][0];
-		$got_b = SelectionResolver::resolve( $document, $selection, $base_b )->value()['deltas'][0];
+		$got_a = SelectionResolver::resolve( $document, $selection, $base_a )->value()['deltas']['opt'];
+		$got_b = SelectionResolver::resolve( $document, $selection, $base_b )->value()['deltas']['opt'];
 
 		$this->assertSame( $delta_a, $got_a, $label . ' -- at the first base' );
 		$this->assertSame( $delta_b, $got_b, $label . ' -- at the converted base' );
@@ -1228,7 +1234,7 @@ final class PriceConfigDeltaTest extends TestCase {
 		foreach ( array( 0, 2, 3 ) as $decimals ) {
 			$GLOBALS['optionia_test_decimals'] = $decimals;
 
-			$deltas[] = SelectionResolver::resolve( $document, array( 'opt' => 'val' ), 8000 )->value()['deltas'][0];
+			$deltas[] = SelectionResolver::resolve( $document, array( 'opt' => 'val' ), 8000 )->value()['deltas']['opt'];
 		}
 
 		$this->assertSame(

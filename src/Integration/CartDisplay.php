@@ -222,20 +222,23 @@ final class CartDisplay {
 		}
 
 		/*
-		 * `resolved` and `deltas` are the same length by construction -- the
-		 * resolver appends one delta per accepted selection -- but that is another
-		 * class's invariant, so a mismatch returns nothing rather than pairing
-		 * option ids with the wrong amounts. Stage 2 shipped exactly that bug
-		 * once, sorting selections before pairing them positionally.
+		 * Already keyed by option id (ADR-061) -- returned as it comes.
+		 *
+		 * 🔴 **This was the SECOND positional pairing, and it was written
+		 * independently of the one in `CartItemData`.** Both did
+		 * `array_combine( array_keys( $resolved ), $amounts )` over a delta list
+		 * the resolver had walked in arrival order; Stage 2 shipped that bug
+		 * once by sorting the selections before pairing them.
+		 *
+		 * ⚠️ **Two implementations of one rule is how they come to disagree.**
+		 * `CartItemPayload`'s docblock says this question is asked in three
+		 * places and must get one answer -- and a multi-select broke the pairing
+		 * here in a different way than it broke the freeze, so the customer's
+		 * *displayed breakdown* and the price they were *charged* could have
+		 * parted company. Measured before ADR-061: this method reached
+		 * `Array to string conversion` on a `many` line.
 		 */
-		$resolved = $result->value()['resolved'];
-		$amounts  = $result->value()['deltas'];
-
-		if ( count( $resolved ) !== count( $amounts ) ) {
-			return array();
-		}
-
-		return array_combine( array_keys( $resolved ), $amounts );
+		return $result->value()['deltas'];
 	}
 
 	/**
