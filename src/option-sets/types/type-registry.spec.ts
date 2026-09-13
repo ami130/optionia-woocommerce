@@ -41,16 +41,21 @@ const EXPECTED_AXES = [
     takesValues: true,
   },
   /*
-   * ⚠️ **These three are `[ONE]` although M14.1's table says `one | many`.**
-   * That is the registry's own decision, not an oversight — see the comments
-   * there — and asserting it here is what stops `MANY` being added quietly:
-   * widening the registry without building the array path would let the API
-   * accept a selection `SelectionResolver` refuses.
+   * ✅ **`checkbox` gained `MANY` in M18.3; the two swatches did not.**
+   *
+   * This assertion is what stopped `MANY` being added quietly, and it did its
+   * job — widening the registry before the array path existed would have let
+   * the API accept a selection `SelectionResolver` refused. It now records the
+   * widening instead of forbidding it, and still forbids the other two.
+   *
+   * 🔴 **`ONE` must stay FIRST.** `OptionsService.create()` defaults to
+   * `cardinality[0]`, so reordering this array would silently turn every new
+   * checkbox into a multi-select. The order is asserted, not just the members.
    */
   {
     presentation: Presentation.CHECKBOX,
     valueKind: ValueKind.CHOICE,
-    cardinality: [Cardinality.ONE],
+    cardinality: [Cardinality.ONE, Cardinality.MANY],
     takesValues: true,
   },
   {

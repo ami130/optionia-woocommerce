@@ -114,6 +114,39 @@ describe('OptionTypeValidator', () => {
       expect(String(details[0].params?.message)).toMatch(/supports one/);
     });
 
+    /**
+     * ✅ **A checkbox may be a multi-select — the gate M18.3 opened.**
+     *
+     * Withheld until M18.1–M18.2 built the array path through the resolver,
+     * the cart, the labels and the order: declaring it earlier would have let
+     * the API accept a selection `SelectionResolver` refused, so a merchant
+     * could author and publish something a customer then hit an error on.
+     */
+    it('accepts many for a checkbox', () => {
+      expect(() =>
+        validator.assertValidOption(Presentation.CHECKBOX, { cardinality: 'many' }),
+      ).not.toThrow();
+    });
+
+    /**
+     * ⚠️ The control: widening one type must not widen its neighbours.
+     *
+     * `radio`, `color_swatch` and `image_swatch` share the checkbox's axes and
+     * sit beside it in the registry. A radio at `many` sells two sizes of one
+     * shirt — measured in the plugin before its own guard landed.
+     */
+    it('still refuses many for the types that cannot take it', () => {
+      [Presentation.RADIO, Presentation.COLOR_SWATCH, Presentation.IMAGE_SWATCH].forEach(
+        (presentation) => {
+          const details = detailsFrom(() =>
+            validator.assertValidOption(presentation, { cardinality: 'many' }),
+          );
+
+          expect(details[0].code).toBe('INCOMPATIBLE_AXIS');
+        },
+      );
+    });
+
     /** Absent axes are not a mistake — a patch need not restate them. */
     it('skips an axis that was not supplied', () => {
       expect(() => validator.assertValidOption(Presentation.RADIO, {})).not.toThrow();

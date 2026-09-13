@@ -575,19 +575,40 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     /**
      * A yes/no toggle at `one`, and a multi-select at `many`.
      *
-     * ⚠️ **Registered `[ONE]` deliberately, though M14.1's table says
-     * `one | many`.** The validator enforces cardinality *from this list*, so
-     * declaring `MANY` here would make the API **accept** a multi-select that
-     * `Engine\SelectionResolver` then refuses: it requires a scalar selection and
-     * answers `ERROR_NOT_SCALAR` for the array a multi-select posts. A merchant
-     * would author it, publish it, and a customer would hit the error.
+     * ✅ **`MANY` was added in M18.3, once the whole path existed.** It was
+     * withheld through M14.1 for a stated reason: the validator enforces
+     * cardinality *from this list*, so declaring it early would have made the
+     * API **accept** a multi-select that `Engine\SelectionResolver` then
+     * refused — a merchant would author it, publish it, and a customer would
+     * hit the error.
      *
-     * `MANY` joins this array in the stage that builds the array path through
-     * resolver, cart, labels and order — not before.
+     * ADR-057 set the bar as *the whole path*, not one stage of it. What had to
+     * exist first, and now does: the resolver accepts and prices an array
+     * (M18.1); `deltas` is keyed by option id so the cart can pair and freeze a
+     * multi-value line (ADR-061); and the cart row, the order meta and the
+     * checkout message all read a list of labels through one shared reader
+     * (M18.2). Measured end to end: `Extras: Red, Blue (+3.00)` in the cart,
+     * `Extras => 'Red, Blue'` in the order.
+     *
+     * 🔴 **`ONE` stays FIRST, and the order is load-bearing.**
+     * `OptionsService.create()` defaults to `definition.cardinality[0]`, so an
+     * option authored without an explicit cardinality is still a yes/no toggle.
+     * Putting `MANY` first would silently turn every new checkbox into a
+     * multi-select.
+     *
+     * ⚠️ **Existing options are untouched**, because `cardinality` is absent
+     * from `OptionChanges` — immutable after creation, by type. Widening this
+     * list cannot reach a checkbox that already exists, only offer a choice to
+     * one being created.
+     *
+     * 📌 **The plugin keeps its own copy of this decision** in
+     * `SelectionResolver::MANY_CAPABLE_TYPES`, because AC4 makes the published
+     * document input rather than authority. The two lists must agree; this is
+     * the authority, and that is the fence.
      */
     presentation: Presentation.CHECKBOX,
     valueKind: ValueKind.CHOICE,
-    cardinality: [Cardinality.ONE],
+    cardinality: [Cardinality.ONE, Cardinality.MANY],
     takesValues: true,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
