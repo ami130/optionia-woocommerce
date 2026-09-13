@@ -38,6 +38,36 @@ function page() {
   `;
 }
 
+/**
+ * A folded group, shaped like M18.4's accordion markup.
+ *
+ * 🔴 **The `<details>` sits INSIDE the `[data-optionia-group]` fieldset**, which
+ * is the constraint M18.4 was built around: the runtime sets `hidden` on the
+ * element carrying that attribute, so a fold wrapping it would let a rule hide a
+ * group's contents while its heading stayed on the page.
+ */
+function foldedPage() {
+  return `
+    <div class="optionia-options" data-optionia="options" data-optionia-product="1">
+      <fieldset data-optionia="group" data-optionia-group="group-a">
+        <div data-optionia="option" data-optionia-option="opt-a">
+          <label><input type="radio" name="optionia[opt-a]" value="yes"
+            data-optionia="value" data-optionia-value="val-yes"> Yes</label>
+        </div>
+      </fieldset>
+      <fieldset class="optionia-group optionia-group--accordion" data-optionia="group"
+                data-optionia-group="group-b" data-optionia-display="accordion">
+        <details class="optionia-group__fold">
+          <summary class="optionia-group__label">Extras</summary>
+          <div data-optionia="option" data-optionia-option="opt-b">
+            <input type="text" name="optionia[opt-b]" data-optionia="value">
+          </div>
+        </details>
+      </fieldset>
+    </div>
+  `;
+}
+
 /** One rule, in the shape `Assets::publish_rules()` emits. */
 function rule(targetType, targetId, action, optionId, operator, value) {
   const condition = { option_id: optionId, operator };
@@ -367,5 +397,57 @@ describe('rule-driven visibility', () => {
     fire(window, yes, 'change');
 
     expect(window.document.querySelector('[data-optionia-option="opt-b"]').hidden).toBe(false);
+  });
+});
+
+describe('rules and folded groups (M18.4)', () => {
+  /**
+   * 🔴 **Hiding a folded group hides its heading too.**
+   *
+   * The defect this prevents: if `data-optionia-group` moved inside the
+   * `<details>`, a rule would hide the group's *contents* and leave the summary
+   * on the page — a heading for options nobody can reach, which reads as a
+   * rendering bug rather than a rule.
+   */
+  it('hides a folded group whole, summary included', async () => {
+    const { window } = await loadStorefront(foldedPage(), {
+      rules: [rule('group', 'group-b', 'hide', 'opt-a', 'equals', 'yes')],
+    });
+
+    const group = window.document.querySelector('[data-optionia-group="group-b"]');
+    const summary = window.document.querySelector('summary');
+
+    expect(group.hidden).toBe(false);
+
+    const yes = window.document.querySelector('input[value="yes"]');
+    yes.checked = true;
+    fire(window, yes, 'change');
+
+    expect(group.hidden).toBe(true);
+    expect(summary.closest('[hidden]')).not.toBeNull();
+  });
+
+  /**
+   * ⚠️ **A control buried inside a `<details>` is still cleared.**
+   *
+   * `clearWithin()` uses `querySelectorAll`, which is depth-unlimited — but
+   * that is a property of the selector, not an intention anybody wrote down,
+   * and M18.4 added a wrapper element between the group and its controls for
+   * the first time. A value left behind on a hidden option is a price the
+   * customer cannot see being charged.
+   */
+  it('clears a control nested inside the fold', async () => {
+    const { window } = await loadStorefront(foldedPage(), {
+      rules: [rule('group', 'group-b', 'hide', 'opt-a', 'equals', 'yes')],
+    });
+
+    const text = window.document.querySelector('input[name="optionia[opt-b]"]');
+    text.value = 'Engrave me';
+
+    const yes = window.document.querySelector('input[value="yes"]');
+    yes.checked = true;
+    fire(window, yes, 'change');
+
+    expect(text.value).toBe('');
   });
 });

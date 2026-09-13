@@ -60,7 +60,24 @@ if ( array() === $optionia_groups ) {
 			 */
 			if ( $optionia_fold ) :
 				?>
-				<details class="optionia-group__fold"<?php echo 'accordion' === $optionia_type ? '' : ' open'; ?>>
+				<?php
+				/*
+				 * 🔴 **An accordion starts closed UNLESS it holds a required
+				 * option.**
+				 *
+				 * Measured: a `required` control inside a closed `<details>`
+				 * reports `willValidate: true` and blocks `checkValidity()`
+				 * while `details.open` is `false` — so the form refuses to
+				 * submit over a field the customer cannot see. Browsers usually
+				 * expand the disclosure to show the message; usually is not a
+				 * guarantee to stake an add-to-cart on.
+				 *
+				 * The merchant still gets their accordion — it simply starts
+				 * open, the way a collapsible `inline` group already does.
+				 */
+				$optionia_open = 'accordion' !== $optionia_type || ! empty( $optionia_group['starts_open'] );
+				?>
+				<details class="optionia-group__fold"<?php echo $optionia_open ? ' open' : ''; ?>>
 					<summary class="optionia-group__label optionia-group__summary"><?php echo esc_html( $optionia_title ); ?></summary>
 
 					<?php if ( '' !== $optionia_desc ) : ?>

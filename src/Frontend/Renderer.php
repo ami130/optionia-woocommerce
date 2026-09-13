@@ -274,6 +274,33 @@ final class Renderer {
 					 */
 					'is_collapsible' => 'inline' === self::display_type_of( $group )
 						&& ! empty( $group['is_collapsible'] ),
+
+					/*
+					 * 🔴 **A group holding a required option must not start
+					 * CLOSED**, or the customer cannot reach what the browser
+					 * refuses to submit without.
+					 *
+					 * Measured: a `required` control inside a closed
+					 * `<details>` reports `willValidate: true` and
+					 * `form.checkValidity() === false`, while `details.open` is
+					 * `false` — so the form blocks on a field nobody can see.
+					 * Chrome and Firefox usually expand the disclosure to show
+					 * the message, but that is a courtesy behaviour rather than
+					 * a guarantee, and it is not one to stake an add-to-cart on.
+					 *
+					 * ⚠️ **Opened, not un-folded.** The merchant asked for an
+					 * accordion and still gets one — it simply starts open, the
+					 * way a collapsible `inline` group already does. Refusing to
+					 * fold at all would discard a choice they made; starting
+					 * open honours it and keeps the product buyable.
+					 *
+					 * 📌 **This is the same dead end ADR-060 recorded**, reached
+					 * from a third direction: there the renderer skipped an
+					 * option the resolver still demanded. The rule is the same
+					 * one — what the page shows and what submission requires
+					 * must agree.
+					 */
+					'starts_open'    => self::holds_a_required_option( $group ),
 					'options'        => $markup,
 				);
 			}
@@ -393,6 +420,30 @@ final class Renderer {
 		}
 
 		return $markup;
+	}
+
+	/**
+	 * Whether any option in this group must be answered.
+	 *
+	 * 🔴 **Read from the published document, not from the rendered markup.**
+	 * A rule may make an option required at runtime too — `frontend.js` applies
+	 * that — but a rule cannot fire before the page loads, so the authored
+	 * answer is the one that decides how the group opens. A group a rule later
+	 * makes required is already visible, because the customer had to answer
+	 * something for the rule to fire.
+	 *
+	 * @param array<string, mixed> $group One published group.
+	 */
+	private static function holds_a_required_option( array $group ): bool {
+		$options = isset( $group['options'] ) && is_array( $group['options'] ) ? $group['options'] : array();
+
+		foreach ( $options as $option ) {
+			if ( is_array( $option ) && ! empty( $option['is_required'] ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

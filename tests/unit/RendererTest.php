@@ -928,13 +928,51 @@ final class RendererTest extends TestCase {
 	 * disclosure by screen readers without any ARIA of ours.
 	 */
 	public function test_an_accordion_renders_a_closed_disclosure(): void {
-		$this->cache_typed( 'radio', array(), array(), array( 'display_type' => 'accordion' ) );
+		$this->cache_typed(
+			'radio',
+			array(),
+			array( 'is_required' => false ),
+			array( 'display_type' => 'accordion' )
+		);
 
 		$markup = $this->render_for( 20, 'simple' );
 
 		$this->assertStringContainsString( '<details class="optionia-group__fold"', $markup );
 		$this->assertStringContainsString( '<summary', $markup );
 		$this->assertStringNotContainsString( '__fold" open', $markup, 'An accordion starts folded.' );
+	}
+
+	/**
+	 * 🔴 **An accordion holding a REQUIRED option starts open.**
+	 *
+	 * Measured: a `required` control inside a closed `<details>` reports
+	 * `willValidate: true` and `form.checkValidity() === false`, while
+	 * `details.open` is `false` — so the browser refuses to submit over a field
+	 * the customer cannot see or reach. Chrome and Firefox usually expand the
+	 * disclosure to show the message; *usually* is not a guarantee to stake an
+	 * add-to-cart on.
+	 *
+	 * ⚠️ **Found by auditing M18.4, not by building it.** `display_type` became
+	 * authorable in that stage, so this combination — accordion + required —
+	 * became reachable through the dashboard for the first time. `radio.php`,
+	 * `checkbox.php`, `color_swatch.php` and `image_swatch.php` all emit the
+	 * real HTML `required` attribute, so it is not merely `aria-required`.
+	 *
+	 * 📌 **The same dead end ADR-060 recorded, from a third direction**: what
+	 * the page shows and what submission demands must agree.
+	 */
+	public function test_an_accordion_with_a_required_option_starts_open(): void {
+		$this->cache_typed(
+			'radio',
+			array(),
+			array( 'is_required' => true ),
+			array( 'display_type' => 'accordion' )
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( '<details class="optionia-group__fold" open>', $markup );
+		$this->assertStringContainsString( ' required', $markup, 'The guard is only needed because this is a real attribute.' );
 	}
 
 	/**
