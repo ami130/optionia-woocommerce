@@ -81,6 +81,61 @@ export const groupSchema = z.object({
 });
 
 /**
+ * The layouts a merchant can choose for a group.
+ *
+ * 🔴 **Three of the API's four, and `stepped` is the missing one** (ADR-063).
+ * It renders as `inline` until its own stage, because a wizard needs a second
+ * reason for a group to be hidden and the storefront's rule runtime recomputes
+ * visibility from scratch on every change — so *"hidden by a rule"* and *"not
+ * the current step"* would share one attribute.
+ *
+ * ⚠️ **Offering it anyway would be worse than omitting it.** A fourth choice
+ * that silently behaves like the first is how a merchant discovers a gap in
+ * production, after they have published. The same reasoning keeps
+ * `AUTHORABLE_TYPES` a subset of the API's registry rather than a mirror of it.
+ *
+ * 📌 **`bin/check-option-type-parity.sh` holds the type list across the two
+ * repositories; this list has no such gate**, because the storefront's
+ * fallback makes a mismatch render rather than fail — an unknown layout draws
+ * as `inline`. If that ever stops being true, this needs a gate.
+ */
+export const GROUP_LAYOUTS = [
+  {
+    value: 'inline',
+    label: 'Inline',
+    hint: 'Laid out on the page, one after another',
+    icon: '▤',
+  },
+  {
+    value: 'accordion',
+    label: 'Accordion',
+    hint: 'Folded behind its heading — the customer opens it',
+    icon: '▸',
+  },
+  {
+    value: 'tabs',
+    label: 'Panel',
+    hint: 'Set apart in its own bordered panel',
+    icon: '▭',
+  },
+] as const;
+
+export type GroupLayout = (typeof GROUP_LAYOUTS)[number]['value'];
+
+/**
+ * A group's presentation, as the editor sends it.
+ *
+ * ⚠️ **`isCollapsible` only means anything for `inline`** (ADR-059), and the
+ * storefront enforces that rather than trusting the payload — an accordion is
+ * already collapsible, and honouring the flag there would give two fields one
+ * job. Sent as authored; the renderer resolves the overlap.
+ */
+export const groupDisplaySchema = z.object({
+  displayType: z.enum(GROUP_LAYOUTS.map((layout) => layout.value) as [string, ...string[]]),
+  isCollapsible: z.boolean(),
+});
+
+/**
  * The option types this editor can author **and re-open**.
  *
  * 🔴 **One list, because two drifted.** The picker in the editor and the schema
@@ -109,7 +164,7 @@ export const groupSchema = z.object({
 export const AUTHORABLE_TYPES = [
   { value: 'radio', label: 'Radio buttons', hint: 'All choices visible at once' , icon: '◉' },
   { value: 'dropdown', label: 'Dropdown', hint: 'A list that opens — better for many choices' , icon: '▾' },
-  { value: 'checkbox', label: 'Checkboxes', hint: 'Tick boxes — one choice for now' , icon: '☑' },
+  { value: 'checkbox', label: 'Checkboxes', hint: 'Tick boxes — one or several choices' , icon: '☑' },
   { value: 'color_swatch', label: 'Colour swatches', hint: 'A colour chip per choice' , icon: '◐' },
   { value: 'image_swatch', label: 'Image swatches', hint: 'A thumbnail per choice' , icon: '▣' },
   { value: 'text_field', label: 'Text field', hint: 'The customer types it — an engraving, a name' , icon: 'T' },

@@ -33,6 +33,26 @@ export interface AuthoringGroup {
   description: string | null;
   sortOrder: number;
   isEnabled: boolean;
+
+  /**
+   * How the storefront lays this group out: `inline`, `accordion`, `tabs` or
+   * `stepped`.
+   *
+   * ⚠️ **Four values arrive, three can be chosen.** `stepped` renders as
+   * `inline` until its own stage (ADR-063), so the picker omits it — but the
+   * API may return it for a group authored elsewhere, and the type must say so
+   * rather than pretend the value cannot exist.
+   */
+  displayType: string;
+
+  /**
+   * Whether an `inline` group can be folded away.
+   *
+   * 🔴 **Ignored for every other type** (ADR-059). An accordion is already
+   * collapsible and a tab already hides its siblings, so honouring it there
+   * would give two fields one job.
+   */
+  isCollapsible: boolean;
   options: AuthoringOption[];
   /**
    * Headings, paragraphs and dividers (M5.4c).
@@ -269,6 +289,30 @@ export async function publishSet(
 
 export async function createGroup(setId: string, label: string): Promise<AuthoringGroup> {
   const { data } = await api.post<AuthoringGroup>(`/option-sets/${setId}/groups`, { label });
+
+  return data;
+}
+
+/**
+ * Change a group's presentation.
+ *
+ * 🔴 **The half M18.4 had to build.** `displayType` and `isCollapsible` have
+ * been stored, accepted by the API and published in the config document since
+ * Phase 5 — and authorable nowhere, because the editor could only *create* a
+ * group by label and delete it. ADR-059 requires both halves in one stage: a
+ * field the storefront honours but no merchant can set is the same defect as
+ * one nothing reads, in the other direction.
+ *
+ * ⚠️ **`stepped` is deliberately absent from what the picker offers** (ADR-063),
+ * though the API accepts it. It renders as `inline` until its own stage, and a
+ * fourth choice that silently behaves like the first is how a merchant
+ * discovers a gap in production.
+ */
+export async function updateGroupDisplay(
+  id: string,
+  changes: { displayType?: string; isCollapsible?: boolean },
+): Promise<AuthoringGroup> {
+  const { data } = await api.patch<AuthoringGroup>(`/groups/${id}`, changes);
 
   return data;
 }

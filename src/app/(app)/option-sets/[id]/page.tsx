@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
+import { GroupLayout } from '@/components/option-sets/group-layout';
 import { OptionPreview } from '@/components/option-sets/option-preview';
 import { RulesPanel } from '@/components/option-sets/rules-panel';
 import { ProductPicker } from '@/components/products/product-picker';
@@ -313,16 +314,20 @@ function GroupCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-medium">{group.label}</h2>
 
-          {canEdit ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={remove.isPending}
-              onClick={() => setConfirmingDelete(true)}
-            >
-              Delete group
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <GroupLayout group={group} canEdit={canEdit} onChanged={onChanged} />
+
+            {canEdit ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={remove.isPending}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                Delete group
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {!confirmingDelete ? null : (

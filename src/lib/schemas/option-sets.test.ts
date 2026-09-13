@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AUTHORABLE_TYPES,
+  GROUP_LAYOUTS,
   OPTION_SET_LIMITS,
   createSetSchema,
+  groupDisplaySchema,
   groupSchema,
   optionSchema,
   acceptsLength,
@@ -616,5 +618,53 @@ describe('whitespace-only text is refused everywhere', () => {
     const parsed = groupSchema.safeParse({ label: 'Extra  Large' });
 
     expect(parsed.success && parsed.data.label).toBe('Extra  Large');
+  });
+});
+
+describe('the group layouts a merchant can choose', () => {
+  /**
+   * 🔴 **`stepped` must NOT be offered while it renders as `inline`** (ADR-063).
+   *
+   * The API accepts four values; this list offers three. A fourth choice that
+   * silently behaves like the first is how a merchant discovers a gap in
+   * production, after they have published — which is exactly what ADR-055 and
+   * ADR-056 withdrew two rule actions to avoid.
+   */
+  it('does not offer stepped', () => {
+    expect(GROUP_LAYOUTS.map((layout) => layout.value)).not.toContain('stepped');
+  });
+
+  /**
+   * ⚠️ The control: the three that ARE drawn are all offered.
+   *
+   * Without this, "stepped is absent" would be satisfied by an empty list.
+   */
+  it('offers every layout the storefront draws', () => {
+    expect(GROUP_LAYOUTS.map((layout) => layout.value)).toEqual([
+      'inline',
+      'accordion',
+      'tabs',
+    ]);
+  });
+
+  /**
+   * Each entry carries what the picker needs to be chosen from quickly — the
+   * same reason `AUTHORABLE_TYPES` carries an icon and a hint.
+   */
+  it('gives every layout a label, a hint and an icon', () => {
+    GROUP_LAYOUTS.forEach((layout) => {
+      expect(layout.label).not.toBe('');
+      expect(layout.hint).not.toBe('');
+      expect(layout.icon).not.toBe('');
+    });
+  });
+
+  it('accepts a layout it offers and refuses one it does not', () => {
+    expect(groupDisplaySchema.safeParse({ displayType: 'accordion', isCollapsible: false }).success).toBe(
+      true,
+    );
+    expect(groupDisplaySchema.safeParse({ displayType: 'stepped', isCollapsible: false }).success).toBe(
+      false,
+    );
   });
 });
