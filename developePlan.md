@@ -21802,13 +21802,83 @@ shared fixture cases. ADR-060's deletion list is unchanged and still accurate.
 
 #### Exit criteria
 
-- [ ] Every consumer suite has a named multi-value test that fails without the fix
-- [ ] `deltas` is keyed by option id at the single assembly point; no `array_combine` on it remains
-- [ ] A single-value line's stored payload and signature are **proven byte-identical** to before
-- [ ] Cart total, displayed breakdown and order meta agree for a multi-select line
-- [ ] A `radio` at `many` is refused
-- [ ] ADR-060's three fence sites are gone, and `MultiSelectFenceTest`'s pairing test is **rewritten, not deleted**
-- [ ] Mutation-proven: every guard killed by a named failing test
+- [x] Every consumer suite has a named multi-value test that fails without the fix
+- [x] `deltas` is keyed by option id at the single assembly point; no `array_combine` on it remains
+- [x] A single-value line's stored payload and signature are **proven byte-identical** to before
+- [x] Cart total, displayed breakdown and order meta agree for a multi-select line
+- [x] A `radio` at `many` is refused
+- [ ] ADR-060's fence sites are gone, and `MultiSelectFenceTest`'s pairing test is **rewritten, not deleted** — ⏸ **deferred to 18-3 by design**; the pairing test is already rewritten
+- [x] Mutation-proven: every guard killed by a named failing test
+
+---
+
+### ▶ Stage 18-3 — `MANY` joins the registry, and the evaluators learn to read a list
+
+#### ✅ Part one complete — the registry gate, 2026-09-13
+
+`checkbox` now declares `cardinality: [ONE, MANY]`. The precondition its own
+comment named — *"the stage that builds the array path through resolver, cart,
+labels and order"* — is genuinely met, and ADR-057's bar was *the whole path*.
+
+🔴 **`ONE` stays FIRST, and the order is load-bearing.**
+`OptionsService.create()` defaults to `definition.cardinality[0]`, so putting
+`MANY` first would silently turn **every new checkbox** into a multi-select.
+Mutation-tested: reordering fails the registry spec, which compares with
+`toEqual` and is therefore order-sensitive.
+
+✅ **Existing options cannot be reached.** `cardinality` is absent from
+`OptionChanges` — immutable after creation, *by type*, not by a check somebody
+remembers. Widening the list offers a choice to an option being created; it
+cannot change one that exists. That is what makes this change safe to ship
+before the evaluator work below.
+
+✅ **A new cross-repo gate compares the two `many` lists.** The API registry and
+the plugin's `MANY_CAPABLE_TYPES` are one decision held in two repositories that
+cannot see each other — exactly the failure `check-option-type-parity.sh`
+already exists for.
+
+📌 **This reverses my own earlier judgement**, recorded in the plugin as *"if it
+grows past two, gate it"*. The risk was never list size; it is divergence, and
+both directions are real: a type the API allows but the plugin refuses is an
+option a merchant authors, publishes, and **cannot sell**; a type the plugin
+allows but the API does not is reachable by crafted payload under AC4.
+
+Proven against three divergences — plugin widens, API widens, and an unreadable
+plugin list, which must not compare as empty and pass.
+
+#### 🔴 Part two — what the registry change exposed
+
+**The three rule evaluators disagree about a multi-select answer**, and every
+suite is green over it because **no fixture has ever asked**: 0 of 46 rule cases
+use a list answer.
+
+Measured directly, answer `['red','blue']`:
+
+| Condition | PHP | storefront JS | **TypeScript** |
+|---|---|---|---|
+| `equals 'red'` | false | false | false |
+| `contains 'red'` | false | false | **true** |
+| `contains 'd,b'` | false | false | **true** ← matches *across* the separator |
+
+PHP and `assets/js/rules.js` both return `''` for an array — the JS one
+deliberately, with a comment saying the agreement is *"written out rather than
+left to `String()` so the agreement is visible at the place it is made."*
+`common/rules/rule-evaluator.ts` has no array guard and uses bare `String()`,
+which yields `"red,blue"`.
+
+⚠️ **Under ADR-051 a disagreement about whether a field is hidden is a
+disagreement about money.**
+
+🔴 **And two problems all three share.** No value-matching operator works on a
+multi-select: a merchant writing *"if Extras contains Red, show Engraving"* gets
+a rule that **never fires** — authored successfully, silently dead. Worse,
+`not_equals 'red'` returns **true** for a customer who did select red.
+
+📌 **The semantics need deciding before any code**, which is an ADR, not a
+choice to make silently. Recommended: `contains` and `in` match if **any** chosen
+value matches; `equals` means the selection is **exactly** that one value. That
+is what a merchant writing the rule expects, and it makes `not_equals` correct
+again as its negation.
 
 ---
 

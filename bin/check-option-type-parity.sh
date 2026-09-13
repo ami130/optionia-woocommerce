@@ -25,6 +25,7 @@ pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REGISTRY="$ROOT/optioniaWooCommerceBackend/src/option-sets/types/type-registry.ts"
 PICKER="$ROOT/optioniaWooCommerceFrontend/src/lib/schemas/option-sets.ts"
+RESOLVER="$ROOT/optioniaWooCommercePlugin/src/Engine/SelectionResolver.php"
 
 for file in "$REGISTRY" "$PICKER"; do
   if [ ! -f "$file" ]; then
@@ -153,6 +154,52 @@ if [ -f "$ITEM_DTO" ]; then
       fi
     done
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Which types may take SEVERAL answers, in both repositories.
+#
+# 🔴 **The plugin keeps its own copy of this decision, and it has to.** AC4
+# makes the published document *input*, not authority, so `SelectionResolver`
+# cannot trust a `cardinality` it is handed — it checks the type against
+# `MANY_CAPABLE_TYPES` before accepting an array.
+#
+# Two lists, one decision, in repositories that cannot see each other. The
+# failure is asymmetric and both directions are real:
+#
+#   - A type the API allows at `many` but the plugin does not: a merchant
+#     authors a multi-select, publishes it, and every customer selection is
+#     refused at add-to-cart. Authored successfully, unsellable.
+#   - A type the plugin allows but the API does not: unreachable through the
+#     dashboard, but AC4 means a crafted payload reaches the resolver anyway.
+#     Measured before the plugin's guard landed: a `radio` at `many` sold
+#     **Small and Large on one line** and charged for both.
+#
+# So this compares them as SETS and requires equality, not a subset either way.
+MANY_REGISTERED=$(grep -oE 'presentation: Presentation\.[A-Z_]+,[[:space:]]*$|cardinality: \[[^]]*\]' "$REGISTRY" \
+  | awk '/presentation:/ { sub(/.*Presentation\./, ""); sub(/,.*/, ""); t = tolower($0); next }
+         /Cardinality\.MANY/ && t != "" { print t; t = "" }
+         /cardinality:/ { t = t }' \
+  | sort -u)
+
+MANY_PLUGIN=$(sed -n '/MANY_CAPABLE_TYPES = array(/,/);/p' "$RESOLVER" \
+  | grep -oE "'[a-z_]+'" | tr -d "'" | sort -u)
+
+if [ ! -f "$RESOLVER" ]; then
+  fail "missing: ${RESOLVER#"$ROOT/"}"
+elif [ -z "$MANY_PLUGIN" ]; then
+  # The same lesson as above: an unreadable list must not compare as empty and
+  # pass. Both lists being empty is a legitimate state -- it was the state
+  # before M18.3 -- so silence here is indistinguishable from agreement.
+  fail "could not read MANY_CAPABLE_TYPES from the plugin -- has its shape changed?"
+elif [ "$MANY_REGISTERED" != "$MANY_PLUGIN" ]; then
+  fail "the two multi-select lists disagree"
+  printf '        API registry allows many for: %s\n' "$(printf '%s' "$MANY_REGISTERED" | tr '\n' ' ')"
+  printf '        Plugin resolver allows:       %s\n' "$(printf '%s' "$MANY_PLUGIN" | tr '\n' ' ')"
+  printf '        A type in one and not the other is either an unsellable option\n'
+  printf '        a merchant can author, or a crafted payload the resolver accepts.\n'
+else
+  pass "both repositories allow many for the same $(printf '%s\n' "$MANY_PLUGIN" | grep -c .) type(s)"
 fi
 
 # Informational: registered but not yet authorable. Expected, and worth seeing.
