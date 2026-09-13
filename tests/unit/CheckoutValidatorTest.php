@@ -568,7 +568,115 @@ final class CheckoutValidatorTest extends TestCase {
 		$this->assertSame( array(), $GLOBALS['optionia_test_notices'] );
 	}
 
+	// --- Multi-select ---------------------------------------------------------
+
+	/**
+	 * 🔴 **A fenced multi-select line does not block checkout.**
+	 *
+	 * ⚠️ **The composition that made a product unbuyable, checked one hop
+	 * further out.** ADR-060 records it at the resolver: the renderer skipped a
+	 * `many` option while the required pass still demanded it, so a customer
+	 * read *"Please choose all required options"* with nothing to choose. This
+	 * asserts the same property at **checkout**, where the customer has already
+	 * paid attention once and a dead end is worse.
+	 *
+	 * A fenced option carries no payload at all, so the line is simply a line
+	 * with no Optionia state — and must check out like any other.
+	 */
+	public function test_a_fenced_multi_select_line_does_not_block_checkout(): void {
+		$this->validator()->validate( $this->cart_with( $this->many_line( array( 'red', 'blue' ) ) ) );
+
+		$this->assertSame(
+			array(),
+			$GLOBALS['optionia_test_notices'],
+			'A skipped option must not block an order it is not part of.'
+		);
+	}
+
+	/**
+	 * ⚠️ The control: a genuine problem still blocks.
+	 *
+	 * Without it, the assertion above would be satisfied by a validator that
+	 * had stopped checking anything — which is the shape this class exists to
+	 * prevent, not a fence.
+	 */
+	public function test_a_deleted_option_still_blocks_checkout(): void {
+		$this->validator()->validate( $this->cart_with( $this->line_then_delete_the_option() ) );
+
+		$this->assertNotEmpty(
+			$GLOBALS['optionia_test_notices'],
+			'A line naming a value the merchant deleted must not check out.'
+		);
+	}
+
 	// --- Helpers -------------------------------------------------------------
+
+	/**
+	 * A cart line built against a multi-select configuration.
+	 *
+	 * 🔴 **The net M18.1 did not have** — `cardinality` appeared in no consumer
+	 * suite, so a multi-select could strand a customer at checkout with every
+	 * test in this file green.
+	 *
+	 * @param mixed $answer What the customer submitted for `opt-a`.
+	 * @return array<string, mixed> A cart item.
+	 */
+	private function many_line( $answer ): array {
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'option_sets' => array(
+					array(
+						'id'          => 'set-1',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => (string) self::PRODUCT_ID,
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'options' => array(
+									array(
+										'id'          => 'opt-a',
+										'type'        => 'checkbox',
+										'cardinality' => 'many',
+										'label'       => 'Extras',
+										'is_required' => true,
+										'values'      => array(
+											array(
+												'value_key' => 'red',
+												'label' => 'Red',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 100,
+												),
+											),
+										),
+									),
+								),
+							),
+						),
+						'rules'       => array(),
+					),
+				),
+			),
+			'W/"checkout-many"'
+		);
+
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => $answer );
+
+		$line = array_merge(
+			( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )->attach( array(), self::PRODUCT_ID, 0, 1 ),
+			array( 'product_id' => self::PRODUCT_ID )
+		);
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		return $line;
+	}
 
 	/**
 	 * A cart line added while `lux` existed, after the merchant deleted it.

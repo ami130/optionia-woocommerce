@@ -428,6 +428,160 @@ final class CartDisplayTest extends TestCase {
 	// --- Helpers -------------------------------------------------------------
 
 	/**
+	 * 🔴 **A multi-select line shows no rows while the fence stands.**
+	 *
+	 * ⚠️ **This suite holds the SECOND positional pairing.**
+	 * `CartDisplay::deltas_for()` reimplements `array_combine( array_keys(
+	 * $resolved ), $amounts )` independently of
+	 * `CartItemData::deltas_by_option()`. The plan named only the latter for a
+	 * long time; fixing one and not the other leaves the customer's *displayed
+	 * breakdown* disagreeing with the price they are *charged*.
+	 *
+	 * `CartItemPayload`'s own docblock says this question is "asked in three
+	 * places and must get one answer". This test is the display's half.
+	 *
+	 * 📌 **M18.2 step 3 inverts this**, and the inversion must land in the same
+	 * change as the totals one or the two halves disagree again.
+	 */
+	public function test_a_multi_select_line_shows_nothing_while_fenced(): void {
+		$this->assertSame( array(), $this->many_rows( array( 'red', 'blue' ) ) );
+	}
+
+	/**
+	 * ⚠️ The control: a single-value line still renders its row and price.
+	 *
+	 * Without it, the assertion above would be satisfied by a display that had
+	 * stopped rendering anything.
+	 */
+	public function test_a_single_value_line_still_shows_its_row(): void {
+		$this->store_many_config( 'one' );
+
+		$rows = ( new CartDisplay( $this->repository() ) )->item_data( array(), $this->many_line( 'red' ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'Extras', $rows[0]['key'] );
+		$this->assertSame( 'Red (+1.00)', $rows[0]['value'] );
+	}
+
+	/**
+	 * 🔴 **One row per OPTION, with one price beside it.**
+	 *
+	 * The measurement ADR-061 turns on for this consumer: the display asks for
+	 * an option's *total* contribution, never "what did the second chosen value
+	 * cost?". That is why `deltas` becomes summed-per-option rather than a
+	 * per-value list — a list would have no row to render itself into.
+	 *
+	 * 📌 **M18.2 must keep this shape.** A multi-select row reads
+	 * `Extras: Red, Blue (+3.00)` — one row, one summed price.
+	 */
+	public function test_a_row_carries_one_price_for_one_option(): void {
+		$this->store_many_config( 'one' );
+
+		$rows = ( new CartDisplay( $this->repository() ) )->item_data( array(), $this->many_line( 'red' ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertArrayHasKey( 'key', $rows[0] );
+		$this->assertArrayHasKey( 'value', $rows[0] );
+	}
+
+	/**
+	 * Rows for a line answering the `many` option however the caller says.
+	 *
+	 * @param mixed $answer What the customer submitted.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function many_rows( $answer ): array {
+		$this->store_many_config();
+
+		return ( new CartDisplay( $this->repository() ) )->item_data( array(), $this->many_line( $answer ) );
+	}
+
+	/**
+	 * A line built by the real writer against the multi-select configuration.
+	 *
+	 * @param mixed $answer What the customer submitted for `opt-a`.
+	 * @return array<string, mixed>
+	 */
+	private function many_line( $answer ): array {
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => $answer );
+
+		$line = ( new CartItemData( $this->repository() ) )->attach( array(), self::PRODUCT_ID, 0, 1 );
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		return array_merge(
+			$line,
+			array(
+				'product_id' => self::PRODUCT_ID,
+				'quantity'   => 1,
+			)
+		);
+	}
+
+	/**
+	 * A configuration whose only option declares the given cardinality.
+	 *
+	 * 🔴 **The net M18.1 did not have** — `cardinality` appeared in no consumer
+	 * suite, so a multi-select could break the displayed breakdown with every
+	 * test here green.
+	 *
+	 * @param string $cardinality What the option declares.
+	 */
+	private function store_many_config( string $cardinality = 'many' ): void {
+		$this->repository()->store(
+			array(
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-1',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => (string) self::PRODUCT_ID,
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'options' => array(
+									array(
+										'id'          => 'opt-a',
+										'type'        => 'checkbox',
+										'cardinality' => $cardinality,
+										'label'       => 'Extras',
+										'values'      => array(
+											array(
+												'value_key' => 'red',
+												'label' => 'Red',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 100,
+												),
+											),
+											array(
+												'value_key' => 'blue',
+												'label' => 'Blue',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 200,
+												),
+											),
+										),
+									),
+								),
+							),
+						),
+						'rules'       => array(),
+					),
+				),
+			),
+			'W/"many-' . $cardinality . '"'
+		);
+	}
+
+	/**
 	 * Display rows for a standard line.
 	 *
 	 * @param int $lux_minor The `lux` option's amount.

@@ -1101,6 +1101,112 @@ final class CartTotalsTest extends TestCase {
 		);
 	}
 
+	/**
+	 * 🔴 **A `many` option attaches NOTHING while the fence stands.**
+	 *
+	 * ADR-060 refuses a multi-select at the resolver because one selection
+	 * carrying two deltas breaks the pairing, the freeze is discarded and **the
+	 * line prices live** — 16c's mechanism, which quoted 85.00 and charged
+	 * 130.00.
+	 *
+	 * ⚠️ **Asserted on the PAYLOAD, not on an error code.** What matters to a
+	 * cart is that no half-built Optionia state reaches the line: partial state
+	 * is what later code would trust.
+	 *
+	 * 📌 **M18.2 step 2 inverts this test**, and that is the point of writing it
+	 * now — the inversion is where the stage proves it changed something.
+	 */
+	public function test_a_multi_select_attaches_no_payload_while_fenced(): void {
+		$this->store_many_config();
+
+		$this->assertSame( array(), $this->attach_answer( array( 'red', 'blue' ) ) );
+	}
+
+	/**
+	 * 🔴 **Fenced on the DECLARATION, even for a single scalar answer.**
+	 *
+	 * The case that tempts a narrower guard. A `many` option answered with one
+	 * value prices correctly today, so a fence reading the *payload* would let
+	 * it through — and the merchant's multi-select would work until the first
+	 * customer ticked a second box. Measured through the full stack, not just
+	 * the resolver.
+	 */
+	public function test_a_many_option_attaches_nothing_even_for_one_answer(): void {
+		$this->store_many_config();
+
+		$this->assertSame( array(), $this->attach_answer( 'red' ) );
+	}
+
+	/**
+	 * ⚠️ The control: the same config at `one` attaches a real payload.
+	 *
+	 * Without this, both assertions above would be satisfied by a writer that
+	 * had stopped attaching anything at all.
+	 */
+	public function test_the_same_option_at_one_attaches_a_payload(): void {
+		$this->store_many_config( 'one' );
+
+		$attached = $this->attach_answer( 'red' );
+
+		$this->assertArrayHasKey( Keys::CART_ITEM_KEY, $attached );
+		$this->assertSame(
+			array( 'opt-a' => 'red' ),
+			$attached[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_SELECTIONS ]
+		);
+	}
+
+	/**
+	 * 🔴 **`deltas` is stored KEYED BY OPTION ID, and always has been.**
+	 *
+	 * The measurement ADR-061 turns on. `CartItemData` pairs positionally and
+	 * then stores the result as a map — so the positional list exists only
+	 * between the resolver returning and this method storing.
+	 *
+	 * 📌 **M18.2 step 2 makes the resolver return this shape directly**, which
+	 * is why this assertion must hold *unchanged* afterwards. If it changes, the
+	 * stored payload changed, and every cart in flight loses its freeze.
+	 */
+	public function test_stored_deltas_are_keyed_by_option_id(): void {
+		$this->store_many_config( 'one' );
+
+		$attached = $this->attach_answer( 'red' );
+
+		$this->assertSame(
+			array( 'opt-a' => 100 ),
+			$attached[ Keys::CART_ITEM_KEY ][ Keys::CART_ITEM_DELTAS ],
+			'The stored shape is a map; M18.2 must not change it.'
+		);
+	}
+
+	/**
+	 * 🔴 **The signature over a single-value line, pinned.**
+	 *
+	 * 📌 **The byte-identical proof M18.2 needs.** ADR-061 claims reshaping
+	 * `deltas` breaks no signature, because the *stored* shape does not change.
+	 * An earlier draft of the analysis claimed the opposite and was wrong. This
+	 * test is what makes the claim checkable rather than asserted: if step 2
+	 * changes it, carts in flight lose their freeze and re-price live.
+	 *
+	 * ⚠️ **Compared against a freshly computed signature, not a hardcoded
+	 * hash.** `wp_hash()` is salt-dependent, so a literal would pin this test to
+	 * one machine.
+	 */
+	public function test_a_single_value_signature_covers_the_keyed_deltas(): void {
+		$this->store_many_config( 'one' );
+
+		$attached = $this->attach_answer( 'red' );
+		$payload  = $attached[ Keys::CART_ITEM_KEY ];
+
+		$this->assertSame(
+			CartItemPayload::sign(
+				array( 'opt-a' => 'red' ),
+				array( 'opt-a' => 100 ),
+				$payload[ Keys::CART_ITEM_CONFIG_VERSION ]
+			),
+			$payload[ Keys::CART_ITEM_SIGNATURE ]
+		);
+	}
+
 	// --- Helpers -------------------------------------------------------------
 
 	/**
@@ -1506,6 +1612,77 @@ final class CartTotalsTest extends TestCase {
 			),
 			'W/"store-' . $lux_key . '-' . $lux_minor . '"'
 		);
+	}
+
+	/**
+	 * Store a configuration whose only option declares `cardinality: many`.
+	 *
+	 * 🔴 **The net M18.1 did not have.** `cardinality` appeared in four test
+	 * files, none of them a consumer suite — so a multi-select could break the
+	 * cart, the order and the display with every one of those suites green.
+	 * That is exactly how M18.1 shipped a live overcharge (ADR-060).
+	 *
+	 * Two values at 1.00 and 2.00, so a line carrying both is 3.00 and a line
+	 * carrying one is distinguishable from it. The amounts matter: a test that
+	 * asserted only *"something was charged"* would pass while the second value
+	 * was silently dropped, which is M11.5's shape.
+	 *
+	 * @param string $cardinality What the option declares.
+	 */
+	private function store_many_config( string $cardinality = 'many' ): void {
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'option_sets' => array(
+					array(
+						'id'          => 'set-1',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => (string) self::PRODUCT_ID,
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'label'   => 'Customization',
+								'options' => array(
+									array(
+										'id'          => 'opt-a',
+										'type'        => 'checkbox',
+										'cardinality' => $cardinality,
+										'label'       => 'Extras',
+										'values'      => array(
+											self::value( 'red', 100 ),
+											self::value( 'blue', 200 ),
+										),
+									),
+								),
+							),
+						),
+						'rules'       => array(),
+					),
+				),
+			),
+			'W/"store-many-' . $cardinality . '"'
+		);
+	}
+
+	/**
+	 * Attach a payload for the given selections, through production code.
+	 *
+	 * @param mixed $answer What the customer submitted for `opt-a`.
+	 * @return array<string, mixed> The attached cart item data.
+	 */
+	private function attach_answer( $answer ): array {
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => $answer );
+
+		$attached = $this->writer()->attach( array(), self::PRODUCT_ID, 0, 1 );
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		return $attached;
 	}
 
 	/**

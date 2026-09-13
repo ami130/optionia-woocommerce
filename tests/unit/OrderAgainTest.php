@@ -222,9 +222,23 @@ final class OrderAgainTest extends TestCase {
 	/**
 	 * Non-scalar members are dropped rather than carried into the cart key.
 	 *
-	 * `SelectionResolver` would refuse them anyway, but they would be hashed into
-	 * the cart item key on the way — so they are dropped here, where the shape is
-	 * still ours to control.
+	 * They would be hashed into the cart item key on the way, so they are
+	 * dropped here, where the shape is still ours to control.
+	 *
+	 * ⚠️ **The original reason for this test has expired.** It read
+	 * *"`SelectionResolver` would refuse them anyway"* — true until M18.1, which
+	 * taught the resolver to accept an array for an option declaring
+	 * `cardinality: many`. The drop is still correct, but it is no longer a
+	 * belt-and-braces guard over a refusal: it is now the **only** thing
+	 * standing between a multi-select order and a malformed cart key.
+	 *
+	 * 🔴 **And it is silent data loss.** A customer reordering a past
+	 * multi-select purchase gets a line with those options **missing**, with no
+	 * error and nothing in the log. Fail-closed, but not fail-visible.
+	 *
+	 * 📌 **M18.2 step 5 (F7) must carry the array through** rather than drop it,
+	 * once the cart can hold one. Until then this test pins the safe behaviour,
+	 * not the desirable one.
 	 */
 	public function test_non_scalar_members_are_dropped(): void {
 		$item = optionia_test_order_item();

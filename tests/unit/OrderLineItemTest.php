@@ -1012,7 +1012,141 @@ final class OrderLineItemTest extends TestCase {
 		( new OrderLineItem() )->attach( new \stdClass(), 'cart-key', $this->line() );
 	}
 
+	/**
+	 * 🔴 **A multi-select writes NO order meta while the fence stands.**
+	 *
+	 * ⚠️ **This is the merchant's fulfilment record**, not a display surface.
+	 * It reaches packing slips, order emails, CSV export and refund tooling, and
+	 * it is permanent — so a wrong value here outlives the cart it came from.
+	 *
+	 * Measured without the fence, by replicating this method's naming logic
+	 * against a `many` label shape:
+	 *
+	 * ```
+	 * Warning: Array to string conversion
+	 * order meta -> name='opt-a'  value='Array'
+	 * ```
+	 *
+	 * `$label['option']` is NULL for a list, so the name falls back to the raw
+	 * option id; `(string)` on the array coerces to `"Array"`. Two defects in
+	 * one line of output.
+	 *
+	 * 📌 **M18.2 step 3 inverts this**, and must write `Extras` / `Red, Blue`.
+	 */
+	public function test_a_multi_select_writes_no_order_meta_while_fenced(): void {
+		$item = optionia_test_order_item();
+
+		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( array( 'red', 'blue' ) ) );
+
+		$this->assertNull( $item->get_meta( 'Extras' ) );
+		$this->assertNull( $item->get_meta( 'opt-a' ), 'An id must never appear where a label belongs.' );
+	}
+
+	/**
+	 * ⚠️ The control: the same option at `one` writes a real label and value.
+	 *
+	 * Without it, the assertion above would be satisfied by a hook that had
+	 * stopped writing meta entirely — which is the silent-data-loss shape, not
+	 * a fence.
+	 */
+	public function test_a_single_value_option_writes_its_label(): void {
+		$item = optionia_test_order_item();
+
+		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( 'red', 'one' ) );
+
+		$this->assertSame( 'Red', $item->get_meta( 'Extras' ) );
+		$this->assertNull( $item->get_meta( 'opt-a' ) );
+	}
+
 	// --- Helpers -------------------------------------------------------------
+
+	/**
+	 * A cart line built against the multi-select configuration.
+	 *
+	 * @param mixed  $answer      What the customer submitted for `opt-a`.
+	 * @param string $cardinality What the option declares.
+	 * @return array<string, mixed>
+	 */
+	private function many_line( $answer, string $cardinality = 'many' ): array {
+		$this->store_many_config( $cardinality );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => $answer );
+
+		$line = ( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )
+			->attach( array(), self::PRODUCT_ID, 0, 1 );
+
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		return array_merge(
+			$line,
+			array(
+				'product_id' => self::PRODUCT_ID,
+				'quantity'   => 1,
+			)
+		);
+	}
+
+	/**
+	 * A configuration whose only option declares the given cardinality.
+	 *
+	 * 🔴 **The net M18.1 did not have** — `cardinality` appeared in no consumer
+	 * suite, so a multi-select could write `"Array"` into every order in the
+	 * store with this file green.
+	 *
+	 * @param string $cardinality What the option declares.
+	 */
+	private function store_many_config( string $cardinality ): void {
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'option_sets' => array(
+					array(
+						'id'          => 'set-1',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => (string) self::PRODUCT_ID,
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'options' => array(
+									array(
+										'id'          => 'opt-a',
+										'type'        => 'checkbox',
+										'cardinality' => $cardinality,
+										'label'       => 'Extras',
+										'values'      => array(
+											array(
+												'value_key' => 'red',
+												'label' => 'Red',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 100,
+												),
+											),
+											array(
+												'value_key' => 'blue',
+												'label' => 'Blue',
+												'price_config' => array(
+													'type' => 'fixed',
+													'amount_minor' => 200,
+												),
+											),
+										),
+									),
+								),
+							),
+						),
+						'rules'       => array(),
+					),
+				),
+			),
+			'W/"order-many-' . $cardinality . '"'
+		);
+	}
 
 	/**
 	 * Build a cart line and run it through the order hook.
