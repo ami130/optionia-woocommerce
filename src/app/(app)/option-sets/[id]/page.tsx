@@ -46,6 +46,7 @@ import { mergedEntries, reorderPayloads } from '@/lib/option-sets/entries';
 import {
   AUTHORABLE_TYPES,
   acceptsLength,
+  acceptsManyAnswers,
   configFor,
   keyFromLabel,
   optionSchema,
@@ -435,6 +436,14 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
   const [label, setLabel] = useState('');
   const [presentation, setPresentation] = useState<string>('radio');
   const [isRequired, setIsRequired] = useState(false);
+
+  /*
+   * 🔴 **Whether the option takes several answers, and it must be set HERE.**
+   * `cardinality` is absent from the API's `OptionChanges`, so it is immutable
+   * after creation — a merchant who wants a multi-select and does not say so
+   * now has to delete the option and make another.
+   */
+  const [takesMany, setTakesMany] = useState(false);
   /* The raw field, not a number: an empty box is "no limit", and coercing as
    * they type would turn a half-deleted "20" into a limit of 2. */
   const [maxLengthText, setMaxLengthText] = useState('');
@@ -469,6 +478,13 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
         label,
         presentation,
         isRequired,
+
+        /*
+         * Sent only when it is both meaningful and chosen. The API refuses
+         * `many` for a type its registry does not allow, and sending `one`
+         * explicitly would be the same as the default it already applies.
+         */
+        ...(acceptsManyAnswers(presentation) && takesMany ? { cardinality: 'many' } : {}),
         ...configFor(presentation, maxLength, minLength),
       }),
     onSuccess: () => {
@@ -476,6 +492,7 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
       setLabel('');
       setPresentation('radio');
       setIsRequired(false);
+      setTakesMany(false);
       setMaxLengthText('');
       setMinLengthText('');
       setKeyTouched(false);
@@ -628,6 +645,36 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
           />
           Required — the customer cannot add to cart without answering
         </label>
+
+        {/*
+          🔴 **Several answers, offered only where the API allows it.**
+
+          Shown for `checkbox` alone, because that is the one type whose
+          registry entry lists `MANY`. Offering it elsewhere would let a
+          merchant author an option the API refuses with `INCOMPATIBLE_AXIS`.
+
+          ⚠️ **Warned about, because it cannot be undone.** `cardinality` is
+          absent from the API's `OptionChanges`, so it is immutable after
+          creation — the same reason `key` is. A merchant who wants a
+          multi-select and does not tick this has to delete the option and make
+          another, and nothing later in the editor will tell them why.
+        */}
+        {!acceptsManyAnswers(presentation) ? null : (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4"
+              checked={takesMany}
+              onChange={(e) => setTakesMany(e.target.checked)}
+            />
+            <span>
+              Let customers pick several
+              <span className="text-muted-foreground block text-xs">
+                Permanent once created, like the key.
+              </span>
+            </span>
+          </label>
+        )}
 
         {/*
           🔴 **A live preview, so the merchant sees the customer's view.**

@@ -342,6 +342,22 @@ export async function createOption(
     validation?: Record<string, unknown>;
     /** Display affordances — `characterCounter` (M14.4b). */
     display?: Record<string, unknown>;
+
+    /**
+     * Whether the option takes one answer or several (M18.3a).
+     *
+     * 🔴 **Omitting it is not neutral — it chooses `one`.**
+     * `OptionsService.create()` falls back to `definition.cardinality[0]`, and
+     * the registry lists `[ONE, MANY]` for a checkbox with `ONE` first, so a
+     * request that leaves this out gets a single-value option every time.
+     *
+     * ⚠️ **And it cannot be corrected afterwards.** `cardinality` is absent
+     * from `OptionChanges`, so it is immutable after creation by type. That is
+     * why M18.1–M18.3 built a multi-select path no merchant could reach: the
+     * storefront could resolve, price, freeze and display several answers, and
+     * every option the dashboard created was `one`.
+     */
+    cardinality?: string;
   },
 ): Promise<AuthoringOption> {
   const { data } = await api.post<AuthoringOption>(`/groups/${groupId}/options`, input);

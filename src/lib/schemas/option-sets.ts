@@ -356,6 +356,25 @@ export function acceptsLength(presentation: string): boolean {
 }
 
 /**
+ * The types a merchant may set to accept several answers.
+ *
+ * 🔴 **Mirrors the API registry, which allows `MANY` for `checkbox` alone**
+ * (M18.3), and the plugin's `SelectionResolver::MANY_CAPABLE_TYPES`, which
+ * keeps its own copy because AC4 makes the published document input rather
+ * than authority. Three lists, one decision;
+ * `bin/check-option-type-parity.sh` holds the API's against the plugin's.
+ *
+ * ⚠️ **Offering it for anything else would create an unsellable option.** The
+ * API refuses `many` for a type its registry does not allow, so the merchant
+ * would author, submit, and be handed an `INCOMPATIBLE_AXIS` error — and if it
+ * somehow reached the storefront, a `radio` at `many` would sell two sizes of
+ * one shirt. Measured before the plugin's guard landed.
+ */
+export function acceptsManyAnswers(presentation: string): boolean {
+  return presentation === 'checkbox';
+}
+
+/**
  * The `validation` and `display` config an option is published with.
  *
  * 🔴 **The counter is *derived*, never a separate switch.**

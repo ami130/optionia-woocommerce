@@ -9,6 +9,7 @@ import {
   groupSchema,
   optionSchema,
   acceptsLength,
+  acceptsManyAnswers,
   configFor,
   keyFromLabel,
   swatchFieldsFor,
@@ -666,5 +667,34 @@ describe('the group layouts a merchant can choose', () => {
     expect(groupDisplaySchema.safeParse({ displayType: 'stepped', isCollapsible: false }).success).toBe(
       false,
     );
+  });
+});
+
+describe('which types may take several answers', () => {
+  /**
+   * 🔴 **`checkbox` alone**, matching the API registry (M18.3) and the plugin's
+   * `MANY_CAPABLE_TYPES`. Three lists, one decision.
+   */
+  it('offers several answers for a checkbox', () => {
+    expect(acceptsManyAnswers('checkbox')).toBe(true);
+  });
+
+  /**
+   * ⚠️ **Anything else would be an unsellable option.** The API refuses `many`
+   * for a type its registry does not allow, so the merchant would author,
+   * submit, and be handed an `INCOMPATIBLE_AXIS` error — and a `radio` at
+   * `many` reaching the storefront would sell two sizes of one shirt.
+   */
+  it('refuses every other type, including the ones that look similar', () => {
+    ['radio', 'dropdown', 'color_swatch', 'image_swatch', 'text_field', 'file_input'].forEach(
+      (presentation) => {
+        expect(acceptsManyAnswers(presentation)).toBe(false);
+      },
+    );
+  });
+
+  /** An unknown type takes the single-value path, as everywhere else. */
+  it('refuses a type it does not recognise', () => {
+    expect(acceptsManyAnswers('a_type_from_a_newer_cloud')).toBe(false);
   });
 });
