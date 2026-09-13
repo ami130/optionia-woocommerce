@@ -5484,3 +5484,85 @@ evaluator fixes what the merchant is shown.
 *"exactly this one value"* is a fair thing to misread as *"this value is among
 them"*. Not built here — it is a phrasing change in the rule builder, and
 `summary.ts` is where it belongs. Recorded so it is not lost.
+
+---
+
+## ADR-063 — `stepped` ships separately, and the reason is a state collision, not effort
+
+**Status:** accepted · **Phase 18, Stage 18-4**
+
+### Context
+
+ADR-059 delivered `display_type` — `inline`, `accordion`, `tabs`, `stepped` —
+and said plainly: *"if `stepped` proves larger than the other three, it ships
+separately, and this ADR is the record that it was scoped as part of one
+milestone. It must not quietly become a fifth thing that publishes and renders
+as `inline`."*
+
+This is that record. `stepped` is larger, and the reason is worth naming
+precisely because *"it was more work"* would not have justified the split.
+
+**The rule runtime already owns the hiding mechanism, and it recomputes from
+scratch.** `assets/js/frontend.js` re-evaluates every rule on every change:
+`revealAll( root )` clears `data-optionia-hidden` from **everything**, then
+`hideTarget()` re-applies it to whatever the evaluator says is hidden now. The
+comment on `revealAll()` states why, and the reasoning is sound:
+
+> *"Recomputed rather than diffed: a rule that stops firing must put its target
+> back, and tracking what to undo is a second source of truth for a fact the
+> evaluator already answers completely."*
+
+**A wizard needs a second reason for a group to be hidden**, and it is not one
+the rule evaluator can answer. *"Hidden because a rule fired"* and *"hidden
+because the customer is on step 2"* would share one attribute, so the first
+keystroke in any field would reveal every step at once.
+
+Rules already target groups — `frontend.js` selects
+`[data-optionia-group="…"]`, and `hide` on a group hides every option inside it.
+So the collision is not hypothetical; it is the first thing a merchant with a
+stepped group and any rule would hit.
+
+### Decision
+
+**18-4 delivers `inline`, `accordion` and `tabs`, rendered and authorable.
+`stepped` is a stage of its own.**
+
+**`stepped` renders as `inline` until then, and that is a considered fallback,
+not the defect ADR-055 and ADR-056 withdrew actions for.** The difference
+matters: those two fields were *specified and applied nowhere*, with no stage
+that would consume them. `stepped` has a named stage, a written reason, and
+three of its four sibling values working — a merchant who selects it gets a
+laid-out group rather than a broken one.
+
+🔴 **The dashboard must not offer `stepped` while it renders as `inline`.**
+Offering a fourth choice that silently behaves like the first is exactly how a
+merchant discovers a gap in production. The picker lists three; the enum keeps
+four, because a document from a newer cloud may name it and the storefront must
+still render something.
+
+**What the stepped stage has to settle**, recorded now while the analysis is
+fresh:
+
+- A second hiding state that survives `revealAll()` — a separate attribute, or
+  a step container the rule runtime does not walk.
+- What "next" means when a rule hides the step the customer was heading for.
+- Whether add-to-cart is reachable before the last step, and what happens to a
+  required option on a step never visited. `ERROR_REQUIRED` for a field the
+  customer never saw is the unbuyable-product shape ADR-060 already recorded
+  once, arrived at from a different direction.
+
+### Consequences
+
+**Three types, not four, is still a real delivery.** `display_type` stops being
+a field read by nothing, which is what ADR-059 committed to and the whole reason
+it was not withdrawn.
+
+**`is_collapsible` ships with them**, per ADR-059: it means *"an `inline` group
+can be folded away"* and is ignored for every other type. With `accordion` now
+rendering, that rule becomes testable rather than theoretical.
+
+⚠️ **The risk this ADR accepts is that `stepped` stays unbuilt and this becomes
+the excuse.** The guard against it is the same one ADR-059 used: the value
+remains in the enum and in the plan with a named stage, and the dashboard does
+not offer it — so nobody can select it, and nobody discovers it silently does
+nothing.
