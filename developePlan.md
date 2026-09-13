@@ -21615,12 +21615,40 @@ sort is load-bearing for line deduplication, not cosmetic.
 
 | Step | Work | Why here |
 |---|---|---|
-| 1 | **F4: coverage first.** Multi-select cases in all five consumer suites, against current fenced behaviour | They pass trivially now, and become the net for everything after. Skipping this repeats 18-1 exactly. |
+| 1 | ✅ **F4: coverage first** — done 2026-09-13 | They pass trivially now, and become the net for everything after. Skipping this repeats 18-1 exactly. |
 | 2 | **F2: `deltas` becomes `array<string, int>`**, summed per option; delete both pairings; keep the count guard | One assembly point (`SelectionResolver:1574`). The guard stops being a coincidence and becomes a real invariant. |
 | 3 | **F1 + F3 together** — pairing and labelling at every site | Three label sites, two pairing sites. Splitting them leaves display and total disagreeing. |
 | 4 | **F5: type/cardinality cross-check** | Must precede 18-3. |
 | 5 | **F7, F6, F9** — remaining consumers | Lower blast radius. |
 | 6 | **Delete the fence** (ADR-060's three sites) | Last, not first: ADR-057's bar is that the *whole* path works. |
+
+#### ✅ Step 1 complete — the coverage net, 2026-09-13
+
+**Eleven tests across four consumer suites**, plus one corrected rationale.
+Written against the *current fenced* behaviour, so they pass today and invert
+when step 2 lands — the inversion is how the stage proves it changed something.
+
+| Suite | What it now pins |
+|---|---|
+| `CartTotalsTest` | No payload attaches for `many`; fenced on the **declaration** even for a scalar answer; `deltas` is **stored keyed by option id**; the signature covers that keyed shape |
+| `CartDisplayTest` | No rows while fenced; one row per **option** with one price — the second pairing site |
+| `OrderLineItemTest` | No order meta while fenced; a `one` option writes its real label |
+| `CheckoutValidatorTest` | A fenced line **does not block checkout** — ADR-060's dead end, checked one hop further out |
+| `OrderAgainTest` | Rationale corrected: its "the resolver would refuse them anyway" reason **expired at 18-1** |
+
+🔴 **Two measurements worth keeping.** The stored payload was captured through
+production code, not simulated: `deltas` comes out as `{"opt-a":100}` — **already
+keyed**, confirming ADR-061's central claim in real code. And the signature test
+compares against a freshly computed `sign()` rather than a literal hash, because
+`wp_hash()` is salt-dependent and a literal would pin the suite to one machine.
+
+🔴 **The net caught F3 at its source.** Removing the fence as a mutant produced
+`Array to string conversion` at `CartDisplay.php:162` — not a test failure but a
+**PHP error**, which is the defect the analysis predicted, reached directly. Two
+suites error and two fail; all four fire.
+
+⚠️ **`CartItemData` has no suite of its own** — it is exercised through these
+four. Worth knowing before step 2 edits it.
 
 #### Exit criteria
 
