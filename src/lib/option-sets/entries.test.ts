@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AuthoringItem, AuthoringOption } from './api';
-import { mergedEntries, reorderPayloads, sortOrderFor } from './entries';
+import { groupReorderPayload, mergedEntries, reorderPayloads, sortOrderFor } from './entries';
 
 const option = (id: string, sortOrder: number): AuthoringOption => ({
   id,
@@ -201,5 +201,77 @@ describe('reorderPayloads', () => {
   it('leaves gaps a later insert can land in', () => {
     expect(sortOrderFor(0)).toBe(10);
     expect(sortOrderFor(1) - sortOrderFor(0)).toBe(10);
+  });
+});
+
+describe('moving a group within its set (M18.6)', () => {
+  const groups = [{ id: 'g1' }, { id: 'g2' }, { id: 'g3' }];
+
+  /**
+   * 🔴 **The whole list is renumbered, not just the pair that swapped.**
+   *
+   * The server applies the list in one transaction; sending only the moved two
+   * would leave the others on whatever numbers they had, which is correct only
+   * while the gaps happen to allow it. Renumbering everything makes the result
+   * independent of what the numbers were before.
+   */
+  it('moves a group down and renumbers every sibling', () => {
+    expect(groupReorderPayload(groups, 0, 1)).toEqual([
+      { id: 'g2', sortOrder: 10 },
+      { id: 'g1', sortOrder: 20 },
+      { id: 'g3', sortOrder: 30 },
+    ]);
+  });
+
+  it('moves a group up', () => {
+    expect(groupReorderPayload(groups, 2, -1)).toEqual([
+      { id: 'g1', sortOrder: 10 },
+      { id: 'g3', sortOrder: 20 },
+      { id: 'g2', sortOrder: 30 },
+    ]);
+  });
+
+  /**
+   * ⚠️ **Off either end is `null`, not a no-op request.**
+   *
+   * A payload that reorders nothing would still be a write, an audit entry and
+   * a `configVersion` bump — telling every storefront its configuration changed
+   * when it did not.
+   */
+  it('refuses to move the first group up or the last one down', () => {
+    expect(groupReorderPayload(groups, 0, -1)).toBeNull();
+    expect(groupReorderPayload(groups, 2, 1)).toBeNull();
+  });
+
+  /** A set with one group has nowhere to move it. */
+  it('returns null for a single group', () => {
+    expect(groupReorderPayload([{ id: 'only' }], 0, -1)).toBeNull();
+    expect(groupReorderPayload([{ id: 'only' }], 0, 1)).toBeNull();
+  });
+
+  /**
+   * ⚠️ **Gaps of 10 match what the server assigns on create**, so a group added
+   * afterwards still lands between two neighbours rather than forcing a
+   * renumber of the whole set.
+   */
+  it('numbers in tens, like the server', () => {
+    const payload = groupReorderPayload(groups, 0, 1);
+
+    expect(payload?.map((entry) => entry.sortOrder)).toEqual([10, 20, 30]);
+  });
+
+  /**
+   * 🔴 **The input is never mutated.**
+   *
+   * The caller passes React state straight in. Swapping in place would mutate
+   * the rendered array, so the list would appear to reorder before the server
+   * agreed — and would stay reordered if the request then failed.
+   */
+  it('leaves the caller\'s array untouched', () => {
+    const original = [{ id: 'g1' }, { id: 'g2' }];
+
+    groupReorderPayload(original, 0, 1);
+
+    expect(original).toEqual([{ id: 'g1' }, { id: 'g2' }]);
   });
 });

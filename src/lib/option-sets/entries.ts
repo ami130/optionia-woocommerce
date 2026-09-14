@@ -113,6 +113,48 @@ export function reorderPayloads(
   };
 }
 
+/**
+ * The payload for moving one **group** past its neighbour.
+ *
+ * ⚠️ **Simpler than `reorderPayloads`, and deliberately not merged with it.**
+ * That one splits a *merged* sequence across two tables, because a group holds
+ * options and presentational items on one shared `sortOrder` scale. Groups have
+ * no such companion list: a set holds groups and nothing else at that level, so
+ * there is one list, one endpoint and one write.
+ *
+ * 🔴 **Every group is renumbered, not just the two that swapped.** The server
+ * applies the list in one transaction, and sending only the moved pair would
+ * leave the others on whatever numbers they had — which is correct only while
+ * the gaps happen to allow it. Renumbering the whole list makes the result
+ * independent of what the numbers were before.
+ *
+ * Gaps of 10 match what the server assigns on create, so a group added later
+ * still lands between two neighbours.
+ *
+ * Returns `null` when the move would run off either end, so the caller sends
+ * nothing rather than a request that reorders nothing.
+ */
+export function groupReorderPayload(
+  groups: ReadonlyArray<{ id: string }>,
+  index: number,
+  direction: -1 | 1,
+): SortEntry[] | null {
+  const target = index + direction;
+
+  if (target < 0 || target >= groups.length) {
+    return null;
+  }
+
+  const next = [...groups];
+
+  [next[index], next[target]] = [next[target], next[index]];
+
+  return next.map((group, position) => ({
+    id: group.id,
+    sortOrder: sortOrderFor(position),
+  }));
+}
+
 /** One sibling's new position, as both reorder endpoints take it. */
 export interface SortEntry {
   id: string;

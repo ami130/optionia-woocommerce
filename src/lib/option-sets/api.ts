@@ -484,6 +484,30 @@ export async function deleteValue(id: string): Promise<void> {
 }
 
 /**
+ * Reorder the groups within a set.
+ *
+ * 🔴 **The endpoint was fully built and the dashboard never called it.** A
+ * merchant could reorder options *within* a group from the first release and
+ * could not move the groups themselves at all — so on a product with three
+ * sections, their order was whatever order they happened to be created in,
+ * permanently. Found by auditing Phase 18, and the same shape as M18.3a's F1:
+ * a server capability with no client.
+ *
+ * ⚠️ **Its own endpoint, and a different one from the options reorder.**
+ * `POST /groups/:id/reorder` moves options *inside* one group;
+ * `POST /option-sets/:id/reorder` moves the groups. Sending a group id to the
+ * first is rejected as `NOT_IN_GROUP` and an option id to this one as
+ * `NOT_IN_SET`, which is what makes them safe to confuse at compile time and
+ * never at runtime.
+ *
+ * The server applies the whole list in one transaction and refuses any id that
+ * does not belong to the set, so a half-applied order is not reachable.
+ */
+export async function reorderGroups(setId: string, entries: SortEntry[]): Promise<void> {
+  await api.post(`/option-sets/${setId}/reorder`, { groups: entries });
+}
+
+/**
  * Reorder siblings in one write, at any level.
  *
  * ⚠️ **Takes explicit `sortOrder`s rather than deriving them from array index.**

@@ -30,6 +30,7 @@ import {
   loadSet,
   publishCheck,
   publishSet,
+  reorderGroups,
   reorderItems,
   reorderOptions,
   updateItem,
@@ -42,7 +43,7 @@ import {
   type ItemKind,
   type PublishFinding,
 } from '@/lib/option-sets/api';
-import { mergedEntries, reorderPayloads } from '@/lib/option-sets/entries';
+import { groupReorderPayload, mergedEntries, reorderPayloads } from '@/lib/option-sets/entries';
 import {
   AUTHORABLE_TYPES,
   acceptsLength,
@@ -122,11 +123,7 @@ export default function OptionSetEditorPage() {
         </Alert>
       ) : null}
 
-      <div className="space-y-4">
-        {set.groups.map((group) => (
-          <GroupCard key={group.id} group={group} canEdit={canEdit} onChanged={reload} />
-        ))}
-      </div>
+      <GroupList setId={setId} groups={set.groups} canEdit={canEdit} onChanged={reload} />
 
       {canEdit ? <AddGroup setId={setId} onAdded={reload} /> : null}
 
@@ -235,14 +232,105 @@ function AddGroup({ setId, onAdded }: { setId: string; onAdded: () => void }) {
   );
 }
 
+/**
+ * The set's groups, in order, with the controls to move them.
+ *
+ * 🔴 **A merchant could not reorder groups at all until M18.6.** The endpoint
+ * `POST /option-sets/:id/reorder` shipped fully built and the dashboard never
+ * called it, so on a product with three sections their order was whatever order
+ * they happened to be created in — permanently. Options *within* a group could
+ * always be moved, which made the gap easy to miss.
+ *
+ * ⚠️ **Move up / move down rather than drag-and-drop**, matching the choice
+ * already made one level down: drag needs a library, does not work from a
+ * keyboard without extra handling, and is awkward on the phones merchants
+ * actually use. The plan's row for this stage said "drag-and-drop"; doing that
+ * would have traded working, accessible controls for a regression.
+ *
+ * A separate component because the mutation needs a hook, and the page's own
+ * body returns early while the set is loading.
+ */
+function GroupList({
+  setId,
+  groups,
+  canEdit,
+  onChanged,
+}: {
+  setId: string;
+  groups: AuthoringSet['groups'];
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const move = useMutation({
+    mutationFn: async ({ index, direction }: { index: number; direction: -1 | 1 }) => {
+      const payload = groupReorderPayload(groups, index, direction);
+
+      /*
+       * `null` means the move runs off an end. The buttons are disabled there,
+       * so this is unreachable from the UI — but a payload that reorders
+       * nothing would still be a write, an audit entry and a `configVersion`
+       * bump, telling every storefront its configuration changed when it did
+       * not.
+       */
+      if (payload === null) {
+        return;
+      }
+
+      await reorderGroups(setId, payload);
+    },
+    onSuccess: onChanged,
+  });
+
+  return (
+    <div className="space-y-4">
+      {groups.map((group, index) => (
+        <GroupCard
+          key={group.id}
+          group={group}
+          canEdit={canEdit}
+          onChanged={onChanged}
+          onMove={
+            canEdit && groups.length > 1
+              ? (direction) => move.mutate({ index, direction })
+              : undefined
+          }
+          isFirst={index === 0}
+          isLast={index === groups.length - 1}
+          isMoving={move.isPending}
+        />
+      ))}
+
+      {move.isError ? (
+        <p className="text-destructive text-sm">
+          That group could not be moved. Try again.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function GroupCard({
   group,
   canEdit,
   onChanged,
+  onMove,
+  isFirst,
+  isLast,
+  isMoving,
 }: {
   group: AuthoringSet['groups'][number];
   canEdit: boolean;
   onChanged: () => void;
+
+  /*
+   * Undefined when the set has one group, so the buttons are absent rather
+   * than present-and-always-disabled — the same shape `OptionBlock` uses one
+   * level down.
+   */
+  onMove?: (direction: -1 | 1) => void;
+  isFirst?: boolean;
+  isLast?: boolean;
+  isMoving?: boolean;
 }) {
   /**
    * Reorder in **one** write, as M13.5 asks.
@@ -316,6 +404,35 @@ function GroupCard({
           <h2 className="font-medium">{group.label}</h2>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/*
+              ⚠️ **Labelled by the group's own name, not "up" and "down".**
+              A screen reader announcing four identical "Move up" buttons on a
+              four-group set says nothing about which group moves — the same
+              reason `OptionBlock` names the option in its label.
+            */}
+            {onMove === undefined ? null : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Move ${group.label} up`}
+                  disabled={isFirst === true || isMoving === true}
+                  onClick={() => onMove(-1)}
+                >
+                  ↑
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Move ${group.label} down`}
+                  disabled={isLast === true || isMoving === true}
+                  onClick={() => onMove(1)}
+                >
+                  ↓
+                </Button>
+              </>
+            )}
+
             <GroupLayout group={group} canEdit={canEdit} onChanged={onChanged} />
 
             {canEdit ? (

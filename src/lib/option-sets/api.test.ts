@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSession, setSession } from '@/lib/auth/token-store';
-import { hasUnpublishedChanges, reorderOptions, updateSet } from './api';
+import { hasUnpublishedChanges, reorderGroups, reorderOptions, updateSet } from './api';
 
 const ok = (data: unknown): Response =>
   new Response(JSON.stringify({ data, meta: {} }), {
@@ -122,6 +122,48 @@ describe('option-sets api', () => {
           { id: 'c', sortOrder: 30 },
         ],
       });
+    });
+  });
+
+  describe('reorderGroups', () => {
+    /**
+     * 🔴 **The URL and the body key are the whole risk.**
+     *
+     * Two reorder endpoints sit one level apart and read almost identically:
+     * `POST /groups/:id/reorder` moves options **inside** a group, and
+     * `POST /option-sets/:id/reorder` moves the groups. Sending a group list to
+     * the first is rejected as `NOT_IN_GROUP` — so the mistake is caught, but
+     * only by a merchant, in production, on a request that looks right.
+     *
+     * Asserted here because nothing else in the client can tell them apart.
+     */
+    it('posts to the SET, with the groups key', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await reorderGroups('s-1', [
+        { id: 'g1', sortOrder: 10 },
+        { id: 'g2', sortOrder: 20 },
+      ]);
+
+      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/option-sets/s-1/reorder');
+      expect(bodyOf(fetchMock, 0)).toEqual({
+        groups: [
+          { id: 'g1', sortOrder: 10 },
+          { id: 'g2', sortOrder: 20 },
+        ],
+      });
+    });
+
+    /**
+     * ⚠️ **Not `/groups/...`** — the endpoint one level down, which would move
+     * options within a group whose id happened to match a set's.
+     */
+    it('does not post to the group-level endpoint', () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      void reorderGroups('s-1', [{ id: 'g1', sortOrder: 10 }]);
+
+      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).not.toMatch(/\/groups\/[^/]+\/reorder$/);
     });
   });
 });
