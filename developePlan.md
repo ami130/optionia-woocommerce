@@ -22050,6 +22050,57 @@ M18.3a).
 not name the two orphaned entries left behind. Removed by hand, and recorded
 where they were.
 
+#### 🔍 Post-stage audit — the withdrawal needed a migration answer, 2026-09-14
+
+**Found by auditing 18-6a against the code, not against its own summary.**
+
+🔴 **A withdrawn field could make an option permanently uneditable.**
+`OptionsService.update()` re-validates the **stored** `display`, and the display
+schemas are `.strict()`. Measured:
+
+```text
+a stored row with a withdrawn key:
+  parses? false
+  -> unrecognized_keys ["labelPlacement"]
+```
+
+Not the label, not the price, not anything — and the merchant could not clear
+the offending field either, because clearing it requires an update.
+
+⚠️ **ADR-056 asked this question; ADR-064 did not.** Withdrawing `show`
+reasoned about stored rows explicitly — *"degrades to a rule that does
+nothing… no migration, and no behaviour change for any existing store"* —
+because every evaluator **ignores** an action it does not know. `.strict()`
+**rejects**. Treating the two withdrawals as analogous was the error, and the
+ADR is amended to say so.
+
+✅ **Fixed at the mechanism, not the instance.** `stripWithdrawn()` removes only
+keys Zod reports as `unrecognized_keys`, applied to stored config on the way
+into re-validation. Any future withdrawal from a `.strict()` schema inherits it
+rather than needing its own migration.
+
+🔴 **A wrong VALUE is still refused.** `columns: 99` breaks a bound the schema
+enforces, so it is returned unchanged for `assertValidOption` to report — this
+forgives a key that no longer exists, never a value that was always wrong.
+Pinned by a row carrying **both** problems.
+
+⚠️ **Applied to stored config only, never to a request.** A merchant sending an
+unknown key still gets an error; silently accepting a typo on create is how a
+field comes to be stored and read by nothing.
+
+**Bounds, measured rather than assumed:** the dashboard never sent either field
+(checked across git history), neither is seeded, **publish does not
+re-validate** so an existing store keeps selling, and duplication copies
+`display` unvalidated so it propagates rather than refuses. Unreachable in
+practice — and reachable through the public API, the standard by which M18.3a's
+`radio`-at-`many` was guarded.
+
+📌 **One mutant was equivalent, and is recorded as such.** Filtering issues on
+`unrecognized_keys` is redundant *today*: other issue codes carry no `keys`
+field, so filtering on all of them strips the same set. Kept deliberately — it
+states the intent and guards against a future Zod attaching `keys` elsewhere.
+Calling an equivalent mutant a test gap would have been the wrong conclusion.
+
 #### Mutation results — three mutants, three killed
 
 | Mutant | Killed by |
