@@ -181,6 +181,23 @@ unset( $optionia_probe );
 				? (int) $optionia_price['amount_minor']
 				: null;
 			?>
+			<?php
+			/*
+			 * 🔴 **The price is appended to the option's TEXT, not a child
+			 * element** (M18.6b). An `<option>` may contain only text — a
+			 * `<span>` inside one is dropped by every browser, so a price
+			 * rendered the way the other four templates render it would vanish
+			 * here and nowhere else.
+			 *
+			 * ⚠️ **One space, and it becomes part of the accessible name.** A
+			 * screen reader reads the option's text, so the price is announced
+			 * with the choice rather than needing its own element — the
+			 * outcome the other templates arrange deliberately.
+			 */
+			$optionia_vprice = OptionView::value_price( $optionia_value, $optionia_display['price_display'] );
+			$optionia_text   = (string) ( $optionia_value['label'] ?? $optionia_key )
+				. ( '' !== $optionia_vprice ? ' ' . $optionia_vprice : '' );
+			?>
 			<option
 				value="<?php echo esc_attr( $optionia_key ); ?>"
 				<?php if ( '' !== $optionia_value_id ) : ?>
@@ -193,7 +210,7 @@ unset( $optionia_probe );
 					data-optionia-price="<?php echo esc_attr( (string) $optionia_pminor ); ?>"
 				<?php endif; ?>
 				<?php selected( ! empty( $optionia_value['is_default'] ) ); ?>
-			><?php echo esc_html( (string) ( $optionia_value['label'] ?? $optionia_key ) ); ?></option>
+			><?php echo esc_html( $optionia_text ); ?></option>
 			<?php
 			unset( $optionia_index );
 		}

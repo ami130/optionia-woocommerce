@@ -53,6 +53,18 @@
 	opacity: 0.8;
 }
 
+/* A choice's own price (M18.6b, ADR-065).
+ *
+ * Muted and beside the label rather than aligned in a column: the label and
+ * the price are one sentence a customer reads together, and a column needs a
+ * width this stylesheet cannot know without owning the theme's layout.
+ */
+.optionia-value__price {
+	margin-left: 0.35em;
+	opacity: 0.75;
+	font-variant-numeric: tabular-nums;
+}
+
 /* -------------------------------------------------------------------------
  * Group layouts (M18.4, ADR-059 and ADR-063)
  *

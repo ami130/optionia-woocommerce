@@ -1107,6 +1107,81 @@ final class RendererTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **A choice's price is rendered, which nothing did before M18.6b.**
+	 *
+	 * `price_display` was normalised by `OptionView::display()` from Phase 14
+	 * and read by no template — the state ADR-064 kept it out of withdrawal to
+	 * fix. Prices reached the page only as `data-optionia-price` attributes for
+	 * the running estimate.
+	 */
+	public function test_a_choice_shows_its_price(): void {
+		$this->cache_typed(
+			'radio',
+			array(
+				'price_config' => array(
+					'type'         => 'fixed',
+					'amount_minor' => 1000,
+				),
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'optionia-value__price', $markup );
+		$this->assertStringContainsString( '+10.00', $markup );
+	}
+
+	/**
+	 * 🔴 **`hidden` suppresses the price but KEEPS the data attribute.**
+	 *
+	 * The running estimate is a separate surface with its own opt-out. Removing
+	 * `data-optionia-price` here would silently disable that too — a merchant
+	 * asking for no per-choice prices has not asked for no total.
+	 */
+	public function test_hidden_suppresses_the_price_but_not_the_estimate(): void {
+		$this->cache_typed(
+			'radio',
+			array(
+				'price_config' => array(
+					'type'         => 'fixed',
+					'amount_minor' => 1000,
+				),
+			),
+			array( 'display' => array( 'price_display' => 'hidden' ) )
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( 'optionia-value__price', $markup );
+		$this->assertStringNotContainsString( '+10.00', $markup );
+		$this->assertStringContainsString( 'data-optionia-price="1000"', $markup );
+	}
+
+	/**
+	 * ⚠️ **A dropdown appends the price to the option's TEXT.**
+	 *
+	 * An `<option>` may contain only text — a `<span>` inside one is dropped by
+	 * every browser, so a price rendered the way the other four templates render
+	 * it would vanish here and nowhere else.
+	 */
+	public function test_a_dropdown_appends_the_price_to_its_option_text(): void {
+		$this->cache_typed(
+			'dropdown',
+			array(
+				'price_config' => array(
+					'type'         => 'fixed',
+					'amount_minor' => 1000,
+				),
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'Luxury +10.00', $markup );
+		$this->assertStringNotContainsString( 'optionia-value__price', $markup );
+	}
+
+	/**
 	 * Cache one option of any type, with optional per-value extras.
 	 *
 	 * Generalised from `cache_dropdown` rather than copied three more times:

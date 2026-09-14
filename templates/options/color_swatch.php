@@ -142,6 +142,22 @@ $optionia_describe = OptionView::described_by( $optionia_option );
 					></span>
 				<?php endif; ?>
 				<span class="optionia-value__label"><?php echo esc_html( (string) ( $optionia_value['label'] ?? $optionia_key ) ); ?></span>
+				<?php
+				/*
+				 * 🔴 **The first per-choice price this plugin shows** (M18.6b).
+				 * Until now a price reached the page only as
+				 * `data-optionia-price` for the running estimate.
+				 *
+				 * ⚠️ **`aria-hidden`, because the label already carries it for a
+				 * screen reader?** No — it does not, and that is why this is
+				 * announced. A customer who cannot see the page must still learn
+				 * that a choice costs more before they make it.
+				 */
+				$optionia_vprice = OptionView::value_price( $optionia_value, $optionia_display['price_display'] );
+				?>
+				<?php if ( '' !== $optionia_vprice ) : ?>
+					<span class="optionia-value__price"><?php echo esc_html( $optionia_vprice ); ?></span>
+				<?php endif; ?>
 			</label>
 			<?php
 			unset( $optionia_index );

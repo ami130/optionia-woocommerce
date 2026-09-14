@@ -157,6 +157,98 @@ final class OptionView {
 	}
 
 	/**
+	 * The price to print beside one choice, or `''` for none.
+	 *
+	 * 🔴 **The first per-choice price this plugin shows.** Until M18.6b, prices
+	 * reached the page only as `data-optionia-price` attributes for the running
+	 * estimate — no template rendered one. `price_display` was normalised in
+	 * `display()` above and read by nothing, which is the state ADR-064 kept it
+	 * out of withdrawal to fix.
+	 *
+	 * ⚠️ **`total` renders as `delta`** (ADR-065). A total is `base + option`,
+	 * and no option template has the base price — but the blocker is not
+	 * plumbing. `frontend.js` listens to **no** WooCommerce variation events,
+	 * deliberately, because *"the estimate is an options delta, not a product
+	 * total… none of those change when a customer picks a different size."* A
+	 * printed total would be stale the moment a customer picks a size, which is
+	 * a wrong price beside a control. Phase 21's server-quoted preview owns it.
+	 *
+	 * 🔴 **Only `fixed` is priced**, matching `PRICEABLE` in the runtime. A
+	 * `percentage` or `per_unit` value prints nothing rather than a guess: *"a
+	 * storefront guessing… would show a total the server disagrees with, which
+	 * is worse than showing none."*
+	 *
+	 * ⚠️ **A zero prints nothing.** `+0.00` beside a free choice reads as a
+	 * mistake — the same reasoning `CartDisplay::with_price()` records for a
+	 * cart line.
+	 *
+	 * @param array<string, mixed> $value   One published value.
+	 * @param string               $display The option's `price_display`.
+	 * @return string A formatted price, or `''`.
+	 */
+	public static function value_price( array $value, string $display ): string {
+		if ( 'hidden' === $display ) {
+			return '';
+		}
+
+		/*
+		 * ⚠️ **Named `$price`, not `$config`, and the name is load-bearing.**
+		 * `bin/check-wire-keys.sh` scans this file for `$config['…']` to learn
+		 * which *validation and display* rules the plugin reads, and reports any
+		 * the API never publishes. A price config read through that name made
+		 * the gate report `amount_minor` and `type` as unpublished rules —
+		 * a true statement about the wrong contract.
+		 */
+		$price = isset( $value['price_config'] ) && is_array( $value['price_config'] )
+			? $value['price_config']
+			: array();
+
+		$type = isset( $price['type'] ) ? (string) $price['type'] : '';
+
+		if ( 'fixed' !== $type || ! isset( $price['amount_minor'] ) || ! is_int( $price['amount_minor'] ) ) {
+			return '';
+		}
+
+		$minor = (int) $price['amount_minor'];
+
+		if ( 0 === $minor ) {
+			return '';
+		}
+
+		$amount = self::money( abs( $minor ) );
+
+		return $minor > 0 ? '+' . $amount : '-' . $amount;
+	}
+
+	/**
+	 * Minor units as this store writes money.
+	 *
+	 * 🔴 **Formatted the way `frontend.js` formats the estimate**, field for
+	 * field — the same `decimals`, separators and `woocommerce_price_format`
+	 * pattern that `Assets::currency_settings()` publishes to it. A price
+	 * printed here and a total summed there that disagreed about a separator
+	 * would read as two different currencies on one page.
+	 *
+	 * ⚠️ **Not `wc_price()`**, which wraps its output in markup and applies
+	 * `woocommerce_price_format` plus filters a theme may have changed. The
+	 * estimate cannot call those from JavaScript, so matching them here would
+	 * be matching something the other half cannot see.
+	 *
+	 * @param int $minor Amount in integer minor units, non-negative.
+	 */
+	private static function money( int $minor ): string {
+		$decimals = function_exists( 'wc_get_price_decimals' ) ? (int) wc_get_price_decimals() : 2;
+		$decimal  = function_exists( 'wc_get_price_decimal_separator' ) ? (string) wc_get_price_decimal_separator() : '.';
+		$thousand = function_exists( 'wc_get_price_thousand_separator' ) ? (string) wc_get_price_thousand_separator() : ',';
+		$symbol   = function_exists( 'get_woocommerce_currency_symbol' ) ? (string) get_woocommerce_currency_symbol() : '';
+		$format   = function_exists( 'get_woocommerce_price_format' ) ? (string) get_woocommerce_price_format() : '%1$s%2$s';
+
+		$amount = number_format( $minor / ( 10 ** $decimals ), $decimals, $decimal, $thousand );
+
+		return str_replace( array( '%1$s', '%2$s' ), array( $symbol, $amount ), $format );
+	}
+
+	/**
 	 * The `aria-describedby` value for an option's control, or `''`.
 	 *
 	 * A **space-separated list**, which is what the attribute takes: an option
