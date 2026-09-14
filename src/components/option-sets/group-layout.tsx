@@ -5,7 +5,7 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import type { AuthoringGroup } from '@/lib/option-sets/api';
-import { updateGroupDisplay } from '@/lib/option-sets/api';
+import { updateGroup } from '@/lib/option-sets/api';
 import { GROUP_LAYOUTS } from '@/lib/schemas/option-sets';
 
 /**
@@ -36,7 +36,7 @@ export function GroupLayout({
 
   const save = useMutation({
     mutationFn: (changes: { displayType?: string; isCollapsible?: boolean }) =>
-      updateGroupDisplay(group.id, changes),
+      updateGroup(group.id, changes),
     onSuccess: () => {
       onChanged();
     },

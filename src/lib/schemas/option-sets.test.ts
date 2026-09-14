@@ -8,9 +8,13 @@ import {
   groupDisplaySchema,
   groupSchema,
   optionSchema,
+  COLUMN_CHOICES,
+  acceptsColumns,
   acceptsLength,
   acceptsManyAnswers,
   configFor,
+  layoutFor,
+  mergeConfig,
   keyFromLabel,
   swatchFieldsFor,
   takesGroupLabel,
@@ -696,5 +700,84 @@ describe('which types may take several answers', () => {
   /** An unknown type takes the single-value path, as everywhere else. */
   it('refuses a type it does not recognise', () => {
     expect(acceptsManyAnswers('a_type_from_a_newer_cloud')).toBe(false);
+  });
+});
+
+describe('laying choices out in columns (M18.6a)', () => {
+  /**
+   * 🔴 **`columns` was published, read by thirteen storefront files, and
+   * authorable nowhere** (ADR-064) — the fourth occurrence in Phase 18 of a
+   * capability built on both sides with no way for a merchant to reach it.
+   */
+  it('offers columns for the five choice types', () => {
+    ['radio', 'checkbox', 'color_swatch', 'image_swatch', 'dropdown'].forEach((presentation) => {
+      expect(acceptsColumns(presentation)).toBe(true);
+    });
+  });
+
+  /** ⚠️ A column count on a text field would be a grid with one cell. */
+  it('refuses columns for types the registry does not accept them for', () => {
+    ['text_field', 'textarea', 'number_field', 'date_picker', 'file_input'].forEach(
+      (presentation) => {
+        expect(acceptsColumns(presentation)).toBe(false);
+      },
+    );
+  });
+
+  /** Bounds copied from `choiceDisplaySchema`, which the API enforces. */
+  it('offers exactly the counts the API accepts', () => {
+    expect([...COLUMN_CHOICES]).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  /**
+   * ⚠️ **One column publishes nothing.** It is what an option renders as when
+   * it says nothing, so sending it would store a value that changes nothing and
+   * make every default option carry a `display` object.
+   */
+  it('sends no display for a single column', () => {
+    expect(layoutFor('radio', 1)).toEqual({});
+    expect(layoutFor('radio', null)).toEqual({});
+  });
+
+  it('sends the column count when the merchant asks for a grid', () => {
+    expect(layoutFor('radio', 3)).toEqual({ display: { columns: 3 } });
+  });
+
+  /** A type that cannot take columns publishes none, whatever is passed. */
+  it('sends nothing for a type that cannot be gridded', () => {
+    expect(layoutFor('text_field', 4)).toEqual({});
+  });
+});
+
+describe('merging option config', () => {
+  /**
+   * 🔴 **The defect this exists to prevent, asserted directly.**
+   *
+   * `{ ...configFor(), ...layoutFor() }` replaces the whole `display` object
+   * rather than merging it, so `characterCounter` would vanish — and M14.4b
+   * makes that counter **required** whenever `maxLength` is set.
+   *
+   * ⚠️ **The two cannot collide today**, because `columns` is choice-only and
+   * `characterCounter` text-only. Asserted anyway: a helper that relies on
+   * which fields happen not to overlap breaks the first time one does.
+   */
+  it('keeps both display keys when two parts each carry one', () => {
+    expect(
+      mergeConfig({ display: { characterCounter: true } }, { display: { columns: 3 } }),
+    ).toEqual({ display: { characterCounter: true, columns: 3 } });
+  });
+
+  it('merges validation the same way', () => {
+    expect(mergeConfig({ validation: { maxLength: 20 } }, { validation: { minLength: 2 } })).toEqual(
+      { validation: { maxLength: 20, minLength: 2 } },
+    );
+  });
+
+  /** Nothing to say publishes no empty objects. */
+  it('omits a half that has nothing in it', () => {
+    expect(mergeConfig({ validation: { maxLength: 20 } })).toEqual({
+      validation: { maxLength: 20 },
+    });
+    expect(mergeConfig({}, {})).toEqual({});
   });
 });

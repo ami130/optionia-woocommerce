@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
+import { GroupDescription } from '@/components/option-sets/group-description';
 import { GroupLayout } from '@/components/option-sets/group-layout';
 import { OptionPreview } from '@/components/option-sets/option-preview';
 import { RulesPanel } from '@/components/option-sets/rules-panel';
@@ -46,9 +47,13 @@ import {
 import { groupReorderPayload, mergedEntries, reorderPayloads } from '@/lib/option-sets/entries';
 import {
   AUTHORABLE_TYPES,
+  COLUMN_CHOICES,
+  acceptsColumns,
   acceptsLength,
   acceptsManyAnswers,
   configFor,
+  layoutFor,
+  mergeConfig,
   keyFromLabel,
   optionSchema,
   swatchFieldsFor,
@@ -448,6 +453,8 @@ function GroupCard({
           </div>
         </div>
 
+        <GroupDescription group={group} canEdit={canEdit} onChanged={onChanged} />
+
         {!confirmingDelete ? null : (
           <Alert variant="destructive">
             <AlertDescription className="space-y-3">
@@ -561,6 +568,13 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
    * now has to delete the option and make another.
    */
   const [takesMany, setTakesMany] = useState(false);
+
+  /*
+   * How many columns the choices are drawn in. `1` is a vertical list, which is
+   * what an option publishes when it says nothing — so the default sends no
+   * `display` at all.
+   */
+  const [columns, setColumns] = useState(1);
   /* The raw field, not a number: an empty box is "no limit", and coercing as
    * they type would turn a half-deleted "20" into a limit of 2. */
   const [maxLengthText, setMaxLengthText] = useState('');
@@ -602,7 +616,13 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
          * explicitly would be the same as the default it already applies.
          */
         ...(acceptsManyAnswers(presentation) && takesMany ? { cardinality: 'many' } : {}),
-        ...configFor(presentation, maxLength, minLength),
+        /*
+         * ⚠️ **Merged, not spread.** Both helpers return a `display` object,
+         * and `{ ...a, ...b }` would replace it wholesale rather than combining
+         * — losing `characterCounter`, which M14.4b requires whenever
+         * `maxLength` is set.
+         */
+        ...mergeConfig(configFor(presentation, maxLength, minLength), layoutFor(presentation, columns)),
       }),
     onSuccess: () => {
       setKey('');
@@ -610,6 +630,7 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
       setPresentation('radio');
       setIsRequired(false);
       setTakesMany(false);
+      setColumns(1);
       setMaxLengthText('');
       setMinLengthText('');
       setKeyTouched(false);
@@ -776,6 +797,43 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
           multi-select and does not tick this has to delete the option and make
           another, and nothing later in the editor will tell them why.
         */}
+        {/*
+          🔴 **`columns` was published, read by thirteen storefront files, and
+          authorable nowhere** (ADR-064). A merchant with eight colour swatches
+          got one long vertical list and no way to make it a grid.
+
+          ⚠️ **Offered only for the types whose registry entry accepts it** —
+          the five choice presentations. A column count on a text field would be
+          a grid with one cell.
+        */}
+        {!acceptsColumns(presentation) ? null : (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">How many columns?</legend>
+            <div className="flex flex-wrap gap-2">
+              {COLUMN_CHOICES.map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  onClick={() => setColumns(count)}
+                  aria-pressed={count === columns}
+                  className={[
+                    'rounded-lg border px-3 py-2 text-sm transition',
+                    'hover:border-foreground/30 hover:bg-accent/50',
+                    count === columns
+                      ? 'border-foreground/60 bg-accent ring-foreground/20 ring-2'
+                      : 'border-border',
+                  ].join(' ')}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {columns === 1 ? 'A vertical list.' : `Choices laid out in ${columns} columns.`}
+            </p>
+          </fieldset>
+        )}
+
         {!acceptsManyAnswers(presentation) ? null : (
           <label className="flex items-start gap-2 text-sm">
             <input

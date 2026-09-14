@@ -308,9 +308,27 @@ export async function createGroup(setId: string, label: string): Promise<Authori
  * fourth choice that silently behaves like the first is how a merchant
  * discovers a gap in production.
  */
-export async function updateGroupDisplay(
+export async function updateGroup(
   id: string,
-  changes: { displayType?: string; isCollapsible?: boolean },
+  changes: {
+    label?: string;
+    displayType?: string;
+    isCollapsible?: boolean;
+
+    /**
+     * The group's own help text, shown above its options.
+     *
+     * 🔴 **Stored, published and RENDERED since Phase 5 — and settable
+     * nowhere.** `createGroup` sends only a label, and there was no group edit
+     * form at all, so the paragraph the storefront draws in both template
+     * branches could never be filled in. The API has accepted it all along
+     * (`@MaxLength(2000)`); only the client was missing.
+     *
+     * ⚠️ **M18.5 lists "help text" as new work.** It is not: this is it, and
+     * M18.6a delivers it (ADR-064).
+     */
+    description?: string;
+  },
 ): Promise<AuthoringGroup> {
   const { data } = await api.patch<AuthoringGroup>(`/groups/${id}`, changes);
 

@@ -424,6 +424,90 @@ export function configFor(
   return { validation, ...display };
 }
 
+/**
+ * The types whose options are laid out in a grid.
+ *
+ * 🔴 **`columns` was published, read by thirteen storefront files, and
+ * authorable nowhere** (ADR-064) — one of four display fields in that state,
+ * and the fourth occurrence in Phase 18 of a capability built on both sides
+ * with no way for a merchant to reach it.
+ *
+ * ⚠️ **Mirrors `choiceDisplaySchema` in the API registry**, which is the
+ * authority: `radio`, `checkbox`, `color_swatch`, `image_swatch` and
+ * `dropdown`. Offering it for a text field would be a grid with one cell.
+ */
+export function acceptsColumns(presentation: string): boolean {
+  return (
+    presentation === 'radio' ||
+    presentation === 'checkbox' ||
+    presentation === 'color_swatch' ||
+    presentation === 'image_swatch' ||
+    presentation === 'dropdown'
+  );
+}
+
+/**
+ * How many columns an option's choices are drawn in.
+ *
+ * 🔴 **Bounds copied from `choiceDisplaySchema`** — `1..6`. A value outside
+ * them is refused by the API, so a form that accepted 12 would let a merchant
+ * submit and be handed an error rather than being told here.
+ *
+ * `1` means a vertical list, which is what an option publishes when it says
+ * nothing — so it is sent only when the merchant asks for more.
+ */
+export const COLUMN_CHOICES = [1, 2, 3, 4, 5, 6] as const;
+
+/**
+ * The `display` config for a choice option's layout.
+ *
+ * Returns `undefined` when there is nothing to say, so an option laid out the
+ * default way publishes no empty object — the same shape `configFor` takes for
+ * length rules.
+ */
+export function layoutFor(
+  presentation: string,
+  columns: number | null,
+): { display?: Record<string, unknown> } {
+  if (!acceptsColumns(presentation) || columns === null || columns === 1) {
+    return {};
+  }
+
+  return { display: { columns } };
+}
+
+/**
+ * One `display` object from every part that has something to say about it.
+ *
+ * 🔴 **Spreading the two results directly loses a key**, and the loss is
+ * silent. `configFor` returns `{ display: { characterCounter } }` and
+ * `layoutFor` returns `{ display: { columns } }`; `{ ...a, ...b }` replaces the
+ * whole `display` object rather than merging it, so the counter would vanish —
+ * and M14.4b makes that counter **required** whenever `maxLength` is set.
+ *
+ * ⚠️ **The two cannot collide today, and that is not a guarantee.** `columns`
+ * is offered for choice types and `characterCounter` is derived for text ones,
+ * so no option currently produces both. A helper that relies on which fields
+ * happen not to overlap breaks the first time one does — which is exactly how
+ * the `reorderPayloads` defect happened: correct until a second kind arrived.
+ */
+export function mergeConfig(
+  ...parts: Array<{ validation?: Record<string, unknown>; display?: Record<string, unknown> }>
+): { validation?: Record<string, unknown>; display?: Record<string, unknown> } {
+  const validation: Record<string, unknown> = {};
+  const display: Record<string, unknown> = {};
+
+  parts.forEach((part) => {
+    Object.assign(validation, part.validation ?? {});
+    Object.assign(display, part.display ?? {});
+  });
+
+  return {
+    ...(Object.keys(validation).length > 0 ? { validation } : {}),
+    ...(Object.keys(display).length > 0 ? { display } : {}),
+  };
+}
+
 export function swatchFieldsFor(presentation: string): {
   readonly color: boolean;
   readonly image: boolean;

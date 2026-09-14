@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSession, setSession } from '@/lib/auth/token-store';
-import { hasUnpublishedChanges, reorderGroups, reorderOptions, updateSet } from './api';
+import {
+  hasUnpublishedChanges,
+  reorderGroups,
+  reorderOptions,
+  updateGroup,
+  updateSet,
+} from './api';
 
 const ok = (data: unknown): Response =>
   new Response(JSON.stringify({ data, meta: {} }), {
@@ -122,6 +128,45 @@ describe('option-sets api', () => {
           { id: 'c', sortOrder: 30 },
         ],
       });
+    });
+  });
+
+  describe('updateGroup', () => {
+    /**
+     * 🔴 **A group's `description` is its help text, and it was settable
+     * nowhere** (ADR-064). Stored, published and rendered by the storefront in
+     * both template branches since Phase 5 — `createGroup` sends only a label,
+     * and there was no group edit form at all.
+     */
+    it('sends the description to the group endpoint', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await updateGroup('g-1', { description: 'Pick your finish.' });
+
+      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/groups/g-1');
+      expect(bodyOf(fetchMock, 0)).toEqual({ description: 'Pick your finish.' });
+    });
+
+    /**
+     * ⚠️ **An emptied box clears it rather than being dropped.** A merchant
+     * removing help text is making a choice; treating `''` as "no change" would
+     * leave text on the storefront they had just deleted.
+     */
+    it('sends an empty description rather than omitting it', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await updateGroup('g-1', { description: '' });
+
+      expect(bodyOf(fetchMock, 0)).toEqual({ description: '' });
+    });
+
+    /** Only what the caller names is sent — a patch, not a replace. */
+    it('sends only the fields it is given', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await updateGroup('g-1', { displayType: 'accordion' });
+
+      expect(bodyOf(fetchMock, 0)).toEqual({ displayType: 'accordion' });
     });
   });
 
