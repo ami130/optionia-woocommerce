@@ -52,13 +52,28 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering), stage 18-6 — group ordering in
-the dashboard.**
+**[Phase 18](#phase-18--option-groups--ordering), stage 18-7 — but settle its
+overlap with 18-3a first.**
 
-✅ **18-0 through 18-4 are done**, plus **18-3a**, which closed four findings an
-audit of the whole run turned up. Multi-select is now authorable, priced,
-bounded, frozen, displayed and replayed on reorder; group layouts are rendered
-and authorable.
+✅ **18-0 through 18-6 are done**, plus **18-3a**. Multi-select is authorable,
+priced, bounded, frozen, displayed and replayed on reorder; group layouts are
+rendered and authorable; groups can be reordered.
+
+🔴 **18-7 needs a decision before any code.** M18.4's own example is *"choose at
+least 2 from this group"* — and **18-3a just built exactly that, per option**.
+Whether a group-level version is a real need or a second mechanism for one fact
+is a question, not an implementation, and this phase has already withdrawn two
+rule actions (ADR-055, ADR-056) for being the second mechanism.
+
+⚠️ **It also needs a migration.** Neither `minSelections` nor `maxSelections`
+exists on `option_groups` — the first schema change since 18-0, where every
+stage since has consumed fields already stored. **18-5 is in the same position**
+(`columns`, `swatchSize`, `labelPlacement`).
+
+📌 **Recommended: an ADR on the overlap, then 18-5 or 18-7 as it decides.** If
+group-level counts are genuinely wanted, the ADR is where the difference from
+the per-option rule gets written down; if not, the stage shrinks or goes, and
+18-8's exit audit is closer than the stage table suggests.
 
 ⏸ **Two stages are deferred with named reasons, not forgotten**: **18-4a**
 (`stepped`, ADR-063 — a wizard collides with the rule runtime's visibility
@@ -21324,7 +21339,7 @@ it lands on; nesting absent because ADR-058 deferred it.
 | **18-4** | Group display types rendered **and** authorable — `inline`, `accordion`, `tabs` | plugin + dashboard | M18.2, ADR-059, **ADR-063** |
 | 18-4a | `stepped` — the wizard layout, split out by ADR-063 | plugin + dashboard | M18.4 |
 | 18-5 | Group presentation config, following the option `display` precedent | all three | M18.5 |
-| 18-6 | Drag-and-drop ordering over the existing endpoints | dashboard | M18.3 |
+| **18-6** | Group ordering in the dashboard — **re-scoped from drag-and-drop** | dashboard | M18.3 |
 | 18-7 | Group-level selection rules | backend + plugin | M18.4 |
 | 18-8 | Adversarial suite + exit-criteria audit | all | — |
 
@@ -21954,6 +21969,77 @@ were written before the fix rather than after. Measured now:
 | Order meta | `opt-a => 'Array'` + PHP notice | `Extras => 'Red, Blue'` |
 | Stored payload | freeze discarded, **line priced live** | `{"opt-a":300}`, signed |
 | Renderer | one shared field name, last value wins | `name="…[]"`, every box posts |
+
+---
+
+### ✅ Stage 18-6 complete — a merchant can reorder groups, 2026-09-14
+
+**`POST /option-sets/:id/reorder` shipped fully built and the dashboard never
+called it.** A merchant could reorder options *within* a group from the first
+release and could not move the groups themselves at all — so on a product with
+three sections, their order was whatever order they happened to be created in,
+**permanently**. The working option-level controls are what made the gap easy to
+miss.
+
+🔴 **The same shape as 18-3a's F1**: a server capability with no client. That is
+now twice in one phase, and worth naming as a pattern rather than two
+coincidences.
+
+#### ✏️ Re-scoped, and the row was wrong
+
+The plan said *"drag-and-drop ordering over the existing endpoints"*. Ordering
+**already worked** one level down, by move-up/move-down buttons the codebase
+chose deliberately:
+
+> *"Drag needs a library, does not work from a keyboard without extra handling,
+> and is awkward on the phones merchants actually use."*
+
+⚠️ **Executing the row as written would have traded working, accessible controls
+for a library and a keyboard regression.** The stage delivers the missing
+capability in the idiom already proven beside it.
+
+#### What landed
+
+| Piece | Note |
+|---|---|
+| `reorderGroups()` | The client the endpoint never had |
+| `groupReorderPayload()` | Swap and renumber, deliberately **not** merged with `reorderPayloads` |
+| `GroupList` | Holds the mutation; the page body returns early while loading |
+| Move buttons | Labelled by the group's **name**, matching `OptionBlock` |
+
+🔴 **Every group is renumbered, not just the swapped pair.** Sending only the two
+would leave the others on whatever numbers they had — correct only while the gaps
+happen to allow it. Renumbering the whole list makes the result independent of
+what the numbers were before.
+
+⚠️ **`null` at either end, so no request is sent.** The buttons are disabled
+there, so it is unreachable from the UI — but a payload that reorders nothing
+would still be a write, an audit entry and a **`configVersion` bump**, telling
+every storefront its configuration changed when it did not.
+
+📌 **`groupReorderPayload` is separate from `reorderPayloads` on purpose.** That
+one splits a *merged* sequence across two tables, because a group holds options
+and presentational items on one shared `sortOrder` scale — and numbering each
+list independently was a measured defect there, two green requests that changed
+nothing. Groups have no companion list, so merging the two would generalise a
+helper around a problem the group case does not have.
+
+#### Mutation results — four mutants, four killed
+
+| Mutant | Killed by |
+|---|---|
+| Posts to `/groups/:id/reorder` — the endpoint one level down | `posts to the SET, with the groups key` + `does not post to the group-level endpoint` |
+| Body key `options` instead of `groups` | `posts to the SET, with the groups key` |
+| Only the swapped pair sent | three renumbering tests |
+| Caller's array mutated in place | `leaves the caller's array untouched` |
+
+⚠️ **The first two matter most.** Two reorder endpoints sit one level apart and
+read almost identically; sending a group list to the wrong one is rejected as
+`NOT_IN_GROUP` — caught, but by a merchant, in production, on a request that
+looks right.
+
+✅ **Backend untouched**, verified by a clean `git status`: the capability was
+already there.
 
 ---
 
