@@ -52,28 +52,37 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering), stage 18-7 — but settle its
-overlap with 18-3a first.**
+**[Phase 18](#phase-18--option-groups--ordering) — 18-6b, then the exit audit.**
 
-✅ **18-0 through 18-6 are done**, plus **18-3a**. Multi-select is authorable,
-priced, bounded, frozen, displayed and replayed on reorder; group layouts are
-rendered and authorable; groups can be reordered.
+✅ **18-0 through 18-6a are done.** Multi-select is authorable, priced, bounded,
+frozen, displayed and replayed; group layouts render and are authorable; groups
+reorder; a group's help text and an option's column layout can be set.
 
-🔴 **18-7 needs a decision before any code.** M18.4's own example is *"choose at
-least 2 from this group"* — and **18-3a just built exactly that, per option**.
-Whether a group-level version is a real need or a second mechanism for one fact
-is a question, not an implementation, and this phase has already withdrawn two
-rule actions (ADR-055, ADR-056) for being the second mechanism.
+📌 **18-6b is small and named**: finish `price_display`. ADR-064 kept it rather
+than withdrawing it — it is normalised into the view model with a written
+default (*"`delta` is the honest framing"*) and **no template reads it**. That
+is the ADR-059 test: the distance between carried and consumed is work, not a
+question. Three of the five choice templates need it, plus a dashboard control.
 
-⚠️ **It also needs a migration.** Neither `minSelections` nor `maxSelections`
-exists on `option_groups` — the first schema change since 18-0, where every
-stage since has consumed fields already stored. **18-5 is in the same position**
-(`columns`, `swatchSize`, `labelPlacement`).
+⚠️ **18-5 is reconsidered, not scheduled** (ADR-064). Adding group-level
+presentation config while the option-level equivalent went unreachable for four
+stages would widen the gap 18-6a just closed. Its "help text" already shipped in
+18-6a. What remains — group `columns`, `swatchSize` — is worth doing only if a
+merchant asks; the option-level fields now cover the same ground one level down.
 
-📌 **Recommended: an ADR on the overlap, then 18-5 or 18-7 as it decides.** If
-group-level counts are genuinely wanted, the ADR is where the difference from
-the per-option rule gets written down; if not, the stage shrinks or goes, and
-18-8's exit audit is closer than the stage table suggests.
+🔴 **18-7 cannot proceed on its written grounds** (ADR-064). ADR-057 settled that
+M18.4's example — *"choose at least 2"* — is a count over a **multi-value
+answer**, which M18.3a delivered per option. What remains is counting *across*
+options in a group, which ADR-057 itself called *"a different feature wearing
+M18.4's words"*. It needs a condition that spans options and an operator that
+counts — **neither exists in any of the three evaluators** — so it is new
+machinery held to shared fixtures, and a product question before an
+implementation.
+
+📌 **Recommended: 18-6b, then 18-8's exit audit.** Phase 18's exit is *"merchants
+can structure a complex product into legible sections; ordering persists and
+renders identically in dashboard, preview and storefront"* — that is now true,
+and closer than the stage table suggests.
 
 ⏸ **Two stages are deferred with named reasons, not forgotten**: **18-4a**
 (`stepped`, ADR-063 — a wizard collides with the rule runtime's visibility
@@ -21338,9 +21347,10 @@ it lands on; nesting absent because ADR-058 deferred it.
 | 18-3 | `MANY` joins the registry; multi-select fixture cases | backend + shared | M14.1 |
 | **18-4** | Group display types rendered **and** authorable — `inline`, `accordion`, `tabs` | plugin + dashboard | M18.2, ADR-059, **ADR-063** |
 | 18-4a | `stepped` — the wizard layout, split out by ADR-063 | plugin + dashboard | M18.4 |
-| 18-5 | Group presentation config, following the option `display` precedent | all three | M18.5 |
 | **18-6** | Group ordering in the dashboard — **re-scoped from drag-and-drop** | dashboard | M18.3 |
-| 18-7 | Group-level selection rules | backend + plugin | M18.4 |
+| **18-6a** | Withdraw two dead display fields; make four live ones authorable | backend + dashboard | ADR-064 |
+| 18-5 | Group presentation config — ⚠️ **reconsidered** by ADR-064 | all three | M18.5 |
+| 18-7 | Group-level selection rules — ⚠️ **premise settled** by ADR-064 | backend + plugin | M18.4 |
 | 18-8 | Adversarial suite + exit-criteria audit | all | — |
 
 #### Why multi-select is three stages and not one
@@ -21969,6 +21979,84 @@ were written before the fix rather than after. Measured now:
 | Order meta | `opt-a => 'Array'` + PHP notice | `Extras => 'Red, Blue'` |
 | Stored payload | freeze discarded, **line priced live** | `{"opt-a":300}`, signed |
 | Renderer | one shared field name, last value wins | `name="…[]"`, every box posts |
+
+---
+
+### ✅ Stage 18-6a complete — withdrawals, and making what exists authorable, 2026-09-14
+
+**A pre-flight analysis of 18-5 and 18-7 found both rest on premises that no
+longer hold.** ADR-064 settles them; this stage acts on it.
+
+#### ✏️ Two display fields withdrawn — on a reason, not on "nothing reads it"
+
+| Field | Why |
+|---|---|
+| `showPriceDelta` | A **second spelling of `priceDisplay`** (`delta \| total \| hidden`). Anything the boolean says, the enum says more precisely — and `{ priceDisplay: 'hidden', showPriceDelta: true }` is a state no rendering can satisfy |
+| `labelPlacement` | Reaches nothing at either end, and `above \| inline \| hidden` is a **theme's** job — `hidden` would strip the accessible name from a priced control |
+
+⚠️ **ADR-055's bar was a *decision*, not disuse.** A field that is merely unbuilt
+is a backlog item. These two have reasons; `price_display` — normalised into the
+view model with a written default and no template reading it — does **not**, so
+it stays and M18.6b finishes it.
+
+🔴 **The schema is `.strict()`, so a withdrawal is a refusal**, not a silently
+ignored field. Asserted directly.
+
+#### 🔴 Four occurrences of one defect, and this stage names it
+
+A capability built on the server **and** the storefront with no way for a
+merchant to reach it:
+
+| # | Capability | Stage |
+|---|---|---|
+| 1 | `cardinality` — multi-select unreachable after four stages | M18.3a |
+| 2 | Group ordering — endpoint built, no client | M18.6 |
+| 3 | Four option display fields, `columns` read by **13** storefront files | **M18.6a** |
+| 4 | A group's `description` — rendered in both template branches | **M18.6a** |
+
+**That is a pattern in how stages were scoped, not four coincidences.**
+
+#### What landed
+
+✅ **A group's help text is authorable.** M18.5 lists it as new work; it is not —
+stored, published and rendered since Phase 5, settable nowhere because
+`createGroup` sends only a label and no group edit form existed.
+
+✅ **`columns` is authorable** for the five choice types its registry entry
+accepts. A merchant with eight colour swatches got one long vertical list and no
+way to make it a grid.
+
+🔴 **`mergeConfig` exists because spreading loses a key, silently.** `configFor`
+returns `{ display: { characterCounter } }` and `layoutFor` returns
+`{ display: { columns } }`; `{ ...a, ...b }` replaces the whole object rather
+than merging — and M14.4b makes that counter **required** whenever `maxLength`
+is set.
+
+⚠️ **The two cannot collide today**, because `columns` is choice-only and
+`characterCounter` text-only. Guarded anyway: a helper that relies on which
+fields happen not to overlap breaks the first time one does — which is exactly
+how `reorderPayloads` broke, correct until a second kind arrived.
+
+#### ✏️ An existing test caught the withdrawal, correctly
+
+`emits no camelCase key for anything it maps` fed `labelPlacement` through and
+failed the moment it left `DISPLAY_KEYS` — a key with no mapping publishes in
+the stored spelling. **Repointed at a live key rather than deleted**: the
+property it guards is about the *mechanism*, and that mechanism has been
+measured wrong twice (`maxLength` verbatim, `minSelections` camelCase until
+M18.3a).
+
+📌 **The schema-coverage gate reads schema → map, not map → schema**, so it did
+not name the two orphaned entries left behind. Removed by hand, and recorded
+where they were.
+
+#### Mutation results — three mutants, three killed
+
+| Mutant | Killed by |
+|---|---|
+| `mergeConfig` replaces instead of merging | `keeps both display keys when two parts each carry one` |
+| One column published as a no-op `display` | `sends no display for a single column` |
+| `columns` offered for every type | `refuses columns for types the registry does not accept them for` |
 
 ---
 
