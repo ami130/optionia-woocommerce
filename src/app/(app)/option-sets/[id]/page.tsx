@@ -48,12 +48,14 @@ import { groupReorderPayload, mergedEntries, reorderPayloads } from '@/lib/optio
 import {
   AUTHORABLE_TYPES,
   COLUMN_CHOICES,
+  PRICE_FRAMINGS,
   acceptsColumns,
   acceptsLength,
   acceptsManyAnswers,
   configFor,
   layoutFor,
   mergeConfig,
+  priceFramingFor,
   keyFromLabel,
   optionSchema,
   swatchFieldsFor,
@@ -575,6 +577,12 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
    * `display` at all.
    */
   const [columns, setColumns] = useState(1);
+
+  /*
+   * How a price is written beside each choice. `delta` is what an option
+   * renders as when it says nothing, so the default sends no `display`.
+   */
+  const [priceFraming, setPriceFraming] = useState('delta');
   /* The raw field, not a number: an empty box is "no limit", and coercing as
    * they type would turn a half-deleted "20" into a limit of 2. */
   const [maxLengthText, setMaxLengthText] = useState('');
@@ -622,7 +630,11 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
          * — losing `characterCounter`, which M14.4b requires whenever
          * `maxLength` is set.
          */
-        ...mergeConfig(configFor(presentation, maxLength, minLength), layoutFor(presentation, columns)),
+        ...mergeConfig(
+          configFor(presentation, maxLength, minLength),
+          layoutFor(presentation, columns),
+          priceFramingFor(presentation, priceFraming),
+        ),
       }),
     onSuccess: () => {
       setKey('');
@@ -631,6 +643,7 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
       setIsRequired(false);
       setTakesMany(false);
       setColumns(1);
+      setPriceFraming('delta');
       setMaxLengthText('');
       setMinLengthText('');
       setKeyTouched(false);
@@ -831,6 +844,43 @@ function AddOption({ groupId, onAdded }: { groupId: string; onAdded: () => void 
             <p className="text-muted-foreground text-xs">
               {columns === 1 ? 'A vertical list.' : `Choices laid out in ${columns} columns.`}
             </p>
+          </fieldset>
+        )}
+
+        {/*
+          🔴 **`price_display` was normalised by the storefront and read by
+          nothing** — the state ADR-064 kept it out of withdrawal to fix.
+
+          ⚠️ **Two framings, not the API's three** (ADR-065). `total` is
+          `base + option`, and a printed total would be stale the moment a
+          customer picks a variation, because the storefront runtime listens to
+          no variation events by design. Phase 21's server-quoted preview owns
+          it, and offering it now would be a third choice that behaves like the
+          first.
+        */}
+        {!acceptsColumns(presentation) ? null : (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Show a price beside each choice?</legend>
+            <div className="flex flex-wrap gap-2">
+              {PRICE_FRAMINGS.map((framing) => (
+                <button
+                  key={framing.value}
+                  type="button"
+                  onClick={() => setPriceFraming(framing.value)}
+                  aria-pressed={framing.value === priceFraming}
+                  className={[
+                    'flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition',
+                    'hover:border-foreground/30 hover:bg-accent/50',
+                    framing.value === priceFraming
+                      ? 'border-foreground/60 bg-accent ring-foreground/20 ring-2'
+                      : 'border-border',
+                  ].join(' ')}
+                >
+                  <span className="text-sm font-medium">{framing.label}</span>
+                  <span className="text-muted-foreground text-xs">{framing.hint}</span>
+                </button>
+              ))}
+            </div>
           </fieldset>
         )}
 

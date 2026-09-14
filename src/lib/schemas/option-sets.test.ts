@@ -9,12 +9,14 @@ import {
   groupSchema,
   optionSchema,
   COLUMN_CHOICES,
+  PRICE_FRAMINGS,
   acceptsColumns,
   acceptsLength,
   acceptsManyAnswers,
   configFor,
   layoutFor,
   mergeConfig,
+  priceFramingFor,
   keyFromLabel,
   swatchFieldsFor,
   takesGroupLabel,
@@ -779,5 +781,60 @@ describe('merging option config', () => {
       validation: { maxLength: 20 },
     });
     expect(mergeConfig({}, {})).toEqual({});
+  });
+});
+
+describe('how a price is written beside a choice (M18.6b)', () => {
+  /**
+   * 🔴 **`total` must NOT be offered while it renders as `delta`** (ADR-065).
+   *
+   * A total is `base + option`, and the storefront runtime listens to no
+   * WooCommerce variation events by design — the estimate is an options delta
+   * and nothing it sums changes with the chosen variation. A printed total
+   * would be stale the moment a customer picks a size.
+   *
+   * Offering a third framing that behaves like the first is how a merchant
+   * discovers a gap in production, which is what ADR-063 keeps `stepped` out of
+   * the layout picker for.
+   */
+  it('does not offer total', () => {
+    expect(PRICE_FRAMINGS.map((framing) => framing.value)).not.toContain('total');
+  });
+
+  /** ⚠️ The control: both framings the storefront can honour are offered. */
+  it('offers the two framings that render', () => {
+    expect(PRICE_FRAMINGS.map((framing) => framing.value)).toEqual(['delta', 'hidden']);
+  });
+
+  /**
+   * ⚠️ **`delta` publishes nothing.** It is what an option renders as when it
+   * says nothing, so sending it would store a value that changes nothing and
+   * make every default option carry a `display` object.
+   */
+  it('sends no display for the default framing', () => {
+    expect(priceFramingFor('radio', 'delta')).toEqual({});
+  });
+
+  it('sends the framing when the merchant asks to hide prices', () => {
+    expect(priceFramingFor('radio', 'hidden')).toEqual({ display: { priceDisplay: 'hidden' } });
+  });
+
+  /** A type with no choices has no per-choice price to frame. */
+  it('sends nothing for a type that has no choices', () => {
+    expect(priceFramingFor('text_field', 'hidden')).toEqual({});
+  });
+
+  /**
+   * 🔴 **Three parts, one `display` object.**
+   *
+   * `layoutFor` and `priceFramingFor` both return `display`, so this is the
+   * case `mergeConfig` exists for — and now a real one rather than a
+   * hypothetical: a merchant can set columns *and* hide prices on the same
+   * option.
+   */
+  it('merges columns and price framing into one display object', () => {
+    expect(mergeConfig(layoutFor('radio', 3), priceFramingFor('radio', 'hidden'))).toEqual({
+      display: { columns: 3, priceDisplay: 'hidden' },
+    });
   });
 });

@@ -459,6 +459,55 @@ export function acceptsColumns(presentation: string): boolean {
 export const COLUMN_CHOICES = [1, 2, 3, 4, 5, 6] as const;
 
 /**
+ * How a price is written beside a choice.
+ *
+ * 🔴 **Two of the API's three** (ADR-065). `total` is `base + option`, and no
+ * option template has the base price — but the blocker is not plumbing.
+ * `frontend.js` listens to **no** WooCommerce variation events, deliberately,
+ * because the estimate is an options *delta* and nothing it sums changes with
+ * the chosen variation. A printed total would be stale the moment a customer
+ * picks a size, which is a wrong price beside a control.
+ *
+ * ⚠️ **Offering it anyway would be worse than omitting it.** It renders as
+ * `delta`, so a merchant would choose a third framing and get the first — the
+ * shape ADR-063 keeps `stepped` out of the layout picker for.
+ *
+ * 📌 **Phase 21's server-quoted preview owns `total`**, and the plugin's own
+ * runtime already says so. When it lands, the base price arrives with it and
+ * this list grows.
+ */
+export const PRICE_FRAMINGS = [
+  {
+    value: 'delta',
+    label: 'What it adds',
+    hint: 'Beside each choice, as +10.00',
+  },
+  {
+    value: 'hidden',
+    label: 'No prices',
+    hint: 'The running total still shows',
+  },
+] as const;
+
+/**
+ * The `display` config for a choice option's price framing.
+ *
+ * `delta` is what an option publishes when it says nothing, so it is sent only
+ * when the merchant asks for something else — the same shape `layoutFor` takes
+ * for a single column.
+ */
+export function priceFramingFor(
+  presentation: string,
+  framing: string,
+): { display?: Record<string, unknown> } {
+  if (!acceptsColumns(presentation) || framing === 'delta') {
+    return {};
+  }
+
+  return { display: { priceDisplay: framing } };
+}
+
+/**
  * The `display` config for a choice option's layout.
  *
  * Returns `undefined` when there is nothing to say, so an option laid out the
