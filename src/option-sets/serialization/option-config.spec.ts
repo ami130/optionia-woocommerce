@@ -78,11 +78,29 @@ describe('option config serialization', () => {
     });
 
     it('renames the other display keys', () => {
-      expect(toPublishedDisplay({ labelPlacement: 'above', showPriceDelta: true })).toEqual({
-        label_placement: 'above',
-        show_price_delta: true,
+      expect(
+        toPublishedDisplay({
+          priceDisplay: 'delta',
+          swatchSize: 'large',
+          collapsedByDefault: true,
+        }),
+      ).toEqual({
+        price_display: 'delta',
+        swatch_size: 'large',
+        collapsed_by_default: true,
       });
     });
+
+    /**
+     * ✏️ **This asserted `labelPlacement` and `showPriceDelta` until M18.6a**,
+     * when both were withdrawn (ADR-064) — one a second spelling of
+     * `priceDisplay`, the other reaching nothing at either end.
+     *
+     * ⚠️ **Repointed at live keys rather than deleted.** The rename itself is
+     * the thing under test, and it was measured wrong twice before: `maxLength`
+     * shipped verbatim, and `minSelections` shipped camelCase until M18.3a. A
+     * test of the mechanism has to keep naming keys that exist.
+     */
 
     it('passes null through', () => {
       expect(toPublishedDisplay(null)).toBeNull();
@@ -96,11 +114,17 @@ describe('option config serialization', () => {
    * *property* — that nothing mapped leaks through in the stored spelling. A new
    * rule added to the schema and forgotten here fails this without anyone having
    * to remember to add a row.
+   *
+   * ✏️ **It fed `labelPlacement` until M18.6a, and caught the withdrawal.**
+   * Removing that key from `DISPLAY_KEYS` (ADR-064) made it fall through
+   * unrenamed, and this test failed — correctly, since a key with no mapping
+   * publishes in the stored spelling. Repointed at a live key, because the
+   * property it guards is about the *mechanism*, not about any one field.
    */
   it('emits no camelCase key for anything it maps', () => {
     const published = {
       ...toPublishedValidation({ minLength: 1, maxLength: 20 }),
-      ...toPublishedDisplay({ characterCounter: true, labelPlacement: 'above' }),
+      ...toPublishedDisplay({ characterCounter: true, collapsedByDefault: true }),
     };
 
     Object.keys(published).forEach((key) => {

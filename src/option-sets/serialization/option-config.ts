@@ -99,8 +99,18 @@ const VALIDATION_KEYS: Readonly<Record<string, string>> = {
 /** Stored key → document key, for every display affordance the plugin reads. */
 const DISPLAY_KEYS: Readonly<Record<string, string>> = {
   characterCounter: 'character_counter',
-  labelPlacement: 'label_placement',
-  showPriceDelta: 'show_price_delta',
+
+  /*
+   * ✏️ **`labelPlacement` and `showPriceDelta` were removed in M18.6a**
+   * (ADR-064). Both were withdrawn from the option schemas, so a mapping for
+   * either would rename a key nothing can produce.
+   *
+   * ⚠️ **The schema-coverage check reads schema → map, not map → schema**, so
+   * it would not have named these. An entry here for a field the schema does
+   * not accept is harmless — `rename()` only visits keys the payload actually
+   * carries — but it reads as a field that exists, which is how a reader comes
+   * to look for one.
+   */
 
   /* Display config (M14.4b). */
   priceDisplay: 'price_display',

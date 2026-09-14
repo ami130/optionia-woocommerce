@@ -95,10 +95,20 @@ const choiceDisplaySchema = z
   .object({
     /** Columns in the rendered grid. One means a vertical list. */
     columns: z.number().int().min(1).max(6).optional(),
-    /** Where the label sits relative to the control. */
-    labelPlacement: z.enum(['above', 'inline', 'hidden']).optional(),
-    /** Whether to show the price difference beside each choice. */
-    showPriceDelta: z.boolean().optional(),
+    /*
+     * ✏️ **`labelPlacement` and `showPriceDelta` were withdrawn in M18.6a**
+     * (ADR-064), not deferred.
+     *
+     * `showPriceDelta` was a second spelling of `priceDisplay` below: anything
+     * the boolean could say, the enum says more precisely, and the two could
+     * contradict each other — `{ priceDisplay: 'hidden', showPriceDelta: true }`
+     * is a state no rendering can satisfy.
+     *
+     * `labelPlacement` reached nothing at either end, and `above | inline |
+     * hidden` is a theme's job: every label already renders inside a `<legend>`
+     * or `<label>` a stylesheet can place, and `hidden` would strip the
+     * accessible name from a priced control.
+     */
 
     /**
      * How a price is written beside a choice.
@@ -522,7 +532,8 @@ const dateValidationSchema = z
 /** Display options for a text option. */
 const textDisplaySchema = z
   .object({
-    labelPlacement: z.enum(['above', 'inline', 'hidden']).optional(),
+    /* `labelPlacement` withdrawn in M18.6a — see the note on the choice schema. */
+
     /**
      * Show a live `12/20` beside the field.
      *

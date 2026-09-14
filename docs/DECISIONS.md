@@ -5566,3 +5566,115 @@ the excuse.** The guard against it is the same one ADR-059 used: the value
 remains in the enum and in the plan with a named stage, and the dashboard does
 not offer it — so nobody can select it, and nobody discovers it silently does
 nothing.
+
+---
+
+## ADR-064 — Three display fields are withdrawn, and M18.4's example is already delivered
+
+**Status:** accepted · **Phase 18, Stage 18-6a**
+
+### Context
+
+A pre-flight analysis of stages 18-5 and 18-7 found that both rest on premises
+that no longer hold.
+
+**On 18-7.** The plan row reads *"group-level selection rules"*, and M18.4's
+example is *"choose at least 2 from this group"*. ADR-057 had already settled
+what that example means:
+
+> *"M18.4's example is unbuildable without it. **"Choose at least 2" is a count
+> over a multi-value answer.** Shipping group rules against single-value options
+> would either mean counting **options answered** — a different feature wearing
+> M18.4's words — or a rule that can never be satisfied."*
+
+**M18.3a delivered exactly that**, as `min_selections` / `max_selections`
+enforced per option. So 18-7's stated example is done, and what remains is a
+*different* question — counting across several options in a group — which
+ADR-057 itself called a different feature.
+
+**On 18-5, and the larger pattern behind it.** The stage proposes group-level
+presentation config while the **option-level equivalent is unreachable**. Seven
+display fields are accepted by the schema and published; not one is authorable
+in the dashboard. Measured:
+
+| Field | Reaches the view model | Rendered on the page | Authorable |
+|---|---|---|---|
+| `columns` | yes | yes (13 files) | **no** |
+| `swatch_size` | yes | yes | **no** |
+| `collapsed_by_default` | yes | yes | **no** |
+| `tooltip` | yes | yes | **no** |
+| `price_display` | yes | **no** | **no** |
+| `label_placement` | **no** | **no** | **no** |
+| `show_price_delta` | **no** | **no** | **no** |
+
+🔴 **This is the fourth occurrence in one phase of one defect**: a capability
+built on the server and the storefront with no way for a merchant to reach it.
+M18.3a's F1 (`cardinality`), M18.6 (group ordering), the four live display
+fields above, and a group's own `description`. Four is a pattern in how stages
+were scoped, not four coincidences.
+
+### Decision
+
+**1. `show_price_delta` is withdrawn — it is a second spelling of
+`price_display`.**
+
+`priceDisplay` is `delta | total | hidden`; `showPriceDelta` is a boolean.
+Anything the boolean can express, the enum expresses more precisely, and the two
+can contradict each other: `{ priceDisplay: 'hidden', showPriceDelta: true }` is
+a state no rendering can satisfy. That is the *"two mechanisms for one fact"*
+shape this phase listed as a thing not to repeat, and the same reason ADR-059
+confined `is_collapsible` to `inline` rather than letting it overlap
+`display_type`.
+
+**2. `label_placement` is withdrawn.**
+
+It reaches nothing — not the view model, not a template — and unlike the fields
+above it has no consumer waiting on a stage. `above | inline | hidden` is also
+the one of these choices a **theme** properly owns: every option label already
+renders inside a `<legend>` or `<label>` a stylesheet can place, and `hidden`
+would remove an accessible name from a priced control, which M29.7b refuses
+elsewhere.
+
+⚠️ **Withdrawn on a *reason*, not on "nothing reads it".** ADR-055 withdrew
+`set_default` because a decision forced it; a field that is merely unbuilt is a
+backlog item, not a withdrawal. These two have reasons: one duplicates a better
+field, the other is a theme's job and its third value is inaccessible.
+
+**3. `price_display` is NOT withdrawn — it is finished in M18.6a.**
+
+It is normalised into the view model with a documented default (*"`delta` is the
+honest framing: an option adds to a price the customer has already seen"*) and
+no template reads it. Unlike the two above, it has a clear consumer and a
+written rationale; the distance between carried and consumed is work, which is
+exactly the test ADR-059 applied to `display_type` and passed.
+
+**4. M18.6a makes what already exists authorable, before either remaining
+stage.**
+
+A group's `description` — stored, published and **rendered in both template
+branches** — plus the four live option display fields. The API already accepts
+all of them, so this is client work.
+
+📌 **18-5 is reconsidered rather than scheduled.** Adding group-level
+presentation config while the option-level equivalent went unreachable for four
+stages would widen the very gap M18.6a exists to close. Its "help text" is
+already the group `description`, which M18.6a delivers.
+
+📌 **18-7 needs its own decision, and it is not this one.** Whether *"choose 2
+across a group"* is wanted at all is a product question. What is settled here:
+its stated example is delivered, so the stage cannot proceed on the grounds it
+was written on. Building it would need a condition that spans options and an
+operator that counts — neither exists in any of the three evaluators — which is
+new machinery held to shared fixtures, not configuration.
+
+### Consequences
+
+**Two fields leave the schema, the rename map and the published document.** No
+merchant can have set either: they are absent from the dashboard, and the two
+are unreachable end to end. `bin/check-wire-keys.sh` reads the option schemas as
+of M18.3a, so removing them from the schema without removing them from
+`DISPLAY_KEYS` fails the build rather than leaving an orphan.
+
+**The withdrawal is recorded where the field was, not only here.** ADR-055 and
+ADR-056 set that precedent: a reader who finds the gap should find the reason at
+the same time.

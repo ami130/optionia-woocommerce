@@ -362,8 +362,8 @@ describe('type registry', () => {
       expect(
         radio?.displaySchema.safeParse({
           columns: 3,
-          labelPlacement: 'above',
-          showPriceDelta: true,
+          priceDisplay: 'delta',
+          swatchSize: 'medium',
         }).success,
       ).toBe(true);
     });
@@ -373,8 +373,19 @@ describe('type registry', () => {
       expect(radio?.displaySchema.safeParse({ columns: 99 }).success).toBe(false);
     });
 
-    it('rejects an unknown label placement', () => {
-      expect(radio?.displaySchema.safeParse({ labelPlacement: 'sideways' }).success).toBe(false);
+    it('rejects an unknown price framing', () => {
+      expect(radio?.displaySchema.safeParse({ priceDisplay: 'sideways' }).success).toBe(false);
+    });
+
+    /**
+     * ✏️ **`labelPlacement` and `showPriceDelta` were withdrawn in M18.6a**
+     * (ADR-064), so the schema must now refuse them rather than accept them
+     * unread. `.strict()` is what turns a withdrawal into a refusal instead of
+     * a silently ignored field.
+     */
+    it('refuses the two withdrawn display fields', () => {
+      expect(radio?.displaySchema.safeParse({ labelPlacement: 'above' }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ showPriceDelta: true }).success).toBe(false);
     });
   });
 
