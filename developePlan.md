@@ -52,37 +52,31 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering) — 18-6b, then the exit audit.**
+**[Phase 18](#phase-18--option-groups--ordering), stage 18-8 — the exit audit.**
 
-✅ **18-0 through 18-6a are done.** Multi-select is authorable, priced, bounded,
+✅ **18-0 through 18-6b are done.** Multi-select is authorable, priced, bounded,
 frozen, displayed and replayed; group layouts render and are authorable; groups
-reorder; a group's help text and an option's column layout can be set.
+reorder; help text, column layout and price framing are all settable.
 
-📌 **18-6b is small and named**: finish `price_display`. ADR-064 kept it rather
-than withdrawing it — it is normalised into the view model with a written
-default (*"`delta` is the honest framing"*) and **no template reads it**. That
-is the ADR-059 test: the distance between carried and consumed is work, not a
-question. Three of the five choice templates need it, plus a dashboard control.
+📌 **Phase 18's exit criteria read:** *"merchants can structure a complex product
+into legible sections; ordering persists and renders identically in dashboard,
+preview, and storefront."* That is now true, and 18-8 is the stage that proves
+it adversarially rather than asserting it.
 
-⚠️ **18-5 is reconsidered, not scheduled** (ADR-064). Adding group-level
-presentation config while the option-level equivalent went unreachable for four
-stages would widen the gap 18-6a just closed. Its "help text" already shipped in
-18-6a. What remains — group `columns`, `swatchSize` — is worth doing only if a
-merchant asks; the option-level fields now cover the same ground one level down.
+⚠️ **Three things carry forward with named owners, not as gaps:**
 
-🔴 **18-7 cannot proceed on its written grounds** (ADR-064). ADR-057 settled that
-M18.4's example — *"choose at least 2"* — is a count over a **multi-value
-answer**, which M18.3a delivered per option. What remains is counting *across*
-options in a group, which ADR-057 itself called *"a different feature wearing
-M18.4's words"*. It needs a condition that spans options and an operator that
-counts — **neither exists in any of the three evaluators** — so it is new
-machinery held to shared fixtures, and a product question before an
-implementation.
+| Deferred | Owner | Why |
+|---|---|---|
+| `stepped` layout | **18-4a** | ADR-063 — a wizard collides with the rule runtime's visibility model |
+| `price_display: total` | **Phase 21** | ADR-065 — needs the server-quoted preview's base price |
+| Group nesting | **M18.1a** | ADR-058 |
 
-📌 **Recommended: 18-6b, then 18-8's exit audit.** Phase 18's exit is *"merchants
-can structure a complex product into legible sections; ordering persists and
-renders identically in dashboard, preview and storefront"* — that is now true,
-and closer than the stage table suggests.
+🔴 **18-5 is reconsidered and 18-7 cannot proceed on its written grounds**
+(ADR-064). 18-5's "help text" shipped in 18-6a; what remains is group-level
+`columns`/`swatchSize`, which the option-level fields now cover one level down.
+18-7's stated example was delivered per option in 18-3a, and what remains needs
+a condition spanning options plus a counting operator — **neither exists in any
+of the three evaluators**.
 
 ⏸ **Two stages are deferred with named reasons, not forgotten**: **18-4a**
 (`stepped`, ADR-063 — a wizard collides with the rule runtime's visibility
@@ -21979,6 +21973,83 @@ were written before the fix rather than after. Measured now:
 | Order meta | `opt-a => 'Array'` + PHP notice | `Extras => 'Red, Blue'` |
 | Stored payload | freeze discarded, **line priced live** | `{"opt-a":300}`, signed |
 | Renderer | one shared field name, last value wins | `name="…[]"`, every box posts |
+
+---
+
+### ✅ Stage 18-6b complete — a choice shows its price, 2026-09-14
+
+**`price_display` stops being normalised-and-unread**, which is what ADR-064
+kept it out of withdrawal to do.
+
+🔴 **This is the FIRST per-choice price the plugin has ever shown.** Prices
+reached the page only as `data-optionia-price` attributes for the running
+estimate; no template rendered one. So `price_display` was never a switch
+between two renderings — `delta` *is* the rendering, and `hidden` its off state.
+
+#### ⏸ `total` waits for Phase 21, and the runtime already said so
+
+A total is `base + option`, and no option template has the base price. That
+alone is plumbing. **The blocker is what the plumbing would break:**
+
+> *"The estimate is an options **delta**, not a product total: it sums the
+> `fixed` prices of the selected values, and **none of those change when a
+> customer picks a different size**."*
+
+That is why `frontend.js` listens to **no** WooCommerce variation events. A
+printed total would be stale the moment a customer picks a size — a wrong price
+beside a control, worse than no price. ⚠️ **And the plugin already names the
+owner**: *"an estimate that knows a variation's base price… is **Phase 21's
+server-quoted preview**."*
+
+`total` falls back to `delta` and **the dashboard omits it** — the guard ADR-063
+uses for `stepped`.
+
+#### What landed
+
+| Piece | Note |
+|---|---|
+| `OptionView::value_price()` | One formatter for all five choice templates |
+| `OptionView::money()` | Matches `frontend.js` **field for field** |
+| Four templates | `<span class="optionia-value__price">` beside the label |
+| `dropdown` | Appended to the option **text** — an `<option>` may hold only text |
+| `PRICE_FRAMINGS` | Two of the API's three, plus `priceFramingFor()` |
+
+🔴 **The two formatters are byte-identical**, verified across four amounts
+including thousands separation. A price printed by PHP and a total summed by JS
+that disagreed about a separator would read as two currencies on one page.
+
+⚠️ **Only `fixed` prints**, matching `PRICEABLE` in the runtime — *"a storefront
+guessing… would show a total the server disagrees with, which is worse than
+showing none."* A zero prints nothing, and a discount prints its own sign.
+
+✅ **`hidden` keeps the data attribute.** The running estimate is a separate
+surface with its own opt-out; removing it would silently disable that too.
+
+#### ✏️ A gate caught a variable name, and it was right to
+
+`check-wire-keys.sh` reported *"the plugin reads rule(s) the API never
+publishes: amount_minor type"*. My `value_price()` had read the **price** config
+through a variable named `$config` — the name the gate scans for to learn which
+*validation and display* rules the plugin reads. A true statement about the
+wrong contract. Renamed to `$price`, and the reason is recorded at the
+declaration so the next reader does not undo it.
+
+📌 **`mergeConfig` now has a real collision.** Until this stage its case was
+hypothetical: `columns` is choice-only and `characterCounter` text-only, so no
+option produced both. `priceDisplay` and `columns` are **both** choice-level, so
+a merchant setting columns and hiding prices produces exactly the overlap it was
+written for.
+
+#### Mutation results — six mutants, six killed
+
+| Mutant | Killed by |
+|---|---|
+| `hidden` ignored | `hidden prints nothing` + the renderer's estimate test |
+| Unpriceable types printed as fixed | `an unpriceable type prints nothing` |
+| A zero printed as `+0.00` | `a zero prints nothing` |
+| A discount printed with `+` | `a discount prints a minus` |
+| `total` offered in the picker | `does not offer total` + `offers the two framings that render` |
+| `delta` published as a no-op | `sends no display for the default framing` |
 
 ---
 
