@@ -147,15 +147,40 @@ export class OptionsService {
       return before;
     }
 
-    // Re-validate against the *merged* result, not the patch alone: a partial
-    // update can produce a combination that is invalid even though each field
-    // looked fine on its own.
+    /*
+     * Re-validate against the *merged* result, not the patch alone: a partial
+     * update can produce a combination that is invalid even though each field
+     * looked fine on its own.
+     *
+     * 🔴 **A STORED value is forgiven a key its schema no longer recognises; a
+     * submitted one is not.** The display schemas are `.strict()`, so a row
+     * holding a withdrawn field would fail here and leave the option
+     * **permanently uneditable** — the merchant could not change its label, its
+     * price, or clear the offending field, because clearing it requires an
+     * update. Measured after M18.6a withdrew two display fields (ADR-064).
+     *
+     * ⚠️ **ADR-056 is the precedent.** Withdrawing the `show` rule action
+     * degraded harmlessly because every evaluator **ignores** an action it does
+     * not know. `.strict()` **rejects**, so a config withdrawal needs this to
+     * degrade the same way.
+     *
+     * `stripWithdrawn` touches only what came from the database. A merchant
+     * sending an unknown key still gets an error.
+     */
+    const definition = this.validator.describe(before.presentation);
+
     this.validator.assertValidOption(before.presentation, {
       valueKind: before.valueKind,
       cardinality: before.cardinality,
-      validation: 'validation' in patch ? patch.validation : before.validation,
+      validation:
+        'validation' in patch
+          ? patch.validation
+          : this.validator.stripWithdrawn(definition.validationSchema, before.validation),
       pricing: 'pricing' in patch ? patch.pricing : before.pricing,
-      display: 'display' in patch ? patch.display : before.display,
+      display:
+        'display' in patch
+          ? patch.display
+          : this.validator.stripWithdrawn(definition.displaySchema, before.display),
     });
 
     await this.options.update({ id } as never, patch as never);

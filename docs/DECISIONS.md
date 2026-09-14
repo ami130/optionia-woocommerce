@@ -5678,3 +5678,53 @@ of M18.3a, so removing them from the schema without removing them from
 **The withdrawal is recorded where the field was, not only here.** ADR-055 and
 ADR-056 set that precedent: a reader who finds the gap should find the reason at
 the same time.
+
+### ✏️ Amended — the stored-row question this ADR failed to ask
+
+**This decision shipped without asking what happens to a row that already holds
+a withdrawn key.** An audit of the stage found the answer, and it was bad.
+
+`OptionsService.update()` re-validates the **stored** `validation`, `pricing`
+and `display` — correctly, because a partial patch can produce a combination
+that is invalid even though each field looked fine alone. The display schemas
+are `.strict()`. Measured:
+
+```text
+a stored row with a withdrawn key:
+  parses? false
+  -> unrecognized_keys ["labelPlacement"]
+```
+
+🔴 **That option becomes permanently uneditable.** Not its label, not its price,
+not anything — and the merchant cannot clear the offending field either, because
+clearing it requires an update.
+
+⚠️ **ADR-056 asked this question and this one did not.** Withdrawing `show`
+reasoned about stored rows explicitly — *"a stored `show` row degrades to a rule
+that does nothing… no migration, and no behaviour change for any existing
+store"* — because every evaluator **ignores** an action it does not know.
+`.strict()` does the opposite: it **rejects**. The two withdrawals are not
+analogous, and treating them as such was the error.
+
+**Fixed by `OptionTypeValidator.stripWithdrawn()`**, applied to stored config on
+the way into re-validation. It removes only keys the schema reports as
+`unrecognized_keys`, so a value that breaks a bound is left for
+`assertValidOption` to refuse: this forgives a key that no longer exists, never
+a value that was always wrong. Zod names the keys, so the strip cannot drift
+from the schema the way a hand-maintained allow-list would.
+
+🔴 **Applied to stored config only, never to a request.** A merchant sending an
+unknown key still gets an error. Silently accepting a typo on create is how a
+field comes to be stored and read by nothing — the state this ADR withdrew two
+fields for.
+
+**Bounds, measured rather than assumed:** the dashboard never sent either field
+(checked across git history), neither is seeded, and **publish does not
+re-validate**, so an existing store keeps selling. Duplication copies `display`
+unvalidated, so it propagates rather than refuses. Unreachable in practice
+today — and reachable through the public API, which is the standard by which
+M18.3a's `radio`-at-`many` was treated as real and guarded.
+
+📌 **The obligation this leaves behind:** any future withdrawal from a
+`.strict()` schema inherits the fix rather than needing its own. That is the
+reason it lives in the validator rather than in a migration.

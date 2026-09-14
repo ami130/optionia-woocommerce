@@ -115,6 +115,75 @@ export class OptionTypeValidator {
    * how the option renders — a radio and a dropdown price identically.
    */
   /**
+   * A stored config with any key its schema no longer recognises removed.
+   *
+   * 🔴 **A withdrawn field would otherwise make an option permanently
+   * uneditable.** `OptionsService.update()` re-validates the **stored**
+   * `validation`, `pricing` and `display` — correctly, because a partial patch
+   * can produce a combination that is invalid even though each field looked
+   * fine alone. But the display schemas are `.strict()`, so a row holding a key
+   * that has since been withdrawn fails with `unrecognized_keys`, and the
+   * merchant cannot change the label, the price, or anything else. They cannot
+   * even clear the offending field, because clearing it requires an update.
+   *
+   * Measured with a stored `{ columns: 3, labelPlacement: 'above' }` after
+   * M18.6a withdrew `labelPlacement` (ADR-064): `parses? false`.
+   *
+   * ⚠️ **ADR-056 is where this obligation comes from.** It withdrew the `show`
+   * rule action and reasoned about stored rows explicitly — *"a stored `show`
+   * row degrades to a rule that does nothing… no migration, and no behaviour
+   * change for any existing store"* — because every evaluator **ignores** an
+   * action it does not know. `.strict()` does the opposite: it **rejects**. So
+   * a config withdrawal needs this to degrade the same way an action
+   * withdrawal already does.
+   *
+   * 🔴 **Zod names the keys, so this cannot drift from the schema.** A
+   * hand-maintained allow-list would be a second statement of what the schema
+   * accepts, and the one that gets forgotten — the shape `bin/check-wire-keys.sh`
+   * exists to catch elsewhere.
+   *
+   * ⚠️ **Applied on the way IN to validation, never on the way in from a
+   * request.** A merchant submitting an unknown key still gets an error:
+   * `assertValidOption` is unchanged, and only a value already in the database
+   * is forgiven. Silently accepting a typo on create is how a field comes to be
+   * stored and read by nothing.
+   *
+   * @param schema The schema the stored value is checked against.
+   * @param stored The value as the database holds it.
+   * @returns The value with unrecognised keys removed, or it unchanged.
+   */
+  stripWithdrawn(schema: z.ZodType, stored: unknown): unknown {
+    if (stored === null || typeof stored !== 'object' || Array.isArray(stored)) {
+      return stored;
+    }
+
+    const result = schema.safeParse(stored);
+
+    if (result.success) {
+      return stored;
+    }
+
+    const withdrawn = new Set(
+      result.error.issues
+        .filter((issue) => issue.code === 'unrecognized_keys')
+        .flatMap((issue) => (issue as unknown as { keys?: string[] }).keys ?? []),
+    );
+
+    if (withdrawn.size === 0) {
+      /*
+       * A different failure — a bound broken, a wrong type. Returned unchanged
+       * so `assertValidOption` reports it: this method forgives a key that no
+       * longer exists, not a value that was always wrong.
+       */
+      return stored;
+    }
+
+    return Object.fromEntries(
+      Object.entries(stored as Record<string, unknown>).filter(([key]) => !withdrawn.has(key)),
+    );
+  }
+
+  /**
    * The registry entry for a type, after `assertValidOption` has accepted it.
    *
    * Callers need the declared axes to fill in what a request omitted — `radio`

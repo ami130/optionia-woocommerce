@@ -3,6 +3,7 @@ import { DomainException } from '../../common/errors/domain.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import type { ErrorDetail } from '../../common/http/api-response.types';
 import { OptionTypeValidator } from './option-type.validator';
+import { findType } from './type-registry';
 
 /**
  * The API boundary.
@@ -304,4 +305,86 @@ describe('OptionTypeValidator', () => {
       expect(details).not.toHaveLength(0);
     });
   });
+
+  describe('a stored config whose schema has moved on', () => {
+    const radio = findType(Presentation.RADIO);
+
+    /**
+     * 🔴 **The defect this exists to prevent: an option nobody can edit.**
+     *
+     * `OptionsService.update()` re-validates the STORED `display`, and the
+     * display schemas are `.strict()` — so a row holding a field withdrawn in
+     * M18.6a (ADR-064) failed with `unrecognized_keys`, and the merchant could
+     * not change its label, its price, or clear the offending field, because
+     * clearing it requires an update.
+     *
+     * ⚠️ **ADR-056 is the obligation.** Withdrawing the `show` rule action
+     * degraded harmlessly because every evaluator IGNORES an action it does not
+     * know. `.strict()` REJECTS, so a config withdrawal has to be made to
+     * degrade the same way.
+     */
+    it('drops a key the schema no longer recognises', () => {
+      const stored = { columns: 3, labelPlacement: 'above', showPriceDelta: true };
+
+      expect(radio?.displaySchema.safeParse(stored).success).toBe(false);
+
+      const cleaned = validator.stripWithdrawn(radio!.displaySchema, stored);
+
+      expect(cleaned).toEqual({ columns: 3 });
+      expect(radio?.displaySchema.safeParse(cleaned).success).toBe(true);
+    });
+
+    /**
+     * 🔴 **A wrong VALUE is not forgiven, only a withdrawn KEY.**
+     *
+     * `columns: 99` breaks a bound the schema still enforces. Returning it
+     * unchanged is what keeps `assertValidOption` reporting it — a strip that
+     * swallowed every failure would turn this guard into a way of accepting
+     * anything the database happened to hold.
+     */
+    it('leaves a value that breaks a bound alone', () => {
+      expect(validator.stripWithdrawn(radio!.displaySchema, { columns: 99 })).toEqual({
+        columns: 99,
+      });
+    });
+
+    /**
+     * 🔴 **A row with BOTH problems keeps the bad value and loses the dead key.**
+     *
+     * The case that decides whether this method forgives too much: `columns:
+     * 99` breaks a bound the schema still enforces, and `labelPlacement` is
+     * withdrawn. The key goes; the bad value stays, so `assertValidOption`
+     * still refuses the update and tells the merchant which bound they broke.
+     *
+     * ⚠️ **The `unrecognized_keys` filter is redundant *today* and kept
+     * deliberately.** Measured: other issue codes carry no `keys` field, so
+     * filtering on all of them strips exactly the same set. It states the
+     * intent, and it is what stops a future Zod version — one that attached
+     * `keys` to some other issue — from turning this into a way of deleting
+     * whatever the database happened to hold.
+     */
+    it('drops the withdrawn key and keeps the invalid value', () => {
+      expect(
+        validator.stripWithdrawn(radio!.displaySchema, { columns: 99, labelPlacement: 'above' }),
+      ).toEqual({ columns: 99 });
+    });
+
+    /** A config that already parses is returned untouched. */
+    it('changes nothing when the stored value is valid', () => {
+      const stored = { columns: 2, priceDisplay: 'total' };
+
+      expect(validator.stripWithdrawn(radio!.displaySchema, stored)).toBe(stored);
+    });
+
+    /**
+     * ⚠️ **`null` is the common case** — most options store no display config
+     * at all — and it must pass through rather than becoming `{}`, which would
+     * write an empty object into every row that had none.
+     */
+    it('passes null and non-objects through', () => {
+      expect(validator.stripWithdrawn(radio!.displaySchema, null)).toBeNull();
+      expect(validator.stripWithdrawn(radio!.displaySchema, 'nonsense')).toBe('nonsense');
+    });
+  });
+
 });
