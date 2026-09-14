@@ -52,22 +52,42 @@ WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 18](#phase-18--option-groups--ordering), stage 18-2 — multi-select
-through the cart, labels, order and analytics.**
+**[Phase 18](#phase-18--option-groups--ordering), stage 18-6 — group ordering in
+the dashboard.**
 
-📌 **Analysed 2026-09-13; ADR-061 settles the design and the execution plan is
-written.** Ten findings, four blocking. Start at **step 1: coverage**, not at
-the code — `cardinality` appears in no consumer test suite, and that blind spot
-is what let 18-1 ship a live overcharge with a green suite.
+✅ **18-0 through 18-4 are done**, plus **18-3a**, which closed four findings an
+audit of the whole run turned up. Multi-select is now authorable, priced,
+bounded, frozen, displayed and replayed on reorder; group layouts are rendered
+and authorable.
 
-🔴 **The obvious fix is worse than the fence.** Relaxing the count guard leaks
-prices *between* options and freezes the wrong total under a valid signature —
-measured at a 100-minor undercharge. `deltas` becomes keyed by option id
-instead.
+⏸ **Two stages are deferred with named reasons, not forgotten**: **18-4a**
+(`stepped`, ADR-063 — a wizard collides with the rule runtime's visibility
+model) and **M18.1a** (nesting, ADR-058).
 
-✅ **No migration, measured:** the *stored* shape has always been keyed, so a
-single-value line's payload and signature are byte-identical before and after.
-Carts in flight are untouched.
+🔴 **18-6 is smaller than its name and bigger than its plan row.** The row says
+*"drag-and-drop ordering over the existing endpoints"* — but ordering **already
+works**, by move-up/move-down buttons the codebase chose deliberately:
+
+> *"Drag needs a library, does not work from a keyboard without extra handling,
+> and is awkward on the phones merchants actually use."*
+
+⚠️ **Replacing that with drag would trade working, accessible UX for a library
+and a keyboard regression.** The stage should be re-scoped or the choice
+re-affirmed — not executed as written.
+
+🔴 **The real gap is the same shape as 18-3a's F1: an endpoint the dashboard
+never calls.** `POST /option-sets/:id/reorder` takes a `ReorderGroupsDto` and is
+fully built; the dashboard has no client for it, so **a merchant cannot reorder
+groups at all** — only options within one. On a product with three sections,
+their order is whatever order they were created in, permanently.
+
+📌 **18-5 and 18-7 both need new columns and a migration.** Neither
+`minSelections` nor `columns`/`swatchSize`/`labelPlacement` exists on
+`option_groups` — a different shape from the last five stages, which all
+consumed fields already stored. ⚠️ **And 18-7 overlaps 18-3a**: M18.4's example
+is *"choose at least 2 from this group"*, which now exists per **option**. Whether
+the group-level version is a second mechanism or a real need is a decision, not
+an implementation.
 
 ✅ **18-0 and 18-1 are done.** Three ADRs, then the array path through the
 resolver: `checkbox.php` branches on `cardinality`, and the resolver accepts,
