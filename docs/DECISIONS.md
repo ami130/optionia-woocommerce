@@ -5728,3 +5728,86 @@ M18.3a's `radio`-at-`many` was treated as real and guarded.
 📌 **The obligation this leaves behind:** any future withdrawal from a
 `.strict()` schema inherits the fix rather than needing its own. That is the
 reason it lives in the validator rather than in a migration.
+
+---
+
+## ADR-065 — `price_display` ships as `delta` and `hidden`; `total` waits for Phase 21
+
+**Status:** accepted · **Phase 18, Stage 18-6b**
+
+### Context
+
+ADR-064 kept `price_display` rather than withdrawing it alongside
+`label_placement` and `show_price_delta`, on the grounds that it has a clear
+consumer and a written default — *"`delta` is the honest framing: an option adds
+to a price the customer has already seen"* — so the distance between carried and
+consumed is **work, not a question**.
+
+Doing that work found the question.
+
+**`delta` is `+£10`, `total` is `£60`, `hidden` shows none.** The first and third
+are renderings of what the template already holds. The second is not: a total is
+`base + option`, and **no option template has the base price**. The renderer's
+view model does not carry one.
+
+That alone would be plumbing. The blocker is what the plumbing would break.
+
+🔴 **The storefront runtime is built on the estimate being a delta**, and says so
+where the decision was made:
+
+> *"The estimate is an options **delta**, not a product total: it sums the
+> `fixed` prices of the selected values, and **none of those change when a
+> customer picks a different size**. There is nothing to recompute, so a listener
+> would re-run the same arithmetic on the same inputs."*
+
+That is why `frontend.js` listens to **no** WooCommerce variation events. A
+per-choice `total` would invalidate it: on a variable product the base changes
+after render, so every printed total would be stale the moment a customer picks
+a size — a wrong price beside a control, which is worse than no price.
+
+⚠️ **And the plugin already names who owns this.** The same note lists what would
+change the decision: *"an estimate that knows a variation's base price… is
+**Phase 21's server-quoted preview**."*
+
+### Decision
+
+**M18.6b renders `delta` and `hidden`. `total` renders as `delta` until Phase
+21**, and the dashboard does not offer it.
+
+**1. `delta` is built, and it is the first per-choice price this plugin shows.**
+No choice template renders a price today — prices reach the DOM only as
+`data-optionia-price` attributes for the running estimate. So this is not a
+switch between two existing renderings; it is the rendering, with `hidden` as
+its off state.
+
+**2. `hidden` is honoured exactly.** A merchant who says "show no prices" gets
+none — the data attributes stay, because the estimate is a separate surface with
+its own opt-out, and removing them would silently disable that too.
+
+**3. `total` falls back to `delta`, and the dashboard omits it** — the same
+shape ADR-063 gave `stepped`. Offering a third choice that behaves like the
+first is how a merchant discovers a gap in production; falling back keeps a
+document from a newer cloud rendering rather than breaking.
+
+**4. Only `fixed` prices are shown**, matching `PRICEABLE` in the runtime. A
+`percentage` or `per_unit` value shows no price rather than a guessed one — the
+rule the estimate already follows, for the reason it already records: *"a
+storefront guessing at any of those would show a total the server disagrees
+with, which is worse than showing none."*
+
+### Consequences
+
+**`price_display` stops being normalised-and-unread**, which is what ADR-064
+committed to. Two of its three values do the whole job for the pricing types the
+storefront can compute.
+
+📌 **Phase 21 inherits `total`, and it is already scoped there.** When the
+server-quoted preview lands, the base price arrives with it and the variation
+staleness disappears — the value becomes renderable without guessing, and the
+dashboard can offer it. Recorded here so it is a dependency rather than a
+forgotten enum member.
+
+⚠️ **The risk this accepts is the same one ADR-063 accepted for `stepped`**: a
+value that stays unbuilt and becomes the excuse. The guard is the same — it
+remains in the enum, falls back visibly, and **no merchant can select it**, so
+nobody discovers it silently does nothing.
