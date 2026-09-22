@@ -1,6 +1,8 @@
 'use client';
 
 import { useMutation } from '@tanstack/react-query';
+
+import type { HistoryEntry } from '@/lib/option-sets/history';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -26,19 +28,48 @@ import { GROUP_LAYOUTS } from '@/lib/schemas/option-sets';
 export function GroupLayout({
   group,
   canEdit,
-  onChanged,
+  onPatched,
+  onRecord,
 }: {
   group: AuthoringGroup;
   canEdit: boolean;
-  onChanged: () => void;
+
+  /**
+   * 🔴 **Hands back the updated group instead of asking for a refetch.**
+   * `updateGroup` answers with the row it wrote, so the caller patches its
+   * cached tree from the response — one request per edit becomes zero.
+   */
+  onPatched: (group: AuthoringGroup) => void;
+
+  /** Record the change so it can be undone (M20.10). */
+  onRecord: (entry: HistoryEntry) => void;
 }) {
   const [open, setOpen] = useState(false);
 
   const save = useMutation({
     mutationFn: (changes: { displayType?: string; isCollapsible?: boolean }) =>
       updateGroup(group.id, changes),
-    onSuccess: () => {
-      onChanged();
+    onSuccess: (updated) => {
+      onPatched(updated);
+
+      /* The inverse is the layout this group had, still on `group` here. */
+      onRecord({
+        label: `Layout: ${group.label}`,
+        inverse: async () =>
+          void onPatched(
+            await updateGroup(group.id, {
+              displayType: group.displayType,
+              isCollapsible: group.isCollapsible,
+            }),
+          ),
+        replay: async () =>
+          void onPatched(
+            await updateGroup(group.id, {
+              displayType: updated.displayType,
+              isCollapsible: updated.isCollapsible,
+            }),
+          ),
+      });
     },
   });
 

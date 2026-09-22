@@ -3,11 +3,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import Link from 'next/link';
+
 import { AsyncState, EmptyState, ErrorState } from '@/components/layout/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useSession } from '@/components/providers/session-provider';
+import { invalidateActivation } from '@/lib/activation/cache';
 import { roleCan } from '@/lib/auth/capabilities';
 import { disconnectStore, listStores, type StoreSummary } from '@/lib/stores/api';
 import { healthLabel, isProblem, storeHealth } from '@/lib/stores/health';
@@ -59,15 +62,22 @@ export default function StoresPage() {
               'Install the Optionia plugin on your WooCommerce site and press Connect. ' +
               'A connection you have started but not yet approved will not appear here until you do.'
             }
+            /*
+             * 🔴 **This pointed at `https://wordpress.org/plugins/`** — the
+             * generic directory index, where Optionia is not listed and will not
+             * be until M35.2. It taught a merchant nothing at the moment they
+             * most needed teaching. M20b.3 built the screen it now points at.
+             */
+            /*
+             * ⚠️ **A button, not an underlined link.** `EmptyState` names this
+             * slot `action` and M20b.5 asks for "one button that fills it" — and
+             * it is the only action on this screen, so it should look like one.
+             * The option-sets empty state already does.
+             */
             action={
-              <a
-                className="text-sm underline"
-                href="https://wordpress.org/plugins/"
-                target="_blank"
-                rel="noreferrer"
-              >
+              <Link href="/install" className={cn(buttonVariants({ variant: 'default' }))}>
                 How to install the plugin
-              </a>
+              </Link>
             }
           />
         }
@@ -79,7 +89,12 @@ export default function StoresPage() {
                 <StoreRow
                   store={store}
                   canDisconnect={canDisconnect}
-                  onDisconnected={() => void queryClient.invalidateQueries({ queryKey: ['stores'] })}
+                  onDisconnected={() => {
+                    void queryClient.invalidateQueries({ queryKey: ['stores'] });
+                    /* `connected` asks about *current* state, so a disconnect
+                     * moves the funnel backwards and the checklist must say so. */
+                    invalidateActivation(queryClient);
+                  }}
                 />
               </li>
             ))}

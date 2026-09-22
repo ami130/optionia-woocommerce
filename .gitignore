@@ -22,7 +22,24 @@
 
 # misc
 .DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp
+
+# Keys and certificates. `*.pem` was here from the Next.js template; the rest
+# were added 2026-09-22 so one file extension is not the whole defence.
 *.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+
+# A local database file is data, not code. WordPress under Studio uses SQLite,
+# and a stray copy here would carry real rows.
+*.sqlite
+*.sqlite3
 
 # debug
 npm-debug.log*

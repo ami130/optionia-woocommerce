@@ -458,6 +458,131 @@ export function acceptsColumns(presentation: string): boolean {
  */
 export const COLUMN_CHOICES = [1, 2, 3, 4, 5, 6] as const;
 
+/** A tooltip's character cap, copied from `choiceDisplaySchema`. */
+export const MAX_TOOLTIP = 300;
+
+/**
+ * An option's presentation extras: whether it starts folded, and its tooltip.
+ *
+ * 🔴 **Both were read by the storefront and settable nowhere.**
+ * `collapsed_by_default` is rendered by **all fourteen** option templates, and
+ * `tooltip` reaches every control through `OptionView::describedby_blocks()`.
+ *
+ * ⚠️ **A tooltip is announced, not hovered** — the plugin is explicit that a
+ * tooltip reachable only by hover *"is invisible to a large group of
+ * customers"*, so it is joined to the control by `aria-describedby` rather than
+ * a `title`. That makes it help text a merchant should write as a sentence, not
+ * a label, and the form says so.
+ *
+ * Each is sent only when it differs from what an option renders as by default,
+ * so an ordinary option publishes no `display` object at all.
+ */
+export function presentationFor(
+  collapsed: boolean,
+  tooltip: string,
+): { display?: Record<string, unknown> } {
+  const display: Record<string, unknown> = {};
+
+  if (collapsed) {
+    display.collapsedByDefault = true;
+  }
+
+  const trimmed = tooltip.trim();
+
+  if (trimmed !== '') {
+    display.tooltip = trimmed;
+  }
+
+  return Object.keys(display).length > 0 ? { display } : {};
+}
+
+/**
+ * The sizes a swatch may be drawn at.
+ *
+ * 🔴 **Read by `color_swatch.php` and `image_swatch.php` and settable
+ * nowhere** — one of five fields M18.8's exit audit found in that state, the
+ * fifth occurrence in this phase of a capability built on both sides with no
+ * way for a merchant to reach it.
+ *
+ * ⚠️ **Offered for the two swatch types only**, though the shared choice schema
+ * accepts it for all five. A radio has no swatch to size, and only those two
+ * templates render the class — offering it elsewhere would be a control that
+ * changes nothing.
+ */
+export const SWATCH_SIZES = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' },
+] as const;
+
+/** Whether an option is drawn as swatches, and so has a size to set. */
+export function acceptsSwatchSize(presentation: string): boolean {
+  return presentation === 'color_swatch' || presentation === 'image_swatch';
+}
+
+/**
+ * How many values a multi-select accepts.
+ *
+ * 🔴 **M18.3a enforced these and left them unauthorable.** That stage closed a
+ * finding — *"`minSelections`/`maxSelections` enforced nowhere"* — by teaching
+ * the resolver to refuse an out-of-bounds selection, and no merchant could set
+ * a bound. By its own standard it was half-delivered.
+ *
+ * Measured before this: a merchant with eight toppings at 1.50 who wanted
+ * *"pick up to three"* had no way to say so — all eight were accepted, at 22.00.
+ *
+ * ⚠️ **Bounds copied from `choiceValidationSchema`**, which the API enforces:
+ * `minSelections` is `0..100` and `maxSelections` is `1..100`.
+ */
+export const MAX_SELECTION_BOUND = 100;
+
+/**
+ * The `validation` config for a multi-select's selection counts.
+ *
+ * 🔴 **Only for an option that takes several answers.** A bound on a
+ * single-value option is a count over one thing — the API accepts it, and
+ * `SelectionResolver` enforces it, so a `min_selections: 2` on a `one` option
+ * refuses every selection. Offering it there would let a merchant build an
+ * unsellable option.
+ *
+ * Each half is sent only when set, so an unbounded multi-select publishes no
+ * empty object.
+ */
+export function selectionBoundsFor(
+  presentation: string,
+  takesMany: boolean,
+  min: number | null,
+  max: number | null,
+): { validation?: Record<string, unknown> } {
+  if (!acceptsManyAnswers(presentation) || !takesMany) {
+    return {};
+  }
+
+  const validation: Record<string, unknown> = {};
+
+  if (min !== null) {
+    validation.minSelections = min;
+  }
+
+  if (max !== null) {
+    validation.maxSelections = max;
+  }
+
+  return Object.keys(validation).length > 0 ? { validation } : {};
+}
+
+/**
+ * Whether a pair of selection bounds contradict each other.
+ *
+ * ⚠️ **The API cross-checks this** (`superRefine`), so a form that did not
+ * would let a merchant submit and be handed *"Minimum selections (3) exceeds
+ * the maximum (2)"* — an error they could have been told about before
+ * submitting.
+ */
+export function boundsContradict(min: number | null, max: number | null): boolean {
+  return min !== null && max !== null && min > max;
+}
+
 /**
  * How a price is written beside a choice.
  *
@@ -505,6 +630,23 @@ export function priceFramingFor(
   }
 
   return { display: { priceDisplay: framing } };
+}
+
+/**
+ * The `display` config for a swatch option's size.
+ *
+ * `medium` is what a swatch renders as when it says nothing — `OptionView`
+ * falls back to it — so it is sent only when the merchant asks for another.
+ */
+export function swatchSizeFor(
+  presentation: string,
+  size: string,
+): { display?: Record<string, unknown> } {
+  if (!acceptsSwatchSize(presentation) || size === 'medium') {
+    return {};
+  }
+
+  return { display: { swatchSize: size } };
 }
 
 /**
@@ -656,3 +798,143 @@ export const OPTION_SET_LIMITS = {
   MAX_VALUE_LABEL,
   KEY_PATTERN,
 } as const;
+
+/**
+ * A numeric field a merchant types, where empty means "unset".
+ *
+ * 🔴 **The input is a STRING and the payload wants a number-or-null.** The
+ * editor does this by hand in six places —
+ * `text.trim() === '' ? null : Number(text)` — and hand-written coercion is
+ * where a `0` becomes `null`, because `Number('') === 0` and `'0'` is falsy as
+ * a string only if you test it wrongly. Modelled once, here.
+ *
+ * ⚠️ **`z.coerce.number()` is deliberately NOT used.** It maps `''` to `0`,
+ * which for `minLength` means "refuse every answer" rather than "no minimum" —
+ * the exact defect `optionSchema`'s own message warns about.
+ */
+const optionalCount = (max: number) =>
+  z
+    .string()
+    .trim()
+    .transform((value) => (value === '' ? null : Number(value)))
+    .refine((value) => value === null || Number.isInteger(value), 'Whole numbers only.')
+    .refine((value) => value === null || value >= 1, 'Zero would refuse every answer.')
+    .refine((value) => value === null || value <= max, 'That number is too large.');
+
+/**
+ * The rest of what the option form collects (20-2b).
+ *
+ * 📌 **Separate from `optionSchema`, not merged into it.** That schema is the
+ * API's shape — `key`, `label`, `presentation`, `isRequired`, `maxLength` —
+ * and is used where a payload is validated. These seven are *form* fields that
+ * feed the config helpers (`layoutFor`, `priceFramingFor`, `swatchSizeFor`,
+ * `presentationFor`, `selectionBoundsFor`) rather than the payload directly.
+ * Merging them would make every caller of `optionSchema` carry fields the API
+ * never sees.
+ *
+ * 🔴 **PENDING, not dead — and nothing in the build can tell the difference.**
+ * Its caller is the `react-hook-form` migration of `AddOption` (20-2c), which
+ * has not landed; today it is imported by its own tests alone.
+ * `check-reachable` cannot see this: that gate works at **module** level, and
+ * this file is reachable through its other exports. Its docblock records the
+ * same trap — *"three rule modules sat with no caller… nothing here could tell
+ * pending from dead, and a reader had no way to know which."*
+ *
+ * So it is written here instead. If the migration is abandoned, **delete this
+ * schema** rather than leave it looking like an oversight.
+ *
+ * ⚠️ **`keyTouched` is absent and must stay absent.** It records whether a
+ * merchant has edited the key so the label can stop auto-filling it — UI
+ * bookkeeping, not data. A form model that carries it would validate it, reset
+ * it, and eventually send it.
+ */
+export const optionFormExtrasSchema = z.object({
+  /** Several answers rather than one. Immutable after creation. */
+  takesMany: z.boolean(),
+
+  /** Columns the choices are drawn in; `1` is a vertical list. */
+  columns: z.number().int().min(1).max(COLUMN_CHOICES[COLUMN_CHOICES.length - 1]),
+
+  /** How a price is written beside each choice. */
+  priceFraming: z.enum(PRICE_FRAMINGS.map((framing) => framing.value) as [string, ...string[]]),
+
+  /** Swatch dimensions, for the two swatch types. */
+  swatchSize: z.enum(SWATCH_SIZES.map((size) => size.value) as [string, ...string[]]),
+
+  /** Rendered collapsed by default. */
+  collapsed: z.boolean(),
+
+  /** Help text shown beside the label. */
+  tooltip: z.string().trim().max(MAX_TOOLTIP, 'That help text is too long.'),
+
+  /** Selection bounds, for an option that takes several answers. */
+  minSelections: optionalCount(MAX_SELECTION_BOUND),
+  maxSelections: optionalCount(MAX_SELECTION_BOUND),
+});
+
+/**
+ * Every field the option form holds, as one schema (20-2c).
+ *
+ * 🔴 **The form's shape, which is NOT the API's.** `optionSchema` validates the
+ * payload and is used wherever a request is checked. This is what `useForm`
+ * needs: the same identity fields, the seven that feed the config helpers, and
+ * the four numeric fields **as the strings a merchant types**.
+ *
+ * ⚠️ **The `*Text` fields stay strings here.** They are converted at
+ * payload-build time by the nine `accepts*(presentation)` guards, which is what
+ * keeps a limit typed for a text field out of a radio's payload. Coercing them
+ * in the schema would move that decision away from the guards and break the
+ * behaviour `add-option.payload.test.tsx` pins.
+ *
+ * ⚠️ **Declared, not reached for through `.shape`.** `optionSchema` ends in a
+ * `.superRefine`, which makes it a `ZodEffects` with no `.shape` at all — so the
+ * identity fields are built from the same helpers it uses. The helpers are the
+ * shared definition; the two schemas are two views of them.
+ *
+ * 📌 **`keyTouched` is absent**, for the reason `optionFormExtrasSchema`
+ * records: it is UI bookkeeping, not data.
+ */
+export const optionFormSchema = z.object({
+  key: key(MAX_OPTION_KEY),
+  label: text(MAX_OPTION_LABEL, 'Give this option a label.', 'That label is too long.'),
+  presentation: z.enum(AUTHORABLE_TYPES.map((type) => type.value) as [string, ...string[]]),
+  isRequired: z.boolean(),
+
+  takesMany: z.boolean(),
+  columns: z.number().int().min(1).max(COLUMN_CHOICES[COLUMN_CHOICES.length - 1]),
+  priceFraming: z.enum(PRICE_FRAMINGS.map((framing) => framing.value) as [string, ...string[]]),
+  swatchSize: z.enum(SWATCH_SIZES.map((size) => size.value) as [string, ...string[]]),
+  collapsed: z.boolean(),
+  tooltip: z.string().trim().max(MAX_TOOLTIP, 'That help text is too long.'),
+
+  minSelText: z.string(),
+  maxSelText: z.string(),
+  maxLengthText: z.string(),
+  minLengthText: z.string(),
+}).superRefine((values, ctx) => {
+  /*
+   * 🔴 **The same cross-field rule `optionSchema` carries, and leaving it out
+   * was a regression.** `optionSchema.superRefine` reports *"A minimum of 50
+   * cannot fit inside a limit of 10"* against `minLength`, and the form used to
+   * render it because `issue()` read that parse directly. Once `issue()` moved
+   * to `formState`, the message vanished — the form schema had no such rule.
+   * Measured before and after: the text was present pre-migration and absent
+   * after.
+   *
+   * ⚠️ **Read from the typed strings**, because that is what this schema holds.
+   * An empty field means "no bound" and cannot contradict anything.
+   */
+  const min = values.minLengthText.trim() === '' ? null : Number(values.minLengthText);
+  const max = values.maxLengthText.trim() === '' ? null : Number(values.maxLengthText);
+
+  if (min !== null && max !== null && min > max) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['minLength'],
+      message: `A minimum of ${min} cannot fit inside a limit of ${max}.`,
+    });
+  }
+});
+
+/** What `useForm` holds for the option form. */
+export type OptionFormValues = z.infer<typeof optionFormSchema>;

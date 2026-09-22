@@ -10,18 +10,27 @@ import {
   optionSchema,
   COLUMN_CHOICES,
   PRICE_FRAMINGS,
+  SWATCH_SIZES,
   acceptsColumns,
   acceptsLength,
   acceptsManyAnswers,
   configFor,
+  acceptsSwatchSize,
+  boundsContradict,
   layoutFor,
   mergeConfig,
+  presentationFor,
   priceFramingFor,
+  selectionBoundsFor,
+  swatchSizeFor,
   keyFromLabel,
   swatchFieldsFor,
   takesGroupLabel,
   takesValues,
   valueSchema,
+  optionFormExtrasSchema,
+  MAX_SELECTION_BOUND,
+  MAX_TOOLTIP,
 } from './option-sets';
 
 const UUID = '0f3c9a1e-4b2d-4c6f-9a11-2e5d7c8b3f04';
@@ -836,5 +845,219 @@ describe('how a price is written beside a choice (M18.6b)', () => {
     expect(mergeConfig(layoutFor('radio', 3), priceFramingFor('radio', 'hidden'))).toEqual({
       display: { columns: 3, priceDisplay: 'hidden' },
     });
+  });
+});
+
+describe('the five fields the exit audit found unauthorable (M18.8a)', () => {
+  /**
+   * 🔴 **M18.3a enforced these bounds and left them unauthorable.**
+   *
+   * That stage closed a finding — *"minSelections/maxSelections enforced
+   * nowhere"* — by teaching the resolver to refuse an out-of-bounds selection,
+   * and no merchant could set one. By its own standard it was half-delivered,
+   * which is the fifth occurrence in this phase of a capability built on both
+   * sides with no way to reach it.
+   */
+  it('sends the selection bounds a merchant sets', () => {
+    expect(selectionBoundsFor('checkbox', true, 1, 3)).toEqual({
+      validation: { minSelections: 1, maxSelections: 3 },
+    });
+  });
+
+  it('sends only the half that is set', () => {
+    expect(selectionBoundsFor('checkbox', true, null, 3)).toEqual({
+      validation: { maxSelections: 3 },
+    });
+    expect(selectionBoundsFor('checkbox', true, 2, null)).toEqual({
+      validation: { minSelections: 2 },
+    });
+  });
+
+  /**
+   * 🔴 **Never for a single-value option.** A bound there is a count over one
+   * thing, and `SelectionResolver` enforces it — `min_selections: 2` on a `one`
+   * option refuses every selection, so offering it would let a merchant build
+   * an **unsellable** option.
+   */
+  it('sends no bounds for an option that takes one answer', () => {
+    expect(selectionBoundsFor('checkbox', false, 2, 5)).toEqual({});
+    expect(selectionBoundsFor('radio', true, 2, 5)).toEqual({});
+  });
+
+  /**
+   * ⚠️ **The API cross-checks this**, so a form that did not would let a
+   * merchant submit and be handed *"Minimum selections (3) exceeds the maximum
+   * (2)"* — an error they could have been told about before submitting.
+   */
+  it('spots a minimum above its maximum', () => {
+    expect(boundsContradict(3, 2)).toBe(true);
+    expect(boundsContradict(2, 2)).toBe(false);
+    expect(boundsContradict(null, 2)).toBe(false);
+    expect(boundsContradict(3, null)).toBe(false);
+  });
+
+  /**
+   * ⚠️ **Swatch size is offered for the two swatch types only**, though the
+   * shared choice schema accepts it for all five. Only those two templates
+   * render the class; a radio has no swatch to size.
+   */
+  it('offers a swatch size only where one is drawn', () => {
+    expect(acceptsSwatchSize('color_swatch')).toBe(true);
+    expect(acceptsSwatchSize('image_swatch')).toBe(true);
+    ['radio', 'checkbox', 'dropdown', 'text_field'].forEach((presentation) => {
+      expect(acceptsSwatchSize(presentation)).toBe(false);
+    });
+  });
+
+  /** `medium` is the storefront's own fallback, so it publishes nothing. */
+  it('sends no swatch size for the default', () => {
+    expect(swatchSizeFor('color_swatch', 'medium')).toEqual({});
+    expect(swatchSizeFor('color_swatch', 'large')).toEqual({
+      display: { swatchSize: 'large' },
+    });
+  });
+
+  it('offers exactly the sizes the API accepts', () => {
+    expect(SWATCH_SIZES.map((size) => size.value)).toEqual(['small', 'medium', 'large']);
+  });
+
+  /**
+   * 🔴 **`collapsed_by_default` is rendered by all fourteen templates and
+   * `tooltip` reaches every control** through `describedby_blocks()`. Both were
+   * settable nowhere.
+   */
+  it('sends the presentation extras a merchant sets', () => {
+    expect(presentationFor(true, 'Pick a finish.')).toEqual({
+      display: { collapsedByDefault: true, tooltip: 'Pick a finish.' },
+    });
+  });
+
+  /** ⚠️ A whitespace-only tooltip is nothing, not a blank one. */
+  it('sends nothing for the defaults, and trims a tooltip', () => {
+    expect(presentationFor(false, '   ')).toEqual({});
+    expect(presentationFor(false, '  Trim me.  ')).toEqual({
+      display: { tooltip: 'Trim me.' },
+    });
+  });
+
+  /**
+   * 🔴 **Five parts, one `display` object, and one `validation` object.**
+   *
+   * The case `mergeConfig` exists for, now at full width: a merchant setting
+   * columns, hiding prices, sizing swatches, folding the option and bounding
+   * its selections produces five parts that must combine rather than replace.
+   */
+  it('merges every part into one config', () => {
+    expect(
+      mergeConfig(
+        layoutFor('color_swatch', 3),
+        priceFramingFor('color_swatch', 'hidden'),
+        swatchSizeFor('color_swatch', 'large'),
+        presentationFor(true, 'Pick a finish.'),
+        selectionBoundsFor('checkbox', true, 1, 3),
+      ),
+    ).toEqual({
+      validation: { minSelections: 1, maxSelections: 3 },
+      display: {
+        columns: 3,
+        priceDisplay: 'hidden',
+        swatchSize: 'large',
+        collapsedByDefault: true,
+        tooltip: 'Pick a finish.',
+      },
+    });
+  });
+
+  /** An option left entirely at its defaults publishes no config at all. */
+  it('publishes nothing when everything is default', () => {
+    expect(
+      mergeConfig(
+        layoutFor('radio', 1),
+        priceFramingFor('radio', 'delta'),
+        swatchSizeFor('radio', 'medium'),
+        presentationFor(false, ''),
+        selectionBoundsFor('radio', false, null, null),
+      ),
+    ).toEqual({});
+  });
+});
+
+describe('optionFormExtrasSchema (20-2b)', () => {
+  const valid = {
+    takesMany: false,
+    columns: 1,
+    priceFraming: 'delta',
+    swatchSize: 'medium',
+    collapsed: false,
+    tooltip: '',
+    minSelections: '',
+    maxSelections: '',
+  };
+
+  it('accepts the form’s defaults', () => {
+    expect(optionFormExtrasSchema.safeParse(valid).success).toBe(true);
+  });
+
+  /**
+   * 🔴 **Empty means "no bound", NOT zero.** `z.coerce.number()` maps `''` to
+   * `0`, and a `minSelections` of zero is the one value `optionSchema`'s own
+   * message calls out — *"a limit of zero would refuse every answer"*. The
+   * editor hand-wrote this check in six places; this is the one that holds it.
+   */
+  it('reads an empty bound as null rather than zero', () => {
+    const parsed = optionFormExtrasSchema.parse({ ...valid, minSelections: '  ' });
+
+    expect(parsed.minSelections).toBeNull();
+  });
+
+  it('reads a typed bound as a number', () => {
+    expect(optionFormExtrasSchema.parse({ ...valid, maxSelections: '3' }).maxSelections).toBe(3);
+  });
+
+  it.each(['0', '-1'])('refuses a bound of %s', (value) => {
+    expect(optionFormExtrasSchema.safeParse({ ...valid, minSelections: value }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a fractional bound', () => {
+    expect(optionFormExtrasSchema.safeParse({ ...valid, minSelections: '1.5' }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a bound above the API’s ceiling', () => {
+    expect(
+      optionFormExtrasSchema.safeParse({
+        ...valid,
+        maxSelections: String(MAX_SELECTION_BOUND + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['nonsense', 'large'])('refuses %s as a price framing', (framing) => {
+    expect(optionFormExtrasSchema.safeParse({ ...valid, priceFraming: framing }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a swatch size outside the registry', () => {
+    expect(optionFormExtrasSchema.safeParse({ ...valid, swatchSize: 'huge' }).success).toBe(false);
+  });
+
+  it('refuses a tooltip longer than the limit', () => {
+    expect(
+      optionFormExtrasSchema.safeParse({ ...valid, tooltip: 'x'.repeat(MAX_TOOLTIP + 1) }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * ⚠️ **`keyTouched` must never reach this schema.** It records whether the
+   * merchant has edited the key so the label stops auto-filling it — UI
+   * bookkeeping. A strict object would reject it; this asserts the field simply
+   * is not part of the model.
+   */
+  it('does not model keyTouched', () => {
+    expect(Object.keys(optionFormExtrasSchema.shape)).not.toContain('keyTouched');
   });
 });

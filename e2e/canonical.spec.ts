@@ -2,12 +2,21 @@ import { expect, test } from '@playwright/test';
 
 import { newMerchant, verifyEmail, type Merchant } from './fixtures';
 import {
+  assignProductCategory,
   assignedExternalId,
   connectedStoreId,
-  importProducts,
   productUrl,
+  isMirrored,
+  mirroredCount,
+  plantPhantomProduct,
+  pushCatalogue,
+  reconcileCatalogue,
+  restoreProduct,
+  removeProductCategory,
   storeToken,
   syncPluginConfig,
+  trashProduct,
+  unassignedExternalId,
 } from './catalogue';
 import { fillCheckout } from './checkout';
 import { clearCarts, disconnectStore } from './reset';
@@ -25,6 +34,17 @@ const STORE_HOST = new URL(SERVICES.store).hostname;
 
 /** Named per run, so a failed run's leftovers cannot be mistaken for this one's. */
 const SET_NAME = `E2E Finish ${Date.now().toString(36)}`;
+
+/**
+ * The category the taxonomy step authors, creates and cleans up.
+ *
+ * One constant because three places must agree: the reference typed into the
+ * dashboard, the term created on the store, and the term removed afterwards. A
+ * literal repeated three times resolves to nothing the moment one of them is
+ * edited, and resolving to nothing is exactly the passing-for-the-wrong-reason
+ * this step exists to rule out.
+ */
+const CATEGORY_SLUG = 'summer';
 
 /**
  * The canonical Gate 1 flow, in a real browser.
@@ -261,11 +281,45 @@ test.describe('Gate 1 — the canonical flow', () => {
       await expect(page.getByText(STORE_HOST).first()).toBeVisible();
     });
 
-    await test.step('the merchant creates an option set', async () => {
+    await test.step('the first run leads with templates, and offers a blank canvas', async () => {
       await page.goto('/option-sets');
 
-      /* The empty state offers both; either opens the same form. */
-      await page.getByRole('button', { name: /new option set|create your first/i }).first().click();
+      /*
+       * 🔴 **The only behavioural cover for the first-run screen.**
+       *
+       * Everything else about this screen is asserted from source, which can say
+       * what the code contains and never what a merchant sees. Two defects found
+       * in Step 0 lived exactly here: the template picker was rendered without a
+       * store and every card failed on click, and the header's "New option set"
+       * button re-offered the blank canvas above the templates.
+       *
+       * ⚠️ **This step also catches the rename.** ADR-087 replaced "Create your
+       * first option set" with "Start from scratch" and hid the header button
+       * until a set exists — so the selector this step used to carry matched
+       * nothing on a first run, and the canonical flow would have failed here.
+       */
+      await expect(page.getByText(/start from a template/i)).toBeVisible();
+
+      /*
+       * The store is connected by this point, so the picker must be offering
+       * real cards rather than the "connect a store first" refusal.
+       */
+      await expect(page.getByRole('button', { name: /t-shirt printing/i })).toBeVisible();
+      await expect(page.getByText(/connect a store first/i)).toHaveCount(0);
+
+      /* Templates lead; the blank canvas is present but secondary (ADR-087). */
+      await expect(page.getByRole('button', { name: /start from scratch/i })).toBeVisible();
+      await expect(page.getByRole('button', { name: /^new option set$/i })).toHaveCount(0);
+    });
+
+    await test.step('the merchant creates an option set', async () => {
+      /*
+       * Gate 1's script authors a set by hand, so it takes the blank canvas
+       * deliberately — the template path is asserted above rather than used
+       * here, because adapting a template would test M20b.4 in the middle of a
+       * flow that is about publishing.
+       */
+      await page.getByRole('button', { name: /start from scratch/i }).click();
       await page.locator('input[name="name"]').fill(SET_NAME);
       await page.getByRole('button', { name: /^create$/i }).click();
 
@@ -276,8 +330,15 @@ test.describe('Gate 1 — the canonical flow', () => {
       await page.getByText(SET_NAME).first().click();
       await page.waitForURL(/\/option-sets\/[0-9a-f-]{36}/, { timeout: 30_000 });
 
-      /* A group holds related options — Gate 1's script says one radio. */
-      await page.getByPlaceholder('Finish').first().fill('Finish');
+      /*
+       * A group holds related options — Gate 1's script says one radio.
+       *
+       * `#new-group-label` rather than the placeholder: the input gained that
+       * id at M19.1' when its `<label>` was bound to it, which it had never
+       * been. `.first()` is gone with it — an id is unique, so there is nothing
+       * to disambiguate.
+       */
+      await page.locator('#new-group-label').fill('Finish');
       await page.getByRole('button', { name: /add group/i }).click();
 
       await expect(page.getByRole('button', { name: /add option/i })).toBeVisible();
@@ -285,14 +346,41 @@ test.describe('Gate 1 — the canonical flow', () => {
       /*
        * Label, then key: the key is what the plugin indexes by.
        *
-       * ⚠️ The group's "New group" input and the option's "Option label" input
-       * **share the placeholder `Finish`** — the same word is a plausible example
-       * for both. Scoped through the key field's own row instead: `finish` is
-       * unique to the option form, so its container is unambiguous.
+       * 🔴 **Addressed by `id`, not by placeholder — the previous locators
+       * could never match.** This block used to wait for
+       * `getByPlaceholder('finish')`, explaining that the group and option
+       * inputs "share the placeholder `Finish`". They never did: the group's is
+       * `Finish`, the option's are `Colour` and `colour`, and `git log -S` puts
+       * those in the very commit that wrote this spec. The suite has therefore
+       * **never got past this line** — it timed out here for five stages while
+       * the authoring page was rewritten three times (18-6, 18-6a, 18-6b).
+       *
+       * ⚠️ **A placeholder is example copy, not an address.** It changes when a
+       * writer picks a friendlier word, and nothing fails until someone runs the
+       * suite.
+       *
+       * ⚠️ **A PREFIX selector, because the ids carry the group id** since
+       * 20-2d — `option-label-<groupId>`. `AddOption` renders once per group,
+       * so fixed ids collided as soon as a set had two; scoping them made the
+       * markup valid and the exact id unknowable from here. This flow creates
+       * one group, so the prefix resolves to one element — and would fail
+       * loudly rather than silently pick a side if that ever changed.
+       *
+       * `[id^="option-label-"]` and `[id^="option-key-"]` are the ids
+       * the page already
+       * sets for its own `<label for=…>`, so they are load-bearing markup: a
+       * rename breaks the form's own accessibility, which is a failure the
+       * dashboard's own guards catch.
        */
-      const optionRow = page.getByPlaceholder('finish', { exact: true }).locator('../..');
-      await optionRow.getByPlaceholder('Finish', { exact: true }).fill('Finish');
-      await page.getByPlaceholder('finish', { exact: true }).fill('finish');
+      await page.locator('[id^="option-label-"]').fill('Finish');
+
+      /*
+       * The key auto-derives from the label, so it already reads `finish`.
+       * Filled explicitly anyway: the derivation stops the moment a merchant
+       * edits the key by hand, and this asserts the value the plugin indexes by
+       * rather than trusting a convenience to have run.
+       */
+      await page.locator('[id^="option-key-"]').fill('finish');
 
       /*
        * 🔴 **`dropdown`, not `radio` — Phase 14's first added type, proven here.**
@@ -306,7 +394,14 @@ test.describe('Gate 1 — the canonical flow', () => {
        * E2E can prove is that a *second* type survives the whole chain — config
        * document, storefront render, cart, checkout, order.
        */
-      await page.getByLabel('Type').selectOption('dropdown');
+      /*
+       * 🔴 **A button grid, not a `<select>`** — and it always was. This line
+       * read `getByLabel('Type').selectOption('dropdown')`, a control the page
+       * has never rendered: `git log -S` puts "What kind of option?" in the very
+       * commit that wrote this spec. Addressed by `data-option-type`, the value
+       * the API stores, rather than the button's visible label.
+       */
+      await page.locator('[data-option-type="dropdown"]').click();
 
       await page.getByRole('button', { name: /add option/i }).click();
 
@@ -315,16 +410,33 @@ test.describe('Gate 1 — the canonical flow', () => {
        * that is not representable in binary floating point is the one that
        * catches an engine multiplying instead of scaling as text.
        */
-      /* ⚠️ `exact` throughout: `getByPlaceholder('lux')` is a *substring* match
-       * and also finds the `Luxury` field beside it. */
-      await expect(page.getByPlaceholder('Luxury', { exact: true })).toBeVisible();
-      await page.getByPlaceholder('Luxury', { exact: true }).fill('Luxury');
-      await page.getByPlaceholder('lux', { exact: true }).fill('lux');
-      await page.getByPlaceholder('10.50', { exact: true }).fill('10.50');
+      /*
+       * 🔴 **Addressed by `id`, like the option fields above.** These used to be
+       * `getByPlaceholder('Luxury' | 'lux' | '10.50', { exact: true })`, which
+       * matched only because nobody had changed that example copy yet — the same
+       * fragility that left the option fields unreachable for five stages. The
+       * value form renders once per option, so its ids are scoped by option id;
+       * `^=` anchors on that prefix, and there is exactly one option here.
+       */
+      const valueLabel = page.locator('[id^="value-label-"]');
+
+      await expect(valueLabel).toBeVisible();
+      await valueLabel.fill('Luxury');
+      await page.locator('[id^="value-key-"]').fill('lux');
+      await page.locator('[id^="value-price-"]').fill('10.50');
       await page.getByRole('button', { name: /add value/i }).click();
 
-      /* The price rendered back is the proof the amount survived the round trip. */
-      await expect(page.getByText('Luxury')).toBeVisible();
+      /*
+       * The price rendered back is the proof the amount survived the round trip.
+       *
+       * ⚠️ **`Luxury (lux)` — the value row, not the bare word.** Plain
+       * `getByText('Luxury')` now matches three elements: this row and two
+       * `<option>`s in the rule builder's selects, which did not exist when this
+       * line was written. Strict mode refused it rather than silently asserting
+       * on a dropdown entry, which would have "passed" without ever proving the
+       * value rendered.
+       */
+      await expect(page.getByText('Luxury (lux)')).toBeVisible();
     });
 
     /**
@@ -342,15 +454,30 @@ test.describe('Gate 1 — the canonical flow', () => {
      * as a special path would break the *choice* beside it.
      */
     await test.step('with a text option the customer types', async () => {
-      await page.getByRole('button', { name: /add option/i }).first().click();
-
-      const textRow = page.getByPlaceholder('finish', { exact: true }).locator('../..');
-      await textRow.getByPlaceholder('Finish', { exact: true }).fill('Engraving');
-      await page.getByPlaceholder('finish', { exact: true }).fill('engraving');
-      await page.getByLabel('Type').selectOption('text_field');
+      /*
+       * 🔴 **No "open the form" click — there is no such control.** This step
+       * began by clicking `Add option`, but that button is the form's *submit*
+       * and is `disabled` until the draft validates, so the click waited three
+       * minutes on a permanently disabled element. The group renders an empty
+       * option form continuously; authoring a second option means filling the
+       * one already on screen.
+       *
+       * The same `id` addressing as the dropdown above — this block carried an
+       * identical copy of the placeholder locators that could never match, so
+       * fixing only the first would have moved the timeout here rather than
+       * removed it.
+       */
+      await page.locator('[id^="option-label-"]').fill('Engraving');
+      await page.locator('[id^="option-key-"]').fill('engraving');
+      await page.locator('[data-option-type="text_field"]').click();
       await page.getByRole('button', { name: /add option/i }).click();
 
-      await expect(page.getByText('Engraving')).toBeVisible();
+      /*
+       * `.first()` for the same reason as `Luxury (lux)` above: an option's name
+       * also appears in the rule builder's selects, so a bare `getByText` is a
+       * strict-mode violation the moment rules exist on the page.
+       */
+      await expect(page.getByText('Engraving').first()).toBeVisible();
 
       /*
        * ⚠️ **The absence is the assertion.**
@@ -368,18 +495,84 @@ test.describe('Gate 1 — the canonical flow', () => {
       await expect(engravingRow.getByRole('button', { name: /add value/i })).toHaveCount(0);
     });
 
-    await test.step('the catalogue is imported', async () => {
+    /**
+     * A second group, and the pane switch between them (20-2d).
+     *
+     * 🔴 **The only browser test of selection.** Unit tests cover it — breaking
+     * the click handler fails four of them — but `jsdom` has no layout and no
+     * viewport, and 20-2d changed the editor from *"every group's fields are on
+     * screen"* to *"one group's are"*. That is an interaction change, and the
+     * suite that exercises a real browser never created a second group.
+     *
+     * ⚠️ **It also guards the defect 2d-a found.** `AddOption` used fixed ids
+     * rendered once per group, so two groups put duplicate `#option-label` in
+     * one document — invalid HTML, and a `<label>` binding to the wrong field.
+     * The prefix locator below would resolve to two elements and fail rather
+     * than silently pick one, which is exactly what should happen.
+     */
+    await test.step('a second group, and switching between them', async () => {
+      await page.locator('#new-group-label').fill('Size');
+      await page.getByRole('button', { name: /add group/i }).click();
+
+      /* Both groups stay listed, whichever is being edited. */
+      await expect(page.getByRole('button', { name: 'Size', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Finish', exact: true })).toBeVisible();
+
       /*
-       * Standing in for M19.1, which owns the real import. Without it
-       * `store_products` is empty and the assign step below has nothing to act
-       * on — which is how that step came to branch, and how its assigning half
-       * went un-run for every one of its first sixteen executions.
+       * 🔴 **Exactly one add-option form, however many groups exist.** The
+       * assertion 20-2d exists to satisfy: before it each group rendered its
+       * own, and at twenty groups of thirty options the page mounted six
+       * hundred option blocks.
+       */
+      await expect(page.locator('[id^="option-label-"]')).toHaveCount(1);
+
+      /* Choosing the first group again moves the editor back to it. */
+      await page.getByRole('button', { name: 'Finish', exact: true }).click();
+
+      await expect(page.locator('[id^="option-label-"]')).toHaveCount(1);
+      await expect(page.getByText('Engraving').first()).toBeVisible();
+    });
+
+    await test.step('the store pushes its catalogue to the cloud', async () => {
+      /*
+       * 🔴 **The real push, not the stand-in.** This step used to call
+       * `importProducts()`, which writes `store_products` with **raw SQL** —
+       * so the flow passed whether or not an ingest endpoint existed at all.
+       * M19.1 replaced it: the plugin reads its own catalogue with
+       * `wc_get_products()` and posts to `POST /v1/store/products`, which is
+       * the path a merchant's store uses. ADR-067: the store pushes, because
+       * the cloud holds no WooCommerce credentials and AC8 forbids it.
        */
       const storeId = connectedStoreId();
       expect(storeId, 'the store should be connected by now').not.toBeNull();
 
-      const imported = await importProducts(storeId as string);
-      expect(imported, 'the WooCommerce store should hold simple products').toBeGreaterThan(0);
+      pushCatalogue();
+
+      /*
+       * 🔴 **Asserted through the dashboard, which reads the cloud.** A count
+       * taken from the database would pass for rows the stand-in could have
+       * written with SQL — the very distinction this step exists to draw. The
+       * picker renders `GET /v1/products` against the merchant's own session,
+       * so a product visible there travelled the whole path: WooCommerce →
+       * plugin → `POST /v1/store/products` → the mirror → the dashboard.
+       */
+      await page.goto('/products');
+
+      await expect(
+        page.getByText(/no products have arrived from your store/i),
+        'the empty state must be gone once a real push has landed',
+      ).toHaveCount(0);
+
+      /*
+       * ⚠️ **Back to the set before the next step.** That step calls
+       * `page.reload()`, which reloads wherever the browser happens to be —
+       * so leaving it on `/products` pointed the reload at a page with no
+       * picker, and the assign step failed looking for a button that was never
+       * on it. Navigating away in a test is a side effect on the steps after.
+       */
+      await page.goto('/option-sets');
+      await page.getByText(SET_NAME).first().click();
+      await page.waitForURL(/\/option-sets\/[0-9a-f-]{36}/, { timeout: 30_000 });
     });
 
     await test.step('the merchant assigns it to a product', async () => {
@@ -410,6 +603,98 @@ test.describe('Gate 1 — the canonical flow', () => {
       expect(assignedProduct, 'the assignment should name a product').not.toBe('');
     });
 
+    /**
+     * 🔴 **Edit an existing value, THEN publish — the sequence no gate covered.**
+     *
+     * M20.10 stopped refetching the tree after an edit and patched the cache
+     * instead, which saved a request and left the set's `rowVersion` stale: the
+     * backend advances it on every child edit (`ParentSetService`), but an edit
+     * response carries only the entity. `publishSet` sends that token and the
+     * API answered **409 "This option set was changed by someone else."** — a
+     * conflict the merchant caused themselves one second earlier.
+     *
+     * ⚠️ **Every suite stayed green** because this file created values and
+     * published, and never *edited* one first. The defect needed exactly this
+     * order to appear, so the fix is worth nothing without a step that proves it.
+     */
+    await test.step('an edited value still publishes', async () => {
+      const row = page.locator('[data-value-row]');
+
+      /*
+       * ⚠️ **Edited, then edited back.** Five later steps assert on `Luxury` —
+       * the storefront render, the price calculation and the order line. This
+       * step exists to exercise the *edit → publish* sequence, not to change
+       * what the rest of the flow sees, so it restores the label before moving
+       * on. The `rowVersion` the defect turned stale advances on **both**
+       * writes, so the 409 would still fire if it came back.
+       */
+      await page.getByRole('button', { name: /^Edit /i }).first().click();
+      await expect(row).toBeVisible();
+
+      await row.locator('[id^="label-"]').fill('Matte black');
+
+      /*
+       * Autosave commits when focus leaves the row — there is no Save button.
+       *
+       * 🔴 **Clicking a heading is the real interaction, and it found a bug.**
+       * A heading is not focusable, so the browser reports `relatedTarget:
+       * null` — indistinguishable from a window switch by that field alone.
+       * The first implementation skipped the save for both and lost the edit.
+       * `document.hasFocus()` separates them; this step is what proved it.
+       */
+      await page.getByRole('heading', { name: 'Finish', exact: true }).click();
+
+      await expect(row).toBeHidden();
+
+      /*
+       * 📌 **Scoped to the value list**, because the edited label also reaches
+       * the rule builder's target pickers — rendered from the same cached tree.
+       * That is itself the patch working: nothing refetched, and three places
+       * show the new label.
+       */
+      await expect(page.getByText('Matte black (lux)')).toBeVisible();
+
+      /* Back to what the rest of the flow expects — a second patched edit. */
+      await page.getByRole('button', { name: /^Edit /i }).first().click();
+      await expect(row).toBeVisible();
+      await row.locator('[id^="label-"]').fill('Luxury');
+      await page.getByRole('heading', { name: 'Finish', exact: true }).click();
+
+      await expect(row).toBeHidden();
+      await expect(page.getByText('Luxury (lux)')).toBeVisible();
+    });
+
+    /*
+     * 🔴 **The preview, in a real browser.** Every other test of it runs in
+     * `jsdom`, which has no layout — and this repository has already shipped a
+     * crushed layout for exactly that reason. The canonical flow already renders
+     * the preview (it is on this page), so asserting it costs one step and no
+     * setup.
+     *
+     * ⚠️ **Scoped to the preview's own section**, because the value's label also
+     * appears in the editor above it — a page-level check would pass on the
+     * editor and prove nothing about the preview.
+     */
+    await test.step('the preview shows the customer what they will get', async () => {
+      const preview = page.getByRole('region', { name: 'What your customer sees' });
+
+      await expect(preview).toBeVisible();
+      await expect(preview.getByText('Luxury')).toBeVisible();
+
+      /*
+       * The base is stated, never implied (ADR-107). A number a merchant could
+       * mistake for "what my customer pays" is worse than no number.
+       */
+      await expect(preview.getByText(/priced against/)).toBeVisible();
+
+      /* Three widths, and the frame narrows (M21.2, ADR-108). */
+      await preview.getByRole('button', { name: 'Phone' }).click();
+      await expect(preview.getByRole('button', { name: 'Phone' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
+
     await test.step('the merchant publishes', async () => {
       const publish = page.getByRole('button', { name: /publish to storefront/i });
 
@@ -424,6 +709,46 @@ test.describe('Gate 1 — the canonical flow', () => {
        * that merely stopped saying "Publishing…" would prove nothing.
        */
       await expect(page.getByText(/Published version \d+/)).toBeVisible();
+    });
+
+    await test.step('the dashboard checklist reflects what the merchant just did', async () => {
+      /*
+       * 🔴 **The only proof the checklist tracks reality (M20b.1, M20b.2).**
+       *
+       * Everything else about it is unit-tested against a fixture, which can
+       * show the component renders a given state correctly and never that the
+       * state *arrives*. This walks the real funnel: by now the merchant has
+       * verified, connected, synced, created, assigned and published — so the
+       * setup list must be complete, and it is complete only if every one of
+       * those steps was derived correctly from the domain tables.
+       *
+       * ⚠️ **This step does NOT prove the cache invalidation, and it was written
+       * believing it did.** Two mutations were needed to establish that:
+       * removing the publish path's `invalidateActivation` left it green with
+       * `page.goto` (a full page load discards the cache), and *still* green
+       * after switching to the nav link — because roughly eighty seconds of
+       * test elapse between the dashboard's first load and this assertion, far
+       * past the 30-second `staleTime`, so the query refetches on mount whatever
+       * invalidated it.
+       *
+       * What it *does* prove is the part no unit test can: that the funnel's
+       * eight steps derive correctly from the real domain tables after a real
+       * merchant journey. The invalidation is covered by
+       * `lib/activation/cache.test.ts`, which enumerates every screen that must
+       * call it.
+       *
+       * The nav link is kept anyway — it is how a merchant actually returns here.
+       */
+      await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+      await page.waitForURL(/\/dashboard$/, { timeout: 30_000 });
+
+      await expect(page.getByText(/8 of 8 complete/)).toBeVisible();
+
+      /* Complete, so the dismiss control is offered (ADR-093). */
+      await expect(page.getByRole('button', { name: /hide this checklist/i })).toBeVisible();
+
+      /* And the value-realized section appears once published. */
+      await expect(page.getByText(/Since you published/)).toBeVisible();
     });
 
     await test.step('the storefront receives it', async () => {
@@ -581,12 +906,90 @@ test.describe('Gate 1 — the canonical flow', () => {
       await expect(page.getByText('Luxury').first()).toBeVisible();
 
       /*
-       * £10.50 as the customer sees it. Scoped to the cart's own table so a
+       * £10.50 as the customer sees it. Scoped to the cart's own container so a
        * sidebar total cannot satisfy it by coincidence, and given a longer wait
        * because WooCommerce recalculates totals over AJAX after the page loads.
+       *
+       * 🔴 **The surface is named, not guessed.**
+       *
+       * ✏️ **This read `.woocommerce-cart-form, .wc-block-cart` until 21b's
+       * analysis** — an either/or that passes on whichever surface the store
+       * happens to render, and never records which. Measured against the live
+       * store: it serves `wc-block-cart`, so the classic branch had **never**
+       * matched. A locator that reads as covering two surfaces while proving one
+       * is worse than a locator that covers one: it hides the gap it creates.
+       *
+       * ⚠️ **Asserting the container first is deliberate.** If the store is
+       * reconfigured to the classic cart, this fails with *"cart surface not
+       * found"* rather than silently proving nothing — which is the failure mode
+       * the either/or had.
+       */
+      const cart = page.locator('.wc-block-cart');
+
+      await expect(cart, 'the Cart block should be the surface under test').toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(cart.getByText(/10\.50/).first()).toBeVisible({ timeout: 30_000 });
+
+      /*
+       * 🔴 **The breakdown, in a real browser** (M21b.1, M21b.2).
+       *
+       * Unit tests prove the rows are built; only this proves WooCommerce
+       * renders them. The base row is the one M21b.1 added, so it is the row
+       * with no history of appearing on any surface — and
+       * `CartItemSchema::get_item_data()` discards a whole element **silently**
+       * if any value is not scalar, which is a failure no unit test of ours
+       * would see.
+       *
+       * ⚠️ **Scoped to the cart, not the page.** The product page shows the same
+       * option and price, so a page-level check would pass on markup the
+       * customer left behind two steps ago.
        */
       await expect(
-        page.locator('.woocommerce-cart-form, .wc-block-cart').getByText(/10\.50/).first(),
+        cart.getByText('Base price'),
+        'the base row should reach the cart a customer actually sees',
+      ).toBeVisible({ timeout: 30_000 });
+
+      /*
+       * 🔴 **A second surface, because one is not four** (M21b.2).
+       *
+       * The mini-cart widget renders the same rows through the same filter —
+       * `mini-cart.php:80` calls `wc_get_formatted_cart_item_data()`, which
+       * applies `woocommerce_get_item_data`. Asserting it here proves the shared
+       * filter *in a browser* rather than only from reading WooCommerce's
+       * source, and it costs one navigation because the widget is on the home
+       * page.
+       *
+       * ⚠️ **The classic cart and the Checkout block summary remain unasserted**
+       * — this store renders neither, so proving them needs a differently
+       * configured store rather than another locator.
+       */
+      await page.goto(`${SERVICES.store}/`);
+
+      const miniCart = page.locator('.widget_shopping_cart_content');
+
+      await expect(
+        miniCart.getByText('Luxury'),
+        'the mini-cart widget should render the same breakdown',
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(miniCart.getByText('Base price')).toBeVisible({ timeout: 30_000 });
+
+      /*
+       * 🔴 **The customised UNIT price, which nothing else asserts** (M21b.2).
+       *
+       * `mini-cart.php:81` renders `quantity × product_price`, and
+       * `WC()->cart->get_product_price()` reads the price **after**
+       * `CartTotals::set_price()` — so this is base £80.00 plus the £10.50
+       * option, and it is one of the four figures the milestone names.
+       *
+       * ⚠️ **The rest of the flow proves the DELTA (£10.50) and the line total;
+       * neither is this number.** A per-unit price that silently stayed at the
+       * base would leave every other assertion passing — which is the
+       * double-multiplication family of bug, seen from the display side.
+       */
+      await expect(
+        miniCart.getByText(/90\.50/),
+        'the mini-cart should price the unit at base plus the option',
       ).toBeVisible({ timeout: 30_000 });
     });
 
@@ -635,10 +1038,21 @@ test.describe('Gate 1 — the canonical flow', () => {
        * "Luxury" was plainly on the page. That is the classic/block split Gate 1
        * asks about, showing up in the test rather than the product.
        */
-      const order = page.locator(
-        '.woocommerce-order-details, .woocommerce-table--order-details, ' +
-          '.wc-block-order-confirmation-totals, .woocommerce-order',
-      );
+      /*
+       * ⚠️ **`.first()` — the selectors nest, and all three now match.**
+       * `.woocommerce-order` wraps `.woocommerce-order-details`, which wraps the
+       * details table, so this list resolved to three elements and strict mode
+       * refused every assertion built on it. The outermost is the right one:
+       * every assertion below asks whether something is *somewhere in the
+       * order*, and the widest container is what makes that true regardless of
+       * which theme rendered it.
+       */
+      const order = page
+        .locator(
+          '.woocommerce-order-details, .woocommerce-table--order-details, ' +
+            '.wc-block-order-confirmation-totals, .woocommerce-order',
+        )
+        .first();
 
       /*
        * **The selection is in the order.** This is the assertion that matters: a
@@ -689,6 +1103,253 @@ test.describe('Gate 1 — the canonical flow', () => {
        */
       await expect(order).toContainText('Mum  & Dad');
       await expect(order.locator('b')).toHaveCount(0);
+    });
+
+    /**
+     * A category assignment, authored in the dashboard and **resolved** by the
+     * plugin (M19.4).
+     *
+     * ✏️ **This step asserted the opposite until M19.4, and was right to.**
+     * While taxonomy was deferred, `skipped_count()` **rose** when a merchant
+     * authored a category, and the acceptance was that the target arrived
+     * *visibly deferred* rather than silently dropped. M19.4 resolves those
+     * targets, so the count now falls to zero — the handover signal that
+     * `ProductIndex::skipped_count()`'s own docblock names.
+     *
+     * 🔴 **Zero is NOT the assertion, because zero is also the state before.**
+     * Measured on the live store: with the category assignment removed the
+     * index reads `skipped=0 terms=0`, and with it `skipped=0 terms=1` —
+     * `entry_count()` is `1` either way. Both counters the admin screen prints
+     * are **identical before and after this step**, so asserting the row would
+     * pass against an assignment that never arrived. `terms` is what changed,
+     * and no status row reports it.
+     *
+     * So the acceptance is the **render**, which is what a merchant sees and
+     * the only non-vacuous signal available: a product the set is *not*
+     * assigned to shows its options once it joins the category. The control
+     * matters — run against the directly-assigned product this would pass
+     * through the manual path and prove nothing about taxonomy.
+     *
+     * ⚠️ **The category must be real.** Taxonomy targets are carried, not
+     * expanded (ADR-068): `build()` stores the slug without checking that the
+     * term exists, and `has_term()` decides at render. So the term is created
+     * and the product put in it here — an assignment to a category no product
+     * is in resolves to nothing, correctly, and would read as a defect.
+     *
+     * ⚠️ **No resync after the category changes.** The document already
+     * carries the target; resolution happens against the *live* product at
+     * render, which is the property ADR-068 chose this design for. Verified on
+     * the store: the product went from 0 option groups to 4 on the category
+     * alone, with no new config fetch.
+     */
+    await test.step('a category assignment resolves on the storefront', async () => {
+      await page.goto(`/option-sets`);
+      await page.getByText(SET_NAME).first().click();
+
+      /*
+       * The type defaults to Category, so only the reference is typed. The
+       * button is "Assign target", not "Assign": the catalogue rows above use
+       * the latter, and two buttons sharing one accessible name would leave
+       * this resolving by render order.
+       */
+      await page.getByLabel(/^reference to assign$/i).fill(CATEGORY_SLUG);
+      await page.getByRole('button', { name: /^assign target$/i }).click();
+
+      /* The row appears named by its type, so a merchant can tell it from a tag. */
+      await expect(page.getByText(CATEGORY_SLUG).first()).toBeVisible();
+
+      /*
+       * 🔴 **No republish, deliberately.** `ConfigDocumentBuilder` joins
+       * assignments **live** and overwrites whatever the snapshot holds — that
+       * is why assignments can change without a new version, and why step 4
+       * needed no serializer change. The set was published earlier in this
+       * flow; this assignment reaches the document on the plugin's next sync.
+       */
+
+      /*
+       * ⚠️ **The plugin has no manual sync control** — config arrives on
+       * `optionia_cron_sync_config`. `syncPluginConfig()` runs that event
+       * through WP-CLI, which is how the rest of this suite advances the
+       * plugin's view rather than waiting on a schedule it does not control.
+       */
+      syncPluginConfig();
+
+      /*
+       * A product the set is NOT assigned to — the control. Read from the
+       * mirror rather than hardcoded, so a rebuilt fixture store cannot leave
+       * this pointing at an id that no longer exists.
+       *
+       * ⚠️ **The store is named, not inferred.** `reset.ts` leaves the
+       * backend's `stores` row behind by design, so several rows for this URL
+       * read `connected` at once and "the connected store" is not a question
+       * `storeUrl` alone can answer. `connectedStoreId()` is the one place
+       * that resolves it — passing its result keeps a second selector from
+       * existing here and drifting away from it.
+       */
+      const controlStore = connectedStoreId();
+
+      expect(controlStore, 'the store should still be connected').not.toBeNull();
+
+      const controlProduct = unassignedExternalId(String(controlStore), SET_NAME);
+
+      expect(controlProduct, 'the store should hold an unassigned product').not.toBe('');
+
+      /*
+       * 🔴 **The negative first.** Without this the positive below proves
+       * nothing: a product that already rendered the set would satisfy it
+       * whether or not the category resolved. Asserting the "before" is what
+       * makes the "after" evidence.
+       */
+      await page.goto(productUrl(controlProduct));
+      await expect(page.locator('.optionia-group')).toHaveCount(0);
+
+      const termId = assignProductCategory(Number(controlProduct), CATEGORY_SLUG);
+
+      try {
+        /*
+         * Deliberately no `syncPluginConfig()` — see the step docblock. The
+         * target is already in the document; only the product's terms changed,
+         * and resolution reads those live.
+         */
+        await page.goto(productUrl(controlProduct));
+
+        /*
+         * The set renders now, and it did not a moment ago. That difference is
+         * the whole acceptance for M19.4.
+         */
+        await expect(page.locator('.optionia-group').first()).toBeVisible();
+      } finally {
+        /*
+         * ⚠️ **Cleanup in `finally`, and it matters.** The category outlives
+         * the run otherwise, and the *next* run's negative assertion above
+         * would fail — a green suite turning red on a second run, blaming the
+         * renderer for a fixture this step left behind.
+         */
+        removeProductCategory(Number(controlProduct), CATEGORY_SLUG, termId);
+      }
+    });
+
+    /**
+     * A deleted product does not break anything (M19.6).
+     *
+     * 🔴 **The assignment survives the product, and that is by design.** There
+     * is no foreign key from `option_set_assignments.targetRef` to
+     * `store_products` — the product lives on the merchant's site, not in the
+     * cloud — so removing the mirror row leaves the assignment live and
+     * pointing at nothing. Proven in a rolled-back transaction while planning
+     * this: deleting the row left the assignment count unchanged and orphaned.
+     *
+     * The milestone's acceptance is *"no orphan errors on the storefront"*, and
+     * both halves are asserted here:
+     *
+     * - the **dashboard** names it — `readAssignments()` uses a `LEFT JOIN`
+     *   *specifically* so an orphan stays visible, because *"an inner join
+     *   would hide exactly the rows that need attention"*;
+     * - the **storefront** keeps serving — the plugin indexes the dead id, and
+     *   since no such product exists nothing ever asks for it.
+     *
+     * ⚠️ **Trashed, not force-deleted.** `ProductWatcher` listens on
+     * `trashed_post` because the admin's own *Move to Trash* fires only that
+     * (ADR-074); forcing a permanent delete would exercise a different hook
+     * than a merchant does.
+     */
+    await test.step('a deleted product leaves the storefront working', async () => {
+      /*
+       * The product this flow assigned earlier — deleting the *control* would
+       * prove nothing, since it has no assignment to orphan.
+       */
+      const storefront = productUrl(assignedProduct);
+
+      /* It renders now; the point is that it still behaves after the delete. */
+      await page.goto(storefront);
+      await expect(page.locator('.optionia-group').first()).toBeVisible();
+
+      trashProduct(assignedProduct);
+
+      try {
+        /* The plugin queues the removal and the drain rides the push cron. */
+        pushCatalogue();
+
+        /*
+         * The dashboard names the orphan rather than hiding it or erroring.
+         */
+        await page.goto(`/option-sets`);
+        await page.getByText(SET_NAME).first().click();
+
+        await expect(page.getByText(/No longer in your catalogue/i).first()).toBeVisible();
+
+        /*
+         * 🔴 **The storefront still answers.** A trashed product's own page is
+         * gone, so this checks a page that still exists — the shop — and that
+         * it renders rather than fataling on an assignment pointing at nothing.
+         */
+        const shop = await page.goto(`${SERVICES.store}/?post_type=product`);
+
+        expect(shop?.status()).toBeLessThan(500);
+      } finally {
+        /*
+         * ⚠️ Restore inside `finally`, or every later run starts a product
+         * short. `wp_untrash_post()` restores the previous status on its own —
+         * measured, rather than the `draft` an earlier draft of this assumed.
+         */
+        restoreProduct(assignedProduct);
+        pushCatalogue();
+      }
+    });
+
+    /**
+     * The mirror repairs its own drift (M19.3).
+     *
+     * 🔴 **The one operation in this phase that can DESTROY merchant data**,
+     * and until now the least proven end to end. Both halves are covered in
+     * isolation — twelve API tests and thirteen plugin tests — but nothing
+     * showed the plugin's manifest and the cloud's comparison agreeing against
+     * a real store. A sweep that deleted too much would pass every one of those
+     * suites and still empty a merchant's catalogue.
+     *
+     * ⚠️ **A phantom is planted rather than produced.** WordPress hooks are
+     * best-effort by design: a deletion while the site is offline, or a queue
+     * entry dropped by `ProductQueue::MAX_ENTRIES`, is what leaves the mirror
+     * holding a product the store no longer sells. Nothing in the normal flow
+     * creates that on demand, so the row is written directly — it is the
+     * precondition, not the behaviour under test.
+     *
+     * 📌 **The real products are the assertion that matters.** "The phantom is
+     * gone" alone would pass for a sweep that deleted *everything*, which is
+     * precisely the failure ADR-075 exists to prevent. So the count is checked
+     * on both sides of it.
+     */
+    await test.step('reconciliation removes drift and keeps everything real', async () => {
+      const storeId = connectedStoreId();
+
+      expect(storeId, 'the store should still be connected').not.toBeNull();
+
+      const before = mirroredCount(String(storeId));
+
+      expect(before, 'the catalogue push should have mirrored products').toBeGreaterThan(0);
+
+      /*
+       * An id far above anything WooCommerce has issued, so it sorts last and
+       * falls inside a final manifest's unbounded upper range. A low id would
+       * also work today; this one cannot collide with a real product.
+       */
+      const PHANTOM = '999999';
+
+      plantPhantomProduct(String(storeId), PHANTOM);
+
+      expect(isMirrored(String(storeId), PHANTOM), 'the phantom should be planted').toBe(true);
+      expect(mirroredCount(String(storeId))).toBe(before + 1);
+
+      reconcileCatalogue();
+
+      /*
+       * 🔴 Both assertions, in this order. The phantom going proves the sweep
+       * acted; the count returning to exactly `before` proves it acted only on
+       * the drift — a sweep that took the real products with it would satisfy
+       * the first assertion and fail this one.
+       */
+      expect(isMirrored(String(storeId), PHANTOM), 'the phantom should be gone').toBe(false);
+      expect(mirroredCount(String(storeId)), 'every real product should survive').toBe(before);
     });
 
     /*

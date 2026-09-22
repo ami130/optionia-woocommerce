@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState, type ReactNode } from 'react';
+import { cloneElement, isValidElement, useId, useState, type ReactNode } from 'react';
 import {
   useForm,
   type DefaultValues,
@@ -104,10 +104,32 @@ export function Field({
   hint?: string;
   children: ReactNode;
 }) {
+  /*
+   * 🔴 **The label was bound to nothing until M19.1'.** Every screen a merchant
+   * meets before they are signed in — login, register, forgot-password, reset —
+   * renders its fields through here, so one unbound `<label>` left **all** of
+   * them announced as unlabelled by a screen reader, and clicking the text did
+   * not focus the input.
+   *
+   * `useId()` rather than a prop: the id has to be unique per instance (two
+   * `Field`s with the same id make `htmlFor` bind to whichever came first), and
+   * making callers invent one is a rule six call sites can forget. The child
+   * keeps an `id` it sets itself, so a caller that needs a specific one wins.
+   */
+  const generatedId = useId();
+  const controlId =
+    isValidElement<{ id?: string }>(children) && children.props.id !== undefined
+      ? children.props.id
+      : generatedId;
+
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium">{label}</label>
-      {children}
+      <label className="text-sm font-medium" htmlFor={controlId}>
+        {label}
+      </label>
+      {isValidElement<{ id?: string }>(children)
+        ? cloneElement(children, { id: controlId })
+        : children}
       {hint === undefined || error !== undefined ? null : (
         <p className="text-muted-foreground text-xs">{hint}</p>
       )}

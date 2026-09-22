@@ -1,4 +1,4 @@
-import type { AuthoringGroup, AuthoringItem, AuthoringOption } from './api';
+import type { AuthoringItem, AuthoringOption } from './api';
 
 /**
  * One row in a group's merged sequence.
@@ -6,9 +6,9 @@ import type { AuthoringGroup, AuthoringItem, AuthoringOption } from './api';
  * A discriminated union rather than a nullable pair, so a renderer cannot reach
  * `entry.option` on an item — TypeScript narrows on `kind`.
  */
-export type Entry =
-  | { kind: 'option'; id: string; sortOrder: number; option: AuthoringOption }
-  | { kind: 'item'; id: string; sortOrder: number; item: AuthoringItem };
+export type Entry<TOption = AuthoringOption, TItem = AuthoringItem> =
+  | { kind: 'option'; id: string; sortOrder: number; option: TOption }
+  | { kind: 'item'; id: string; sortOrder: number; item: TItem };
 
 /**
  * A group's options and presentational items as **one ordered sequence**.
@@ -35,12 +35,33 @@ export type Entry =
  *
  * Extracted from the editor rather than inlined so this ordering can be tested
  * directly: it is the one piece of logic that must agree with the storefront.
+ *
+ * ⚠️ **Generic over the option and item type, so the live preview can pass its
+ * own tree.** ADR-106 decided the preview reuses this ordering rather than
+ * growing a second one, and that decision did not compile: `PreviewGroup` is
+ * `readonly` at two levels — its `options`, and each option's `values` — and a
+ * `Pick<AuthoringGroup, …>` refuses both.
+ *
+ * ✏️ **Widening the parameter alone was not enough**, which a first attempt
+ * measured: `readonly AuthoringOption[]` still carries a *mutable* `values`, so
+ * the mismatch simply moved one level down. Generic parameters fix it at every
+ * level and are strictly better than widening — each caller keeps its own
+ * option type instead of everything collapsing to a shared supertype, so a
+ * renderer reading `entry.option` still sees exactly what it passed in.
+ *
+ * Safe, and not a weakening: every entry is built into a **new** object and the
+ * sort runs on the array this function just created, so the input is read and
+ * never touched.
  */
-export function mergedEntries(group: Pick<AuthoringGroup, 'options' | 'items'>): Entry[] {
+export function mergedEntries<TOption extends { id: string; sortOrder: number },
+  TItem extends { id: string; sortOrder: number }>(group: {
+  readonly options?: readonly TOption[];
+  readonly items?: readonly TItem[];
+}): Entry<TOption, TItem>[] {
   const options = group.options ?? [];
   const items = group.items ?? [];
 
-  const merged: Entry[] = [
+  const merged: Entry<TOption, TItem>[] = [
     ...options.map((option) => ({
       kind: 'option' as const,
       id: option.id,

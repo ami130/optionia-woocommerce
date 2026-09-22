@@ -7,7 +7,17 @@ import {
 import { ApiError, NetworkError } from './error';
 import type { ApiEnvelope, ApiErrorResponse, ApiMeta } from './types';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/v1';
+/**
+ * Where the API lives, including its `/v1` prefix.
+ *
+ * Exported because one link cannot go through `api.get()`: the plugin download
+ * is a **file the browser fetches directly** (M20b.3), so an `<a href>` needs the
+ * absolute URL rather than a relative path, which would resolve against the
+ * dashboard's own origin.
+ */
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/v1';
+
+const BASE_URL = API_BASE_URL;
 
 /**
  * Routes whose `401` is the answer, not an expired token.

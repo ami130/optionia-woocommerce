@@ -11,9 +11,10 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:reachable": "node bin/check-reachable.mjs",
-    "check": "npm run check:reachable && npm run lint && npm run typecheck && npm run test",
+    "check": "npm run check:reachable && npm run check:fixtures && npm run lint && npm run typecheck && npm run test",
     "e2e": "playwright test",
-    "e2e:ui": "playwright test --ui"
+    "e2e:ui": "playwright test --ui",
+    "check:fixtures": "bash bin/check-shared-fixtures.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -37,6 +38,8 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

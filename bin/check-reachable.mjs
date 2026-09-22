@@ -49,8 +49,50 @@ const ROOT = resolve(HERE, '..', 'src');
  * A pattern is an exemption that quietly widens; a name expires the moment
  * somebody asks why it is here. Each entry must say what it waits for and which
  * stage removes it.
+ *
+ * ⚠️ **Known limit: this counts IMPORTS, not uses.** Measured in the M20.6
+ * audit — deleting the only `<PricingExample>` call still passed, because the
+ * `import` line remained. So "reachable" here means "something the app renders
+ * imports it", which is weaker than "the product runs it". Closing that needs
+ * call-graph analysis rather than an import scan; recorded so the gate is not
+ * read as proving more than it does.
  */
-const EXEMPT = new Map([]);
+const EXEMPT = new Map([
+  /*
+   * 🔴 **A measurement, not a feature — and the only entry here that is not a
+   * debt.** `fidelity.ts` compares the preview's arithmetic against the
+   * storefront's own rendered markup (M21.6, ADR-109). Nothing in the product
+   * renders it, and nothing should: it exists to answer *"do the two agree?"*,
+   * and giving it a caller in the UI would put a test harness in front of a
+   * merchant.
+   *
+   * ⚠️ **Exempt from REACHABILITY, not from proof.** `fidelity.test.ts` runs it
+   * across **every** authorable type against `rendered-fixtures.json`, fails if
+   * any type's prices disagree, and is itself mutation-proven — including the
+   * mutation that exposed its first version comparing a number with itself.
+   *
+   * 📌 **No stage removes this one.** Every other exemption named the milestone
+   * that would discharge it, and each was discharged. This one is permanent by
+   * design, which is why it says so rather than naming a stage that will never
+   * come.
+   */
+  ['lib/preview/fidelity.ts', 'M21.6 — a fidelity measurement, deliberately not rendered'],
+
+  /*
+   * ✅ **Empty since M21.3, and that is the milestone's exit.**
+   *
+   * Three entries stood here. `price-config-delta.ts` and `line-total.ts` went
+   * when M20.6's worked example gave them a caller. `rule-evaluator.ts` — exempt
+   * since M20.6 because *"a WORKED EXAMPLE has no answers to evaluate"* — and
+   * `lib/preview/`'s `preview-tree.ts` and `options-under.ts` went when the live
+   * preview started evaluating real customer answers.
+   *
+   * ⚠️ **An entry here is a debt, not a category.** Each one named the stage
+   * that would remove it, and each was removed by that stage rather than
+   * renewed. Adding one is fine; adding one without naming what discharges it
+   * is how a list like this stops meaning anything.
+   */
+]);
 
 const ROUTE_FILES = new Set([
   'page',

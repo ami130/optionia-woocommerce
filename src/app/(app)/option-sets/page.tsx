@@ -2,7 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useState, type ReactNode } from 'react';
 
 import { useSession } from '@/components/providers/session-provider';
 import {
@@ -10,17 +11,23 @@ import {
   ConflictAwareError,
   EmptyState,
   ErrorState,
+  LoadingRows,
 } from '@/components/layout/states';
 import { AuthForm, Field } from '@/components/forms/auth-form';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { TemplatePicker } from '@/components/option-sets/option-set-display';
+import { HelpNote } from '@/components/help/help-note';
+import { invalidateActivation } from '@/lib/activation/cache';
+import { HELP } from '@/lib/help/concepts';
 import { roleCan } from '@/lib/auth/capabilities';
 import {
   createSet,
   deleteSet,
   duplicateSet,
+  importSet,
   listSets,
   updateSet,
   type OptionSetSummary,
@@ -30,7 +37,8 @@ import {
   renameSetSchema,
   type CreateSetInput,
 } from '@/lib/schemas/option-sets';
-import { listStores } from '@/lib/stores/api';
+import { STARTER_TEMPLATES, templateDocument } from '@/lib/option-sets/templates';
+import { listStores, type StoreSummary } from '@/lib/stores/api';
 import { cn } from '@/lib/utils';
 
 /**
@@ -44,7 +52,9 @@ import { cn } from '@/lib/utils';
 export default function OptionSetsPage() {
   const { me } = useSession();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [creating, setCreating] = useState(false);
+  const [pickingTemplate, setPickingTemplate] = useState(false);
 
   const canEdit = roleCan(me?.role, 'option_sets:edit');
   const canDelete = roleCan(me?.role, 'option_sets:delete');
@@ -52,7 +62,27 @@ export default function OptionSetsPage() {
   const stores = useQuery({ queryKey: ['stores'], queryFn: listStores });
   const sets = useQuery({ queryKey: ['option-sets'], queryFn: () => listSets() });
 
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: ['option-sets'] });
+  /**
+   * Whether this tenant has a store, or whether we do not yet know.
+   *
+   * Three states, not two. A template and a new option set both need a store,
+   * and both screens previously read an unresolved query as "no stores" — so a
+   * merchant with a connected store was told to go and connect one while their
+   * store list was still loading.
+   */
+  const storeState: 'unknown' | 'none' | 'some' =
+    stores.data === undefined ? 'unknown' : stores.data.length === 0 ? 'none' : 'some';
+
+  /**
+   * Creating, importing or deleting a set moves the funnel's `created` step, so
+   * the dashboard checklist is refreshed alongside this screen's own list
+   * (`invalidateActivation`). Without it the checklist says "create your first
+   * option set" for thirty seconds after the merchant created one.
+   */
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['option-sets'] });
+    invalidateActivation(queryClient);
+  };
 
   /**
    * Which store each set belongs to.
@@ -62,6 +92,63 @@ export default function OptionSetsPage() {
    * only when there is more than one store: with a single store the label is
    * noise on every row.
    */
+  /**
+   * Build a set from a starter template (M20.7).
+   *
+   * 🔴 **Through the IMPORT endpoint**, so a template and a merchant's own file
+   * take one path — one transaction, and every rule the import enforces applies
+   * to a template automatically.
+   *
+   * ⚠️ **Into the merchant's first store**, because this only appears when they
+   * have no sets at all: the empty state is the first-run screen, and a store
+   * picker there is a question before they have seen what a set is. A merchant
+   * with several stores can copy it across afterwards.
+   */
+  const fromTemplate = useMutation({
+    mutationFn: (id: string) => {
+      const template = STARTER_TEMPLATES.find((candidate) => candidate.id === id);
+      const storeId = (stores.data ?? [])[0]?.id;
+
+      if (template === undefined || storeId === undefined) {
+        /*
+         * 🔴 **This was documented as unreachable, and was not.** The claim was
+         * that "the empty state needs a connected store to have got this far" —
+         * but the store guard lives in `NewSetForm`, the *blank canvas* form,
+         * and the picker never passed through it. A merchant with no connected
+         * store saw four clickable cards and got this rejection on every one.
+         *
+         * The funnel proves that merchant is real: more tenants have created an
+         * option set than have a connected store. The picker is now told it is
+         * `unavailable` and says so in place of the cards, so this branch is a
+         * backstop rather than the path a merchant actually walks.
+         */
+        return Promise.reject(new Error('Connect a store before using a template.'));
+      }
+
+      return importSet(storeId, templateDocument(template) as unknown as Record<string, unknown>);
+    },
+    /**
+     * 🔴 **Into the editor, not back to the list** (M20b.4).
+     *
+     * This used to be `onSuccess: refresh` — the same handler the blank-canvas
+     * form uses — so a merchant chose "T-shirt printing", the import succeeded,
+     * and they were left looking at the list they started on, with a new row to
+     * find and click.
+     *
+     * That undercut the milestone's own claim. A template is *"the fastest route
+     * to a published option"* only because the merchant lands in a **populated**
+     * editor and learns by seeing one; landing back on a list teaches nothing and
+     * costs a click more than the blank canvas it was meant to beat.
+     *
+     * 📌 The list is still invalidated: the merchant will come back to it, and a
+     * stale list would be missing the set they just made.
+     */
+    onSuccess: (created) => {
+      refresh();
+      router.push(`/option-sets/${created.id}`);
+    },
+  });
+
   const storeLabels = new Map((stores.data ?? []).map((store) => [store.id, store.storeUrl]));
   const showStore = (stores.data ?? []).length > 1;
 
@@ -73,18 +160,93 @@ export default function OptionSetsPage() {
           <p className="text-muted-foreground text-sm">
             The options your storefront offers, grouped and published together.
           </p>
+
+          {/*
+            🔴 **In the header, not the empty state** (ADR-098). The hierarchy was
+            already explained — and only where a merchant has *no* sets, so it
+            vanished the moment they had one. "What is the difference between a
+            group and an option?" is asked while building the second one.
+          */}
+          <HelpNote concept={HELP.hierarchy} className="pt-1" />
         </div>
 
-        {canEdit && !creating ? (
-          <Button onClick={() => setCreating(true)}>New option set</Button>
+        {/*
+          * Hidden while the tenant has no sets at all (ADR-087): the empty state
+          * below is leading that merchant through their first run, and a "New
+          * option set" button above it re-offers the blank canvas as the primary
+          * action — which is the contradiction ADR-087 resolves. It returns as
+          * soon as one set exists.
+          */}
+        {canEdit && !creating && (sets.data ?? []).length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {/*
+              * 🔴 **Templates stay reachable after the first run** (ADR-096).
+              *
+              * ADR-087 decided templates *lead* the first run and said nothing
+              * about afterwards — and the answer that fell out was "nothing":
+              * the picker lives inside the empty state, so a merchant who made
+              * one blank set could never find a template again. "Add gift wrap"
+              * is far more likely on a second set than a first.
+              *
+              * ⚠️ **Beside the create button, not inside its form.** A store
+              * picker and a name field are questions; a template is an answer.
+              * Putting templates inside the blank-canvas form would make a
+              * merchant start the wrong flow to find the right one.
+              */}
+            <Button variant="outline" onClick={() => setPickingTemplate((open) => !open)}>
+              {pickingTemplate ? 'Cancel' : 'New from template'}
+            </Button>
+
+            {/*
+              ⚠️ **Closes the template picker on the way in.** The two panels are
+              alternatives, and `pickingTemplate` used to survive the switch — so
+              a merchant who opened templates, chose the blank canvas instead, and
+              then cancelled the form was returned to the picker they had left.
+            */}
+            <Button
+              onClick={() => {
+                setPickingTemplate(false);
+                setCreating(true);
+              }}
+            >
+              New option set
+            </Button>
+          </div>
         ) : null}
       </div>
+
+      {pickingTemplate && !creating ? (
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            {/*
+              The same picker the empty state uses, with the same store guard —
+              one component, so the two placements cannot drift into offering
+              different templates or disagreeing about when one can be used.
+            */}
+            <TemplatePicker
+              templates={STARTER_TEMPLATES.map((template) => ({
+                id: template.id,
+                name: template.name,
+                description: template.description,
+              }))}
+              busy={fromTemplate.isPending}
+              unavailable={templateUnavailable(storeState)}
+              onChoose={(id: string) => fromTemplate.mutate(id)}
+            />
+
+            {fromTemplate.error === null || fromTemplate.error === undefined ? null : (
+              <ErrorState error={fromTemplate.error} />
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {creating ? (
         <Card>
           <CardContent className="pt-6">
             <NewSetForm
               stores={stores.data ?? []}
+              storeState={storeState}
               onCancel={() => setCreating(false)}
               onCreated={() => {
                 setCreating(false);
@@ -110,7 +272,61 @@ export default function OptionSetsPage() {
             }
             action={
               canEdit ? (
-                <Button onClick={() => setCreating(true)}>Create your first option set</Button>
+                <div className="space-y-4">
+                  {/*
+                    * 🔴 **Templates lead the first run (ADR-087).** A merchant who
+                    * does not yet know what "option group" means is not taught by
+                    * an empty screen, which is M20b.4's argument — so on a tenant
+                    * with no sets at all, the templates come first and "start from
+                    * scratch" is the secondary choice below them.
+                    *
+                    * ⚠️ **Demoted, never removed.** The earlier code put the blank
+                    * button above the picker; the spec said "never a blank canvas".
+                    * Both were deliberate and they contradicted each other. The
+                    * resolution is order, not deletion: a merchant who knows what
+                    * they want still reaches an empty set in one click, and is not
+                    * made to delete a template first.
+                    *
+                    * 📌 **Built through the IMPORT endpoint**, so a template and
+                    * a merchant's own file take one path: one transaction, and
+                    * every rule the import enforces applies to a template too.
+                    */}
+                  <TemplatePicker
+                    templates={STARTER_TEMPLATES.map((template) => ({
+                      id: template.id,
+                      name: template.name,
+                      description: template.description,
+                    }))}
+                    busy={fromTemplate.isPending}
+                    /*
+                     * An option set belongs to a store, so a template cannot be
+                     * imported without one. Said here rather than discovered by
+                     * clicking a card that always fails.
+                     *
+                     * 🔴 **`storeState` distinguishes "none" from "not yet known".**
+                     * `stores` and `sets` are independent queries and `AsyncState`
+                     * gates only on `sets`, so an empty set list can render while
+                     * the store list is still in flight. Testing
+                     * `(stores.data ?? []).length === 0` reads that in-flight
+                     * moment as "no stores" and tells a merchant who *does* have
+                     * one to go and connect it — the wrong message, shown to the
+                     * merchant who did everything right.
+                     *
+                     * `undefined` means unknown; only a settled empty array means
+                     * none. The same distinction `AsyncState` itself draws.
+                     */
+                    unavailable={templateUnavailable(storeState)}
+                    onChoose={(id: string) => fromTemplate.mutate(id)}
+                  />
+
+                  {fromTemplate.error === null || fromTemplate.error === undefined ? null : (
+                    <ErrorState error={fromTemplate.error} />
+                  )}
+
+                  <Button variant="outline" onClick={() => setCreating(true)}>
+                    Start from scratch
+                  </Button>
+                </div>
               ) : (
                 <span className="text-muted-foreground text-sm">Ask a teammate to create one.</span>
               )
@@ -125,6 +341,7 @@ export default function OptionSetsPage() {
                 <SetRow
                   set={set}
                   storeLabel={showStore ? storeLabels.get(set.storeId) : undefined}
+                  stores={stores.data ?? []}
                   canEdit={canEdit}
                   canDelete={canDelete}
                   onChanged={refresh}
@@ -138,12 +355,53 @@ export default function OptionSetsPage() {
   );
 }
 
+/**
+ * Why a template cannot be used right now, or null when it can.
+ *
+ * 📌 **One function, three call sites.** The empty state, the header picker and
+ * `NewSetForm` all need the same answer, and three copies of it is how two of
+ * them end up saying different things about the same tenant.
+ *
+ * ⚠️ `unknown` is not `none`: an unresolved store query must not be reported as
+ * "you have no stores", which is what told merchants with a connected store to
+ * go and connect one.
+ */
+function templateUnavailable(storeState: 'unknown' | 'none' | 'some'): ReactNode {
+  if (storeState === 'none') {
+    return (
+      <>
+        Connect a store first — an option set belongs to one.{' '}
+        <Link href="/stores" className="underline">
+          Go to stores
+        </Link>
+      </>
+    );
+  }
+
+  if (storeState === 'unknown') {
+    /* Neither offer nor refuse until the answer arrives. */
+    return <span className="text-muted-foreground text-sm">Checking your stores…</span>;
+  }
+
+  return null;
+}
+
 function NewSetForm({
   stores,
+  storeState,
   onCancel,
   onCreated,
 }: {
   stores: Array<{ id: string; storeUrl: string }>;
+  /**
+   * Whether the store list has settled, and what it said.
+   *
+   * 🔴 **`stores.length === 0` cannot answer this on its own.** The prop arrives
+   * as `stores.data ?? []`, so an unresolved query is indistinguishable from a
+   * tenant with no stores — and this form told a merchant whose store list was
+   * still loading to go and connect one they already had.
+   */
+  storeState: 'unknown' | 'none' | 'some';
   onCancel: () => void;
   onCreated: () => void;
 }) {
@@ -154,7 +412,12 @@ function NewSetForm({
    */
   const onlyStore = stores.length === 1 ? stores[0].id : '';
 
-  if (stores.length === 0) {
+  if (storeState === 'unknown') {
+    // Neither offer a form that cannot submit nor claim there is no store.
+    return <LoadingRows rows={2} />;
+  }
+
+  if (storeState === 'none') {
     return (
       <Alert>
         <AlertDescription>
@@ -210,21 +473,44 @@ function NewSetForm({
   );
 }
 
-function SetRow({
+/**
+ * ⚠️ **Exported for test** (M20.8). The page renders it directly; nothing else
+ * imports it. Copy-to-store cannot be asserted without mounting a row that has
+ * more than one store to choose between.
+ */
+export function SetRow({
   set,
   storeLabel,
+  stores,
   canEdit,
   canDelete,
   onChanged,
 }: {
   set: OptionSetSummary;
   storeLabel?: string;
+
+  /**
+   * Every store this merchant owns — the targets a copy may go to (M20.8).
+   *
+   * 📌 **The whole list, filtered here rather than by the caller**, because the
+   * row is what knows which store it is already in: the set's own store is not
+   * a target, it is the plain Duplicate.
+   */
+  stores: StoreSummary[];
+
   canEdit: boolean;
   canDelete: boolean;
   onChanged: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
+
+  /*
+   * 🔴 **Only the OTHER stores.** A merchant with one storefront has no choice
+   * to make, and a picker listing one option is a question with one answer.
+   */
+  const targets = stores.filter((store) => store.id !== set.storeId);
+  const [target, setTarget] = useState('');
 
   /**
    * Both writes carry `rowVersion`.
@@ -243,8 +529,11 @@ function SetRow({
   });
 
   const duplicate = useMutation({
-    mutationFn: () => duplicateSet(set.id),
-    onSuccess: onChanged,
+    mutationFn: (storeId?: string) => duplicateSet(set.id, undefined, storeId),
+    onSuccess: () => {
+      setTarget('');
+      onChanged();
+    },
   });
 
   return (
@@ -292,14 +581,52 @@ function SetRow({
             ) : null}
 
             {canEdit ? (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={duplicate.isPending}
-                onClick={() => duplicate.mutate()}
-              >
-                {duplicate.isPending ? 'Duplicating…' : 'Duplicate'}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={duplicate.isPending}
+                  onClick={() => duplicate.mutate(undefined)}
+                >
+                  {duplicate.isPending ? 'Duplicating…' : 'Duplicate'}
+                </Button>
+
+                {/*
+                  * 🔴 **Shown only when there IS somewhere else to copy to**
+                  * ([D5], M20.8). Assignments do not travel — they name
+                  * products by external id, which means nothing in another
+                  * store — so the copy arrives unassigned, which is honest
+                  * rather than broken.
+                  */}
+                {targets.length === 0 ? null : (
+                  <>
+                    <label className="sr-only" htmlFor={`copy-to-${set.id}`}>
+                      Copy to store
+                    </label>
+                    <select
+                      id={`copy-to-${set.id}`}
+                      value={target}
+                      onChange={(event) => setTarget(event.target.value)}
+                      className="border-input h-8 rounded-md border px-2 text-xs"
+                    >
+                      <option value="">Copy to…</option>
+                      {targets.map((store) => (
+                        <option key={store.id} value={store.id}>
+                          {store.storeUrl}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={target === '' || duplicate.isPending}
+                      onClick={() => duplicate.mutate(target)}
+                    >
+                      Copy to store
+                    </Button>
+                  </>
+                )}
+              </>
             ) : null}
 
             {canDelete ? (

@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { formatAmount } from '@/lib/money/money';
+import {
+  TARGET_TYPE_LABELS,
+  type AssignmentTarget,
+  type AssignmentTargetType,
+  type AssignmentView,
+} from '@/lib/option-sets/api';
 import type { Product } from '@/lib/products/api';
 
 /**
@@ -50,15 +57,33 @@ function price(product: Product): string {
  * **Assign** button there, the catalogue puts nothing — so it is a slot rather
  * than a flag. A boolean prop per screen is how the two copies drifted.
  */
-export function ProductRow({ product, action }: { product: Product; action?: ReactNode }) {
+export function ProductRow({
+  product,
+  action,
+  select,
+}: {
+  product: Product;
+  action?: ReactNode;
+  /**
+   * An optional selection control, rendered before the name (M19.5).
+   *
+   * A slot rather than a `selected`/`onSelect` pair: this component is also
+   * rendered where nothing is selectable, and an optional callback would put
+   * the decision "is this list selectable?" in two places.
+   */
+  select?: ReactNode;
+}) {
   return (
     <li className="flex items-center justify-between gap-4 p-3 text-sm">
-      <span className="min-w-0">
-        <span className="block truncate font-medium">{product.name}</span>
-        {/* Truncated like the name above it: a SKU is merchant text and can be long. */}
-        <span className="text-muted-foreground block truncate text-xs">
-          {identity(product)}
-          {product.type === 'simple' ? '' : ` · ${product.type}`}
+      <span className="flex min-w-0 items-center gap-3">
+        {select}
+        <span className="min-w-0">
+          <span className="block truncate font-medium">{product.name}</span>
+          {/* Truncated like the name above it: a SKU is merchant text and can be long. */}
+          <span className="text-muted-foreground block truncate text-xs">
+            {identity(product)}
+            {product.type === 'simple' ? '' : ` · ${product.type}`}
+          </span>
         </span>
       </span>
 
@@ -107,11 +132,96 @@ export function EmptyCatalogue({ searching }: { searching: boolean }) {
 
   return (
     <Alert>
-      <AlertTitle>Your catalogue has not been imported yet</AlertTitle>
+      <AlertTitle>No products have arrived from your store yet</AlertTitle>
       <AlertDescription>
-        Optionia imports your products from WooCommerce automatically. Once that has run they will
-        appear here, ready to assign to an option set.
+        {/*
+          🔴 **This used to say Optionia "imports" them, and that describes a
+          design that was withdrawn.** ADR-067 reversed it: the **store pushes**
+          its catalogue, because the cloud holds no WooCommerce credentials and
+          AC8 forbids it holding any. The old copy told a merchant the opposite
+          of how the system works — as the first thing they read when something
+          is wrong.
+
+          ⚠️ **And it named no action.** "Once that has run" leaves a merchant
+          waiting on a process they cannot see, start or diagnose. The plugin's
+          System Status carries a *Catalogue sync* row that answers exactly
+          this, so the honest empty state points at it.
+        */}
+        Your store sends its products to Optionia every few minutes. A large catalogue arrives in
+        batches, so this can take a while the first time. Check{' '}
+        <strong>Optionia → System Status</strong> in your WordPress admin: the{' '}
+        <em>Catalogue sync</em> row shows whether it has started, how far it has reached, and
+        whether it has finished.
       </AlertDescription>
     </Alert>
+  );
+}
+
+/**
+ * One current assignment.
+ *
+ * For a **product**, the name is joined server-side, so `null` means it is not
+ * in the catalogue — deleted upstream, or not yet imported. Saying that plainly
+ * is the point: the option has silently stopped rendering while this list still
+ * claims it applies, and the WooCommerce id alone would not tell a merchant why.
+ *
+ * 🔴 **That warning is product-only, and getting it wrong was the defect.**
+ * `productName` is joined from `store_products`, so it is `null` for **every**
+ * category, tag, attribute and price band — nothing else is in that table. Left
+ * as it was, every non-product assignment would have read "No longer in your
+ * catalogue" from the moment M19.1' made them authorable: a correct assignment
+ * reported as broken, which is worse than no message at all.
+ */
+export function AssignedRow({
+  row,
+  canAssign,
+  isBusy,
+  onRemove,
+}: {
+  row: AssignmentView;
+  canAssign: boolean;
+  isBusy: boolean;
+  onRemove: (target: AssignmentTarget) => void;
+}) {
+  /* An older row, written before target types were authorable, means `product`. */
+  const targetType = (row.targetType ?? 'product') as AssignmentTargetType;
+  const isProduct = targetType === 'product';
+
+  return (
+    <li className="flex items-center justify-between gap-3 p-3 text-sm">
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{row.productName ?? row.targetRef}</span>
+
+        {isProduct ? (
+          row.productName === null ? (
+            <span className="text-destructive text-xs">No longer in your catalogue</span>
+          ) : row.productStatus !== 'publish' ? (
+            <span className="text-muted-foreground text-xs">
+              {row.productStatus} — not visible on your storefront
+            </span>
+          ) : null
+        ) : (
+          /*
+           * ⚠️ Named rather than silent. A merchant who assigned "summer" as a
+           * category and again as a tag sees two identical rows otherwise.
+           */
+          <span className="text-muted-foreground text-xs">
+            {TARGET_TYPE_LABELS[targetType] ?? targetType}
+          </span>
+        )}
+      </span>
+
+      {canAssign && row.targetRef !== null ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={isBusy}
+          /* The type travels with the reference: `targetRef` is unique only within one. */
+          onClick={() => onRemove({ targetType, targetRef: row.targetRef as string })}
+        >
+          Remove
+        </Button>
+      ) : null}
+    </li>
   );
 }

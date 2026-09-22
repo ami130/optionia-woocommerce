@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
@@ -7,6 +8,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { invalidateActivation } from '@/lib/activation/cache';
 import { api } from '@/lib/api/client';
 import { formLevelMessage } from '@/lib/forms/api-errors';
 import { cn } from '@/lib/utils';
@@ -28,6 +30,7 @@ function VerifyEmailContent() {
   const params = useSearchParams();
   const token = params.get('token');
   const { me, refresh } = useSession();
+  const queryClient = useQueryClient();
 
   const [state, setState] = useState<'idle' | 'working' | 'done' | 'failed'>(
     token === null ? 'idle' : 'working',
@@ -111,6 +114,21 @@ function VerifyEmailContent() {
             if (needsRefresh) {
               void refresh();
             }
+
+            /*
+             * 🔴 **And the funnel, because this is a *client-side* navigation.**
+             *
+             * `/dashboard` is reached through `<Link>`, so the React Query cache
+             * survives and `['activation']` still holds the answer from before
+             * verification — for its 30-second `staleTime`, with
+             * `refetchOnWindowFocus` off. A merchant who verified and pressed
+             * Continue landed on the checklist with "Verify your email" still
+             * unticked.
+             *
+             * `verified` is the **first** step a new merchant completes, so this
+             * was the staleness most likely to be seen.
+             */
+            invalidateActivation(queryClient);
           }}
         >
           Continue

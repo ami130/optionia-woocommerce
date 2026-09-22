@@ -57,9 +57,27 @@ export function RulesPanel({
 }) {
   const queryClient = useQueryClient();
 
+  /**
+   * The set's rules.
+   *
+   * 🔴 **Seeded from the tree, which already carries them** (M20.8 audit F3).
+   * `GET /:id/detail` returns the rules with the groups, and this panel fetched
+   * a second copy on every render — the backend projection's own docblock
+   * records the mirror-image mistake being fixed once before: *"a fifth query on
+   * every dashboard render whose result was thrown away"*.
+   *
+   * ⚠️ **`initialData`, not a replacement for the query.** Every mutation here
+   * invalidates this key, and repointing those at the tree would change the
+   * panel's refresh contract for no gain. Seeding removes the request on first
+   * render and leaves every later refresh exactly as it was.
+   *
+   * 📌 **Optional on the type**, because `duplicateSet` and `createSet` answer
+   * with a summary that has no tree — so `?? []` rather than a cast.
+   */
   const rules = useQuery({
     queryKey: ['option-set', set.id, 'rules'],
     queryFn: () => listRules(set.id),
+    initialData: set.rules ?? [],
   });
 
   /*

@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSession, setSession } from '@/lib/auth/token-store';
 import {
+  assignProducts,
+  assignTargets,
   hasUnpublishedChanges,
   reorderGroups,
   reorderOptions,
   updateGroup,
+  unassignProduct,
+  unassignTarget,
   updateSet,
 } from './api';
 
@@ -85,6 +89,78 @@ describe('option-sets api', () => {
         .mockResolvedValueOnce(ok({ snapshot: { note: null } }));
 
       expect(await hasUnpublishedChanges('s', 1)).toBe(false);
+    });
+  });
+
+  /**
+   * Assignment writes (M19.1').
+   *
+   * 🔴 **Asserted at the wire, because a wrong URL or body here does not
+   * fail.** The API accepts both request shapes and defaults a missing
+   * `targetType` to `product`, so sending the wrong one returns `200` and
+   * writes an assignment that resolves to the wrong thing — or to nothing.
+   */
+  describe('assignments', () => {
+    it('posts the target shape, with the type on every entry', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await assignTargets('s-1', [{ targetType: 'category', targetRef: 'summer' }]);
+
+      expect(bodyOf(fetchMock, 0)).toEqual({
+        targets: [{ targetType: 'category', targetRef: 'summer' }],
+      });
+    });
+
+    /*
+     * `assignProducts` is a convenience over `assignTargets`, not a second path:
+     * two functions posting two body shapes to one endpoint is how they drift.
+     */
+    it('sends products through the same shape', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await assignProducts('s-1', ['wc-1', 'wc-2']);
+
+      expect(bodyOf(fetchMock, 0)).toEqual({
+        targets: [
+          { targetType: 'product', targetRef: 'wc-1' },
+          { targetType: 'product', targetRef: 'wc-2' },
+        ],
+      });
+    });
+
+    /**
+     * 🔴 **The type must be on the DELETE, not left to the default.**
+     * `targetRef` is unique only within a type, so omitting it removes the
+     * product row whenever a category shares a reference with one.
+     */
+    it('sends the target type when unassigning', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await unassignTarget('s-1', { targetType: 'category', targetRef: 'summer' });
+
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+        '/option-sets/s-1/assignments/summer?targetType=category',
+      );
+    });
+
+    it('names product explicitly when unassigning a product', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await unassignProduct('s-1', 'wc-1');
+
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain('targetType=product');
+    });
+
+    /* A slug with a slash or space would otherwise break the path or the query. */
+    it('encodes both the reference and the type', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({}));
+
+      await unassignTarget('s-1', { targetType: 'attribute', targetRef: 'pa_color/red blue' });
+
+      const url = String(fetchMock.mock.calls[0]?.[0]);
+
+      expect(url).toContain('pa_color%2Fred%20blue');
+      expect(url).not.toContain('pa_color/red blue');
     });
   });
 

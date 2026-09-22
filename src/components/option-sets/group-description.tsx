@@ -1,6 +1,8 @@
 'use client';
 
 import { useMutation } from '@tanstack/react-query';
+
+import type { HistoryEntry } from '@/lib/option-sets/history';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -24,11 +26,17 @@ import { groupSchema } from '@/lib/schemas/option-sets';
 export function GroupDescription({
   group,
   canEdit,
-  onChanged,
+  onPatched,
+  onRecord,
 }: {
   group: AuthoringGroup;
   canEdit: boolean;
-  onChanged: () => void;
+
+  /** 🔴 The updated group, so the caller patches rather than refetches. */
+  onPatched: (group: AuthoringGroup) => void;
+
+  /** Record the change so it can be undone (M20.10). */
+  onRecord: (entry: HistoryEntry) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(group.description ?? '');
@@ -45,9 +53,24 @@ export function GroupDescription({
      * "no change" would leave text on the storefront they had just deleted.
      */
     mutationFn: () => updateGroup(group.id, { description: draft.trim() }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       setOpen(false);
-      onChanged();
+      onPatched(updated);
+
+      /*
+       * ⚠️ **`?? ''` because an emptied box CLEARS the description** — the
+       * mutation above says so. The inverse has to send the same shape, or
+       * undoing a cleared description would send `null` and leave it cleared.
+       */
+      const before = group.description ?? '';
+
+      onRecord({
+        label: `Help text: ${group.label}`,
+        inverse: async () =>
+          void onPatched(await updateGroup(group.id, { description: before })),
+        replay: async () =>
+          void onPatched(await updateGroup(group.id, { description: updated.description ?? '' })),
+      });
     },
   });
 

@@ -1,26 +1,29 @@
 'use client';
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useState } from 'react';
 
 import { AsyncState } from '@/components/layout/states';
 import { EmptyCatalogue, ProductRow } from '@/components/products/product-display';
 import { useSession } from '@/components/providers/session-provider';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { roleCan } from '@/lib/auth/capabilities';
 import { useDebounced } from '@/lib/hooks/use-debounced';
 import { listProducts } from '@/lib/products/api';
 import { listStores } from '@/lib/stores/api';
+import { cn } from '@/lib/utils';
 
 /**
  * The synced catalogue (M13.6).
  *
- * Read-only by design. Products are WooCommerce's, imported here so an option
- * set can be assigned to one; editing a name or price on this screen would
- * either be silently overwritten by the next import or write back to a
- * merchant's shop, and neither is something this phase promises.
+ * Read-only by design. Products are WooCommerce's — **pushed here by the store**
+ * (ADR-067), not pulled — so an option set can be assigned to one; editing a name
+ * or price on this screen would either be silently overwritten by the next push
+ * or write back to a merchant's shop, and neither is something this phase
+ * promises.
  */
 export default function ProductsPage() {
   const { me } = useSession();
@@ -124,8 +127,29 @@ export default function ProductsPage() {
       {stores.isLoading === false && (stores.data ?? []).length === 0 ? (
         <Alert>
           <AlertTitle>Connect a store first</AlertTitle>
-          <AlertDescription>
-            Products are imported from WooCommerce. Connect a store to see them here.
+          <AlertDescription className="flex flex-col items-start gap-3">
+            {/*
+              🔴 **This said "Products are imported from WooCommerce", which is
+              the design ADR-067 withdrew.** The store **pushes** its catalogue:
+              the cloud holds no WooCommerce credentials and AC8 forbids it
+              holding any. `EmptyCatalogue` beside this branch already records
+              fixing exactly that wording — one branch was corrected and the one
+              next to it was missed, so a merchant on an empty screen was told
+              the opposite of how the system works.
+            */}
+            <span>
+              Your store sends its products to Optionia once the plugin is connected. Connect
+              one to see them here.
+            </span>
+
+            {/*
+              ⚠️ **And it named no action.** The spec asks for "one button that
+              fills it"; this said "connect a store" with nothing to click, while
+              the install screen that explains how already exists.
+            */}
+            <Link href="/install" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+              How to connect a store
+            </Link>
           </AlertDescription>
         </Alert>
       ) : (

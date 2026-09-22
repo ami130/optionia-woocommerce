@@ -76,6 +76,21 @@ export function disconnectStore(): void {
     'optionia_connection_tenant',
     'optionia_store_token',
     'optionia_circuit_state',
+
+    /*
+     * 🔴 **The catalogue walk, or the next run inherits a finished one.** The
+     * cursor holds a position against *a* cloud catalogue, and a completed walk
+     * correctly refuses to restart — so leaving it here made the next run push
+     * nothing for its brand-new store, and the assign step then found no
+     * products. Measured: `offset 5 / total 5` survived into a run whose store
+     * had zero rows.
+     *
+     * ⚠️ The plugin clears this on a *merchant-initiated* disconnect
+     * (`ConnectionSection`). This helper bypasses that path by deleting options
+     * directly, so it has to clear the same things — which is exactly why the
+     * omission was invisible.
+     */
+    'optionia_catalogue_cursor',
   ];
 
   for (const option of options) {

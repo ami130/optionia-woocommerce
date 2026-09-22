@@ -115,7 +115,33 @@ describe('shared product display', () => {
     const source = read(DISPLAY);
 
     expect(source).toMatch(/starts with<\/em>/);
-    expect(source).toContain('has not been imported yet');
+  });
+
+  /**
+   * 🔴 **The empty state must describe a push, not an import.** It said
+   * *"Optionia imports your products"* until M19.1 — a design ADR-067 had
+   * already withdrawn, since the cloud holds no WooCommerce credentials and AC8
+   * forbids it. A merchant met that sentence as the **first** thing they read
+   * when something was wrong, and it told them the opposite of how the system
+   * works.
+   */
+  it('describes the catalogue arriving from the store, not being imported', () => {
+    const source = read(DISPLAY);
+
+    expect(source).not.toMatch(/Optionia imports your products/);
+    expect(source).toMatch(/sends its products/);
+  });
+
+  /**
+   * ⚠️ **And it must name an action.** "Once that has run" leaves a merchant
+   * waiting on a process they cannot see or diagnose. The plugin's System
+   * Status has a row that answers exactly this question.
+   */
+  it('points the merchant at where the sync is visible', () => {
+    const source = read(DISPLAY);
+
+    expect(source).toMatch(/System Status/);
+    expect(source).toMatch(/Catalogue sync/);
   });
 
   /**
