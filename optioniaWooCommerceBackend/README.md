@@ -99,6 +99,35 @@ npm run test
 `check:secrets` runs first in CI, independently. A leaked credential fails the
 build even when everything else passes.
 
+### The e2e suite needs a prepared database
+
+```bash
+npm run test:e2e
+```
+
+🔴 **It uses `optionia_woo_test`, never your development database.** Pinned in
+both `test/setup-e2e.ts` and `test/teardown-e2e.ts` — the teardown runs in its
+own process and does not load `setupFiles`, so pinning one would leave the half
+that *deletes* unpinned. It sweeps every tenant with no members, option sets or
+stores, which is correct against a test database and destructive against a
+development one (F53).
+
+⚠️ **Schema alone is not enough.** A freshly created database needs migrations
+**and** seed data, or the application refuses to register a tenant — *"No 'free'
+plan found"* — and the suite reports hundreds of assertion failures rather than
+the one real cause:
+
+```bash
+mysql -e "CREATE DATABASE IF NOT EXISTS optionia_woo_test"
+DB_NAME=optionia_woo_test NODE_ENV=test npm run migration:run
+DB_NAME=optionia_woo_test NODE_ENV=test npm run db:seed
+```
+
+📌 **`DB_PASSWORD` cannot be empty**, even locally: `config/env.ts` reads it
+through `required()`, which throws on an empty string as well as an absent one.
+The common root-with-no-password setup does not work — create a MySQL user with
+a password.
+
 ---
 
 ## Principles
