@@ -1,6 +1,8 @@
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { DataSource } from 'typeorm';
 
 import { bootstrapTestApp } from './harness';
@@ -124,7 +126,14 @@ describe('option sets (e2e)', () => {
       `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, configVersion,
                            createdAt, updatedAt)
        VALUES (?, ?, 'woocommerce', ?, ?, 'connected', 0, NOW(3), NOW(3))`,
-      [id, await tenantIdOf(which), which, `https://${which}.example.com`],
+      /*
+       * ⚠️ **The URL is per STORE, not per tenant.** `uq_stores_tenant_url`
+       * allows one tenant several storefronts only at different addresses, and
+       * seeding two with `https://a.example.com` collided — which is the
+       * constraint modelling reality, since M20.8's whole point is a merchant
+       * running more than one shop.
+       */
+      [id, await tenantIdOf(which), which, `https://${which}-${id}.example.com`],
     );
 
     return id;
@@ -358,6 +367,364 @@ describe('option sets (e2e)', () => {
     }, 20_000);
   });
 
+  describe('import', () => {
+    const doc = (over: Record<string, unknown> = {}) => ({
+      version: 1,
+      name: 'Imported',
+      groups: [
+        {
+          label: 'Finish',
+          description: null,
+          displayType: 'inline',
+          isCollapsible: false,
+          isEnabled: true,
+          sortOrder: 0,
+          options: [
+            {
+              key: 'colour',
+              label: 'Colour',
+              presentation: 'dropdown',
+              isRequired: false,
+              isEnabled: true,
+              sortOrder: 0,
+              values: [
+                {
+                  valueKey: 'gold',
+                  label: 'Gold',
+                  sortOrder: 0,
+                  priceType: 'fixed',
+                  priceAmountMinor: 500,
+                  skuSuffix: '-GD',
+                },
+              ],
+            },
+          ],
+          items: [],
+        },
+      ],
+      rules: [],
+      ...over,
+    });
+
+    it('builds a set from a document', async () => {
+      const response = await asA('post', '/import').send({ storeId: storeA, document: doc() });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data).toMatchObject({ name: 'Imported', status: 'draft' });
+    }, 30_000);
+
+    it('builds the whole tree', async () => {
+      const created = await asA('post', '/import').send({ storeId: storeA, document: doc() });
+      const detail = await asA('get', `/${created.body.data.id}/detail`);
+
+      const group = detail.body.data.groups[0];
+
+      expect(group.label).toBe('Finish');
+      expect(group.options[0].key).toBe('colour');
+      expect(group.options[0].values[0]).toMatchObject({ valueKey: 'gold', skuSuffix: '-GD' });
+    }, 30_000);
+
+    /**
+     * 🔴 **The whole reason this is a backend endpoint.** Rebuilding from the
+     * dashboard would be a sequence of creates with no transaction: a document
+     * failing partway leaves a set nobody authored, and a create is a shape
+     * change that clears the undo log. One transaction means a bad document
+     * creates **nothing**.
+     */
+    it('creates nothing when a document is invalid partway through', async () => {
+      const before = await asA('get', '');
+
+      const bad = doc();
+
+      /* The second option names a presentation the registry does not have. */
+      (bad.groups[0] as { options: unknown[] }).options.push({
+        key: 'shape',
+        label: 'Shape',
+        presentation: 'hologram',
+        isRequired: false,
+        isEnabled: true,
+        sortOrder: 1,
+        values: [],
+      });
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+
+      const after = await asA('get', '');
+
+      expect(after.body.data.length).toBe(before.body.data.length);
+    }, 30_000);
+
+    /**
+     * 🔴 **A failure in a LATER group, after earlier ones are written.**
+     *
+     * The test above fails on the second option of the *first* group, so only
+     * one group had been saved when the transaction rolled back. This one
+     * writes a whole valid group, its option and its value — then fails in the
+     * second group, which is the case that actually exercises the rollback
+     * across several `manager.save` calls.
+     */
+    it('rolls back groups already written when a later one fails', async () => {
+      const before = await asA('get', '');
+
+      const bad = doc();
+
+      (bad.groups as Record<string, unknown>[]).push({
+        label: 'Second',
+        description: null,
+        displayType: 'inline',
+        isCollapsible: false,
+        isEnabled: true,
+        sortOrder: 20,
+        options: [
+          {
+            key: 'broken',
+            label: 'Broken',
+            presentation: 'hologram',
+            isRequired: false,
+            isEnabled: true,
+            sortOrder: 10,
+            values: [],
+          },
+        ],
+        items: [],
+      });
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+
+      const after = await asA('get', '');
+
+      expect(after.body.data.length).toBe(before.body.data.length);
+    }, 30_000);
+
+    /** ⚠️ A target store in another tenant is a 404, as everywhere else. */
+    it('refuses a store belonging to another tenant', async () => {
+      const response = await asA('post', '/import').send({ storeId: storeB, document: doc() });
+
+      expect(response.status).toBe(404);
+    }, 30_000);
+
+    /**
+     * 🔴 **A valueless type must refuse values, and the import did not.**
+     *
+     * `option-values.service.ts` states the rule and the reason: *"a merchant
+     * could add three values to a text field, the publish check would
+     * deliberately look past them, and the storefront would render an input
+     * that ignores them. Rows that exist, validate, publish, and mean
+     * nothing."*
+     *
+     * Measured before this test existed: `status=201 values=1`. The import
+     * wrote rows through `manager.save` directly and never called
+     * `takesValues` — and neither did the dashboard's own validator, so the
+     * defect was reachable through the ordinary UI.
+     *
+     * ⚠️ **Our own export cannot produce such a file**, because the tree cannot
+     * hold that shape. It takes a hand-edited document — which is exactly what
+     * import exists to accept.
+     */
+    it('refuses values on a type that takes none', async () => {
+      const bad = doc();
+
+      (bad.groups[0] as { options: Record<string, unknown>[] }).options[0]!.presentation =
+        'text_field';
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    /** ⚠️ And a text field with no values imports fine — the rule is about values. */
+    it('imports a valueless type that carries no values', async () => {
+      const fine = doc();
+      const option = (fine.groups[0] as { options: Record<string, unknown>[] }).options[0]!;
+
+      option.presentation = 'text_field';
+      option.values = [];
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: fine });
+
+      expect(response.status).toBe(201);
+    }, 30_000);
+
+    /**
+     * 🔴 **The limits the API owns, enforced by the API.**
+     *
+     * The dashboard checks them before sending, which makes the UI path safe —
+     * but a client check is never the boundary, and this endpoint is guarded by
+     * a capability rather than by a client.
+     */
+    it('refuses more values than the limit allows', async () => {
+      const bad = doc();
+      const option = (bad.groups[0] as { options: Record<string, unknown>[] }).options[0]!;
+
+      option.values = Array.from({ length: 501 }, (_, i) => ({
+        valueKey: `v${i}`,
+        label: `V${i}`,
+        sortOrder: i,
+        priceType: 'fixed',
+        priceAmountMinor: 0,
+      }));
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    it('refuses more options than the limit allows', async () => {
+      const bad = doc();
+      const group = bad.groups[0] as { options: Record<string, unknown>[] };
+
+      group.options = Array.from({ length: 201 }, (_, i) => ({
+        key: `k${i}`,
+        label: `K${i}`,
+        presentation: 'dropdown',
+        isRequired: false,
+        isEnabled: true,
+        sortOrder: i,
+        values: [{ valueKey: 'a', label: 'A', sortOrder: 0, priceType: 'fixed', priceAmountMinor: 0 }],
+      }));
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    /**
+     * 🔴 **A duplicate key reached the database and became a 500.** The unique
+     * index caught it, so nothing was corrupted — but a merchant met a server
+     * error where the create path gives them a named field.
+     */
+    it('refuses two values sharing a key with a 400, not a 500', async () => {
+      const bad = doc();
+      const option = (bad.groups[0] as { options: Record<string, unknown>[] }).options[0]!;
+
+      (option.values as Record<string, unknown>[]).push({
+        valueKey: 'gold',
+        label: 'Gold again',
+        sortOrder: 1,
+        priceType: 'fixed',
+        priceAmountMinor: 0,
+      });
+
+      const response = await asA('post', '/import').send({ storeId: storeA, document: bad });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    /**
+     * 🔴 **Every starter template must survive the real endpoint** (M20.7, M20b.4).
+     *
+     * A template a merchant meets as an error on their **first action** is the
+     * worst possible first run — and the dashboard's own tests validate them
+     * against `parsePortable`, which is a client check rather than the boundary.
+     *
+     * ✏️ **Driven by a fixture emitted from `templates.ts`, not a hand copy.**
+     * The previous version pasted the engraving document into this file and
+     * tested that one alone. It had already drifted — the pasted copy carried a
+     * single option where the real template carries two — which is exactly the
+     * failure a hand copy invites, and it left three of the four templates with
+     * no proof at all.
+     *
+     * `bin/check-template-fixture.sh` keeps the fixture and the dashboard's
+     * source in step, so this cannot quietly test a stale document again.
+     *
+     * 📌 **`fixtures/dashboard/`, not `fixtures/shared/`.** That directory means
+     * *shared with the plugin* — `check-fixture-parity.sh` requires every file in
+     * it to exist in both repositories — and the plugin never imports a template.
+     */
+    describe('the starter templates', () => {
+      const templates: Record<string, Record<string, unknown>> = JSON.parse(
+        readFileSync(join(__dirname, 'fixtures/dashboard/starter-templates.json'), 'utf8'),
+      ) as Record<string, Record<string, unknown>>;
+
+      /* A gate that iterates an empty object passes for the wrong reason. */
+      it('covers the four the plan names', () => {
+        expect(Object.keys(templates).sort()).toEqual([
+          'dimensions',
+          'engraving',
+          'gift-wrap',
+          'tshirt',
+        ]);
+      });
+
+      it.each(Object.keys(templates))('imports the %s template', async (id) => {
+        const response = await asA('post', '/import').send({
+          storeId: storeA,
+          document: templates[id],
+        });
+
+        expect(response.status).toBe(201);
+
+        /*
+         * ⚠️ Asserted on the **stored tree**, not on the create response: an
+         * import that answered `201` and wrote nothing would satisfy a status
+         * check, and a merchant would open an empty set.
+         *
+         * ✏️ **Counted against the document, not against zero.** This asserted
+         * `options.length > 0`, which is satisfied by an endpoint that imported
+         * one option out of five. Comparing to the sent document means every
+         * option in it must arrive.
+         *
+         * ⚠️ **This cannot detect fixture drift, and is not meant to.** Both
+         * sides of the comparison come from the same file, so a thinned fixture
+         * shrinks the expectation with it — verified, it passes. What it proves
+         * is that the *endpoint* honours the document it was given. That the
+         * document still matches `templates.ts` is
+         * `templates.fixture.test.ts`'s job, in the only repository that can
+         * rebuild it.
+         */
+        const detail = await asA('get', `/${response.body.data.id}/detail`);
+        const groups = detail.body.data.groups as Array<{ options: unknown[] }>;
+        const wanted = templates[id] as unknown as {
+          groups: Array<{ options: unknown[] }>;
+        };
+
+        expect(groups).toHaveLength(wanted.groups.length);
+        wanted.groups.forEach((group, index) => {
+          expect(groups[index].options).toHaveLength(group.options.length);
+        });
+      }, 30_000);
+
+      /**
+       * The engraving template is the richest — option-level `per_char` pricing,
+       * a length limit, a derived counter and a charset rule — so its fields are
+       * asserted individually rather than only counted.
+       */
+      it('preserves the engraving template’s pricing and validation', async () => {
+        const response = await asA('post', '/import').send({
+          storeId: storeA,
+          document: templates.engraving,
+        });
+
+        expect(response.status).toBe(201);
+
+        const detail = await asA('get', `/${response.body.data.id}/detail`);
+        const options = detail.body.data.groups[0].options as Array<{
+          presentation: string;
+          pricing?: Record<string, unknown>;
+          validation?: Record<string, unknown>;
+        }>;
+        const text = options.find((option) => option.presentation === 'text_field');
+
+        expect(text?.pricing).toMatchObject({ type: 'per_char', amountMinor: 50 });
+        expect(text?.validation).toMatchObject({ maxLength: 30 });
+      }, 30_000);
+    });
+
+    /** 📌 An imported set is always a draft, whatever the document claims. */
+    it('imports as a draft', async () => {
+      const response = await asA('post', '/import').send({
+        storeId: storeA,
+        document: doc({ status: 'published', version: 9 }),
+      });
+
+      expect(response.body.data).toMatchObject({ status: 'draft', version: 0 });
+    }, 30_000);
+  });
+
   describe('duplicate', () => {
     it('copies a set as a draft', async () => {
       const created = await asA('post').send({ name: 'Original', storeId: storeA });
@@ -367,6 +734,69 @@ describe('option sets (e2e)', () => {
       expect(response.body.data.name).toBe('Original (copy)');
       expect(response.body.data.status).toBe('draft');
       expect(response.body.data.id).not.toBe(created.body.data.id);
+    }, 30_000);
+
+    /**
+     * Copying into a **second store of the same tenant** (M20.8).
+     *
+     * 🔴 **The multi-store differentiator [D5] promises**, and `duplicate`
+     * hardcoded `storeId: source.storeId` — so a merchant running three
+     * storefronts rebuilt the same option set by hand for each.
+     *
+     * ⚠️ **Assignments are deliberately NOT copied**, and that is what makes
+     * this safe: they name products by external id, which means nothing in
+     * another store. The copy arrives unassigned, which is the honest state.
+     */
+    it('copies into another store of the same tenant', async () => {
+      const storeA2 = await store('a');
+      const created = await asA('post').send({ name: 'Shared', storeId: storeA });
+
+      const response = await asA('post', `/${created.body.data.id}/duplicate`).send({
+        storeId: storeA2,
+      });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.storeId).toBe(storeA2);
+      expect(response.body.data.status).toBe('draft');
+    }, 30_000);
+
+    it('stays in the source store when no target is named', async () => {
+      const created = await asA('post').send({ name: 'Local', storeId: storeA });
+      const response = await asA('post', `/${created.body.data.id}/duplicate`).send({});
+
+      expect(response.body.data.storeId).toBe(storeA);
+    }, 30_000);
+
+    /**
+     * 🔴 **The tenant-isolation surface this milestone opens.**
+     *
+     * A target store is a caller-supplied id, so without a check a merchant
+     * could copy their option set **into another tenant's storefront** — the
+     * copy would be stamped with the caller's tenant while pointing at someone
+     * else's shop.
+     *
+     * ⚠️ **404, not 403**, matching `assertStoreBelongsToTenant`: a store id in
+     * another tenant must not be distinguishable from one that does not exist,
+     * or the error itself confirms the store is real.
+     */
+    it('refuses a target store belonging to another tenant', async () => {
+      const created = await asA('post').send({ name: 'Smuggle', storeId: storeA });
+
+      const response = await asA('post', `/${created.body.data.id}/duplicate`).send({
+        storeId: storeB,
+      });
+
+      expect(response.status).toBe(404);
+    }, 30_000);
+
+    it('refuses a target store that does not exist', async () => {
+      const created = await asA('post').send({ name: 'Ghost', storeId: storeA });
+
+      const response = await asA('post', `/${created.body.data.id}/duplicate`).send({
+        storeId: randomUUID(),
+      });
+
+      expect(response.status).toBe(404);
     }, 30_000);
 
     it('accepts a name for the copy', async () => {

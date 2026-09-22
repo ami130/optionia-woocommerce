@@ -133,13 +133,43 @@ describe('tenant isolation matrix (e2e)', () => {
     ['DELETE /v1/option-sets/:id/permanent', () =>
       del(tokenB, `/option-sets/${owned.set}/permanent`)],
     ['POST /v1/option-sets/:id/duplicate', () => post(tokenB, `/option-sets/${owned.set}/duplicate`)],
+    /*
+     * 🔴 **The target store is the tenant surface here**, not a set id: an
+     * import names the store its new set belongs to, and the scoped repository
+     * stamps the caller's tenant on the row — so an unchecked target would
+     * produce a set that belongs to B while pointing at A's storefront.
+     */
+    ['POST /v1/option-sets/import', () =>
+      post(tokenB, '/option-sets/import', {
+        storeId: storeA,
+        document: { version: 1, name: 'Smuggled', groups: [], rules: [] },
+      })],
     ['GET /v1/option-sets/:id/detail', () => get(tokenB, `/option-sets/${owned.set}/detail`)],
     ['GET /v1/option-sets/:id/assignments', () =>
       get(tokenB, `/option-sets/${owned.set}/assignments`)],
     ['POST /v1/option-sets/:id/assignments', () =>
       post(tokenB, `/option-sets/${owned.set}/assignments`, { externalProductIds: ['wc-1'] })],
-    ['DELETE /v1/option-sets/:id/assignments/:externalProductId', () =>
+    // M19.1' added a second request shape reaching the same service. A new wire
+    // shape gets its own negative test rather than inheriting the old one's.
+    ['POST /v1/option-sets/:id/assignments (targets)', () =>
+      post(tokenB, `/option-sets/${owned.set}/assignments`, {
+        targets: [{ targetType: 'category', targetRef: 'summer' }],
+      })],
+    ['DELETE /v1/option-sets/:id/assignments/:targetRef', () =>
       del(tokenB, `/option-sets/${owned.set}/assignments/wc-1`)],
+
+    /*
+     * Bulk removal and the pre-apply count (M19.5). Both reach the same
+     * tenant-scoped `requireSet()`, but that is the claim under test rather
+     * than a reason to skip them: a route that resolved the set another way
+     * would pass every other suite.
+     */
+    ['POST /v1/option-sets/:id/assignments/unassign', () =>
+      post(tokenB, `/option-sets/${owned.set}/assignments/unassign`, {
+        targets: [{ targetType: 'product', targetRef: 'wc-1' }],
+      })],
+    ['GET /v1/option-sets/:id/assignments/preview', () =>
+      get(tokenB, `/option-sets/${owned.set}/assignments/preview?targetType=category&targetRef=summer`)],
     ['GET /v1/option-sets/:id/preview', () => get(tokenB, `/option-sets/${owned.set}/preview`)],
 
     /**
@@ -323,6 +353,74 @@ describe('tenant isolation matrix (e2e)', () => {
       expect(
         response.body.data.some((row: { id: string }) => row.id === storeA),
       ).toBe(false);
+    }, 60_000);
+
+    /**
+     * `GET /v1/activation/me` (M20b.1) names no id at all — the tenant comes from
+     * the request context — so the cross-tenant probe has nothing to ask for and
+     * the property proven instead is that the *answer* is the caller's own.
+     *
+     * Tenant A owns a connected store and a published-capable option set here;
+     * tenant B owns neither. So an unscoped funnel does not merely return the
+     * wrong id, it tells tenant B they have connected a store and created an
+     * option set — leaking tenant A's progress as tenant B's own.
+     */
+    it('GET /v1/activation/me answers for the caller, not another tenant', async () => {
+      const [a, b] = await Promise.all([
+        get(tokenA, '/activation/me'),
+        get(tokenB, '/activation/me'),
+      ]);
+
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+
+      // Different tenants, and therefore different answers.
+      expect(a.body.data.tenantId).not.toBe(b.body.data.tenantId);
+
+      const reached = (body: { data: { steps: Array<{ step: string; reached: boolean }> } },
+                       step: string) =>
+        body.data.steps.find((s) => s.step === step)?.reached;
+
+      // Tenant A has a connected store and an option set; tenant B has neither.
+      expect(reached(a.body, 'connected')).toBe(true);
+      expect(reached(a.body, 'created')).toBe(true);
+      expect(reached(b.body, 'connected')).toBe(false);
+      expect(reached(b.body, 'created')).toBe(false);
+    }, 60_000);
+
+    /**
+     * `/v1/activation/preferences` is **per user**, not per tenant (ADR-088), so
+     * the property is stronger than isolation between tenants: one person's
+     * dismissal must not reach another person at all.
+     *
+     * Asserted by *writing* as one and reading as the other — a read-only check
+     * would pass against a table that is simply empty, which is the shape of
+     * green test this suite exists to prevent.
+     */
+    it('PATCH /v1/activation/preferences does not reach another user', async () => {
+      await patch(tokenA, '/activation/preferences', { dismissed: true });
+
+      const [a, b] = await Promise.all([
+        get(tokenA, '/activation/preferences'),
+        get(tokenB, '/activation/preferences'),
+      ]);
+
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+
+      // A dismissed; B never did, and must not inherit it.
+      expect(a.body.data.checklistDismissedAt).not.toBeNull();
+      expect(b.body.data.checklistDismissedAt).toBeNull();
+    }, 60_000);
+
+    /** Restoring is the same route with `false`, and is equally private. */
+    it('restores only the caller’s own checklist', async () => {
+      await patch(tokenA, '/activation/preferences', { dismissed: true });
+      await patch(tokenA, '/activation/preferences', { dismissed: false });
+
+      const a = await get(tokenA, '/activation/preferences');
+
+      expect(a.body.data.checklistDismissedAt).toBeNull();
     }, 60_000);
 
     /**

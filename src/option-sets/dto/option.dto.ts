@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { OptionalNotNull, Trimmed } from '../../common/validation/trimmed.decorator';
 import {
-  IsBoolean,
   IsEnum,
   IsObject,
   IsOptional,
@@ -13,6 +12,7 @@ import {
 } from 'class-validator';
 
 import { Cardinality, Presentation, ValueKind } from '../../common/database/enums';
+import { IsStrictBoolean } from '../../common/validation/strict-boolean.decorator';
 
 /**
  * Request shapes for option endpoints.
@@ -93,12 +93,12 @@ export class CreateOptionDto {
   helpText?: string;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isRequired?: boolean;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 
@@ -161,12 +161,12 @@ export class UpdateOptionDto {
   helpText?: string;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isRequired?: boolean;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 

@@ -320,6 +320,12 @@ describe('audit coverage (e2e)', () => {
        * appear here if driving it from this suite is genuinely impossible.
        */
       const coveredElsewhere: Record<string, string> = {
+        /*
+         * Needs a whole exported document to rebuild from — the import suite
+         * has one, and building a second here would be a second definition of
+         * what an exported set looks like.
+         */
+        [AuditAction.OPTION_SET_IMPORTED]: 'option-sets-http.e2e-spec',
         // Needs a rule targeting the value; the cascade suite creates one.
         [AuditAction.OPTION_VALUE_DELETE_REFUSED]: 'cascade.e2e-spec',
         // Team lifecycle: a second user, an invitation and its acceptance.

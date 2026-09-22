@@ -171,6 +171,9 @@ export interface AppConfig {
    */
   readonly appUrl: string;
 
+  /** Directory holding built plugin zips, for the download route (M20b.3). */
+  readonly pluginDistDir: string;
+
   readonly logLevel: string;
 }
 
@@ -284,6 +287,23 @@ export function loadConfig(): AppConfig {
     // Production is not allowed to guess — a wrong host in a verification link
     // is a link that cannot be clicked.
     appUrl: isProduction ? required('APP_URL') : optional('APP_URL', 'http://localhost:3000'),
+
+    /**
+     * Where the built plugin zips live, for the download route (M20b.3).
+     *
+     * ⚠️ **Defaulted to the plugin repo's own `dist/` in development**, which is
+     * exactly where `bin/package.sh` writes them — so a developer who has built
+     * the plugin gets a working download with no configuration, and one who has
+     * not gets a clear 404 rather than a confusing empty file.
+     *
+     * Production sets it explicitly: the API and the plugin repo are not
+     * neighbours on a deployed host.
+     *
+     * 📌 **A relative path, resolved by the service rather than here.** This file
+     * has no imports at all — it is loaded by the TypeORM CLI as well as by Nest
+     * — and pulling in `node:path` to build a default would give it one.
+     */
+    pluginDistDir: optional('PLUGIN_DIST_DIR', '../optioniaWooCommercePlugin/dist'),
 
     mail: loadMailConfig(isProduction),
 

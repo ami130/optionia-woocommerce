@@ -100,6 +100,12 @@ export function ApiErrors(
         'The request conflicts with current state — a stale `rowVersion`, a ' +
         'duplicate key, or a transient lock conflict a retry may resolve.',
     },
+    413: {
+      code: ErrorCode.PAYLOAD_TOO_LARGE,
+      description:
+        'The request body exceeds the 1 MB limit. Send fewer items per ' +
+        'request; the limit is a bound on one request, not on the total.',
+    },
     429: { code: ErrorCode.RATE_LIMITED, description: 'Rate limit exceeded.' },
   };
 

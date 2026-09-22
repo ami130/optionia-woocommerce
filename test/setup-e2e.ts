@@ -21,6 +21,14 @@ process.env.THROTTLE_SHORT_LIMIT ??= '100000';
 process.env.THROTTLE_DEFAULT_LIMIT ??= '100000';
 process.env.THROTTLE_SUSTAINED_LIMIT ??= '100000';
 
+/*
+ * ⚠️ **The per-route auth caps are separate, and raising the globals misses
+ * them.** `POST /auth/refresh` allows 60 an hour in the controller; a suite
+ * that signs in and navigates repeatedly exhausts it, and every later
+ * navigation lands on the sign-in screen instead of the page under test.
+ */
+process.env.THROTTLE_REFRESH_LIMIT ??= '100000';
+
 
 /**
  * Load `.env` here, before any suite's imports are evaluated.

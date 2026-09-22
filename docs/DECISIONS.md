@@ -5811,3 +5811,1425 @@ forgotten enum member.
 value that stays unbuilt and becomes the excuse. The guard is the same — it
 remains in the enum, falls back visibly, and **no merchant can select it**, so
 nobody discovers it silently does nothing.
+
+---
+
+## ADR-066 — Stages 18-5 and 18-7 are closed as superseded, and Phase 18 closes with them
+
+**Status:** accepted · **Phase 18, Stage 18-8**
+
+### Context
+
+Phase 18's exit audit found the phase's criteria met and one real gap, which
+M18.8a closed. Two stage rows remained open — and **neither describes work that
+still exists**, which is a different thing from work that was skipped.
+
+Closing a scoped stage needs a written reason, for the same purpose ADR-055 and
+ADR-056 served: a reader who finds the gap should find the reason at the same
+time, rather than concluding the stage was forgotten.
+
+### Decision
+
+**1. 18-5 — "group presentation config" — is superseded, not deferred.**
+
+M18.5 asked for *"columns, swatch sizing, label placement, help text"* at the
+group level. Each has been answered elsewhere:
+
+| Asked for | Where it went |
+|---|---|
+| Help text | ✅ **Shipped in M18.6a** as the group's `description` — stored, published and rendered since Phase 5, and settable nowhere until then |
+| Label placement | ✏️ **Withdrawn in M18.6a** (ADR-064) — a theme's job, and its `hidden` value would strip the accessible name from a priced control |
+| Columns, swatch sizing | ✅ **Authorable per option** as of M18.8a |
+
+⚠️ **Adding a second, group-level copy of `columns` and `swatchSize` would be
+two mechanisms for one fact** — the shape this phase withdrew three fields and
+two rule actions for. A group-level column count would also have to resolve
+against each option's own, and *"which wins?"* is a question with no good answer
+that a merchant should never have to ask.
+
+📌 **If a merchant asks for it, it returns as its own stage with that evidence.**
+What is closed is the row, not the idea.
+
+**2. 18-7 — "group-level selection rules" — cannot proceed on its written
+grounds.**
+
+ADR-057 settled what M18.4's example means:
+
+> *"'Choose at least 2' is a count over a **multi-value answer**. Shipping group
+> rules against single-value options would either mean counting **options
+> answered** — a different feature wearing M18.4's words — or a rule that can
+> never be satisfied."*
+
+**M18.3a delivered exactly that** — `min_selections` / `max_selections`, enforced
+per option — and M18.8a made them authorable. The stage's stated example is done.
+
+What remains is *"choose 2 across a group"*, which ADR-057 itself called a
+different feature. It is not configuration:
+
+- A condition reads **one** option (`EvaluableCondition.optionId` is singular).
+- **None of the nine operators counts anything** — they are equality, substring,
+  list membership and numeric comparison.
+
+So it needs a condition shape that spans options *and* a counting operator,
+**in all three evaluators**, held to the shared fixture. That is new machinery
+and a product question, not a stage that was skipped.
+
+### Consequences
+
+**Phase 18 closes.** Its exit criteria — *"merchants can structure a complex
+product into legible sections; ordering persists and renders identically in
+dashboard, preview, and storefront"* — were verified against composed behaviour
+rather than asserted, and the one gap that verification found was closed before
+this decision.
+
+**Three things carry forward with named owners, and none is a gap:**
+
+| Carried | Owner | Reason |
+|---|---|---|
+| `stepped` layout | **18-4a** | ADR-063 — a wizard collides with the rule runtime's visibility model |
+| `price_display: total` | **Phase 21** | ADR-065 — needs the server-quoted preview's base price |
+| Group nesting | **M18.1a** | ADR-058 |
+
+🔴 **The lesson this phase should carry out of it**, recorded because it recurred
+five times: *"the storefront reads it"* was repeatedly treated as done. A stage
+that adds a published field is not complete until a merchant can set it — and
+M18.3a proved a stage can even close a finding about a field and still leave it
+unauthorable.
+
+---
+
+## ADR-067 — The catalogue is pushed by the store, not pulled by the cloud
+
+**Status:** accepted · **Phase 19, Stage 19-0**
+
+### Context
+
+M19.1 reads: *"Paginated pull from the WC REST API into `store_products`."*
+
+**The cloud cannot do that, and the gap is structural rather than unbuilt.**
+Measured against the code:
+
+- The `Store` entity holds `storeUrl`, `pushUrl`, `configVersion`, version
+  strings — and **no WooCommerce credentials**. No `consumerKey`,
+  `consumerSecret` or `ck_`/`cs_` value exists anywhere in the backend.
+- No `wc/v3` or `wp-json/wc` call exists in either repository.
+- The connection handshake exchanges a **per-store token the plugin holds**; it
+  requests no WooCommerce API scope and never has.
+- `products.controller.ts` is **`@Get()` only**. Nothing can write
+  `store_products` — today it is populated solely by the E2E stand-in, through
+  raw SQL.
+
+So a pull would need a second credential exchange, a credential store, and a
+reachable storefront. **AC8 rules the first two out** on their own:
+
+> *"Every plugin installation is treated as potentially hostile. Authorization is
+> enforced at the API boundary, never assumed from the caller."*
+
+A pull design has the cloud hold WooCommerce read-write credentials **for every
+tenant** — a high-value secret pool, and the exact reversal of the trust
+direction AC8 establishes. The plugin's credential is deliberately *"scoped to
+that store, revocable, and useless for reading any other tenant's data"*; a
+WooCommerce key is none of those things.
+
+### Decision
+
+**The plugin reads its own catalogue and pushes it to the cloud.**
+
+**1. Every piece already exists, and one is an exact precedent.**
+
+| Need | What serves it |
+|---|---|
+| Read the catalogue | `wc_get_products()` — in-process, **no credentials** |
+| Batch the work | `Activation\Scheduler` |
+| Deliver it | `Api\PostsToCloud` + `Api\CircuitBreaker` |
+| Authenticate | `Bearer` + `OPTION_STORE_TOKEN` |
+| Accept it | `StoreTokenGuard` + `SiteMatchGuard` |
+| Wake the store | `pushUrl` + `PushSignature` + `Connection\PushEndpoint` |
+
+🔴 **`POST /orders` is the precedent, not an analogy.** It is a
+store-authenticated write of store facts, guarded by exactly those two guards.
+A product ingest endpoint is the same shape with a different payload.
+
+**2. This does not violate AC1 — it is the direction AC1 already names.**
+
+AC1 says config flows cloud → plugin and *"events flow the other: plugin → cloud
+(analytics, order facts)."* A catalogue is a **fact about the store**, not
+authoring. M5.6 says so itself: the mirror is *"a cache of the merchant's
+catalogue for the picker UI, **never a source of truth**"*, and it sits directly
+beside "order facts" in the schema.
+
+⚠️ **The inversion is in M19.1's wording, not in the architecture.** Reading
+"pull" as a requirement rather than a sketch is what would have broken AC8.
+
+**3. M19.2 collapses into the same mechanism.**
+
+With the plugin owning the sync, incremental updates are WordPress hooks —
+`save_post_product`, `before_delete_post` — not WooCommerce webhooks with
+`X-WC-Webhook-Signature` HMAC verification. **No signature infrastructure to
+build, and no webhook registration to keep alive.** The milestone's intent
+survives; its named mechanism does not.
+
+### Consequences
+
+🔴 **`BATCH_SIZE` cannot be copied from `OrderReporter`.** Ten is right *there*
+because each report is one HTTP request — *"ten reports at a second each"*. A
+catalogue push fits many products in **one** request, so the constraint is
+payload size, not request count. At ten per fifteen-minute run a 100k catalogue
+would take **104 days**; M19.1 requires *"100k+ products without timing out"*.
+
+The orders DTO caps arrays at 200 per request, which is the pattern to follow —
+and the initial import needs a **faster catch-up cadence than the steady-state
+fifteen minutes**, or it measures in days.
+
+⚠️ **WP-Cron is unreliable on low-traffic sites**, which this plan already
+records. That is survivable *because* `PushEndpoint` exists: the cloud can wake
+the store rather than waiting for a request to trigger cron. An import that
+stalls is visible and restartable rather than silently pending.
+
+📌 **The E2E stand-in is the acceptance test.**
+`optioniaWooCommerceFrontend/e2e/catalogue.ts` writes `store_products` by raw SQL
+so the canonical suite has products to assign. When the real path lands **that
+file must go and the suite must use it instead** — otherwise the repository
+carries two import paths and the second is the one nobody remembers writing.
+
+---
+
+## ADR-068 — Taxonomy targets resolve in the plugin, and the index stays assignment-scaled
+
+**Status:** accepted · **Phase 19, Stage 19-0**
+
+### Context
+
+M19.4 must resolve `category`, `tag`, `attribute` and `price_range` assignment
+targets. `Config\ProductIndex` resolves **`all` and `manual` only** and reports
+the rest through `skipped_count()` — the handover signal M19.4 must drive to
+zero.
+
+Phase 10 named the choice and left it open: *"plugin-side against live WordPress
+taxonomy, or cloud-side with the store pushing taxonomy it does not currently
+send."*
+
+**Cloud-side expansion is the obvious answer and it is wrong**, for a reason the
+plan has already analysed once. `ProductIndex`'s size argument is:
+
+> *"This index scales with **assignments**, not catalogue size. `ALL` is a flag
+> with no per-product keys and `CONDITIONAL` is skipped, so only `MANUAL`
+> produces entries. A 100k-product store with one `ALL` assignment indexes
+> **nothing**."*
+
+Expanding `category:shirts` into product ids at publish **inverts that premise**:
+one assignment could write tens of thousands of keys into a single
+`wp_options` row. That is the objection M10.1 raised, which was rejected on the
+grounds that it *"conflated index size with catalogue size"* — and expansion
+makes the conflation true. There is **no size cap on the index today**, so the
+growth would be silent.
+
+### Decision
+
+**1. Taxonomy targets resolve in the plugin, against the live product, at render.**
+
+The renderer already holds the `WC_Product` global (`Renderer::current_product()`),
+and WordPress loads a product's term relationships with the product on a product
+page — so `has_term()` is normally a **cache hit, not a query**. The index keeps
+carrying taxonomy *targets* rather than expanded product ids, so it stays
+assignment-scaled exactly as its own docblock claims.
+
+🔴 **This is the opposite of the storefront-side reasoning M18 used for price
+display**, and deliberately: there the plugin lacked the data and could only
+guess. Here the plugin has the *authoritative* data and the cloud has a stale
+copy. Resolving where the truth lives is the same principle applied honestly.
+
+**2. `price_range` resolves cloud-side, because the cloud already knows it.**
+
+`StoreProduct.priceMinor` exists. ⚠️ But M5.6 says price in the mirror is
+*"display-only; the plugin always uses WooCommerce's live price"* — so a
+price-range **target** resolved against the mirror can disagree with what the
+customer is charged. It is expanded at publish like `manual`, and the
+divergence is the merchant's to see, not the customer's to pay for.
+
+**3. `categories`/`tags` are still added to `store_products`.** They were
+specified in M5.6 and never built. The **picker** needs them — *"assign by
+category"* (M19.5) cannot offer a category the cloud cannot name — even though
+render-time resolution does not.
+
+### Consequences
+
+🔴 **`ConfigReadBudgetTest` cannot currently see a taxonomy read, and that must
+be fixed FIRST.** The harness counts `get_option` and `get_post_meta`. It stubs
+and counts **no term function at all** — `get_the_terms`, `has_term` and
+`wp_get_post_terms` are absent. So a taxonomy read would **pass the budget test
+while performing queries**.
+
+⚠️ **This is the same blind spot that test was written to close**, in a
+different dimension. Its own docblock records the first instance:
+
+> *"`get_post_meta` was undefined, so an index stored there would have satisfied
+> the budget above while a shop page performed twenty-five meta reads… a check
+> inspecting nothing, inside the test written to prevent exactly that."*
+
+**So 19-0 ends with the harness, not with this decision.** Stub the term
+functions, count them, and prove the counter counts — the same three steps that
+file already applies to post meta. Any taxonomy work before that is unmeasured.
+
+📌 **The acceptance is `skipped_count()` reaching zero**, and it is already
+surfaced in `Admin\SystemStatus`. The phase can prove the handover rather than
+assert it.
+
+⚠️ **`CONDITIONAL` mode is NOT resolved by this decision.** Its condition tree is
+JSON evaluated against product state, and `option_set_assignments` requires it to
+apply to *"a product created next month"*. Whether render-time evaluation can
+carry it is a question for M19.4 proper, with the harness in place to measure the
+answer.
+
+---
+
+## ADR-069 — `CONDITIONAL` stays deferred; 19-1' opens the four data-shaped targets
+
+**Status:** accepted · **Phase 19, Stage 19-1' step 1**
+
+### Context
+
+`assignments.service.ts` hardcodes `MANUAL` + `PRODUCT` in both `assign()` and
+`unassign()`, and `AssignProductsDto` carries `externalProductIds` alone — so
+**three of five target types and two of three modes cannot be authored at all.**
+M19.4's acceptance signal, `ProductIndex::skipped_count()`, can only report on
+assignments nothing can create.
+
+19-1' opens that. The question this settles is **how far**.
+
+**The five target types are not one kind of thing.** Four are *data*:
+`category`, `tag` and `attribute` are a slug or id; `price_range` is a band.
+Each fits the `targetRef` column that already exists and the
+`ix_assignments_target` index that already covers it.
+
+**`CONDITIONAL` is not a target type at all — it is a mode with no shape.**
+Measured: the `conditions` JSON column exists on the entity, and there is **no
+schema, no validator, and no evaluator** anywhere in the repository. Nothing
+defines what a condition tree looks like.
+
+And Phase 10's Finding 2 already named why it is structurally different:
+
+> *"The condition tree is JSON evaluated against product state, not a key…
+> the entity's own docblock is explicit that a conditional set must apply to **"a
+> product created next month"** — after the index was written. Any write-time
+> index is stale for exactly the mode whose purpose is not going stale."*
+
+### Decision
+
+**19-1' opens `category`, `tag`, `attribute` and `price_range`.
+`CONDITIONAL` stays deferred to M19.4, named rather than vague.**
+
+**1. The four are one change; `CONDITIONAL` is a feature.** The four need a
+wider DTO, a target type threaded through two methods, and a picker. The fifth
+needs a condition-tree schema, a validator, an evaluator held to the same
+standard as the three rule evaluators, and a decision about where it runs.
+Bundling them would make a stage whose smaller half is done in a day hostage to
+a half nobody has designed.
+
+**2. Deferring it costs nothing that opening it would buy.** A merchant cannot
+author a conditional assignment today, and will not be able to after 19-1' —
+the difference is that the reason is now written at the point the stage was
+scoped, rather than discovered by the next reader.
+
+🔴 **3. `skipped_count()` still moves.** The signal counts every assignment the
+index cannot resolve. Opening the four data targets means it can finally count
+something real — and `CONDITIONAL` keeps it above zero until M19.4, which is
+**correct**: the handover is not complete while a mode remains unresolved.
+⚠️ **So "reaches zero" is M19.4's acceptance, not 19-1's.** A stage that drove
+it to zero by refusing to create conditional rows would be gaming its own test.
+
+### Consequences
+
+⚠️ **`ALL` has no uniqueness protection, and 19-1' must not assume otherwise.**
+The unique key is `(optionSetId, targetType, targetRef, deletedAt)`, and MySQL
+treats NULLs as distinct — so two `ALL` rows for one set do not collide. The
+entity says this is *"known rather than accidental"* because M13.6 authors only
+`MANUAL`. If 19-1' lets a merchant create `ALL`, duplicates become reachable.
+
+✅ **The storefront is already safe from that**: `ProductIndex` guards with
+`if ( ! isset( $all[ $set_id ] ) )`, so duplicate `ALL` rows are idempotent by
+the time they reach a page. The damage is a confusing assignment list, not a
+wrong render — which makes it a **write-path** problem to solve in 19-1', not a
+reason to withhold the mode.
+
+📌 **The publish serializer is the other decision 19-1' must re-open.**
+`assignments: []` is documented as *"by design, not because it is unbuilt"* —
+Phase 10 Stage 1 chose it. Emitting non-product assignments changes what every
+storefront receives, so it gets the treatment ADR-064 gave a withdrawal: the
+decision is re-opened in writing, or the targets resolve from the index alone
+and the array stays empty.
+
+---
+
+## ADR-070 — the legacy assignment request shape is kept, and normalised in the controller
+
+**Status:** accepted · **Phase 19, Stage 19-1' steps 2–3**
+
+### Context
+
+ADR-069 opened the four non-product target types. Widening the write path means
+`POST /v1/option-sets/:id/assignments` takes
+`{ targets: [{ targetType, targetRef }] }` — but the deployed dashboard sends
+`{ externalProductIds: [...] }`, the M13.6 shape.
+
+⚠️ **An assignment write is the one place a rejected request is invisible.** The
+merchant sees a failure they cannot interpret, or — worse, if a client ignores
+the status — an option that simply never renders, with
+`ProductIndex::skipped_count()` as the only trace. That asymmetry is why the old
+shape is not simply dropped.
+
+### Decision
+
+**Both shapes are accepted. The conversion happens in the controller, not the
+DTO. The old shape is removed when the dashboard stops sending it, not before.**
+
+🔴 **The DTO cannot do this, and it was proved rather than argued.**
+`class-transformer` fixes an instance's properties from the keys the **source
+object** carries. Two attempts failed:
+
+1. `@Transform` on `targets` — never invoked; a legacy body has no `targets` key.
+2. `@Transform` on `externalProductIds` writing the sibling key — invoked, and a
+   probe confirmed it *did* mutate the source object, but the property list was
+   already settled, so `targets` was still `undefined` on the instance.
+
+Both surfaced identically: `400 "targets should not be empty"`, naming a field
+the caller never sent. `@ValidateIf` makes `targets` required only when
+`externalProductIds` is absent, and the controller — which holds the whole
+validated body — produces the `AssignmentTarget[]` the service takes.
+
+📌 **The first attempt shipped with a docblock explaining why it worked.** It did
+not work. A printed probe of the actual instance settled in one run what two
+rounds of plausible reasoning got wrong — the same defect shape Phase 18 kept
+finding in code, arrived at in my own method.
+
+**Two further consequences, both decided rather than defaulted:**
+
+⚠️ **`{ externalProductIds: [] }` is rejected.** `@ValidateIf` skips `targets`
+whenever the legacy field is *defined*, so an empty array would otherwise pass
+every validator and reach the service with nothing to assign — a `200` that
+assigned nothing. `@ArrayNotEmpty()` on the legacy field closes it;
+mutation-proven.
+
+🔴 **`DELETE …/assignments/:targetRef` takes the type as a query parameter**,
+defaulting to `product`. A second path segment would `404` every URL the
+deployed dashboard calls. An unrecognised type is a `400`, **never** a fallback
+to `product`: `targetRef` is unique only within a type, so coercing it would
+delete the wrong row whenever a category and a product share a reference — an
+ordinary collision, not an exotic one.
+
+### Consequences
+
+**The A3 existence check stays product-only.** A category, tag, attribute or
+price band is not a row in this database — the mirror holds them as JSON, so the
+equivalent is an unindexable `JSON_CONTAINS` scan — and requiring a member would
+reject correct configurations: a merchant assigns to "Summer" before stocking
+it, and the whole point of a taxonomy assignment is that it applies to products
+that do not exist yet.
+
+✏️ **`@IsIn(ASSIGNABLE_TARGET_TYPES)` is an equivalent mutant today, kept
+deliberately.** `AssignmentTargetType` holds exactly the five values the
+authoring list holds, so swapping it for the enum changes no behaviour and no
+test can kill it — recorded as equivalent, not as a gap. It is the **seam** that
+must move first if a type is ever stored but not authorable. Note that
+`conditional` is an `AssignmentMode`, **not** a target type; tests asserting it
+is refused are covering the mode/target-type confusion, not this distinction.
+
+📌 **The `ALL` duplicate-row gap named in ADR-069 is not reachable.**
+`AssignmentMode.ALL` has one writer in the repository — `demo.seed.ts:417`. This
+endpoint writes `MANUAL` unconditionally and the DTO refuses `mode` as a field.
+No code was written for it; it becomes live work the moment anything authors an
+`ALL` assignment.
+
+---
+
+## ADR-071 — non-product targets are typed by hand until the catalogue can name them
+
+**Status:** accepted · **Phase 19, Stage 19-1' steps 5–6**
+
+### Context
+
+ADR-069 opened `category`, `tag`, `attribute` and `price_range`, and ADR-070
+made the API accept them. Step 5 had to make them reachable by a merchant, and
+the plan called for *"a target-type picker"*.
+
+**Nothing can name a store's categories.** `store_products.categories` exists on
+the entity and is written **only by `demo.seed.ts`**; `products.service.ts`
+calls it *"sync bookkeeping the picker has no use for"* and excludes it from
+`ProductSummary`. No endpoint exposes it. M19.1's catalogue import is what would
+populate it.
+
+### Decision
+
+**A target-type selector plus a typed reference, now. A real chooser after
+M19.1.** Taken with the user.
+
+A chooser built today would be **empty on every real store** — a chooser with
+nothing to choose. A merchant who mistypes a slug gets an assignment that never
+resolves, which is surfaced already: `ProductIndex::skipped_count()` reaches the
+merchant as **"Deferred assignments"** in the plugin's admin.
+
+📌 **`toSummary()` was NOT widened.** The plan allowed widening it *"only as
+needed"*; free-text entry means the picker never reads a product's categories,
+so the allow-list stays closed. The condition was satisfied by not touching it.
+
+### Consequences
+
+🔴 **Three defects that non-product rows would have caused, found by reading the
+picker before changing it.** Each was invisible while only products could be
+assigned:
+
+1. `AssignedRow` printed *"No longer in your catalogue"* whenever `productName`
+   was null — and `productName` joins `store_products`, so it is null for
+   **every** category, tag, attribute and price band. Every correct non-product
+   assignment would have rendered as broken from the first release.
+2. `Remove` sent a bare reference; `targetRef` is unique only *within* a type.
+3. Assigned-state was keyed by reference alone, so product `12` would show
+   "Assigned" because category `12` was.
+
+**`AssignedRow` moved into `product-display.tsx`.** That module exists because
+`/products` and the picker each had their own row and had already drifted; a
+shared presentational row belongs there, and it is now render-tested rather than
+exported purely for a test.
+
+⚠️ **The acceptance signal RISES, and the plan said it falls.**
+`skipped_count()` counts assignments the index could not resolve, so authoring a
+category takes it 0 → 1. ADR-069 governs: resolution is M19.4, and driving this
+to zero here would game the test. The E2E asserts the row is **non-zero**.
+
+⚠️ **That E2E is written and has not been run** — `npm run e2e` needs the API,
+dashboard and a live WordPress, none of which were available. Recorded as
+unexecuted rather than reported as passing; it must run before 19-1' is closed.
+
+📌 **Writing it still paid.** Four selectors in the first draft were invented —
+a status page that does not exist, a sync button that does not exist, the wrong
+publish label, and a republish that is unnecessary because assignments join the
+document live. It also exposed two real defects in the step-5 UI: a duplicate
+accessible name matching two controls, and two buttons sharing the name
+"Assign". Both are fixed and guarded.
+
+---
+
+## ADR-072 — the request body limit is explicit, and oversize is a 413
+
+**Status:** accepted · **Phase 19, Stage 19-2 step 1**
+
+### Context
+
+Stage 19-2 pushes catalogue batches to the cloud, so the batch size had to be
+chosen against whatever body limit applies. Probing the running API revealed
+there is none configured — and that this is already a live defect.
+
+**Measured** against `POST /v1/store/orders` on a running server:
+
+| Body | Response |
+|---|---|
+| 50 kb | `401` (auth reached — body accepted) |
+| 99 kb | `401` (auth reached — body accepted) |
+| 150 kb | **`500 INTERNAL_ERROR`** |
+| 250 kb | **`500 INTERNAL_ERROR`** |
+
+`main.ts` configures no body limit, so Express's **100 kb** default applies. The
+server log records `PayloadTooLargeError`; the client is told only
+`INTERNAL_ERROR`, which names nothing it can act on.
+
+🔴 **The opaque `500` wedges the order queue permanently.**
+`OrderReporter::report()` treats a 4xx (except 401/429) as `OUTCOME_REJECTED`
+and drops it, but anything `>= 500` as **`OUTCOME_RETRY`** — and the drain
+`break`s on the first retryable failure. One oversized order therefore retries
+every fifteen minutes for ever **and blocks every order queued behind it**.
+
+📌 **Reachable, not theoretical.** `ReportOrderDto` permits 200 selections with
+500-character values — **~148 kb** — and `OrderPayload::MAX_SELECTIONS` is the
+same 200, so the plugin will build one. A heavily-personalised order is enough.
+
+### Decision
+
+**Set the body limit explicitly, and make exceeding it a `413`.**
+
+**1. Explicit rather than inherited.** A limit nobody chose is a limit nobody
+can reason about: the catalogue batch size has to be sized against it, and
+`e2e` proved it is invisible until something large hits it.
+
+**2. `413`, because the status code is what the plugin acts on.** The plugin
+already distinguishes correctly — a 4xx is a disagreement about the payload,
+which retrying cannot fix, so it drops and logs loudly; a 5xx is an outage,
+which retrying can. An oversized body is the **first** kind wearing the second's
+clothing. Returning `413` fixes the order-queue defect without touching
+`OrderReporter` at all.
+
+### Consequences
+
+⚠️ **This changes behaviour for a request that used to `500`.** That is the
+point: the previous behaviour was a silent permanent stall, and no client can
+have depended on it.
+
+✏️ **The catalogue batch size is NOT a derived number, and an audit corrected
+this paragraph.** It read *"the limit divided by [~487 bytes] is the ceiling"* —
+which used a **typical** product and ignored that `categories` and `tags` each
+permit 50 entries of 200 characters. The true worst case is **~22 kB**, so only
+**47** maximal products fit in 1 MB, and a batch capped for that worst case
+would take **26 days** to push a 100k catalogue against 4.2 days at 250.
+
+🔴 **So 250 is a throughput choice and this limit is its guard, which puts a
+requirement on the pusher (M19.1 step 3): a `413` means halve the batch and
+retry, never fail permanently.** Worst case that converges in three halvings;
+a realistic store never triggers it. ⚠️ There is **no inherited behaviour** to
+rely on — `Api\PostsToCloud` is an interface returning a `Response`, and status
+handling belongs to each caller, as `OrderReporter` does its own.
+
+`Client::TIMEOUT = 8` seconds bounds the batch from the other side. ⚠️ **`OrderReporter::BATCH_SIZE = 10` must not be copied**: its docblock
+justifies ten as *"ten reports at a second each"*, which is wall-clock for **ten
+HTTP requests**. A catalogue batch is **one** request, so neither the number nor
+its reasoning transfers.
+
+---
+
+## ADR-073 — the catalogue push shrinks before sending, rather than reacting to a 413
+
+**Status:** accepted · **Phase 19, Stage 19-2 step 3a**
+
+### Context
+
+ADR-072 sets a 1 MB body limit and records an obligation on the pusher: *"a
+`413` means halve the batch and retry, never fail permanently."* Building that
+naively is wrong, and the reason is in `Api\Client`:
+
+```php
+if ( ! $this->is_retryable( $last ) ) {
+    // A 4xx is a real answer, not a transient failure.
+    $this->breaker->record_failure();
+    return $last;
+}
+```
+
+🔴 **A `413` is a non-retryable 4xx, so every one reaches
+`CircuitBreaker::record_failure()`.** Halving from 250 takes **three** rejections
+in the worst case — three consecutive failures, which is exactly the shape that
+opens the breaker. An open breaker stops **all** cloud traffic: config sync and
+order reporting included. A catalogue push with verbose taxonomies would take
+the whole integration down with it.
+
+That comment is right in general and wrong for this status. A 413 is not "the
+request was invalid" — it is "this request was too big", which is a property of
+*how much* was sent, not of whether the caller is broken.
+
+### Decision
+
+**The pusher measures the encoded batch and splits it before sending. A `413` is
+the fallback, not the mechanism.**
+
+**1. The measurement is exact, not an estimate.** `Api\Client` sends
+`wp_json_encode( $body )` verbatim, so encoding the same array with the same
+function yields the byte count the server will see. One `strlen` per batch.
+
+**2. The budget is below the limit, deliberately.** The plugin targets a
+fraction of 1 MB rather than the limit itself: headers, the envelope and any
+future field all consume the difference, and a push that sits exactly at the
+boundary turns a one-byte change into an outage.
+
+**3. A 413 still has a handler**, because a limit can change on the server
+without the plugin learning. It halves and retries **once**, then advances the
+cursor past the offending span rather than looping — a batch that cannot be made
+to fit must not block the products behind it, which is the order-queue defect
+ADR-072 fixed wearing different clothes.
+
+### Consequences
+
+⚠️ **The breaker keeps its meaning.** It counts failures that indicate the cloud
+is unreachable or the plugin is broken. Routine size management never reaches
+it, so a store with 50-term products syncs quietly instead of tripping a
+protection designed for outages.
+
+📌 **The batch size becomes two numbers, not one.** `MAX_PRODUCTS_PER_PUSH`
+(250) bounds the *count* — the server rejects more with a `400` — and the byte
+budget bounds the *size*. Whichever binds first decides the batch, and for a
+realistic catalogue that is the count.
+
+---
+
+## ADR-074 — a trashed product is removed from the mirror, not mirrored as trash
+
+**Status:** accepted · **Phase 19, Stage 19-4 step 1**
+
+### Context
+
+M19.2 makes the plugin listen to WooCommerce's product hooks. WooCommerce
+distinguishes two endings, and fires a different action for each
+(`class-wc-product-data-store-cpt.php:422-429`, named dynamically as
+`woocommerce_{delete,trash}_{post_type}`):
+
+- **`woocommerce_delete_product`** — the row is gone from WordPress
+- **`woocommerce_trash_product`** — the row survives with `post_status = trash`
+
+🔴 **Trash breaks the model the mirror already uses.** `CataloguePayload` walks
+`publish`, `draft`, `pending` and `private` — deliberately, so a merchant can
+assign options to a product **before** publishing it. `trash` is **not** in that
+list. So the full walk and an incremental trash event would disagree: the walk
+says a trashed product is absent, and mirroring the status would say it is
+present-but-trashed.
+
+Two sources of truth for the same product is the defect, not the status value.
+
+### Decision
+
+**Both hooks remove the product from the mirror.**
+
+**1. The walk is the definition, and the increment must match it.** Whatever a
+full re-walk would produce is what the mirror should hold at any moment. A walk
+omits trashed products, so an increment must remove them — otherwise a
+reconciliation (M19.3) would silently "fix" a row the increment had just
+written, and the two mechanisms would fight.
+
+**2. Untrashing is an ordinary create.** Restoring from trash sets the status
+back and fires `woocommerce_update_product`, which queues the product again.
+Nothing special is needed for the reverse direction, which is why removal is
+safe rather than lossy.
+
+**3. The picker already handles absence well.** A row that disappears leaves
+`productName` null on any assignment targeting it, and the dashboard renders
+*"No longer in your catalogue"* — the message written for exactly this and,
+until now, unreachable because a push could never remove a row (recorded in
+`catalogue-ingest.service.ts`).
+
+### Consequences
+
+⚠️ **This requires a removal endpoint, which M19.1 did not build.**
+`CatalogueIngestController` is `@Post` only. Step 2 adds
+`DELETE /v1/store/products/:externalId`, guarded exactly as the ingest is.
+
+📌 **An assignment to a removed product is not deleted with it.** The assignment
+row is the merchant's intent, and a product trashed by accident and restored an
+hour later should not lose it. The picker shows the warning; M19.5's bulk
+tooling is where cleaning them up belongs.
+
+⚠️ **Deletion remains best-effort, as every hook-driven sync is.** A product
+deleted while the site is offline, or dropped by the queue cap, leaves a stale
+row — which is precisely what **M19.3's reconciliation** exists to repair. The
+increment is the fast path, not the guarantee.
+
+### ✏️ Amended at step 4 — WooCommerce's deletion hooks do not cover the admin
+
+🔴 **`woocommerce_trash_product` and `woocommerce_delete_product` fire only
+through `WC_Product::delete()`** — the data store's own path. **The WordPress
+admin's "Move to Trash" does not use it.** Measured against a running site:
+
+| Action | Hooks that fired |
+|---|---|
+| `$product->delete( false )` | **`woocommerce_trash_product`** |
+| `wp_trash_post( $id )` — *the admin's button* | **`trashed_post` only** |
+| `wp_delete_post( $id, true )` | **`before_delete_post` only** |
+
+Listening to the WooCommerce hooks alone would therefore have missed **the most
+common way a merchant removes a product**, and the mirror would keep offering it
+until a reconciliation noticed — a silent gap of exactly the shape this stage
+exists to close.
+
+**So the watcher listens to WordPress's post hooks — `trashed_post` and
+`before_delete_post` — filtered to `post_type === 'product'`**, and not to
+WooCommerce's. They fire on *both* paths, because `WC_Product::delete()` calls
+`wp_trash_post()` / `wp_delete_post()` underneath.
+
+📌 **The restore assumption above is confirmed, not assumed.** Measured:
+untrashing a product fires **`woocommerce_update_product`**, so a restore
+re-queues the product as an upsert with no `untrashed_post` listener needed.
+That is what makes removal safe rather than lossy.
+
+---
+
+## ADR-075 — reconciliation compares ids, and only a complete manifest may delete
+
+**Status:** accepted · **Phase 19, Stage 19-5 step 1**
+
+### Context
+
+M19.3 makes the mirror self-healing. Seven places across both repositories defer
+to it, and they are **not one problem**. Three drift classes:
+
+| Class | Cause | Visible to the cloud? |
+|---|---|---|
+| **Stale rows** — mirror has, store does not | deleted while offline; removal dropped by the queue cap; deletion shifted a row past the walk cursor | yes, via `syncedAt` |
+| **Missing rows** — store has, mirror does not | created while offline; upsert dropped; walk skipped it | **no** |
+| **Stale content** — both have it, values differ | an edit lost with a dropped queue entry | only by comparing every field |
+
+🔴 **The middle class is structurally invisible from the cloud.** It cannot know
+about a product it has never heard of. So reconciliation is **plugin-driven**,
+like everything else since ADR-067 — the store is the authority on what exists.
+
+### Decision
+
+**The plugin sends pages of external ids. The cloud answers with the ids it
+holds that the page's range does not cover. Deletion happens only when the
+manifest is complete.**
+
+🔴 **1. A partial manifest must never imply deletion — this is a data-loss
+risk, not a performance one.** If absence from a page meant "gone", then during
+an ordinary paged sweep the cloud would see every id outside the current page as
+deleted. Modelled: a mirror of 40,000 products and a page of 250 leaves
+**39,750 valid products deleted**. The same trap fires against an incomplete
+initial walk, where a whole-store manifest would look like 60,000 missing rows.
+
+**Two invariants follow, and neither is optional:**
+
+- A page carries `is_final`. Deletion is considered **only** on the final page,
+  and **only** for ids below the highest the manifest has covered.
+- The plugin **refuses to reconcile while a catalogue walk is incomplete**.
+  `CatalogueCursor::is_complete()` already answers this.
+
+📌 **2. Ids, not products — measured at ~40× cheaper.** An earlier note (in
+`catalogue-ingest.service.ts`) planned to use `syncedAt`: mark a sweep start,
+re-push everything so their `syncedAt` advances, then delete what lags. That
+works and costs a **full 4.2-day walk** for 100k products — 400 requests at 250
+per batch. An id manifest at 10,000 per request is **10**.
+
+It is also strictly more capable: a manifest detects **missing** rows, which
+`syncedAt` cannot, because a row that was never written has no timestamp to lag.
+
+⚠️ **Verified against the body limit**: 10,000 ids at the column's full 64
+characters is **664 kB**, inside the 1 MB limit (ADR-072); realistic numeric ids
+are 77 kB.
+
+**3. `is_final` returns, and this time it has a reader.** It was removed from
+`IngestProductsDto` in 19-2 for having none — logged and consumed by nothing.
+Here it is the flag that separates *"this is the whole store"* from *"this is
+page three"*, which is the difference between a safe sweep and a catalogue
+deleted.
+
+### Consequences
+
+⚠️ **Stale content is deferred, explicitly.** Detecting an edit lost to a
+dropped queue entry means comparing timestamps per product, which means sending
+them — most of a full walk again. `externalUpdatedAt` is already carried for it.
+**Owner: M19.5's bulk tooling**, or a later stage that can justify the traffic;
+half-building it here would add cost without closing the case.
+
+📌 **Daily, not quarter-hourly.** Hooks are the fast path and reconciliation is
+the backstop. A 100k catalogue costs ~10 requests a day against a 300/hour
+per-route budget, and `CRON_HEARTBEAT` already establishes a daily schedule.
+
+---
+
+## ADR-076 — 19-6 resolves taxonomy; three targets keep the counter above zero
+
+**Status:** accepted · **Phase 19, Stage 19-6 step 1**
+
+### Context
+
+M19.4's stated acceptance is `ProductIndex::skipped_count()` reaching **zero**.
+Measured against the code, three separate things stand between here and that
+number, and they are not the same kind of work:
+
+| Target | State |
+|---|---|
+| `category`, `tag` | **Ready.** ADR-068 settled where they resolve, 19-0a built the harness, and the data is on the product |
+| `attribute`, `price_range` | **No interpreter anywhere.** Authorable, publishable, counted — and `price_range: "10-20"` exists only as an example string in one test. The *format* was never defined |
+| `CONDITIONAL` | **No schema, no validator, no evaluator** (ADR-069) |
+
+🔴 **Only the first row is implementation. The other two are design.** A
+`price_range` needs a grammar (inclusive? currency? what does `"10-"` mean?),
+and `CONDITIONAL` needs a condition tree held to the same standard as the three
+rule evaluators.
+
+### Decision
+
+**19-6 resolves `category` and `tag`. `attribute`, `price_range` and
+`CONDITIONAL` are deferred with named owners, and the acceptance is restated
+rather than quietly missed.**
+
+⚠️ **`skipped_count()` will NOT reach zero at the end of this stage, and the
+milestone says it should.** That contradiction is recorded here rather than
+discovered later — the treatment ADR-069 gave the last time this counter's
+target moved. **The honest acceptance for 19-6 is that the count FALLS**: a
+category assignment that was counted as deferred now resolves and renders, and
+the remainder is three named things rather than a vague rest.
+
+📌 **Bundling them would make a provable stage hostage to three open designs.**
+The taxonomy half can be built, tested and measured today; the others cannot be
+started without decisions nobody has made.
+
+**Precedence: `all` < taxonomy < product.**
+
+`ProductIndex::for_product()` already merges `all` under per-product entries,
+because *"naming a product explicitly is the more specific statement"*. A
+taxonomy assignment sits between: more specific than "every product in the
+store", less than naming this one. ⚠️ **Stated rather than assumed** — with
+three tiers the ordering stops being obvious, and a merchant whose category rule
+silently beat their product rule would have no way to see why.
+
+### Consequences
+
+🔴 **An existing test must change, and deleting it would be wrong.**
+`ConfigReadBudgetTest` asserts **zero** term reads, with the message *"a term
+read here means resolution moved without the budget following it."* It was
+written in 19-0a anticipating exactly this stage. It becomes a **budget** — at
+most two term reads, and zero *database* reads when the cache is primed — not an
+absence. It is the only guard on AC3's most fragile assumption.
+
+📌 **That assumption is now measured, not hedged.** ADR-068 said `has_term()` is
+*"normally"* a cache hit. Against the running site: a cold `get_the_terms()` is
+**4 queries**, warm is **0**, and after a real `WP_Query` for the product —
+which is what a product page does — both taxonomies cost **0**. AC3's ≤1 extra
+DB read per page is satisfiable, *because* WordPress primes term relationships
+with the post query.
+
+---
+
+## ADR-077 — A resolved taxonomy target is proven by the render, not by a counter
+
+**Status:** accepted · **Stage:** 19-6
+
+### Context
+
+The canonical E2E's step 6 asserted that "Deferred assignments" was **non-zero**
+after authoring a category. That was correct while taxonomy was deferred, and
+ADR-076 inverted it: the count now **falls**. The obvious repair — assert `0` —
+is wrong, and the reason is worth recording because it is the failure mode this
+repository keeps rediscovering.
+
+🔴 **Zero is also the value before the step runs.** Measured by building the
+index from the same document with and without the category assignment:
+
+| | `skipped` | `terms` | `entry_count` |
+|---|---|---|---|
+| before | 0 | 0 | 1 |
+| after | 0 | 1 | 1 |
+
+Both counters `Admin\SystemStatus` prints are **identical either side of the
+step**. Only `terms` changes, and no status row reports it. An assertion on the
+admin screen would therefore pass against an assignment that never arrived —
+a test that reports success while proving nothing.
+
+### Decision
+
+**The acceptance is the storefront render, with its own control.**
+
+A product the set is *not* assigned to renders nothing; once it joins the
+category it renders the set. Both halves are asserted, in that order: without
+the negative, the positive would pass for a product that already rendered.
+
+⚠️ **The control must not be the assigned product.** Run against it, the
+assertion passes through the manual path and says nothing about taxonomy.
+
+⚠️ **The category has to be real.** Taxonomy targets are carried, not expanded
+(ADR-068): `build()` stores the slug without checking the term exists, and
+`has_term()` decides at render. The step that authored `summer` never created
+the term or put a product in it — invisible while the target was only *counted*,
+fatal once it is *resolved*.
+
+### Consequences
+
+📌 **Verified on the running store, not argued.** Product 14 went from **0**
+option groups to **4** on joining the category, with **no config resync** — the
+property ADR-068 chose this design for: resolution reads the live product, so a
+product added tomorrow matches without a new document.
+
+🔴 **Two defects in the test's own fixtures, both found by running it.**
+
+1. `store_products` mirrors **every** store. The first scoped-by-nothing query
+   returned externalId `1000` — a `demo.optionia.test` product absent from the
+   site under test. The negative assertion passed *vacuously* on a page with no
+   product on it, and only a WP-CLI failure exposed it.
+2. `assignProductCategory()` created the term, then threw while attaching it,
+   leaving the caller no id to clean up with. The category survived the run and
+   would have broken the next run's precondition. The helper now rolls back what
+   it created before rethrowing.
+
+📌 **Both were caught because the test was run, not because it was reviewed.**
+
+### The first repair of (1) was itself wrong — and the audit caught it
+
+✏️ Scoping the query by `storeUrl = ? AND status = 'connected'` reads as a fix
+and is not one: **that filter does not name one row.** `reset.ts` deliberately
+leaves the backend's `stores` row behind — *"a merchant who reinstalls a plugin
+is in precisely this state"* — so connected rows for one URL accumulate across
+runs, and `LIMIT 1` over them picks by accident.
+
+🔴 **Measured, after that repair shipped green.** The only row matching the
+filter was three weeks old and carried a *different published set assigned to
+the very product the helper returned*, while the plugin was bound to a newer row
+the same filter reported `disconnected`. The negative assertion survived solely
+because the cloud scopes the config document to the bound store, so the stale
+set never reached the plugin. **The query was wrong and the answer was right by
+coincidence** — the exact failure mode this ADR exists to rule out.
+
+📌 **The fix is to stop having a second selector.** `connectedStoreId()` already
+resolves this correctly (`ORDER BY createdAt DESC` — newest wins), so the store
+id is passed in and the helper filters `p.storeId = ?`. The duplicate selector
+was the defect; deleting it is the repair.
+
+Two further latent defects in the same query, both proven against live data:
+
+- 🔴 **`NOT IN` over a nullable column matches nothing.** `targetRef` is
+  nullable and an `all`-mode assignment stores NULL there — one such row exists
+  today. In SQL `x NOT IN (… NULL …)` is UNKNOWN for every row, so the helper
+  returns `''`. Differential test against the real NULL-bearing set: the old
+  query returned empty, the guarded one returned `14`. Fixed with
+  `a.targetRef IS NOT NULL`.
+- ⚠️ **The subquery compared product ids against category slugs.** A category
+  slug `"14"` would silently exclude product 14. Proven inside a rolled-back
+  transaction: without the filter the query returned `<none>`, with it `14`.
+  Fixed with `a.targetType = 'product'`.
+
+`DISTINCT` was dropped as redundant once `storeId` is fixed — `store_products`
+carries a UNIQUE index `uq_store_products_external` on `(storeId, externalId)`,
+confirmed in `information_schema`.
+
+---
+
+## ADR-078 — Bulk removal is a POST, and a stale selection is not an error
+
+**Status:** accepted · **Stage:** 19-7 (M19.5)
+
+### Context
+
+`DELETE /:targetRef` removes exactly one target. Bulk unassign had no path at
+any layer — no endpoint, no service method, no client function — while bulk
+*assign* already worked: `@Post()` takes `MAX_TARGETS = 100` and upserts with
+`ON DUPLICATE KEY UPDATE`, written so a picker's double-click cannot 409.
+
+### Decision
+
+**`POST /:id/assignments/unassign`, and `DELETE /:targetRef` is untouched.**
+
+🔴 **Not a `DELETE` carrying a body.** RFC 9110 leaves a body on DELETE
+undefined; intermediaries and some fetch stacks drop it. A bulk removal that
+silently removed *nothing* would be indistinguishable from one that worked.
+Changing the existing URL was also refused for the reason `targetType` became a
+query parameter rather than a path segment: it is what the shipped dashboard
+calls, and a new segment 404s deployed clients.
+
+**A target that is already gone is not an error.**
+
+📌 The single unassign answers `404` — right for one *named* thing. A bulk
+removal is a **selection**, and selections go stale: another session removes a
+row, or a merchant re-clicks a slow request. Failing the whole request because
+one of fifty rows had gone would leave the other forty-nine assigned and say
+nothing about which. So it answers `200` with a `removed` count.
+
+⚠️ **Matched on the `(type, ref)` PAIR.** `targetRef` is unique only within a
+type. Mutation **M78** — matching the reference alone — was killed by
+`removes only the target type asked for when a ref is shared`.
+
+### Consequences
+
+The client chunks at 100. Safe because assign is idempotent: a chunk replayed
+after a network error cannot duplicate or 409.
+
+---
+
+## ADR-079 — A pre-apply count is an estimate, and says so
+
+**Status:** accepted · **Stage:** 19-7 (M19.5)
+
+### Context
+
+M19.5 requires *"counts shown before applying"*. An earlier analysis assumed the
+cloud could not count category members. **That was wrong**, and checking it
+changed the design.
+
+📌 **The mirror holds slugs.** `CataloguePayload::terms()` builds its list from
+`$term->slug` — *"a slug is what `has_term()` takes, so it is what an assignment
+must carry"* — and an assignment stores the same slug. Verified against a
+plugin-pushed row: `["uncategorized"]`.
+
+### Decision
+
+**`GET /:id/assignments/preview` returns `{ matched, exact }`.**
+
+🔴 **`exact: false` for a taxonomy, and the flag is the point.** The mirror is a
+snapshot; the storefront resolves `has_term()` **live** (ADR-068), so a product
+categorised after the count still matches. The dashboard therefore says *"about
+N products in your catalogue today"* — a count, never a promise. Mutation
+**M79**, flipping the flag to `true`, was killed by three tests.
+
+**A product target is `exact: true`** — it names one thing, and calling a
+merchant's explicit choice an estimate would be false.
+
+**`matched: null` for `attribute` and `price_range`.** Their reference format
+was never defined (ADR-076), so there is nothing to count. `null` is the absence
+of a measurement; `0` would be a measurement, and a wrong one.
+
+⚠️ **`JSON_CONTAINS` cannot use an index, and that is acceptable here.**
+Measured on the real plan: MySQL takes the `storeId` index lookup **first** and
+applies the JSON test to that subset, so the work is bounded by one merchant's
+catalogue. It runs in the **dashboard** on an explicit click — AC3 governs the
+storefront product page and is not implicated.
+
+🔴 **Scoped to the set's own store.** `externalId` is unique only within a store
+— WooCommerce numbers from 1 on every install. Mutation **M80** (dropping the
+`storeId` filter) raised the count from 2 to 3 and was killed by
+`counts only the set's own store`.
+
+---
+
+## ADR-080 — M19.6 was already built; what was missing was the proof
+
+**Status:** accepted · **Stage:** 19-7 (M19.6)
+
+### Context
+
+M19.6 asks for *"assignments to deleted products handled gracefully; no orphan
+errors on the storefront"*. Analysis found the behaviour **already present** on
+both sides, and untested end to end.
+
+### Decision
+
+**Nothing functional changed. An E2E was added.**
+
+🔴 **Orphans are reachable and harmless, both proven rather than argued.**
+There is no foreign key from `targetRef` to `store_products`, and `remove()`
+deletes the mirror row without touching assignments — demonstrated in a
+rolled-back transaction, which left the assignment live and orphaned. The
+storefront is unaffected: `ProductIndex::build()` indexes the dead id and
+`for_product()` returns it, but no such product exists, so **nothing ever
+asks**. Measured: `entries=1 skipped=0`, no error.
+
+📌 **The dashboard already names it**, and the reasoning was already recorded:
+`readAssignments()` uses a `LEFT JOIN` *"so a merchant can see it and remove it
+— an inner join would hide exactly the rows that need attention"*, and the row
+renders **"No longer in your catalogue"** with four existing assertions.
+
+⚠️ **The gap was that no test deleted a product.** The new step trashes the
+assigned product — *trashed*, because `ProductWatcher` listens on `trashed_post`
+(ADR-074) — then asserts the dashboard names the orphan and the storefront still
+serves. It restores in `finally`.
+
+🔴 **Two assumptions in that step were wrong, and measuring corrected both.**
+`wp post delete` refuses a product — *"Posts of type 'product' do not support
+being sent to trash"* — because WP-CLI consults `post_type_supports( 'product',
+'trash' )`, which WooCommerce does not declare, even though the site has
+`EMPTY_TRASH_DAYS = 30` and `wp_trash_post()` itself succeeds. Passing `--force`
+would have deleted permanently and fired `before_delete_post` — a **different
+hook** than the admin's button. The helper calls `wp_trash_post()` directly.
+
+And untrashing does **not** leave a product in `draft`: measured, `after
+untrash: publish`, because `wp_untrash_post()` restores the previous status from
+`_wp_desired_post_status`. Forcing `publish` back would have masked a real
+regression if that ever stopped working.
+
+### Consequences
+
+✏️ **A helper written from memory was wrong and was deleted.** A first draft ran
+`optionia_cron_drain_products`; no such hook exists. `QueueDrainer::register()`
+hangs the drain off `CRON_PUSH_CATALOGUE`, so `pushCatalogue()` already drains
+it — the invented helper would have run a no-op and reported success.
+
+---
+
+## ADR-081 — The first catalogue sync takes days, and that is accepted
+
+**Status:** accepted · **Stage:** 19-8 (Phase 19 exit)
+
+### Context
+
+Phase 19's exit says *"large catalogues performant"*. M19.1 says *"100k+
+without timing out"*. Those are not the same claim, and the exit audit had to
+decide whether the second satisfies the first.
+
+**Measured, not estimated.** `CataloguePusher::BATCH_SIZE = 250` and
+`Scheduler::INTERVAL = 900` give four runs an hour:
+
+| BATCH_SIZE | Throughput | 100k catalogue | Worst-case body (1200 B/product) |
+|---|---|---|---|
+| **250 (today)** | 1,000/hr | **4.17 days** | 293 KB — 38% of budget |
+| 500 | 2,000/hr | 2.08 days | 586 KB — 76% of budget |
+| 1000 | 4,000/hr | 1.04 days | **1172 KB — over the 768 KB budget** |
+
+📌 **`BATCH_SIZE` is the bound, not the bytes.** `BYTE_BUDGET = 768 KB` holds
+~1,614 products at the plan's measured 487 B each, and still ~655 at a
+pessimistic 1200 B. At 250 the byte budget is nowhere near binding. Real
+mirrored rows average **108 bytes** of field data, so 1200 is a deliberate
+over-estimate.
+
+### Decision
+
+**No change. 4.17 days is recorded as accepted for the initial walk.**
+
+🔴 **Nothing times out, and that is the milestone's actual requirement.** Each
+batch is one request well inside `Client::TIMEOUT = 8`; the duration is the
+*schedule*, not any single call. A merchant's catalogue becomes progressively
+visible — `Catalogue sync` in System Status reports position and total
+precisely so a long walk reads as progress rather than a stall.
+
+⚠️ **Raising it is a coordinated change, not a constant.** The plugin's
+`BATCH_SIZE`, the API's `MAX_PRODUCTS_PER_PUSH` and
+`bin/check-catalogue-limits.sh` pin each other; the gate fails if they drift.
+The table above is recorded so that a future raise is a **decision with numbers
+already in hand**, not a rediscovery.
+
+📌 **500 is the option if this ever needs revisiting** — it halves the walk and
+still fits the budget at 76%. 1000 does not: its worst case exceeds
+`BYTE_BUDGET`, which would make `CataloguePusher`'s halving path a routine
+occurrence rather than the exception it was written as.
+
+### Consequences
+
+The incremental path is unaffected: `QueueDrainer` carries 250 upserts and 20
+removals per run, and an ordinary day's product edits clear in one cron tick.
+Only the **first** sync of a large store is measured in days.
+
+---
+
+## ADR-082 — "Explainable" is answered store-wide in Phase 19; per-product waits for M21.4
+
+**Status:** accepted · **Stage:** 19-8 (Phase 19 exit)
+
+### Context
+
+Phase 19's exit asks for resolution that is *"deterministic and explainable"*.
+
+**Deterministic holds, and is tested.** `ProductIndex::for_product()` sorts by
+assignment `priority` with the set id breaking ties, so two renders of unchanged
+configuration produce the same order — proven by
+`test_resolution_follows_priority_not_document_order`,
+`test_a_manual_priority_overrides_an_all_priority` and
+`test_equal_priorities_break_their_tie_by_set_id`. Mutants M73–M75 were killed
+against it.
+
+**Explainable holds only at the store level.** `Admin\SystemStatus` answers *"is
+sync working?"* across 20+ rows — `Indexed products`, `Deferred assignments`,
+`Catalogue sync`, `Queued product changes` — and the dashboard names a broken
+assignment per row (*"No longer in your catalogue"*, *"draft — not visible on
+your storefront"*).
+
+🔴 **What nothing answers is "why does this set not apply to THIS product?"** A
+merchant reading `Deferred assignments: 3` cannot tell which product is affected
+or which of `attribute`, `price_range` or `conditional` caused it.
+
+### Decision
+
+**Phase 19 closes with store-wide explainability. Per-product diagnosis is
+assigned to M21.4, not left unowned.**
+
+📌 **M21.4 is *"preview against a real product's base price"* — it already
+resolves a set against one named product.** "Why does this not apply?" is the
+same resolution with its reasoning surfaced, so building it in Phase 19 would
+mean writing that resolution twice, in two places, to drift apart. The pattern
+this repository keeps paying for.
+
+⚠️ **Recorded as a dependency rather than a wish.** Phase 21 depends on Phases
+16, 17 and 20; this adds nothing to that chain, because the data it needs —
+the index, the skip counter and the assignment list — all exist today.
+
+### Consequences
+
+A merchant whose option set does not appear can today tell *deferred* from
+*broken* store-wide, and can see every assignment with its own status. What they
+cannot do is point at one product and be told why. That is the gap, stated
+plainly, with an owner.
+
+---
+
+## ADR-083 — The dashboard shares the evaluators by fixture, not by copy
+
+**Status:** accepted, **not yet built** · **Stage:** 20-0 (Phase 20 entry)
+
+⚠️ **The decision is made; none of the three steps below has been taken.**
+Verified 2026-09-15: `src/lib/rules/` holds schema, summary and vocabulary and
+**no evaluator**; `src/lib/money/` parses and formats but does not compute. That
+is correct — M20.6 has not started — but an ADR marked only *"accepted"* reads
+as groundwork already in place, and someone planning the pricing editor would
+find otherwise mid-stage.
+
+### Context
+
+M20.6 asks for a pricing editor *"with worked examples showing a computed sample
+total"*, and M21.1 forbids the obvious way to build one: the preview renderer
+must share the storefront's semantics, **"never a second set of rules"**.
+
+✏️ **The Phase 20 analysis called this a gap. It is not.** Both evaluators
+already exist and are **framework-free** — no Nest, no TypeORM, no request
+context anywhere in the graph:
+
+| File | `^import` | On |
+|---|---|---|
+| `rule-evaluator.ts` | 0 | — |
+| `line-total.ts` | 0 | — |
+| `percentage.ts` | 0 | — |
+| `price-config-delta.ts` | **3** | `database/enums`, `text/measure`, `./percentage` — each itself import-free |
+
+⚠️ **An earlier draft of this ADR said "zero imports" for all four.** That was
+measured on two of them and generalised; `price-config-delta.ts` has three. The
+*conclusion* survives — every transitive dependency is a plain module, so the
+copy is four files plus two small ones — but the evidence as first written was
+wrong, and a reader checking it would have found that out the hard way.
+
+What M20.6 needs from each:
+
+| File | Lines | What M20.6 needs from it |
+|---|---|---|
+| `src/common/rules/rule-evaluator.ts` | 603 | `evaluateRules`, `ruleFires`, `conditionHolds`, `MAX_RULE_PASSES` |
+| `src/common/money/price-config-delta.ts` | 486 | `optionPricingDelta`, `priceConfigDelta` |
+| `src/common/money/line-total.ts` | 95 | `sumDeltas`, `clampToZero` |
+| `src/common/money/percentage.ts` | 63 | percentage rounding |
+
+### Decision
+
+**The dashboard gets its own copy of the pure functions, and parity is held by
+the shared fixture — not by comparing source.**
+
+🔴 **A third implementation is arriving whether or not we plan for it.** PHP's
+`Engine\RuleEvaluator` and the cloud's TS evaluator already exist; the dashboard
+is the third. The question was never "how do we avoid a third?" but "what keeps
+three in step?"
+
+📌 **The mechanism exists, but it is PER-REPOSITORY — and an earlier draft of
+this ADR got that wrong.** There is no single gate counting evaluators across the
+product. Each repository ships its **own** `check-shared-fixtures.sh` with its
+**own** `SUITE_ROOT` and its own floor:
+
+| Repository | `SUITE_ROOT` | `RULE_SUITE_FLOOR` | Suites counted |
+|---|---|---|---|
+| plugin | its own test trees | **2** | PHP evaluator + browser JS |
+| backend | `src` | **1** | the TS evaluator |
+| **dashboard** | — | — | **no such gate, and no fixture execution at all** |
+
+✏️ **So "the count rises 2 → 3" was wrong.** Nothing would rise. The dashboard is
+a third repository that does not participate, and adding a copy there changes no
+existing gate's output — which is precisely how an unproven evaluator ships
+green.
+
+🔴 **The gate's own docblock records this failure happening before:** M17.9 added
+a third evaluator in the browser with its fixture run under `tests/js`, and the
+gate searched `tests/unit` alone — *"deleting `tests/js/rule-fixtures.test.js`
+left every gate green, still reporting 'rule cases are executed here'."* The fix
+then was making `SUITE_ROOT` a list. The same shape of omission is available
+again, one repository over.
+
+⚠️ **Behaviour parity, not source parity, and the difference is the point.**
+`check-fixture-parity.sh` enforces byte-identical *fixtures*, which is right for
+data. Enforcing byte-identical *source* across 1,247 lines would forbid the
+dashboard from adapting an import path, and would still not prove the two agree
+— only that they look alike. The fixture proves they answer the same.
+
+### Consequences
+
+M20.6 needs **no new evaluator**, but it does need **new gate wiring** — and
+that is the part worth planning for rather than discovering.
+
+Three things, in order:
+
+1. **Copy the pure functions** — `rule-evaluator.ts`, `price-config-delta.ts`,
+   `line-total.ts`, `percentage.ts`, plus `database/enums` and `text/measure`.
+2. **Copy the shared rule fixture** into the dashboard, and add it to
+   `check-fixture-parity.sh` so the third copy cannot drift from the other two.
+   That gate already proves *"all 4 shared fixture(s) are byte-identical across
+   both repositories"* — it becomes three.
+3. **Give the dashboard its own `check-shared-fixtures.sh`** with
+   `RULE_SUITE_FLOOR=1`, so a suite that stops executing the cases fails the
+   build. Without this the copy is invisible to every gate in the product.
+
+🔴 **A copy that does not execute the fixture is the failure mode**, and nothing
+currently would catch it: the code compiles, the totals look plausible, every
+gate stays green, and only a merchant comparing the builder against a live
+storefront would ever notice. Step 3 is not optional tidying — it is the only
+thing that makes step 1 provable.
+
+---
+
+## ADR-084 — M20.1's third pane shows shape, not behaviour
+
+**Status:** accepted · **Stage:** 20-0 (Phase 20 entry)
+
+### Context
+
+M20.1 specifies a three-pane builder: *structure · editor · **live preview***.
+But **Phase 21 depends on Phase 20**, so M20.1 cannot contain the preview Phase
+21 exists to build. Left unresolved, the pane grows a rule evaluator and a price
+calculation, and M21.1's *"never a second set of rules"* is violated before
+Phase 21 begins.
+
+### Decision
+
+**The third pane renders shape and copy at set level. Behaviour waits for Phase
+21.**
+
+📌 **The contract already exists, one level down.** `OptionPreview` renders a
+single option and says what it is:
+
+> *"A likeness, not the storefront. The real markup comes from the plugin's
+> templates and carries pricing, swatch colours and the character counter's live
+> count. This shows shape and copy — enough to answer 'is this the control I
+> meant?'"*
+
+M20.1 scales that contract from one option to a set. It does **not** change it.
+
+⚠️ **`OptionPreview` cannot simply be reused.** It takes four scalars —
+`label`, `presentation`, `isRequired`, `maxLength` — and is rendered *inline
+inside the option editor* under "Your customer sees". It has no values, no
+groups, no rules and no pricing. The set-level pane is new work built to the
+same promise, not a lift of the existing component.
+
+**The line, stated so it cannot erode quietly:**
+
+| M20.1 may show | Phase 21 owns |
+|---|---|
+| groups, their order and layout | rule evaluation (show/hide/require) |
+| each option's control shape and label | computed prices and sample totals |
+| required markers, help text | viewport fidelity (M21.2) |
+| "this control, in this position" | *"does this behave like the storefront?"* |
+
+🔴 **Any rule evaluation or price arithmetic in this pane is out of scope**, and
+that is the whole reason this ADR exists. Phase 21's exit is *"preview matches
+storefront behaviour for rules and pricing"*; a Phase 20 pane that half-answers
+it leaves two previews disagreeing, with the merchant trusting whichever they
+saw last.
+
+### Consequences
+
+M20.1 ships a pane a merchant can use to answer *"is my set laid out the way I
+meant?"* — the question being asked while composing. *"Will a customer be shown
+this, and charged that?"* is answered in Phase 21, by the renderer that shares
+the storefront's semantics (ADR-083 supplies its evaluators).
+
+---
+
+## ADR-085 — M20.2 re-affirms move up/down; drag is additive, if at all
+
+**Status:** accepted · **Stage:** 20-0 (Phase 20 entry)
+
+### Context
+
+M20.2 asks for *"drag-and-drop composition with keyboard-accessible
+alternatives"*. The same row appeared in Phase 18 and the plan itself refused to
+execute it as written:
+
+> *"Ordering **already works**, by move-up/move-down buttons the codebase chose
+> deliberately … Replacing that with drag would trade working, accessible UX for
+> a library and a keyboard regression. The stage should be re-scoped or the
+> choice re-affirmed — **not executed as written**."*
+
+The codebase's own reason, recorded at the call site: *"drag needs a library,
+does not work from a keyboard without extra handling, and is awkward on the
+phones merchants actually use."*
+
+### Decision
+
+**The existing controls are re-affirmed. Drag may be added *over* them; it may
+never replace them.**
+
+📌 **M20.2's substance already shipped.** Reorder endpoints exist for groups,
+options, items **and** rules; `reorderGroups` posts to
+`/option-sets/:id/reorder` and is wired into the editor. The gap the plan named
+at Phase 18 — *"an endpoint the dashboard never calls"* — was closed for groups.
+
+⚠️ **Accessibility is the requirement, not the caveat.** M20.2 phrases drag as
+primary and keyboard as the *"alternative"*. That is backwards here: the
+keyboard path is what exists, works, and is already reasoned about — the call
+site notes *"a screen reader announcing four identical 'Move up' buttons"*, so
+its labelling was considered. Drag added later is an enhancement on a working
+base; drag built first makes the accessible path the fallback nobody tests.
+
+### Consequences
+
+🔴 **One instance of the Phase 18 gap is still open, and it is NOT groups.**
+`POST /option-sets/:id/rules/reorder` is fully built, and the dashboard has
+**no client function for it at all** — `rules-panel.tsx` makes zero reorder
+calls. A merchant cannot reorder rules.
+
+📌 **Severity is usability, not correctness**, and the endpoint says why:
+*"Order is presentation, not precedence — M17.2 makes evaluation
+order-independent."* Nothing evaluates differently; a merchant simply cannot
+arrange a long rule list into an order they can read.
+
+**M20.2 closes that gap** — one client function and the controls to call it —
+rather than adding a drag library the two prior decisions both argued against.

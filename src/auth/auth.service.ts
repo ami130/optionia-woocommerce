@@ -1,3 +1,4 @@
+import { MailKind } from '../common/database/enums';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -202,6 +203,7 @@ export class AuthService {
       text: rendered.text,
       html: rendered.html,
       template: 'password-reset',
+      kind: MailKind.TRANSACTIONAL,
       userId: user.id,
     });
 
@@ -260,6 +262,7 @@ export class AuthService {
         text: rendered.text,
         html: rendered.html,
         template: 'password-changed',
+      kind: MailKind.TRANSACTIONAL,
         userId: user.id,
       });
     }
@@ -440,6 +443,7 @@ export class AuthService {
       text: rendered.text,
       html: rendered.html,
       template: 'verify-email',
+      kind: MailKind.TRANSACTIONAL,
     });
   }
 

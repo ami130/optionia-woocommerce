@@ -5,10 +5,21 @@ import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { getTenantId } from '../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
-import { OptionSetStatus } from '../common/database/enums';
+import {
+  GroupDisplayType,
+  OptionSetStatus,
+  PresentationalKind,
+  PriceType,
+} from '../common/database/enums';
 import { DomainException } from '../common/errors/domain.exception';
 import { OptionGroup } from './entities/option-group.entity';
 import { OptionSet } from './entities/option-set.entity';
+import { OptionValue } from './entities/option-value.entity';
+import { Option } from './entities/option.entity';
+import { PresentationalItem } from './entities/presentational-item.entity';
+import { OptionTypeValidator } from './types/option-type.validator';
+import { AUTHORING_LIMITS } from './authoring-limits';
+import { findType } from './types/type-registry';
 import { copyOptionsInto, copyRulesInto } from './option-groups.service';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { assertVersionMatches } from './optimistic-lock';
@@ -38,6 +49,7 @@ export class OptionSetsService {
     private readonly hardDelete: HardDeleteService,
     private readonly trees: OptionSetTreeLoader,
     private readonly serializer: OptionSetSerializer,
+    private readonly validator: OptionTypeValidator,
   ) {}
 
   /**
@@ -285,14 +297,320 @@ export class OptionSetsService {
    * published set and having the copy go live immediately would publish work
    * nobody reviewed.
    */
-  async duplicate(id: string, name?: string): Promise<OptionSet> {
+  /**
+   * Rebuild a set from an exported document (M20.8).
+   *
+   * 🔴 **One transaction, because a part-written set has no undo.** Creating a
+   * tree is a group, then options, then values, then items — and doing it as a
+   * sequence of requests from the dashboard would leave a set nobody authored
+   * when a document failed halfway. A create is a shape change that clears the
+   * undo log, so there would be no way back.
+   *
+   * 📌 **The same shape `duplicate` already proved.** An import is that
+   * operation with a *document* as the source rather than a row; the atomicity
+   * requirement is identical and so is the traversal.
+   *
+   * ⚠️ **Every option is validated by the registry on the way in**, exactly as
+   * an authored one is. A document arrives hand-edited or from a future
+   * release, and trusting it because this product wrote one like it is how a
+   * malformed file becomes a malformed set.
+   */
+  async importDocument(
+    storeId: string,
+    document: Record<string, unknown>,
+  ): Promise<OptionSet> {
+    await this.assertStoreBelongsToTenant(storeId);
+
+    const name = typeof document.name === 'string' ? document.name.trim() : '';
+
+    if (name === '') {
+      throw DomainException.validation([{ field: 'document.name', code: 'REQUIRED' }]);
+    }
+
+    const groups = Array.isArray(document.groups) ? document.groups : [];
+
+    if (groups.length === 0) {
+      throw DomainException.validation([{ field: 'document.groups', code: 'REQUIRED' }]);
+    }
+
+    if (groups.length > AUTHORING_LIMITS.groupsPerSet) {
+      throw DomainException.validation([{ field: 'document.groups', code: 'TOO_MANY' }]);
+    }
+
+    const created = await this.dataSource.transaction(async (manager) => {
+      const tenantId = getTenantId();
+
+      if (tenantId === null) {
+        /* Unreachable behind the guard; stated rather than coerced. */
+        throw DomainException.notFound('Store');
+      }
+
+      const set = await manager.save(
+        manager.create(OptionSet, {
+          tenantId,
+          storeId,
+          name,
+          /*
+           * 🔴 **Always a draft, whatever the document claims.** A file could
+           * name a status and a version; honouring them would publish work
+           * nobody reviewed onto a storefront customers are buying from.
+           */
+          status: OptionSetStatus.DRAFT,
+          version: 0,
+          rowVersion: 1,
+          publishedConfigVersion: 0,
+        }),
+      );
+
+      for (const [g, rawGroup] of groups.entries()) {
+        const group = rawGroup as Record<string, unknown>;
+
+        const groupRow = await manager.save(
+          manager.create(OptionGroup, {
+            optionSetId: set.id,
+            label: String(group.label ?? '').trim(),
+            description: typeof group.description === 'string' ? group.description : null,
+            /*
+             * ⚠️ **Checked against the real set, not cast.** A document may
+             * name a layout that does not exist; falling back to `inline` is
+             * what the plugin's renderer already does for an unknown one, so
+             * the two agree rather than the import inventing a value.
+             */
+            displayType: Object.values(GroupDisplayType).includes(
+              group.displayType as GroupDisplayType,
+            )
+              ? (group.displayType as GroupDisplayType)
+              : GroupDisplayType.INLINE,
+            sortOrder: typeof group.sortOrder === 'number' ? group.sortOrder : g * 10,
+            isCollapsible: group.isCollapsible === true,
+            /* Disabled work stays disabled, as everywhere else. */
+            isEnabled: group.isEnabled !== false,
+          }),
+        );
+
+        const options = Array.isArray(group.options) ? group.options : [];
+
+        /*
+         * 🔴 **The limits the API owns, enforced by the API.** The dashboard
+         * checks them before sending, which makes the UI path safe — but a
+         * client check is never the boundary, and this endpoint is guarded by a
+         * capability rather than by a client.
+         */
+        if (options.length > AUTHORING_LIMITS.optionsPerGroup) {
+          throw DomainException.validation([
+            { field: `document.groups.${g}.options`, code: 'TOO_MANY' },
+          ]);
+        }
+
+        for (const [o, rawOption] of options.entries()) {
+          const option = rawOption as Record<string, unknown>;
+          const presentation = String(option.presentation ?? '');
+
+          /*
+           * 🔴 **The registry validates it, not this loop.** A presentation it
+           * does not know, a pricing shape it refuses, a validation rule that
+           * contradicts itself — all of it is the same check an authored option
+           * passes, and it throws inside the transaction so nothing is written.
+           */
+          /*
+           * 🔴 **Looked up first, so an unknown presentation fails before the
+           * registry-driven checks run on `undefined`.** `findType` returning
+           * null is a document naming a type this release does not have.
+           */
+          const definition = findType(presentation);
+
+          if (definition === null) {
+            throw DomainException.validation([
+              { field: `document.groups.${g}.options.${o}.presentation`, code: 'UNKNOWN_TYPE' },
+            ]);
+          }
+
+          this.validator.assertValidOption(presentation, {
+            validation: option.validation ?? null,
+            pricing: option.pricing ?? null,
+            display: option.display ?? null,
+          });
+
+          const optionRow = await manager.save(
+            manager.create(Option, {
+              optionGroupId: groupRow.id,
+              key: String(option.key ?? '').trim(),
+              valueKind: definition.valueKind,
+              cardinality: definition.cardinality[0],
+              /*
+               * 📌 **Taken from the DEFINITION the validator returned**, not
+               * from the document: it has already proved the presentation
+               * exists, and reading it back narrows the type without a cast
+               * that could outlive the check.
+               */
+              presentation: definition.presentation,
+              label: String(option.label ?? '').trim(),
+              description: typeof option.description === 'string' ? option.description : null,
+              placeholder: typeof option.placeholder === 'string' ? option.placeholder : null,
+              helpText: typeof option.helpText === 'string' ? option.helpText : null,
+              isRequired: option.isRequired === true,
+              isEnabled: option.isEnabled !== false,
+              sortOrder: typeof option.sortOrder === 'number' ? option.sortOrder : o * 10,
+              defaultValue: typeof option.defaultValue === 'string' ? option.defaultValue : null,
+              validation: (option.validation ?? null) as never,
+              pricing: (option.pricing ?? null) as never,
+              display: (option.display ?? null) as never,
+            }),
+          );
+
+          const values = Array.isArray(option.values) ? option.values : [];
+
+          /*
+           * 🔴 **A valueless type must refuse values, not collect them
+           * silently.** `option-values.service.ts` states the reason: the
+           * publish check deliberately looks past a valueless option's values,
+           * so rows created here would *"exist, validate, publish, and mean
+           * nothing"* — and the storefront would render an input that ignores
+           * them.
+           *
+           * ⚠️ **The import wrote rows through `manager.save` directly**, so it
+           * never passed the guard the create path applies. Mirroring
+           * `duplicate`'s *transaction* shape was not enough: a duplicate copies
+           * rows that already passed these checks, and an import's rows have
+           * passed nothing.
+           */
+          if (values.length > 0 && !definition.takesValues) {
+            throw DomainException.validation([
+              { field: `document.groups.${g}.options.${o}.values`, code: 'TYPE_TAKES_NO_VALUES' },
+            ]);
+          }
+
+          if (values.length > AUTHORING_LIMITS.valuesPerOption) {
+            throw DomainException.validation([
+              { field: `document.groups.${g}.options.${o}.values`, code: 'TOO_MANY' },
+            ]);
+          }
+
+          /*
+           * ⚠️ **A duplicate key reached the database and became a 500.** The
+           * unique index caught it, so nothing was corrupted — but a merchant
+           * met a server error where the create path names the field.
+           */
+          const seenKeys = new Set<string>();
+
+          for (const [v, rawValue] of values.entries()) {
+            const value = rawValue as Record<string, unknown>;
+
+            const valueKey = String(value.valueKey ?? '').trim();
+
+            if (seenKeys.has(valueKey)) {
+              throw DomainException.validation([
+                {
+                  field: `document.groups.${g}.options.${o}.values.${v}.valueKey`,
+                  code: 'DUPLICATE',
+                },
+              ]);
+            }
+
+            seenKeys.add(valueKey);
+
+            await manager.save(
+              manager.create(OptionValue, {
+                optionId: optionRow.id,
+                valueKey,
+                label: String(value.label ?? '').trim(),
+                sortOrder: typeof value.sortOrder === 'number' ? value.sortOrder : v * 10,
+                /* Checked against the real set; an unknown type falls back to
+                 * `fixed`, which is what the column defaults to. */
+                priceType: Object.values(PriceType).includes(value.priceType as PriceType)
+                  ? (value.priceType as PriceType)
+                  : PriceType.FIXED,
+                priceAmountMinor:
+                  typeof value.priceAmountMinor === 'number' ? value.priceAmountMinor : 0,
+                priceConfig: (value.priceConfig ?? null) as never,
+                imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : null,
+                colorHex: typeof value.colorHex === 'string' ? value.colorHex : null,
+                groupLabel: typeof value.groupLabel === 'string' ? value.groupLabel : null,
+                skuSuffix: typeof value.skuSuffix === 'string' ? value.skuSuffix : null,
+                weightDeltaGrams:
+                  typeof value.weightDeltaGrams === 'number' ? value.weightDeltaGrams : null,
+                isDefault: value.isDefault === true,
+                isEnabled: value.isEnabled !== false,
+              }),
+            );
+          }
+        }
+
+        const items = Array.isArray(group.items) ? group.items : [];
+
+        if (items.length > AUTHORING_LIMITS.itemsPerGroup) {
+          throw DomainException.validation([
+            { field: `document.groups.${g}.items`, code: 'TOO_MANY' },
+          ]);
+        }
+
+        for (const [i, rawItem] of items.entries()) {
+          const item = rawItem as Record<string, unknown>;
+
+          await manager.save(
+            manager.create(PresentationalItem, {
+              optionGroupId: groupRow.id,
+              /*
+               * ⚠️ **An unknown kind is REFUSED, not defaulted.** A heading
+               * silently becoming a paragraph would change what a customer
+               * reads, unlike a layout falling back to `inline` — which the
+               * plugin's renderer does anyway.
+               */
+              kind: (() => {
+                if (!Object.values(PresentationalKind).includes(item.kind as PresentationalKind)) {
+                  throw DomainException.validation([
+                    { field: `document.groups.${g}.items.${i}.kind`, code: 'UNKNOWN_KIND' },
+                  ]);
+                }
+
+                return item.kind as PresentationalKind;
+              })(),
+              content: String(item.content ?? ''),
+              sortOrder: typeof item.sortOrder === 'number' ? item.sortOrder : i * 10,
+            }),
+          );
+        }
+      }
+
+      return set;
+    });
+
+    await this.audit.record({
+      action: AuditAction.OPTION_SET_IMPORTED,
+      resourceType: 'option_set',
+      resourceId: created.id,
+      changes: diff(null, { name: created.name, storeId, status: created.status }),
+    });
+
+    return created;
+  }
+
+  async duplicate(id: string, name?: string, storeId?: string): Promise<OptionSet> {
     const source = await this.findOne(id);
+
+    /*
+     * 🔴 **A named target store is verified against the acting tenant** (M20.8).
+     *
+     * The id comes from the caller, and the scoped repository stamps the tenant
+     * on the new row — so an unchecked target would produce a set that belongs
+     * to this tenant while pointing at somebody else's storefront. The same
+     * guard `create` uses, for the same reason.
+     *
+     * ⚠️ **Assignments are not copied**, which is what makes a cross-store copy
+     * meaningful rather than broken: they name products by external id, and
+     * those ids mean nothing in another store. The copy arrives unassigned.
+     */
+    if (storeId !== undefined && storeId !== source.storeId) {
+      await this.assertStoreBelongsToTenant(storeId);
+    }
+
+    const targetStoreId = storeId ?? source.storeId;
 
     const copy = await this.dataSource.transaction(async (manager) => {
       const created = await manager.save(
         manager.create(OptionSet, {
           tenantId: source.tenantId,
-          storeId: source.storeId,
+          storeId: targetStoreId,
           name: name?.trim() || `${source.name} (copy)`,
           status: OptionSetStatus.DRAFT,
           // A copy is unpublished however published its source was.

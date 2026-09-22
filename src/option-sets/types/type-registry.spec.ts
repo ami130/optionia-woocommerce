@@ -387,6 +387,95 @@ describe('type registry', () => {
       expect(radio?.displaySchema.safeParse({ labelPlacement: 'above' }).success).toBe(false);
       expect(radio?.displaySchema.safeParse({ showPriceDelta: true }).success).toBe(false);
     });
+
+    /*
+     * -------------------------------------------------------------------
+     * The four style tokens (M21c.2, ADR-112)
+     *
+     * 🔴 **These become CSS on a merchant's storefront**, so the schema is the
+     * first of two defences — the plugin re-validates at emission (M21c.4).
+     * What is tested here is that a bad value never becomes an authored one.
+     * -------------------------------------------------------------------
+     */
+    it('accepts the four style tokens', () => {
+      expect(
+        radio?.displaySchema.safeParse({
+          accentColor: '#3858e9',
+          borderRadius: 4,
+          spacing: 12,
+          swatchPx: 48,
+        }).success,
+      ).toBe(true);
+    });
+
+    /**
+     * 🔴 **The injection case.** An accent colour reaches a `style` attribute,
+     * so anything that is not six hex digits must not survive authoring —
+     * a closing quote and a second declaration most of all.
+     */
+    it('rejects an accent colour that is not six hex digits', () => {
+      for (const hostile of [
+        '#f00',
+        'red',
+        'rgb(255,0,0)',
+        '#3858e9; background: url(//evil)',
+        '#3858e9"',
+        'var(--x)',
+        '#gggggg',
+        '',
+      ]) {
+        expect(radio?.displaySchema.safeParse({ accentColor: hostile }).success).toBe(false);
+      }
+    });
+
+    it('clamps the three numeric tokens to their documented ranges', () => {
+      expect(radio?.displaySchema.safeParse({ borderRadius: -1 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ borderRadius: 25 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ spacing: -1 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ spacing: 49 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ swatchPx: 15 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ swatchPx: 129 }).success).toBe(false);
+    });
+
+    /**
+     * ⚠️ **A float is not a pixel count.** `4.5` would reach a stylesheet as
+     * `4.5px`, which renders — so the refusal has to be the schema's, not the
+     * renderer's.
+     */
+    it('rejects a fractional pixel value', () => {
+      expect(radio?.displaySchema.safeParse({ borderRadius: 4.5 }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ spacing: 0.5 }).success).toBe(false);
+    });
+
+    /**
+     * ⚠️ **A number arriving as a string is still not a number.** The wire is
+     * JSON and a dashboard field is a text input; `"4"` is what a form sends
+     * when nobody coerced it.
+     */
+    it('rejects a numeric token sent as a string', () => {
+      expect(radio?.displaySchema.safeParse({ borderRadius: '4' }).success).toBe(false);
+      expect(radio?.displaySchema.safeParse({ swatchPx: '48' }).success).toBe(false);
+    });
+
+    /**
+     * 🔴 **The tokens are shared, so both display schemas must carry them.**
+     * They are spread from one definition precisely so a merchant learns the
+     * vocabulary once — a text field has an accent colour as much as a swatch
+     * does, and two copies is how the two come to disagree.
+     */
+    it('accepts the style tokens on a text option too', () => {
+      const text = findType(Presentation.TEXT_FIELD);
+
+      expect(
+        text?.displaySchema.safeParse({
+          accentColor: '#3858e9',
+          borderRadius: 4,
+          spacing: 12,
+        }).success,
+      ).toBe(true);
+
+      expect(text?.displaySchema.safeParse({ accentColor: 'red' }).success).toBe(false);
+    });
   });
 
   describe('radio pricing schema', () => {

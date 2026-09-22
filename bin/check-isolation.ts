@@ -61,6 +61,31 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
    */
   'GET /v1/products',
   /**
+   * A merchant's own funnel position, added for M20b.1.
+   *
+   * It names **no id at all** — the tenant is read from the request context —
+   * so there is nothing foreign for a caller to ask for and no 404 to assert.
+   * The property proven instead is that the answer is the caller's own: tenant A
+   * owns a connected store and an option set, tenant B owns neither, and an
+   * unscoped funnel would tell tenant B they had both. Proven in
+   * `isolation-matrix.e2e-spec`.
+   */
+  'GET /v1/activation/me',
+  /**
+   * This person's dashboard preferences, added for M20b.2.
+   *
+   * Like `/activation/me` they name **no id** — the user comes from the request
+   * context — so there is nothing foreign to ask for and no 404 to assert. The
+   * property here is stronger than tenant isolation and is asserted instead:
+   * these are **per user** (ADR-088), so one person's dismissal must not reach
+   * another. Proven in `isolation-matrix.e2e-spec` by writing as one user and
+   * reading as another, rather than by a read-only check that would pass against
+   * an empty table.
+   */
+  'GET /v1/activation/preferences',
+  'PATCH /v1/activation/preferences',
+
+  /**
    * `authorize` names a connection request, not a tenant's resource.
    *
    * There is no foreign id to refuse: a request id belongs to a pending

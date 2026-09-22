@@ -483,6 +483,78 @@ describe('option authoring (e2e)', () => {
     }, 30_000);
   });
 
+  /**
+   * Booleans mean what the caller sent (`IsStrictBoolean`).
+   *
+   * 🔴 **Both of these were real, and both were measured against this API.**
+   *
+   * ```text
+   * PATCH /v1/values/:id  {"isEnabled": "false"}  → 200, isEnabled: TRUE
+   * PATCH /v1/values/:id  {"isEnabled": null}     → 500 INTERNAL_ERROR
+   * ```
+   *
+   * The first is the dangerous one: `enableImplicitConversion` casts by
+   * truthiness, so the string spelling of the **opposite** intent enabled a value
+   * the merchant was disabling — with a success status, and that value then
+   * appears on their storefront. The second reached a `NOT NULL` column because
+   * `@IsOptional()` skips every validator for a `null`.
+   *
+   * Tested over HTTP rather than only in the decorator's unit spec, because both
+   * defects were produced by the *pipeline* — the global `ValidationPipe`'s
+   * options — and not by any one validator.
+   */
+  describe('boolean fields refuse anything that is not a boolean', () => {
+    const value = async (): Promise<string> => {
+      const group = await newGroup();
+      const option = await newOption(group, `bool${Date.now() % 100000}`);
+      const created = await post(tokenA, `/options/${option}/values`, {
+        valueKey: 'v',
+        label: 'V',
+      });
+
+      expect(created.status).toBe(201);
+
+      return created.body.data.id as string;
+    };
+
+    it.each(['false', '0', 'true', 'no'])('refuses the string %p', async (sent) => {
+      const id = await value();
+
+      const response = await patch(tokenA, `/values/${id}`, { isEnabled: sent });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    /** A `null` is a 400 at the edge, never a 500 from the column. */
+    it('refuses an explicit null', async () => {
+      const id = await value();
+
+      const response = await patch(tokenA, `/values/${id}`, { isEnabled: null });
+
+      expect(response.status).toBe(400);
+    }, 30_000);
+
+    it.each([true, false])('accepts the real boolean %p and stores it', async (sent) => {
+      const id = await value();
+
+      const response = await patch(tokenA, `/values/${id}`, { isEnabled: sent });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.isEnabled).toBe(sent);
+    }, 30_000);
+
+    /** 📌 Omitting the field must still mean "leave it alone". */
+    it('leaves the field unchanged when it is omitted', async () => {
+      const id = await value();
+      expect((await patch(tokenA, `/values/${id}`, { isEnabled: false })).status).toBe(200);
+
+      const response = await patch(tokenA, `/values/${id}`, { label: 'Renamed' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.isEnabled).toBe(false);
+    }, 30_000);
+  });
+
   describe('values', () => {
     it('creates a value with a default price of zero', async () => {
       const group = await newGroup();

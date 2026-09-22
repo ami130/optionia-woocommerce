@@ -118,6 +118,20 @@ const DISPLAY_KEYS: Readonly<Record<string, string>> = {
   collapsedByDefault: 'collapsed_by_default',
   tooltip: 'tooltip',
   columns: 'columns',
+
+  /*
+   * Style tokens (M21c.2, ADR-112).
+   *
+   * ⚠️ **`accentColor` and `borderRadius` rename; `spacing` and `swatchPx` do
+   * not.** A key already lowercase passes through `rename()` untouched, and an
+   * entry mapping a key to itself reads as though it were doing something. Both
+   * are listed anyway, because `check-wire-keys.sh` asserts every published key
+   * is snake_case and a reader comparing the four should find four.
+   */
+  accentColor: 'accent_color',
+  borderRadius: 'border_radius',
+  spacing: 'spacing',
+  swatchPx: 'swatch_px',
 };
 
 function rename(

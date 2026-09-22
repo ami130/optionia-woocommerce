@@ -1,3 +1,4 @@
+import { MailKind } from '../../common/database/enums';
 import { Logger } from '@nestjs/common';
 
 import type { AppConfig } from '../../config/env';
@@ -34,6 +35,7 @@ describe('SmtpTransport', () => {
     text: 'plain',
     html: '<p>html</p>',
     template: 'verify-email',
+    kind: MailKind.TRANSACTIONAL,
   };
 
   beforeEach(() => {

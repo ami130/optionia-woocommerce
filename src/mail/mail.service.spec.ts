@@ -1,3 +1,8 @@
+import {
+  MailKind,
+  SuppressionReason,
+  TRANSACTIONAL_TEMPLATES,
+} from '../common/database/enums';
 import { MailService, normaliseAddress } from './mail.service';
 import { MailDeliveryError, type MailTransportDriver, type OutgoingMail } from './mailer';
 
@@ -12,7 +17,7 @@ import { MailDeliveryError, type MailTransportDriver, type OutgoingMail } from '
 describe('MailService', () => {
   function build(overrides: {
     transport?: Partial<MailTransportDriver>;
-    suppression?: { liftedAt: Date | null } | null;
+    suppression?: { liftedAt: Date | null; reason?: string } | null;
     onSave?: (row: Record<string, unknown>) => void;
     saveThrows?: boolean;
   }) {
@@ -63,6 +68,7 @@ describe('MailService', () => {
     text: 'plain',
     html: '<p>html</p>',
     template: 'verify-email',
+    kind: MailKind.TRANSACTIONAL,
   };
 
   it('sends and records the delivery', async () => {
@@ -99,6 +105,160 @@ describe('MailService', () => {
 
       expect(result.sent).toBe(true);
       expect(sent).toHaveLength(1);
+    });
+
+    /**
+     * 🔴 **An unsubscribe used to silence a password reset.**
+     *
+     * Every mail was refused for a suppressed address whatever the reason, so a
+     * merchant who opted out of onboarding email would stop receiving
+     * verification links and resets — locking themselves out of their own
+     * account by clicking unsubscribe in a marketing message. Nothing writes an
+     * `unsubscribe` row yet, which is the only reason it had not happened.
+     */
+    describe('an unsubscribe silences nudges, not account mail', () => {
+      const unsubscribed = { liftedAt: null, reason: SuppressionReason.UNSUBSCRIBE };
+
+      it('still sends transactional mail', async () => {
+        const { service, sent } = build({ suppression: unsubscribed });
+
+        const result = await service.send({ ...mail, kind: MailKind.TRANSACTIONAL });
+
+        expect(result.sent).toBe(true);
+        expect(sent).toHaveLength(1);
+      });
+
+      it('refuses lifecycle mail', async () => {
+        const { service, sent, rows } = build({ suppression: unsubscribed });
+
+        /*
+         * ⚠️ A real lifecycle template, not `mail`'s transactional one: the
+         * allow-list refuses a mismatch in **both** directions, so reusing the
+         * default here would fail for the wrong reason.
+         */
+        const result = await service.send({
+          ...mail,
+          template: 'nudge-stalled-before-connect',
+          kind: MailKind.LIFECYCLE,
+        });
+
+        expect(result.sent).toBe(false);
+        expect(sent).toHaveLength(0);
+        expect(rows[0]).toMatchObject({ status: 'suppressed' });
+      });
+    });
+
+    /**
+     * ⚠️ **Deliverability suppressions silence everything, including account
+     * mail.** A hard-bounced address does not work, so a password reset would not
+     * arrive either — and sending to it damages delivery for every merchant who
+     * *is* reachable. `manual` is read the same way: support's "stop mailing
+     * this" means all of it.
+     */
+    it.each([
+      SuppressionReason.HARD_BOUNCE,
+      SuppressionReason.COMPLAINT,
+      SuppressionReason.MANUAL,
+    ])('refuses even transactional mail for a %s', async (reason) => {
+      const { service, sent } = build({ suppression: { liftedAt: null, reason } });
+
+      const result = await service.send({ ...mail, kind: MailKind.TRANSACTIONAL });
+
+      expect(result.sent).toBe(false);
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  /**
+   * 🔴 **A nudge must not be able to call itself transactional.**
+   *
+   * `kind` decides whether an unsubscribe silences a message and is declared by
+   * the caller, so without this a lifecycle mail could opt out of opt-outs — the
+   * inverse of the defect `MailKind` exists to fix, and invisible until a
+   * merchant complained that unsubscribing did nothing.
+   */
+  describe('the transactional allow-list', () => {
+    it.each(TRANSACTIONAL_TEMPLATES)('accepts %s as transactional', async (template) => {
+      const { service, sent } = build({});
+
+      const result = await service.send({
+        ...mail,
+        template,
+        kind: MailKind.TRANSACTIONAL,
+      });
+
+      expect(result.sent).toBe(true);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('refuses a template that is not on the list', async () => {
+      const { service, sent } = build({});
+
+      await expect(
+        service.send({ ...mail, template: 'nudge-stalled-before-connect', kind: MailKind.TRANSACTIONAL }),
+      ).rejects.toThrow(/is lifecycle mail, sent as transactional/);
+
+      /* ⚠️ Nothing sent: the refusal happens before the transport is reached. */
+      expect(sent).toHaveLength(0);
+    });
+
+    /** The same template as lifecycle mail is fine — that is the honest kind. */
+    it('accepts an unlisted template as lifecycle mail', async () => {
+      const { service, sent } = build({});
+
+      const result = await service.send({
+        ...mail,
+        template: 'nudge-stalled-before-connect',
+        kind: MailKind.LIFECYCLE,
+      });
+
+      expect(result.sent).toBe(true);
+      expect(sent).toHaveLength(1);
+    });
+
+    /**
+     * 🔴 **The mirror image, and the one the first version of this guard let
+     * through.** It refused a nudge claiming transactional and permitted
+     * `password-reset` declared `LIFECYCLE` — which an unsubscribe then silences,
+     * locking a merchant out of their own account. Same outcome as the defect
+     * `MailKind` exists to prevent, reached by a one-word mistake at a call site.
+     */
+    it.each(TRANSACTIONAL_TEMPLATES)('refuses %s sent as lifecycle mail', async (template) => {
+      const { service, sent } = build({});
+
+      await expect(
+        service.send({ ...mail, template, kind: MailKind.LIFECYCLE }),
+      ).rejects.toThrow(/is transactional mail, sent as lifecycle/);
+
+      expect(sent).toHaveLength(0);
+    });
+
+    /**
+     * ⚠️ **Refused, not silently corrected.** Sending it under the right kind
+     * would hide a call site that disagrees with the allow-list, and the next
+     * edit there would be made against a belief the code had quietly overruled.
+     */
+    it('does not quietly send a mismatched message under the correct kind', async () => {
+      const { service, sent, rows } = build({});
+
+      await expect(
+        service.send({ ...mail, template: 'password-reset', kind: MailKind.LIFECYCLE }),
+      ).rejects.toThrow();
+
+      expect(sent).toHaveLength(0);
+      expect(rows).toHaveLength(0);
+    });
+
+    /**
+     * 📌 The list must name every template the code actually sends as
+     * transactional, or a real auth mail throws at send time.
+     */
+    it('covers every transactional mail this API sends', () => {
+      expect([...TRANSACTIONAL_TEMPLATES].sort()).toEqual([
+        'password-changed',
+        'password-reset',
+        'verify-email',
+      ]);
     });
   });
 

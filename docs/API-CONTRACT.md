@@ -82,10 +82,23 @@ freely. **Clients must not parse `message`.** The full set and its statuses:
 | `CONFLICT` | 409 | Request conflicts with current state |
 | `ALREADY_EXISTS` | 409 | Uniqueness violation |
 | `VERSION_MISMATCH` | 409 | Optimistic lock failed; reload and retry |
+| `PAYLOAD_TOO_LARGE` | 413 | Body exceeds the 1 MB limit — send fewer items per request |
 | `RATE_LIMITED` | 429 | Too many requests |
 | `PLAN_LIMIT_EXCEEDED` | 429 | Plan quota reached |
 | `INTERNAL_ERROR` | 500 | Unexpected; details are logged, never returned |
 | `SERVICE_UNAVAILABLE` | 503 | Dependency unavailable |
+
+**The request body limit is 1 MB, and exceeding it is a `413`** (ADR-072). It is
+set explicitly rather than inherited: with nothing configured, Express applied
+100 kb and `body-parser`'s error — not a Nest exception — reached the filter as
+an **`INTERNAL_ERROR`**. Measured before the fix, a 150 kb body answered `500`.
+
+🔴 **That mattered because the plugin reads the status, not the message.**
+`OrderReporter` drops a 4xx as a permanent rejection but retries anything
+`>= 500`, and stops its drain on the first retryable failure — so one oversized
+order retried every fifteen minutes for ever **and blocked every order queued
+behind it**. `ReportOrderDto` permits 200 selections of 500 characters
+(~148 kb), so it was reachable. A `413` makes the plugin drop it loudly instead.
 
 **404 versus 403 is a security decision, not a style choice.** A resource
 belonging to another tenant returns `NOT_FOUND`. Returning `FORBIDDEN` would
@@ -691,6 +704,7 @@ in different orders are resolved by the database rolling one back. That surfaces
 as a conflict rather than a `500`, because it is transient and a retry will
 usually succeed.
 | `POST /option-sets/:id/duplicate` | `option_sets:edit` | `[built]` |
+| `POST /option-sets/import` | `option_sets:edit` | `[built]` |
 | `POST /option-sets/:id/publish` | `option_sets:publish` | `[built]` |
 | `GET /option-sets/:id/publish-check` | `option_sets:view` | `[built]` |
 | `GET /option-sets/:id/versions` · `GET /option-sets/:id/versions/:version` | `option_sets:view` | `[built]` |
@@ -698,7 +712,9 @@ usually succeed.
 | `POST /option-sets/:id/reorder` | `option_sets:edit` | `[built]` |
 | `GET /option-sets/:id/assignments` | `option_sets:view` | `[built]` |
 | `POST /option-sets/:id/assignments` | `products:assign` | `[built]` |
-| `DELETE /option-sets/:id/assignments/:externalProductId` | `products:assign` | `[built]` |
+| `DELETE /option-sets/:id/assignments/:targetRef` | `products:assign` | `[built]` |
+| `POST /option-sets/:id/assignments/unassign` | `products:assign` | `[built]` |
+| `GET /option-sets/:id/assignments/preview` | `products:assign` | `[built]` |
 
 **`editor` can edit but cannot publish**, and that is the single most important
 line in the permission matrix. Editing is safe; publishing changes a live
@@ -738,9 +754,21 @@ is the read half.
 Phase 13 the only source was `demo.seed.ts`, which is why Phase 10's renderer had
 nothing real to resolve.
 
+**Any target type, since M19.1'.** Until then this endpoint wrote `PRODUCT`
+unconditionally and the DTO had no field to carry anything else, so three of the
+five target types the enum, the column and the `ix_assignments_target` index all
+supported were unreachable end to end.
+
 ```jsonc
-// Request body
-{ "externalProductIds": ["1042", "1043"] }   // WooCommerce ids, not ours
+// Request body — M19.1' shape
+{ "targets": [
+    { "targetType": "product",  "targetRef": "1042" },   // WooCommerce ids, not ours
+    { "targetType": "category", "targetRef": "summer" }
+] }
+
+// Request body — the M13.6 shape, still accepted, read as `product` targets.
+// ⚠️ Deprecated: it cannot express a non-product assignment.
+{ "externalProductIds": ["1042", "1043"] }
 
 // → 200
 { "data": {
@@ -805,8 +833,23 @@ its own tombstone. **`ALL` assignments are not covered** — their target column
 are NULL and MySQL treats NULLs as distinct — which is acceptable because this
 endpoint authors only `MANUAL`.
 
-⚠️ **A product must exist in the set's own store** (finding **A3**). `targetRef`
-holds a WooCommerce id and has **no foreign key**: the product lives on the
+⚠️ **`targetType` is validated against the *authoring* list**, not the storage
+enum — `ASSIGNABLE_TARGET_TYPES` in `assign-product.dto.ts`. The two hold the
+same five values today, so the distinction changes no behaviour; it is the seam
+that has to move first if a type is ever stored but not authorable, and the
+OpenAPI schema documents the authoring list rather than the column's vocabulary.
+Note that `conditional` is an `AssignmentMode`, **not** a target type — it is not
+in `AssignmentTargetType` at all.
+
+⚠️ **A product must exist in the set's own store** (finding **A3**), **and this
+check applies to products only.** A category, tag, attribute or price band is not
+a row in this database — the mirror holds them as JSON, so the equivalent would
+be an unindexable `JSON_CONTAINS` scan — and requiring a member would reject
+correct configurations: a merchant assigns to "Summer" before stocking it, and
+the whole point of a taxonomy assignment is that it applies to products that do
+not exist yet.
+
+For a product, `targetRef` holds a WooCommerce id and has **no foreign key**: the product lives on the
 merchant's site, not in this database, so nothing in the schema stops a set being
 assigned to a product belonging to another store — accepted, stored, and silently
 never rendering, because the plugin indexes by an id that does not exist there.
@@ -817,6 +860,69 @@ unknown id refuses the **whole** request rather than assigning part of it.
 twice answers `404` and does not advance `config_version` — mutation-proven:
 relaxing that filter let the second call match the tombstone and report success
 for work it did not do.
+
+`DELETE /v1/option-sets/:id/assignments/:targetRef?targetType=category`
+
+🔴 **The type is a query parameter, not a second path segment**, and it defaults
+to `product`. Adding a segment would `404` every URL the deployed dashboard
+already calls, so the existing form keeps meaning exactly what it meant. An
+unrecognised `targetType` is a `400`, **never** a silent fallback to `product`:
+`targetRef` is unique only within a type, so coercing it would delete the wrong
+row whenever a category and a product share a reference — an ordinary collision,
+not an exotic one.
+
+### `POST /v1/option-sets/:id/assignments/unassign` **[built]**
+
+Remove many targets in one request
+([M19.5](../../developePlan.md)) — the bulk half of the picker.
+
+**A `POST`, not a `DELETE` carrying a body.** RFC 9110 leaves a body on DELETE
+undefined and intermediaries drop it, so a bulk removal that removed *nothing*
+would be indistinguishable from one that worked. The single-target delete above
+is untouched: it is what the shipped dashboard calls.
+
+**A target that is already gone is not an error.** The single unassign answers
+`404` — right for one *named* thing. A selection goes stale whenever another
+session removes a row or a merchant re-clicks a slow request, and failing the
+whole request would leave every other row assigned while saying nothing about
+which. So this answers `200` with `removed`.
+
+```jsonc
+// Request body
+{ "targets": [ { "targetType": "product", "targetRef": "1042" } ] }   // max 100
+
+// 200
+{ "data": { "assignments": [ /* the set's live assignments after the change */ ],
+            "configVersion": 42,
+            "removed": 1 } }                 // fewer than asked = stale selection
+```
+
+Targets are matched on the **`(targetType, targetRef)` pair**, never the
+reference alone: `targetRef` is unique only within a type, so category `12` and
+product `12` are different rows.
+
+### `GET /v1/option-sets/:id/assignments/preview` **[built]**
+
+How many products a target would apply to, **before** applying it
+([M19.5](../../developePlan.md)).
+
+```jsonc
+// GET …/assignments/preview?targetType=category&targetRef=summer
+{ "data": { "matched": 12, "exact": false } }
+```
+
+**`exact` is the important field.** A taxonomy count reads the **mirror**, which
+is a snapshot; the storefront resolves `has_term()` **live**, so a product
+categorised after this call still matches. The dashboard therefore says *"about
+N products in your catalogue today"* — a count, never a promise. A `product`
+target is `exact: true`: it names one thing.
+
+**`matched: null` means uncountable, not zero.** `attribute` and `price_range`
+have no defined reference format, so there is nothing to count — and `0` would
+be a measurement, a wrong one.
+
+Scoped to the set's own store: `externalId` is unique only within a store, since
+WooCommerce numbers from 1 on every install.
 
 ### `POST /v1/option-sets/:id/publish` **[built]**
 
@@ -1658,6 +1764,9 @@ mutation-proven by dropping the join.
 | `POST /store/disconnect` | `[built]` |
 | `GET /store/config` | `[built]` |
 | `POST /store/orders` | `[built]` |
+| `POST /store/products` | `[built]` |
+| `DELETE /store/products/:externalId` | `[built]` |
+| `POST /store/products/reconcile` | `[built]` |
 
 > **A store credential is an opaque token, not a JWT.** `store_credentials` stores
 > a SHA-256 hash and an 8-character prefix; the plaintext exists only in the
@@ -1876,6 +1985,158 @@ where it would actually happen.
 **Order ids are scoped to the store.** WooCommerce ids restart at 1 on every
 install, so two stores reporting order `1` are two different orders.
 
+### `POST /v1/store/products` **[built]**
+
+One batch of the store's catalogue ([M19.1](../../developePlan.md)) — the ingest
+half of the catalogue push.
+
+🔴 **The store pushes; the cloud never pulls** (ADR-067). M19.1 was specified as
+a *"paginated pull from the WC REST API"*, and the cloud cannot do that: it
+holds no WooCommerce credentials, and **AC8 forbids it holding any** — *"every
+plugin installation is treated as potentially hostile"*. A pull would mean a
+per-tenant pool of WooCommerce read-write keys, the exact reversal of that trust
+direction. The plugin reads its own catalogue with `wc_get_products()`
+(in-process, no credentials) and posts batches here.
+
+```jsonc
+// Request body
+{
+  "products": [
+    { "external_id": "1042", "name": "Custom Hoodie", "sku": "HOOD-1",
+      "type": "simple", "price_minor": 1799, "status": "publish",
+      "permalink": "https://store.example.com/product/custom-hoodie/",
+      "image_url": null, "categories": ["Apparel"], "tags": ["bestseller"],
+      "external_updated_at": "2026-09-14T06:00:00.000Z" }
+  ]
+}
+
+// → 200
+{ "accepted": 1 }
+```
+
+**Guarded exactly as `POST /store/orders`**: `StoreTokenGuard` then
+`SiteMatchGuard`, in that order — the second reads what the first put in
+context. ⚠️ **`storeId` comes from the credential, never from the body.**
+Accepting it as a field would let any connected store rewrite another's
+catalogue.
+
+**At most 250 products per request.** ✏️ An earlier draft called that number
+*"derived"* from the body limit, putting the worst-case product at ~1.8 kB. That
+was wrong: it **forgot the taxonomy arrays** — `categories` and `tags` each
+allow 50 entries of 200 characters, so the true worst case is **~22 kB** and a
+full batch of them is **5.26 MB**.
+
+🔴 **250 is a throughput choice, and the body limit is what enforces safety.** A
+cap safe in every case is too slow to ship: only **47** maximal products fit in
+1 MB, and 40 per batch would take **26 days** for a 100k catalogue on the
+plugin's 900-second schedule, against **4.2 days** at 250. So a batch that
+exceeds 1 MB answers `413` and the pusher **halves its batch and retries** —
+converging in three steps worst case, and never triggering at all for a
+realistic store, where 50 real slugs make a ~2.2 kB product and 250 of those is
+~529 kB.
+
+Exceeding the **cap** is a `400`; exceeding the **body limit** is a `413`. Both
+are asserted at the boundary in `catalogue-ingest.e2e-spec.ts`.
+
+⚠️ **`OrderReporter::BATCH_SIZE = 10` is not the precedent for that number.**
+That drain sends **one request per order**, and its docblock justifies ten as
+wall-clock for ten requests. A catalogue push sends **one request per batch** —
+at ten per run, a 100k catalogue would take **104 days**.
+
+**Idempotent**, on `uq_store_products_external (storeId, externalId)`: a re-push
+updates rows rather than duplicating them, so a retry after a lost response is
+safe.
+
+✏️ **There is deliberately no `inserted` count.** An earlier draft reported one
+from `affectedRows` — MySQL counts 1 per insert, 2 per update. That arithmetic
+is **not recoverable**, because a row updated to identical values counts **0**:
+`affectedRows = 3` on a three-row batch means either three inserts, or one
+insert with one update and one no-op. A count that is sometimes wrong is worse
+than none, since nothing downstream can tell which time it is.
+
+`syncedAt` is refreshed on **every** row in the batch, including unchanged ones:
+it records when the cloud last *heard about* a product, not when the product
+last changed (that is `externalUpdatedAt`). M19.3's reconciliation reads the
+first to find rows the store has stopped mentioning, so leaving it stale on an
+unchanged row would make a live product look abandoned.
+
+### `POST /v1/store/products/reconcile` **[built]**
+
+Compare one page of the store's product ids against the mirror
+([M19.3](../../developePlan.md)) — the self-healing half of the catalogue sync.
+
+🔴 **The store is the authority on what exists** (ADR-067). The cloud cannot
+detect a product it has never heard of, so the sweep is driven from the plugin.
+
+```jsonc
+// Request body
+{
+  "external_ids": ["1001", "1002", "1005"],  // ascending
+  "range_start": "1001",                      // the whole sweep's floor
+  "is_final": true                            // the last page of the manifest
+}
+
+// → 200
+{ "checked": 3, "stale": 1, "removed": 1 }
+```
+
+🔴 **A non-final page never deletes** (ADR-075). Absence from a *page* is not
+absence from the store — during an ordinary paged sweep every id outside the
+current page is absent from it. Modelled: a mirror of 40,000 products and a page
+of 250 would leave **39,750 valid products deleted**. So a page reports `stale`
+and removes nothing; the decision waits for `is_final`.
+
+⚠️ **A final page is unbounded above, and an earlier draft was not.** Deriving
+the ceiling from the page's own highest id made the store's **highest** product
+unreconcilable: delete `wc-9` from `wc-1…wc-9` and the final manifest is
+`wc-1…wc-8`, whose range stops at `wc-8` — so `wc-9` survived every sweep for
+ever. A final page means *"this is the whole store from `range_start` upward"*.
+A non-final page keeps its ceiling, because everything above it is still coming.
+
+**At most 10,000 ids per page**, measured against the 1 MB limit at the column's
+full width: 10,000 × 64 characters is **664 kB**. Realistic numeric ids are
+77 kB. 📌 Ids rather than products is the economy — a 100k catalogue is **ten**
+requests here against **400** for a full re-push.
+
+⚠️ **Ids not present in the mirror are ignored, not an error.** The cloud cannot
+create a product from an id alone; `POST /store/products` does that.
+Reconciliation's job in that direction is to be silent.
+
+### `DELETE /v1/store/products/:externalId` **[built]**
+
+Remove one product from the mirror ([M19.2](../../developePlan.md)) — the
+incremental half of the catalogue sync.
+
+🔴 **Both of WooCommerce's endings arrive here** (ADR-074).
+`woocommerce_delete_product` removes the row from WordPress;
+`woocommerce_trash_product` leaves it with `post_status = trash`, which the
+catalogue walk **excludes** — it covers `publish`, `draft`, `pending` and
+`private` so a merchant can assign options before publishing. Mirroring trash as
+a status would leave the walk and the increment disagreeing about the same
+product, and M19.3's reconciliation would undo whichever wrote last. So both
+mean *remove*.
+
+**Guarded exactly as the ingest**, and scoped by the credential: the route takes
+only an external id, which two stores may legitimately share, so ⚠️ **the store
+comes from the token or it comes from nowhere.**
+
+```jsonc
+// → 200
+{ "removed": true }   // false when no such product was in the mirror
+```
+
+⚠️ **Removing something that was never here is a `200`, not a `404`.** The
+plugin queues a removal for a product that may never have been pushed — deleted
+before the first walk reached it — and a `404` would make it retry a request
+whose desired end state already holds. `removed` separates a real deletion from
+a redelivery **in the log**; the plugin acts on neither.
+
+📌 **Assignments are not deleted with the product.** An assignment row is the
+merchant's intent, and a product trashed by accident and restored an hour later
+must not lose it. The picker renders *"No longer in your catalogue"* from the
+absent row — a message written for exactly this and unreachable until now,
+because a push alone could never remove one.
+
 ### `POST /v1/store/disconnect` **[built]**
 
 The plugin telling the cloud it is leaving.
@@ -2023,6 +2284,198 @@ capture: a `400` says nothing, while a recorded mismatch says a site is confused
 
 **Errors:** `VALIDATION_FAILED`, `UNAUTHENTICATED` (unknown or revoked
 credential), `RATE_LIMITED`.
+
+---
+
+## PLUGIN — `/v1/plugin/*`
+
+**Realm:** none — both routes are `@Public()`.
+
+| Route | Capability | Status |
+| --- | --- | --- |
+| `GET /plugin/latest` | — | `[built]` |
+| `GET /plugin/download/:version` | — | `[built]` |
+
+### `GET /v1/plugin/latest` **[built]**
+
+What the newest build is, so the install screen can name the version and size
+before a merchant commits to a download ([M20b.3](../../developePlan.md)).
+
+```jsonc
+// GET /v1/plugin/latest → 200
+{ "data": {
+    "version": "0.2.0",
+    "filename": "optionia-0.2.0.zip",
+    "sizeBytes": 440657,
+    "downloadUrl": "/v1/plugin/download/0.2.0"
+} }
+```
+
+`404` when nothing has been built — which is **not an error state**: a developer
+who has not run `bash bin/package.sh` in the plugin repo has no archives, and the
+honest answer is that there is nothing to download.
+
+### `GET /v1/plugin/download/:version` **[built]**
+
+The zip itself.
+
+⚠️ **The one route in this API that does not answer with the `{data, meta}`
+envelope**, and it cannot — the body is a zip. It is excluded from the OpenAPI
+document rather than described with a JSON shape it does not return, and served
+as a stream with `Content-Type: application/zip`,
+`Content-Disposition: attachment; filename="optionia-<version>.zip"` and an exact
+`Content-Length`.
+
+🔴 **Public, deliberately** (ADR-095). The plugin carries **no secret by design** —
+AC8 is explicit that "no SaaS secret ever ships inside the plugin" and every
+installation is treated as potentially hostile — so there is nothing here to
+protect with a login. And a login wall is a real cost at the worst moment: M20b.3
+calls the browser-tab-to-WordPress-admin journey "the weakest link", and a
+merchant may be installing from a WordPress admin on a machine where they are not
+signed in to the dashboard.
+
+🔴 **`:version` is validated, not sanitised.** It is interpolated into a
+filesystem path, so the question is not what to strip but whether the string looks
+like a version at all: anything not matching `\d+\.\d+\.\d+` never reaches the
+disk, and a resolved path that has left the archive directory is refused as a
+backstop.
+
+📌 Proven where the guard lives rather than over HTTP — the router already answers
+`404` to an encoded slash *before* this code runs, so an e2e traversal test passes
+whatever the pattern says. Verified by mutation: loosening it to `(.+)` left every
+HTTP case green and failed the service's own spec.
+
+`404` for a version that was never built.
+
+---
+
+## ACTIVATION — `/v1/activation/*`
+
+| Route | Capability | Status |
+| --- | --- | --- |
+| `GET /activation/me` | `analytics:view` | `[built]` |
+| `GET /activation/preferences` | `analytics:view` | `[built]` |
+| `PATCH /activation/preferences` | `analytics:view` | `[built]` |
+
+### `GET /v1/activation/me` **[built]**
+
+Where this merchant stands in the activation funnel ([M20b.1](../../developePlan.md)),
+and the state M20b.2's setup checklist renders.
+
+```text
+signup → email verified → plugin installed → store connected
+       → products synced → option set created → assigned → PUBLISHED
+       → first customer selection → first order with options
+```
+
+**Activation is `published`.** The two steps after it are value-realized and are
+reported as ordinary steps, so a client can show "you have published" separately
+from "a customer has bought through it".
+
+**No tenant parameter, by construction.** The tenant comes from the request
+context, so there is no id for a caller to substitute and cross-tenant reads are
+unrepresentable rather than merely refused (ADR-010).
+
+⚠️ **The steps are not monotone.** Each asks *"has this tenant ever reached this
+state?"*, except `connected` and `published`, which ask about **current** state
+because that is what the words mean to the reader. A merchant who connected a
+store and later disconnected it reports `installed` and `synced` true with
+`connected` false. `nextStep` is therefore the **earliest** unreached step, not the
+furthest — that merchant should be told to reconnect, not congratulated.
+
+**The platform-wide aggregate is deliberately not exposed here.** "Of merchants who
+signed up this month, what fraction published?" spans every tenant and is a staff
+question; `ActivationService.funnel()` answers it and
+[M26.6](../../developePlan.md) owns the surface, behind Phase 26's staff guard.
+Serving it on a tenant-guarded route would hand every merchant every other
+merchant's signup counts. See ADR-086.
+
+```jsonc
+// GET /v1/activation/me → 200
+{ "data": {
+    "tenantId": "0f3c…",
+    "signedUpAt": "2026-09-01T10:00:00.000Z",
+    "activated": false,
+    "nextStep": "connected",
+    "steps": [
+      { "step": "signed_up", "reached": true },
+      { "step": "verified",  "reached": true },
+      { "step": "installed", "reached": true },
+      { "step": "connected", "reached": false },
+      { "step": "synced",    "reached": false },
+      { "step": "created",   "reached": false },
+      { "step": "assigned",  "reached": false },
+      { "step": "published", "reached": false },
+      { "step": "selected",  "reached": false },
+      { "step": "ordered",   "reached": false }
+    ]
+} }
+```
+
+📌 **`signedUpAt` is the anchor for every "stalled before X" question.** Each
+step is a boolean `EXISTS`, so the funnel could say *whether* a merchant had
+connected but not *how long they had not* — which is what
+[M20b.6](../../developePlan.md)'s nudges key on, and what M20b.8's time-to-value
+measures from. One timestamp rather than one per step: only signup has a moment
+the schema records directly, and adding a reached-at column to six tables for four
+nudges would be a migration in search of a requirement.
+
+`401` unauthenticated, `403` without `analytics:view`, `429` rate limited.
+
+### `GET /v1/activation/preferences` and `PATCH /v1/activation/preferences` **[built]**
+
+This person's dashboard preferences ([M20b.2](../../developePlan.md)). Today one
+field: whether they have dismissed the setup checklist.
+
+⚠️ **Per user, not per tenant** (ADR-088). The checklist tracks a *person's*
+progress through their own first run, so a colleague invited next month sees
+their own. The user comes from the request context — like `/activation/me`, these
+routes take no id, so a cross-user read is unrepresentable rather than merely
+refused.
+
+`analytics:view` for the same reason `me` uses it: this is the caller's own
+dashboard state, and inventing a capability per screen is how a permission matrix
+becomes unauditable.
+
+📌 **Not audit-logged, deliberately.** `AuditService` records that "reading your
+own profile is not an event" and omits `refresh` and `me` on the same grounds.
+Hiding a checklist is a UI preference, not something a reader of the trail is
+looking for.
+
+```jsonc
+// GET /v1/activation/preferences → 200
+{ "data": { "checklistDismissedAt": null } }
+
+// PATCH /v1/activation/preferences  { "dismissed": true } → 200
+{ "data": { "checklistDismissedAt": "2026-09-16T10:04:11.000Z" } }
+```
+
+**`dismissed` is an explicit boolean, and `false` restores the checklist.** The
+dashboard offers "show it again", so a dismiss-only route would need a second one
+to undo it — two ways to write one column.
+
+A missing row is a valid answer and is **not** created on read: every merchant
+who has never dismissed anything would otherwise get a row written on their first
+dashboard visit, which is a write on a read path and a table that grows with
+sign-ups rather than with decisions.
+
+`400` for a non-boolean `dismissed`, `401` unauthenticated, `403` without
+`analytics:view`, `429` rate limited.
+
+🔴 **"Non-boolean" means what it says, and that took a decorator to achieve.**
+`main.ts` sets `enableImplicitConversion: true`, under which
+`class-transformer` casts by truthiness *before* any validator runs — so **every
+non-empty string was `true`**, the string `"false"` included. Measured before the
+fix, on a merchant-facing field:
+
+```text
+PATCH /v1/values/:id   {"isEnabled": "false"}  → 200, isEnabled: true
+PATCH /v1/values/:id   {"isEnabled": null}     → 500 INTERNAL_ERROR
+```
+
+Every boolean in this API now uses `IsStrictBoolean`, which decides from the raw
+payload: a boolean is accepted, **anything else — strings, numbers, `null` — is a
+`400`**, and an omitted key still means "leave unchanged".
 
 ---
 

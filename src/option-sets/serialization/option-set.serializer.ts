@@ -269,6 +269,16 @@ export class OptionSetSerializer {
        * plugin written against a shape lacking these keys would need a
        * `schema_version` bump to gain them. An empty array is a shape a reader
        * handles from its first release.
+       *
+       * ✅ **M19.1' re-opened this decision and kept it** — the treatment
+       * ADR-064 gave a withdrawal. Opening the four non-product target types
+       * needed **no change here**, because the live join in
+       * `ConfigDocumentBuilder` maps `target_type`/`target_ref` from whatever
+       * the row holds and never filtered on `product`. Mutation-proven: making
+       * that join drop non-product targets, and hardcoding `target_type` to
+       * `'product'`, are each killed by
+       * `assignments.e2e-spec.ts` → *"a category assignment authored through
+       * the API reaches the document"*.
        */
       assignments: [],
       groups: tree.groups

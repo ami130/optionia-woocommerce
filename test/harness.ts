@@ -1,5 +1,6 @@
 import * as compression from 'compression';
 import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { config as loadDotenv } from 'dotenv';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,7 @@ import { DataSource } from 'typeorm';
 
 import { AppModule } from '../src/app.module';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
+import { BODY_LIMIT } from '../src/common/http/body-limit';
 import { flattenValidationErrors } from '../src/common/validation/flatten-validation-errors';
 import { deleteTenantsFor } from './cleanup-tenants';
 
@@ -81,7 +83,7 @@ export async function bootstrapTestApp(
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule, ...extraImports],
   } as never).compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication<NestExpressApplication>();
   const context = new RequestContextMiddleware();
 
   app.use(context.use.bind(context));
@@ -94,6 +96,33 @@ export async function bootstrapTestApp(
    * so "untestable" would mean "unverified" for a stated requirement.
    */
   app.use(compression({ threshold: 1024 }));
+
+  /**
+   * The same body limit `main.ts` installs (ADR-072).
+   *
+   * 🔴 **Found by a test that failed for the wrong reason.** Without this the
+   * harness ran on Express's 100 kb default while production ran on 1 MB, so a
+   * 529 kB batch — comfortably legal — answered `413` here and `200` there.
+   * Every payload-size assertion was being made against a limit the product
+   * does not have.
+   *
+   * ⚠️ **This bootstrap duplicates `main.ts` by hand**, which is why the drift
+   * was possible at all. The compression note above states the principle: a
+   * harness that skips what production installs makes the difference
+   * untestable. The body limit is the same case, and was missed.
+   *
+   * 📌 **The limit is imported, never retyped** — a limit written out in two
+   * files is a limit that drifts, which is the defect this block exists to
+   * close.
+   *
+   * ✏️ An earlier version of this note claimed `app.use(json(…))` leaves a
+   * second parser in the chain and that switching to `useBodyParser` fixed a
+   * run of gate failures. **Both halves were wrong**: Nest filters its default
+   * parsers by function name and `express.json()` is named `jsonParser`, so
+   * either form suppresses it — and the failures had a cause this never found.
+   */
+  app.useBodyParser('json', { limit: BODY_LIMIT });
+  app.useBodyParser('urlencoded', { limit: BODY_LIMIT, extended: true });
 
   app.setGlobalPrefix('v1', { exclude: ['health'] });
   app.useGlobalPipes(

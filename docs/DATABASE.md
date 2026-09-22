@@ -626,6 +626,38 @@ today. The table exists now because the `Mailer` must consult it from the first
 send — a suppression check retrofitted later is one that was absent for every
 message sent in between.
 
+### `user_preferences`
+
+One person's dashboard preferences (M20b.2). Today that is a single column:
+whether they have dismissed the setup checklist, and when.
+
+**Keyed on the user, not the tenant**, and that is the decision worth recording
+(ADR-088). The setup checklist tracks a *person's* progress through their own
+first run — a colleague invited next month has not done that run and must see
+their own checklist, so a tenant-level flag would hide it from someone who has
+never seen it. Someone who belongs to two tenants dismisses it once.
+
+⚠️ **No `tenant_id` column, deliberately** — the one table here where that is
+correct rather than an oversight. The route that reads it resolves the user from
+the request context and takes no id, so there is nothing to scope by tenant and
+nothing for a caller to substitute.
+
+`UNIQUE (user_id)`: one row per person, so a read is a lookup rather than a
+"latest wins" scan, and two dashboard tabs writing at once cannot leave two rows
+that disagree. The write is an upsert for the same reason — with the unique index
+in place, a find-then-save would hand the losing tab a duplicate-key error
+instead of the dismissal it asked for.
+
+`checklist_dismissed_at` is a **timestamp rather than a boolean**. "Dismissed"
+and "dismissed on the 3rd" cost the same to store, and the second answers
+questions the first cannot: whether people dismiss before or after activating,
+and whether M20b.6 should treat a months-old dismissal differently from this
+morning's.
+
+**Built once, for three consumers.** `localStorage` was rejected as the store: a
+dismissal in the browser does not follow the merchant to their laptop, and
+M20b.6's unsubscribe preference and later settings need the same surface.
+
 ## Referential integrity
 
 Every foreign key declares its delete behaviour. MySQL defaults to `RESTRICT`,
@@ -657,6 +689,7 @@ tenant_members.user_id     → users(id)              ON DELETE CASCADE
 tenant_members.invited_by  → users(id)              ON DELETE SET NULL
 tenant_invitations.tenant_id → tenants(id)          ON DELETE CASCADE
 tenant_invitations.invited_by → users(id)           ON DELETE SET NULL
+user_preferences.user_id   → users(id)              ON DELETE CASCADE
 platform_staff.user_id     → users(id)              ON DELETE CASCADE
 platform_staff.granted_by  → users(id)              ON DELETE SET NULL
 impersonation_sessions.staff_user_id → users(id)    ON DELETE RESTRICT

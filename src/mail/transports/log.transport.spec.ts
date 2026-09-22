@@ -1,3 +1,4 @@
+import { MailKind } from '../../common/database/enums';
 import { Logger } from '@nestjs/common';
 
 import { LogTransport } from './log.transport';
@@ -17,6 +18,7 @@ describe('LogTransport', () => {
     text: 'Visit https://app.example.com/verify?t=abc',
     html: '<p>html</p>',
     template: 'verify-email',
+    kind: MailKind.TRANSACTIONAL,
   };
 
   let logged: string[];

@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '../auth/auth.module';
 import { StoreProduct } from './entities/store-product.entity';
+import { CatalogueIngestController } from './catalogue-ingest.controller';
+import { CatalogueIngestService } from './catalogue-ingest.service';
 import { ProductsController } from './products.controller';
 import { ProductsRepository } from './products.repository';
 import { ProductsService } from './products.service';
@@ -21,8 +23,8 @@ import { ProductsService } from './products.service';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([StoreProduct]), AuthModule],
-  controllers: [ProductsController],
-  providers: [ProductsService, ProductsRepository],
+  controllers: [ProductsController, CatalogueIngestController],
+  providers: [ProductsService, ProductsRepository, CatalogueIngestService],
   exports: [ProductsRepository],
 })
 export class ProductsModule {}

@@ -12,6 +12,15 @@ export const ErrorCode = {
   MALFORMED_JSON: 'MALFORMED_JSON',
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
 
+  /**
+   * 413 — the request body exceeds the configured limit.
+   *
+   * 🔴 **A distinct code because the caller's remedy is distinct**: not "fix
+   * the field" but "send less in one request". The plugin's catalogue push
+   * reads it as the signal to halve its batch, which no 400 could carry.
+   */
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+
   // 401 — no valid credential.
   UNAUTHENTICATED: 'UNAUTHENTICATED',
   TOKEN_EXPIRED: 'TOKEN_EXPIRED',
@@ -64,6 +73,7 @@ export const ERROR_STATUS: Record<ErrorCodeValue, HttpStatus> = {
   [ErrorCode.VALIDATION_FAILED]: HttpStatus.BAD_REQUEST,
   [ErrorCode.MALFORMED_JSON]: HttpStatus.BAD_REQUEST,
   [ErrorCode.UNSUPPORTED_MEDIA_TYPE]: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+  [ErrorCode.PAYLOAD_TOO_LARGE]: HttpStatus.PAYLOAD_TOO_LARGE,
 
   [ErrorCode.UNAUTHENTICATED]: HttpStatus.UNAUTHORIZED,
   [ErrorCode.TOKEN_EXPIRED]: HttpStatus.UNAUTHORIZED,

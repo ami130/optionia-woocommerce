@@ -8,7 +8,6 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
-  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -21,6 +20,7 @@ import {
 } from 'class-validator';
 
 import { GroupDisplayType } from '../../common/database/enums';
+import { IsStrictBoolean } from '../../common/validation/strict-boolean.decorator';
 
 /**
  * Request shapes for group endpoints.
@@ -49,13 +49,13 @@ export class CreateOptionGroupDto {
   displayType?: GroupDisplayType;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isCollapsible?: boolean;
 
   /** M7.2's escape hatch: created disabled, so a group can be built before it shows. */
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }
@@ -81,12 +81,12 @@ export class UpdateOptionGroupDto {
   displayType?: GroupDisplayType;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isCollapsible?: boolean;
 
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   isEnabled?: boolean;
 }

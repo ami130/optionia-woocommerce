@@ -236,11 +236,26 @@ export function ruleFires(rule: EvaluableRule, answers: Answers): boolean {
 /**
  * Evaluate a rule set to a fixed point.
  *
- * `answersFor` maps a target id to the options whose answers it controls —
+ * `optionsUnder` maps a target id to the options whose answers it clears —
  * a group target controls every option inside it, an option controls itself,
- * a value controls the option that owns it. The caller supplies it because only
+ * and a **value controls nothing at all**. The caller supplies it because only
  * the caller has the document; the evaluator stays a pure function of its
  * arguments, which is what lets one fixture drive two languages.
+ *
+ * 🔴 **This said "a value controls the option that owns it" until M21.1.**
+ * Written before M17.8 and never corrected when the semantics changed, under a
+ * parameter name (`answersFor`) that no longer exists either. Hiding one colour
+ * of five removes a *choice*: the question stays and the answer stays valid.
+ * Measured with the old mapping, hiding a value **deleted the answer of a
+ * customer who had chosen something else**, and an unrelated "is empty" rule
+ * then fired against a third option.
+ *
+ * ⚠️ **The cycle detector in `publish-check.ts` keeps the value → option edge
+ * and is right to** — it asks what a target can *reach*, since `set_default`
+ * writes the owning option's answer. Two questions, two maps. The authority for
+ * *this* one is `rule-fixtures.json`'s case
+ * *"a value target hides a choice, and clears NO answer — not even its own
+ * option's"*.
  */
 export function evaluateRules(
   rules: readonly EvaluableRule[],

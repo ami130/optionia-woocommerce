@@ -9,6 +9,7 @@ import { ParentSetService } from './parent-set';
 import { PresentationalItem } from './entities/presentational-item.entity';
 import { PresentationalItemsRepository } from './presentational-items.repository';
 import { PresentationalKind } from '../common/database/enums';
+import { displaySchemaFor } from './types/presentational-display';
 import { diff } from '../audit/audit-diff';
 import { pick } from './entity-patch';
 
@@ -76,6 +77,47 @@ export class PresentationalItemsService {
     return item;
   }
 
+  /**
+   * A validated `display` block, or `null` (M21c.5, F31, ADR-113).
+   *
+   * 🔴 **This was `input.display ?? null` — any JSON, stored and published.**
+   * An option's `display` has been schema-checked per type since M14.4b; a
+   * presentational item's was guarded by `@IsObject()` alone, so a payload
+   * carrying `accent_color: '#fff; background: url(//evil)'` and a `<script>`
+   * tag validated with **zero errors** and reached the wire intact. Inert only
+   * because no template read it, and M21c.5 is what starts reading it.
+   *
+   * ⚠️ **A bad block is a refusal, not a silent drop.** `DomainException` is
+   * how every other authoring rule answers, and storing `null` instead would
+   * leave a merchant looking at a setting that vanished without explanation.
+   */
+  private displayFor(
+    kind: PresentationalKind,
+    display: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> | null {
+    if (display === null || display === undefined) {
+      return null;
+    }
+
+    const parsed = displaySchemaFor(kind).safeParse(display);
+
+    if (!parsed.success) {
+      /*
+       * The same shape an option's display failure produces: a dotted field
+       * path per issue, so a dashboard showing one can show both identically.
+       */
+      throw DomainException.validation(
+        parsed.error.issues.map((issue) => ({
+          field: ['display', ...issue.path.map(String)].join('.'),
+          code: 'invalid',
+          params: { message: issue.message },
+        })),
+      );
+    }
+
+    return parsed.data as Record<string, unknown>;
+  }
+
   async create(optionGroupId: string, input: CreateItemInput): Promise<PresentationalItem> {
     await this.assertGroupExists(optionGroupId);
 
@@ -90,7 +132,7 @@ export class PresentationalItemsService {
       kind: input.kind,
       content,
       sortOrder: input.sortOrder ?? (await this.items.nextSortOrder(optionGroupId)),
-      display: input.display ?? null,
+      display: this.displayFor(input.kind, input.display),
     } as never);
 
     await this.parents.touchForOption(optionGroupId);
@@ -126,7 +168,7 @@ export class PresentationalItemsService {
     }
 
     if (changes.display !== undefined) {
-      patch.display = changes.display;
+      patch.display = this.displayFor(before.kind, changes.display);
     }
 
     if (Object.keys(patch).length === 0) {

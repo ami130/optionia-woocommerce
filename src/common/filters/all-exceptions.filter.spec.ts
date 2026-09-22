@@ -217,6 +217,81 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
+  /**
+   * Body-parser errors (ADR-072).
+   *
+   * 🔴 **These were `500`s, and one of them wedged the order queue.**
+   * `body-parser` throws a plain `Error` carrying `status`/`statusCode`, not a
+   * Nest `HttpException`, so the filter's `instanceof` check missed it and an
+   * oversized body answered `INTERNAL_ERROR`. `OrderReporter` drops a 4xx as
+   * rejected but retries a `>= 500` and `break`s its drain — so one oversized
+   * order retried for ever and blocked every order behind it.
+   *
+   * Constructed the way `body-parser` constructs them: `status` and `type` as
+   * own properties on an `Error`. The real object is verified in
+   * `main.ts`'s measured note; this pins the translation.
+   */
+  describe('body-parser errors', () => {
+    const parserError = (type: string, status: number): Error =>
+      Object.assign(new Error('request entity too large'), { type, status, statusCode: status });
+
+    it('maps an oversized body to 413 PAYLOAD_TOO_LARGE', () => {
+      filter.catch(parserError('entity.too.large', 413), host);
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.PAYLOAD_TOO_LARGE);
+      expect(body().error.code).toBe(ErrorCode.PAYLOAD_TOO_LARGE);
+    });
+
+    it('tells the caller the body was too large, not that we failed', () => {
+      filter.catch(parserError('entity.too.large', 413), host);
+
+      expect(body().error.message).toBe('The request body is too large.');
+    });
+
+    it('maps an unparseable body to 400', () => {
+      filter.catch(parserError('entity.parse.failed', 400), host);
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+      expect(body().error.code).toBe(ErrorCode.VALIDATION_FAILED);
+    });
+
+    /*
+     * ⚠️ Only a 4xx is the caller's mistake. A 5xx-shaped error must still be
+     * reported as ours, however it is decorated — otherwise a genuine fault
+     * would be blamed on the request that exposed it.
+     */
+    it('leaves a 5xx-shaped error to the generic handler', () => {
+      const logged = jest.spyOn(filter['logger'], 'error');
+
+      filter.catch(parserError('entity.verify.failed', 500), host);
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(body().error.code).toBe(ErrorCode.INTERNAL_ERROR);
+
+      /*
+       * 🔴 **The logging is the assertion, and a surviving mutant proved it.**
+       * Dropping the 4xx restriction changes neither the status nor the code
+       * here — a 500 maps to `INTERNAL_ERROR` down either path — so the first
+       * two expectations passed against the mutant. What genuinely differs is
+       * that the translated path reports `logAsError: false`, filing one of our
+       * own faults as the caller's mistake and losing it from the error log.
+       */
+      expect(logged).toHaveBeenCalled();
+    });
+
+    /*
+     * `type` is body-parser's own discriminator. Without requiring it, any
+     * error that happened to carry a numeric `status` would be reported as the
+     * caller's fault — including one of ours.
+     */
+    it('ignores an error carrying a status but no parser type', () => {
+      filter.catch(Object.assign(new Error('something of ours'), { status: 404 }), host);
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(body().error.code).toBe(ErrorCode.INTERNAL_ERROR);
+    });
+  });
+
   describe('meta', () => {
     it('is present on every error', () => {
       filter.catch(new Error('boom'), host);

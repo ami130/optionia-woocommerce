@@ -4,6 +4,7 @@ import { OptionalNotNull, Trimmed } from '../../common/validation/trimmed.decora
 import {
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -115,6 +116,34 @@ export class ListOptionSetsDto {
   cursor?: string;
 }
 
+/**
+ * A set rebuilt from an exported document (M20.8).
+ *
+ * 🔴 **The document is `Record<string, unknown>` on purpose.** Its *shape* is
+ * validated in the service, against the same registry and per-type schemas that
+ * validate an authored option — because a file arrives hand-edited, from a
+ * future release, or simply wrong. A DTO that described the tree would be a
+ * second definition of what an option set is, and the two would disagree the
+ * first time either changed.
+ */
+export class ImportOptionSetDto {
+  /**
+   * Which store the imported set belongs to.
+   *
+   * ⚠️ **Checked against the acting tenant in the service.** A store id is
+   * caller-supplied, and the scoped repository stamps the tenant on the new row
+   * — so an unchecked target would produce a set that belongs to this tenant
+   * while pointing at somebody else's storefront.
+   */
+  @IsUUID()
+  @ApiProperty({ type: String })
+  storeId!: string;
+
+  @IsObject()
+  @ApiProperty({ type: Object })
+  document!: Record<string, unknown>;
+}
+
 export class DuplicateOptionSetDto {
   /**
    * Name for the copy. Defaults to the original with a `(copy)` suffix.
@@ -129,6 +158,27 @@ export class DuplicateOptionSetDto {
   @MaxLength(255)
   @ApiPropertyOptional({ type: String })
   name?: string;
+
+  /**
+   * Copy into a different store of the same tenant (M20.8).
+   *
+   * 🔴 **The multi-store differentiator [D5] promises.** `duplicate` copied
+   * into the source's own store, so a merchant running three storefronts
+   * rebuilt the same option set by hand for each.
+   *
+   * ⚠️ **Checked against the acting tenant in the service**, never trusted: a
+   * target store is a caller-supplied id, and without that check a merchant
+   * could attach a copy to another tenant's storefront. The refusal is a
+   * **404**, so a store in another tenant is indistinguishable from one that
+   * does not exist.
+   *
+   * 📌 **Optional, defaulting to the source's store**, because the common case
+   * is still "another one like this, here".
+   */
+  @IsOptional()
+  @IsUUID()
+  @ApiPropertyOptional({ type: String })
+  storeId?: string;
 }
 
 /**

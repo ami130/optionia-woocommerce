@@ -73,6 +73,21 @@ describe('assignments (e2e)', () => {
       .delete(`/v1/option-sets/${set}/assignments/${externalId}`)
       .set('Authorization', `Bearer ${token}`);
 
+  const unassignMany = (
+    targets: Array<{ targetType: string; targetRef: string }>,
+    set = setId,
+  ): request.Test =>
+    request(app.getHttpServer())
+      .post(`/v1/option-sets/${set}/assignments/unassign`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ targets });
+
+  const preview = (targetType: string, targetRef: string, set = setId): request.Test =>
+    request(app.getHttpServer())
+      .get(`/v1/option-sets/${set}/assignments/preview`)
+      .query({ targetType, targetRef })
+      .set('Authorization', `Bearer ${token}`);
+
   const listAssignments = (set = setId): request.Test =>
     request(app.getHttpServer())
       .get(`/v1/option-sets/${set}/assignments`)
@@ -492,5 +507,298 @@ describe('assignments (e2e)', () => {
     expect(published?.assignments).toEqual([
       { mode: 'manual', target_type: 'product', target_ref: 'wc-1', priority: 0 },
     ]);
+  });
+
+  /**
+   * The same journey for a **category** (M19.1' step 4).
+   *
+   * 🔴 **This is the gap the stage actually had.** The publish path was already
+   * target-type agnostic — `ConfigDocumentBuilder` joins assignments live and
+   * maps `target_type`/`target_ref` from whatever the row holds, and
+   * `config-delivery.e2e-spec.ts` already published a category — but that test
+   * inserts through the repository, bypassing the API. Nothing proved a
+   * non-product assignment **authored through the API** reaches the document,
+   * which is precisely the path M19.1' opened.
+   *
+   * ⚠️ **No `store_products` row is seeded, deliberately.** The A3 existence
+   * check is product-only: a category is not a row in this database, and
+   * requiring a member would reject the configuration a merchant makes when
+   * they assign to "Summer" before stocking it.
+   *
+   * 📌 **The plugin still skips this**, and that is correct, not a failure.
+   * `Config\ProductIndex` indexes `manual` + `product` and counts everything
+   * else in `skipped_count()`. Resolution is M19.4 (ADR-068); this stage makes
+   * the assignment *authorable and published*, so the counter finally has
+   * something real to count.
+   */
+  it('a category assignment authored through the API reaches the document', async () => {
+    const credential = generateStoreToken();
+
+    await dataSource.query(
+      `INSERT INTO store_credentials
+         (id, createdAt, updatedAt, storeId, tokenHash, tokenPrefix, scopes)
+       VALUES (UUID(), NOW(3), NOW(3), ?, ?, ?, '')`,
+      [storeId, credential.hash, credential.prefix],
+    );
+
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const group = await request(app.getHttpServer())
+      .post(`/v1/option-sets/${setId}/groups`)
+      .set(auth)
+      .send({ label: 'Finish' });
+    const option = await request(app.getHttpServer())
+      .post(`/v1/groups/${group.body.data.id}/options`)
+      .set(auth)
+      .send({ key: 'finish', label: 'Finish', presentation: 'radio' });
+    await request(app.getHttpServer())
+      .post(`/v1/options/${option.body.data.id}/values`)
+      .set(auth)
+      .send({ valueKey: 'lux', label: 'Luxury' });
+
+    await request(app.getHttpServer())
+      .post(`/v1/option-sets/${setId}/assignments`)
+      .set(auth)
+      .send({ targets: [{ targetType: 'category', targetRef: 'summer' }] })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/v1/option-sets/${setId}/publish`)
+      .set(auth)
+      .send({})
+      .expect(201);
+
+    const document = await request(app.getHttpServer())
+      .get('/v1/store/config')
+      .set('Authorization', `Bearer ${credential.plaintext}`)
+      .expect(200);
+
+    /*
+     * ⚠️ **Found by id, not by "the first set with assignments".** The store is
+     * shared across this suite, so the neighbouring test's product set is also
+     * in the document — selecting by shape picked that one up and the assertion
+     * compared the wrong set.
+     */
+    const published = (document.body.data.option_sets as Array<{
+      id: string;
+      assignments: Array<{ mode: string; target_type: string; target_ref: string }>;
+    }>).find((set) => set.id === setId);
+
+    expect(published).toBeDefined();
+    expect(published?.assignments).toEqual([
+      { mode: 'manual', target_type: 'category', target_ref: 'summer', priority: 0 },
+    ]);
+  });
+
+  // --- Bulk unassign (M19.5) ----------------------------------------------
+
+  it('removes several targets in one request', async () => {
+    await assign(['wc-1', 'wc-2', 'wc-3']).expect(200);
+
+    const response = await unassignMany([
+      { targetType: 'product', targetRef: 'wc-1' },
+      { targetType: 'product', targetRef: 'wc-3' },
+    ]).expect(200);
+
+    expect(response.body.data.removed).toBe(2);
+
+    const remaining = (response.body.data.assignments as Array<{ targetRef: string }>).map(
+      (row) => row.targetRef,
+    );
+
+    expect(remaining).toEqual(['wc-2']);
+  });
+
+  /**
+   * 🔴 **A stale selection is not an error**, and this is the assertion that
+   * says so. The single unassign answers `404` for a target that is not
+   * assigned — right for one named thing, wrong for a selection, which goes
+   * stale whenever another session removes a row or a merchant re-clicks a
+   * slow request. Failing wholesale would leave every other row assigned and
+   * say nothing about which.
+   */
+  it('ignores targets that are already gone, and reports how many it removed', async () => {
+    await assign(['wc-1']).expect(200);
+
+    const response = await unassignMany([
+      { targetType: 'product', targetRef: 'wc-1' },
+      { targetType: 'product', targetRef: 'wc-2' },
+    ]).expect(200);
+
+    expect(response.body.data.removed).toBe(1);
+    expect(response.body.data.assignments).toEqual([]);
+  });
+
+  /**
+   * 🔴 **The PAIR addresses the row, not the reference.**
+   *
+   * `targetRef` is unique only within a type, so a category and a product may
+   * share one. Removing the category must leave the product assigned —
+   * matching on the reference alone once deleted the wrong row, which is why
+   * the single unassign takes a type at all.
+   */
+  it('removes only the target type asked for when a ref is shared', async () => {
+    await assign(['wc-1']).expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/v1/option-sets/${setId}/assignments`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ targets: [{ targetType: 'category', targetRef: 'wc-1' }] })
+      .expect(200);
+
+    const response = await unassignMany([
+      { targetType: 'category', targetRef: 'wc-1' },
+    ]).expect(200);
+
+    expect(response.body.data.removed).toBe(1);
+    expect(response.body.data.assignments).toEqual([
+      expect.objectContaining({ targetType: 'product', targetRef: 'wc-1' }),
+    ]);
+  });
+
+  it('advances configVersion on a bulk unassign', async () => {
+    await assign(['wc-1']).expect(200);
+
+    const before = await storeVersion();
+
+    await unassignMany([{ targetType: 'product', targetRef: 'wc-1' }]).expect(200);
+
+    expect(await storeVersion()).toBeGreaterThan(before);
+  });
+
+  it('refuses an empty bulk unassign', async () => {
+    await unassignMany([]).expect(400);
+  });
+
+  it('a repeated pair in one bulk unassign is de-duplicated', async () => {
+    await assign(['wc-1']).expect(200);
+
+    const response = await unassignMany([
+      { targetType: 'product', targetRef: 'wc-1' },
+      { targetType: 'product', targetRef: 'wc-1' },
+    ]).expect(200);
+
+    /* One row existed, so one row was removed — not two. */
+    expect(response.body.data.removed).toBe(1);
+  });
+
+  // --- Counts before applying (M19.5) -------------------------------------
+
+  /**
+   * ⚠️ **A taxonomy count is an ESTIMATE, and the flag says so.** The mirror is
+   * a snapshot; the storefront resolves `has_term()` live (ADR-068), so a
+   * product categorised after this count still matches. `exact: false` is what
+   * stops the number being presented as a promise.
+   */
+  it('counts the mirrored products in a category, inexactly', async () => {
+    await dataSource.query(
+      `UPDATE store_products SET categories = JSON_ARRAY('summer')
+        WHERE storeId = ? AND externalId IN ('wc-1', 'wc-2')`,
+      [storeId],
+    );
+
+    const response = await preview('category', 'summer').expect(200);
+
+    expect(response.body.data).toEqual({ matched: 2, exact: false });
+  });
+
+  it('counts a tag from its own column', async () => {
+    await dataSource.query(
+      `UPDATE store_products SET tags = JSON_ARRAY('personalised')
+        WHERE storeId = ? AND externalId = 'wc-3'`,
+      [storeId],
+    );
+
+    const response = await preview('tag', 'personalised').expect(200);
+
+    expect(response.body.data).toEqual({ matched: 1, exact: false });
+  });
+
+  /**
+   * A category nothing is in counts zero rather than failing: assigning a set
+   * to a term before stocking it is a plan, not a mistake (M19.1').
+   */
+  it('counts zero for a category no product is in', async () => {
+    const response = await preview('category', 'nothing-is-here').expect(200);
+
+    expect(response.body.data).toEqual({ matched: 0, exact: false });
+  });
+
+  /**
+   * 🔴 **A product target is EXACT — it names one thing.** Reporting
+   * `exact: false` for it would tell a merchant their own explicit choice was
+   * a guess.
+   */
+  it('reports a known product as an exact single match', async () => {
+    const response = await preview('product', 'wc-1').expect(200);
+
+    expect(response.body.data).toEqual({ matched: 1, exact: true });
+  });
+
+  it('reports a product that is not in the store as no match', async () => {
+    const response = await preview('product', 'wc-absent').expect(200);
+
+    expect(response.body.data).toEqual({ matched: 0, exact: true });
+  });
+
+  /**
+   * `attribute` and `price_range` have no defined reference format (ADR-076),
+   * so there is nothing to count. `null` is the absence of a measurement;
+   * reporting `0` would be a measurement, and a wrong one.
+   */
+  it('reports an uncountable target type as unknown rather than zero', async () => {
+    const response = await preview('attribute', 'colour:red').expect(200);
+
+    expect(response.body.data).toEqual({ matched: null, exact: false });
+  });
+
+  it('refuses a preview with no targetRef', async () => {
+    await request(app.getHttpServer())
+      .get(`/v1/option-sets/${setId}/assignments/preview`)
+      .query({ targetType: 'category' })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(400);
+  });
+
+  it('refuses a preview with an unknown target type', async () => {
+    await preview('nonsense', 'summer').expect(400);
+  });
+
+  /**
+   * 🔴 **Scoped to the set's own store, and this is the only test that says
+   * so.** `externalId` is unique only within a store — WooCommerce numbers from
+   * 1 on every install — so an unscoped count reports another merchant's
+   * catalogue as though it were this one's. Measured while writing this: with
+   * the `storeId` filter removed, the category count rose from 2 to 3.
+   */
+  it('counts only the set’s own store', async () => {
+    await dataSource.query(
+      `UPDATE store_products SET categories = JSON_ARRAY('summer')
+        WHERE storeId = ? AND externalId IN ('wc-1', 'wc-2')`,
+      [storeId],
+    );
+
+    /*
+     * A second store for the same tenant — `harness.store('a')` creates one
+     * rather than returning the first, which is how the cross-store join test
+     * above gets its other store. A second *tenant* would need `tenant('b')`
+     * and prove a weaker thing: tenant isolation is already enforced a layer
+     * up, and the bug this guards against is two stores of one merchant.
+     */
+    const otherStore = await harness.store('a');
+
+    await dataSource.query(
+      `INSERT INTO store_products
+         (id, createdAt, updatedAt, storeId, externalId, name, type, status, syncedAt, categories)
+       VALUES (UUID(), NOW(3), NOW(3), ?, 'wc-9', 'Other store product', 'simple', 'publish',
+               NOW(3), JSON_ARRAY('summer'))
+       ON DUPLICATE KEY UPDATE categories = VALUES(categories)`,
+      [otherStore],
+    );
+
+    const response = await preview('category', 'summer').expect(200);
+
+    /* The other store's product is in `summer` too, and must not be counted. */
+    expect(response.body.data.matched).toBe(2);
   });
 });

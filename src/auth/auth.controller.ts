@@ -2,6 +2,8 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Ip, Post, UseGuards } from
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
+import { authThrottleLimit } from './auth-throttle';
+
 import { getUserId } from '../common/context/request-context';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
@@ -288,7 +290,9 @@ export class AuthController {
    */
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @Throttle({
+    default: { limit: authThrottleLimit('THROTTLE_REFRESH_LIMIT', 60), ttl: 3_600_000 },
+  })
   async refresh(
     @Body() dto: RefreshDto,
     @Ip() ip: string,

@@ -1,7 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
-  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -11,6 +10,7 @@ import {
 } from 'class-validator';
 
 import { StoreStatus } from '../../common/database/enums';
+import { IsStrictBoolean } from '../../common/validation/strict-boolean.decorator';
 
 /**
  * The largest storage figure a store may report, in bytes.
@@ -122,7 +122,7 @@ export class HeartbeatDto {
    * capability one — and the difference decides whether anyone needs to act.
    */
   @IsOptional()
-  @IsBoolean()
+  @IsStrictBoolean()
   @ApiPropertyOptional({ type: Boolean })
   schema_refused?: boolean;
 

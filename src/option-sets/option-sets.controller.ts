@@ -28,6 +28,7 @@ import {
   CreateOptionSetDto,
   DeleteOptionSetDto,
   DuplicateOptionSetDto,
+  ImportOptionSetDto,
   ListOptionSetsDto,
   UpdateOptionSetDto,
 } from './dto/option-set.dto';
@@ -230,6 +231,26 @@ export class OptionSetsController {
     return this.publishing.rollback(id, dto.version, dto.note, dto.rowVersion);
   }
 
+  /**
+   * Rebuild a set from an exported document (M20.8).
+   *
+   * 🔴 **One transaction, because a part-written set has no undo.** Doing this
+   * from the dashboard would be a sequence of creates: a document failing
+   * halfway leaves a set nobody authored, and a create is a shape change that
+   * clears the editor's undo log.
+   *
+   * ⚠️ **Declared before `:id/duplicate` is irrelevant — `import` is a fixed
+   * segment on the collection**, not an id, so there is no ambiguity with
+   * `:id`-prefixed routes.
+   */
+  @Post('import')
+  @HttpCode(HttpStatus.CREATED)
+  @RequireCapability(Capability.OPTION_SETS_EDIT)
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async importDocument(@Body() dto: ImportOptionSetDto): Promise<OptionSet> {
+    return this.service.importDocument(dto.storeId, dto.document);
+  }
+
   @Post(':id/duplicate')
   @HttpCode(HttpStatus.CREATED)
   @RequireCapability(Capability.OPTION_SETS_EDIT)
@@ -238,6 +259,6 @@ export class OptionSetsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DuplicateOptionSetDto,
   ): Promise<OptionSet> {
-    return this.service.duplicate(id, dto.name);
+    return this.service.duplicate(id, dto.name, dto.storeId);
   }
 }

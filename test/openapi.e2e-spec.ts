@@ -345,7 +345,24 @@ function publicRoutes(app: INestApplication): Set<string> {
       );
 
     if (isPublic) {
-      Object.keys(layer.route?.methods ?? {}).forEach((method) => found.add(`${method} ${path}`));
+      /*
+       * ✏️ **Recorded in OpenAPI's parameter syntax, not Express's.**
+       *
+       * The router reports `/v1/plugin/download/:version`; the generated document
+       * says `/v1/plugin/download/{version}`. The caller compares against the
+       * document, so a parameterised public route never matched and was reported
+       * as an unsecured operation.
+       *
+       * 🔴 Invisible until M20b.3, because **no public route had ever taken a
+       * path parameter** — `/auth/*`, `/store/config` and `/health` are all
+       * fixed paths. The first one that did failed a gate it satisfied.
+       */
+      const documented = path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+
+      Object.keys(layer.route?.methods ?? {}).forEach((method) => {
+        found.add(`${method} ${path}`);
+        found.add(`${method} ${documented}`);
+      });
     }
   }
 

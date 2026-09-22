@@ -198,6 +198,29 @@ describe('option config serialization', () => {
       });
     });
 
+    /**
+     * 🔴 **The open-ended top tier, with the key absent rather than null.**
+     *
+     * `?? null` is what turns a bracket carrying no `maxQuantity` into the
+     * `max_quantity: null` the plugin reads as "no ceiling". Without it the key
+     * is `undefined`, which `JSON.stringify` drops from the document — so the
+     * top tier arrives with no ceiling *marker* rather than with no ceiling, and
+     * a quantity above the last bracket matches nothing.
+     *
+     * ✏️ **Added in M21.1, from the dashboard's port of this file.** The case
+     * above spells the open bracket `maxQuantity: null`, on which `?? null` is a
+     * no-op; mutating the default away left all 84 serialization tests passing.
+     * The defaulting was load-bearing and unguarded.
+     */
+    it('states max_quantity explicitly when a bracket has no ceiling', () => {
+      const published = toPublishedOptionPricing({
+        type: 'tiered',
+        tiers: [{ minQuantity: 10, amountMinor: 80 }],
+      }) as { tiers: Record<string, unknown>[] };
+
+      expect(published.tiers[0]).toHaveProperty('max_quantity', null);
+    });
+
     it('leaves an option with no option-level price alone', () => {
       expect(toPublishedOptionPricing(null)).toBeNull();
     });

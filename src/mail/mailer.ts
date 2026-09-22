@@ -1,3 +1,5 @@
+import type { MailKind } from '../common/database/enums';
+
 /**
  * The mail boundary.
  *
@@ -19,6 +21,17 @@ export interface OutgoingMail {
    * can answer "which message do you mean?" without reading the body.
    */
   readonly template: string;
+
+  /**
+   * What this message is for, which decides whether an unsubscribe silences it.
+   *
+   * 🔴 **Required, deliberately.** A default would have to be one of the two, and
+   * either choice is wrong somewhere: defaulting to transactional lets a nudge
+   * ignore an unsubscribe, and defaulting to lifecycle lets an unsubscribe
+   * silence a password reset. Making every caller say costs one line and removes
+   * both failures — the compiler names anyone who forgets.
+   */
+  readonly kind: MailKind;
 
   /** Both nullable: verification mail predates the tenant it belongs to. */
   readonly tenantId?: string | null;

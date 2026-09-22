@@ -1396,6 +1396,180 @@ describe('pre-publish checks', () => {
     });
   });
 
+  describe('a selection minimum no customer could reach', () => {
+    /** One option with two values, and the minimum a caller asks for. */
+    const bounded = (minSelections: number, hides: string[]) =>
+      context({
+        tree: {
+          set: set(),
+          rules: [],
+          groups: [
+            {
+              group: group(),
+              items: [],
+              options: [
+                {
+                  option: option({
+                    presentation: 'checkbox',
+                    validation: { minSelections } as never,
+                  }),
+                  values: [value({ id: 'value-1' }), value({ id: 'value-2' })],
+                },
+              ],
+            },
+          ],
+        },
+        rules: hides.map((id, index) =>
+          rule({ id: `rule-${index}`, targetType: 'value', targetId: id, action: 'hide' }),
+        ),
+      });
+
+    /**
+     * 🔴 **The dead end, measured on the shipped resolver.**
+     *
+     * A rule hiding one of two values leaves an option asking for two with one
+     * selectable. Choosing one gives `too_few_selections`; choosing the hidden
+     * one gives `hidden_by_rule`. Both refusals are correct; the composition is
+     * an unbuyable product, and no action the customer takes escapes it.
+     */
+    it('blocks a minimum the rules can make unreachable', () => {
+      const findings = runPublishChecks(bounded(2, ['value-2']));
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          code: 'SELECTION_MINIMUM_UNREACHABLE',
+          severity: PublishSeverity.BLOCKER,
+        }),
+      );
+    });
+
+    /**
+     * ⚠️ The control: a minimum the rules cannot reach down to is fine.
+     *
+     * Without this, "blocks an unreachable minimum" would be satisfied by a
+     * check that blocked every bounded option.
+     */
+    it('allows a minimum that survives every rule', () => {
+      const findings = runPublishChecks(bounded(1, ['value-2']));
+
+      expect(findings.map((finding) => finding.code)).not.toContain(
+        'SELECTION_MINIMUM_UNREACHABLE',
+      );
+    });
+
+    /** No value-hiding rule means nothing can reduce the count. */
+    it('allows a bounded option when no rule hides a value', () => {
+      const findings = runPublishChecks(bounded(2, []));
+
+      expect(findings.map((finding) => finding.code)).not.toContain(
+        'SELECTION_MINIMUM_UNREACHABLE',
+      );
+    });
+
+    /**
+     * 🔴 **Counted against the WORST case, not the current one.**
+     *
+     * Two rules hiding two different values leave nothing selectable. Rules
+     * fire on a customer's answers, so which are hidden varies per visitor — a
+     * check that only caught the always-broken case would pass a configuration
+     * that strands one customer in ten.
+     */
+    it('counts every value any rule can hide, not one rule at a time', () => {
+      const findings = runPublishChecks(bounded(1, ['value-1', 'value-2']));
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({ code: 'SELECTION_MINIMUM_UNREACHABLE' }),
+      );
+    });
+
+    /**
+     * 🔴 **A minimum can be impossible with NO rules at all.**
+     *
+     * `minSelections: 5` on an option with two values refuses every customer —
+     * measured, `too_few_selections` for any selection. An earlier version of
+     * this check returned early when nothing could be hidden, so this
+     * configuration published cleanly.
+     *
+     * ⚠️ **The form cannot catch it.** Values are added *after* an option is
+     * created, so at creation time there is no count to validate against: a
+     * merchant sets `min: 3`, then adds two values. Publish is the one point
+     * where the whole tree is visible.
+     */
+    it('blocks a minimum larger than the option has values, with no rules', () => {
+      const findings = runPublishChecks(bounded(5, []));
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          code: 'SELECTION_MINIMUM_UNREACHABLE',
+          severity: PublishSeverity.BLOCKER,
+        }),
+      );
+    });
+
+    /**
+     * ⚠️ **Two messages, because two different edits fix them.**
+     *
+     * Telling a merchant to *"narrow what the rules hide"* when no rule is
+     * involved would send them looking for something that does not exist.
+     */
+    it('does not blame rules when no rule is involved', () => {
+      const [finding] = runPublishChecks(bounded(5, [])).filter(
+        (f) => f.code === 'SELECTION_MINIMUM_UNREACHABLE',
+      );
+
+      expect(finding.message).toContain('only has 2');
+      expect(finding.message).not.toContain('rules can hide');
+    });
+
+    /** ...and still blames them when they are. */
+    it('blames rules when a rule is what makes it unreachable', () => {
+      const [finding] = runPublishChecks(bounded(2, ['value-2'])).filter(
+        (f) => f.code === 'SELECTION_MINIMUM_UNREACHABLE',
+      );
+
+      expect(finding.message).toContain('rules can hide');
+    });
+
+    /**
+     * ⚠️ **A malformed bound is ignored, not a refusal.**
+     *
+     * `validation` is a JSON column, so a row written by an older build may
+     * hold anything. Blocking a publish over a field the merchant cannot see
+     * would be worse than ignoring it — and it matches what
+     * `SelectionResolver::selection_bound()` does reading the same value.
+     */
+    it('ignores a minimum that is not a usable integer', () => {
+      const findings = runPublishChecks(
+        context({
+          tree: {
+            set: set(),
+            rules: [],
+            groups: [
+              {
+                group: group(),
+                items: [],
+                options: [
+                  {
+                    option: option({
+                      presentation: 'checkbox',
+                      validation: { minSelections: 'two' } as never,
+                    }),
+                    values: [value({ id: 'value-1' })],
+                  },
+                ],
+              },
+            ],
+          },
+          rules: [rule({ targetType: 'value', targetId: 'value-1', action: 'hide' })],
+        }),
+      );
+
+      expect(findings.map((finding) => finding.code)).not.toContain(
+        'SELECTION_MINIMUM_UNREACHABLE',
+      );
+    });
+  });
+
   describe('the validator list', () => {
     it('runs every registered validator', () => {
       const names = PUBLISH_VALIDATORS.map((validator) => validator.name);
@@ -1409,6 +1583,7 @@ describe('pre-publish checks', () => {
         'set-price-does-not-fight-option-pricing',
         'rule-payloads-do-not-conflict',
         'rule-conditions-are-a-list',
+        'selection-minimums-are-reachable',
         'set-has-assignments',
         'patterns-are-safe',
       ]);

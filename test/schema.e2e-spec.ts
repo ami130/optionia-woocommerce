@@ -533,6 +533,13 @@ describe('schema (integration)', () => {
       // A suppression is a fact about an address, not about a tenant or a user —
       // it must hold even if the person registers again.
       'email_suppressions',
+
+      // A preference belongs to the *person*, for the same reason the auth
+      // tokens above do (M20b.2, ADR-088). Someone in two tenants dismisses the
+      // setup checklist once, not once per workspace — and the route that reads
+      // it resolves the user from the request context and takes no id, so there
+      // is nothing to scope by tenant and nothing for a caller to substitute.
+      'user_preferences',
     ]);
 
     it('every other table reaches a tenant', async () => {

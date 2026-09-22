@@ -3,6 +3,7 @@ import type { DataSource } from 'typeorm';
 import { OptionGroup } from '../option-sets/entities/option-group.entity';
 import { OptionSet } from '../option-sets/entities/option-set.entity';
 import { OptionSetAssignment } from '../option-sets/entities/option-set-assignment.entity';
+import { OptionSetVersion } from '../option-sets/entities/option-set-version.entity';
 import { OptionValue } from '../option-sets/entities/option-value.entity';
 import { Option } from '../option-sets/entities/option.entity';
 import { OrderEvent } from '../orders/entities/order-event.entity';
@@ -22,6 +23,8 @@ import {
   StoreStatus,
   ValueKind,
 } from '../common/database/enums';
+import { OptionSetSerializer } from '../option-sets/serialization/option-set.serializer';
+import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
 import { report } from './seed-context';
 
 /**
@@ -271,7 +274,17 @@ async function seedProducts(
         priceMinor: 1500 + Math.floor(random() * 8500),
         status: 'publish',
         permalink: `${SEED_STORE_URL}/product/demo-${index + 1}`,
-        categories: [index % 3 === 0 ? 'Apparel' : 'Homeware'],
+        /*
+         * 🔴 **Slugs, because that is what the plugin sends.**
+         * `CataloguePayload::terms()` builds its list from `$term->slug` --
+         * *"a slug is what `has_term()` takes, so it is what an assignment must
+         * carry"* -- and a taxonomy assignment stores the slug too. Seeding the
+         * **display** name here (`Apparel`) made every category feature pass
+         * against seeded data and fail against a real store, because
+         * `JSON_CONTAINS(categories, '"apparel"')` matches one and not the
+         * other. Verified against a plugin-pushed row: `["uncategorized"]`.
+         */
+        categories: [index % 3 === 0 ? 'apparel' : 'homeware'],
         tags: index % 4 === 0 ? ['personalised'] : [],
         syncedAt: new Date(),
       }),
@@ -295,6 +308,38 @@ async function seedOptionSets(
   const options = dataSource.getRepository(Option);
   const values = dataSource.getRepository(OptionValue);
   const assignments = dataSource.getRepository(OptionSetAssignment);
+  const versions = dataSource.getRepository(OptionSetVersion);
+
+  /**
+   * The same serializer the publish path uses, so a seeded snapshot and a real
+   * one cannot describe the published shape differently.
+   */
+  const serializer = new OptionSetSerializer();
+
+  /**
+   * The options of a group, with their values, in the order the tree expects.
+   *
+   * Read back rather than accumulated in memory: the loop below creates options
+   * in several branches (the seasonal one only for the first set), and building
+   * the list by hand would mean remembering to append in each of them — exactly
+   * the kind of bookkeeping that silently omits a row from the snapshot.
+   */
+  const optionsOf = async (optionGroupId: string) => {
+    const rows = await options.find({
+      where: { optionGroupId, deletedAt: LIVE_SENTINEL_SQL as never },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    });
+
+    return Promise.all(
+      rows.map(async (option) => ({
+        option,
+        values: await values.find({
+          where: { optionId: option.id, deletedAt: LIVE_SENTINEL_SQL as never },
+          order: { sortOrder: 'ASC', id: 'ASC' },
+        }),
+      })),
+    );
+  };
 
   for (const [index, spec] of OPTION_SETS.entries()) {
     const set = await sets.save(
@@ -409,6 +454,50 @@ async function seedOptionSets(
         }),
       );
     }
+
+    /**
+     * 🔴 **The snapshot, without which a "published" set is unservable.**
+     *
+     * This seed used to mark sets `PUBLISHED` and write `publishedAt` while
+     * creating **no** `option_set_versions` row — a state the publish path can
+     * never produce, because it writes both in one transaction.
+     *
+     * `config-document.ts` builds a storefront's configuration by looking each
+     * published set up as `optionSetId:version` in that table, and **skips**
+     * what it cannot find (deliberately: one corrupt set must not take a whole
+     * storefront down). So every seeded set was silently absent — a demo showed
+     * five published option sets and the storefront rendered none of them.
+     *
+     * Measured before this fix: 4 published sets with zero version rows.
+     *
+     * 📌 **Serialized by the real serializer, not by hand.** A hand-written
+     * snapshot is a second definition of the published shape that drifts the
+     * first time a field is added — which is the whole reason `toPublished`
+     * lists every field explicitly.
+     */
+    await versions.save(
+      versions.create({
+        optionSetId: set.id,
+        version: set.version,
+        snapshot: {
+          ...serializer.toPublished({
+            set,
+            rules: [],
+            groups: [
+              {
+                group,
+                items: [],
+                options: await optionsOf(group.id),
+              },
+            ],
+          }),
+          version: set.version,
+        } as unknown as Record<string, unknown>,
+        publishedBy: null,
+        publishedAt: set.publishedAt ?? new Date(),
+        note: 'Seeded demo data.',
+      }),
+    );
 
     // The first set covers everything; the rest target a slice of the catalogue,
     // so assignment resolution has overlapping cases to exercise.

@@ -1036,6 +1036,137 @@ export const rulePayloadsDoNotConflict: PublishValidator = {
   },
 };
 
+/**
+ * A minimum no customer could ever satisfy.
+ *
+ * 🔴 **A dead end the customer cannot act their way out of.** An option with
+ * `minSelections: 2` whose rules can hide all but one of its values refuses
+ * **every** path: choosing one value gives `too_few_selections`, and choosing
+ * the hidden one gives `hidden_by_rule`. Both refusals are individually
+ * correct; the composition is an unbuyable product.
+ *
+ * Measured on the shipped resolver, with a rule hiding one of two values:
+ *
+ * ```text
+ * rule hides a value, min=2, one left:   REFUSED ["too_few_selections"]
+ * customer picks the hidden one too:     REFUSED ["hidden_by_rule"]
+ * ```
+ *
+ * ⚠️ **M18.8a is what made this reachable.** Value-targeting `hide` rules have
+ * been authorable since Phase 17, and `minSelections` was enforced from M18.3a
+ * — but no merchant could *set* a minimum until M18.8a, so the pair could not
+ * be authored. Widening what a merchant can express widened what they can
+ * express wrongly.
+ *
+ * 🔴 **Caught at publish, not at add-to-cart**, on `RULE_TARGET_NOT_IN_SET`'s
+ * precedent: a configuration that cannot work should fail for the merchant who
+ * wrote it, not silently for every customer who meets it. This is the third
+ * unbuyable-product shape this phase has recorded (ADR-060, and the required
+ * accordion at M18.4), and the first a publish check can see.
+ *
+ * ⚠️ **Counted against the WORST case, not the current one.** Rules fire on a
+ * customer's answers, so which values are hidden varies per visitor. The check
+ * asks whether *any* combination of rules could leave too few — because a
+ * configuration that strands one customer in ten is still broken, and a check
+ * that only caught the always-broken case would pass the intermittent one.
+ */
+export const selectionMinimumsAreReachable: PublishValidator = {
+  name: 'selection-minimums-are-reachable',
+  validate({ tree, rules }) {
+    const findings: PublishFinding[] = [];
+
+    /*
+     * Value ids a live `hide` rule can remove, across every rule. A value named
+     * by two rules is still one value, so a Set rather than a count.
+     */
+    const hideable = new Set<string>();
+
+    rules
+      .filter((rule) => rule.disabledReason !== 'target_deleted')
+      .filter((rule) => rule.targetType === 'value' && ANSWER_AFFECTING_ACTIONS.has(rule.action))
+      .forEach((rule) => hideable.add(rule.targetId));
+
+    /*
+     * ⚠️ **No early return when nothing can be hidden.**
+     *
+     * 🔴 **A minimum can be impossible with no rules at all.** `minSelections:
+     * 5` on an option with two values refuses **every** customer — measured,
+     * `REFUSED ["too_few_selections"]` for any selection — and an earlier
+     * version of this check returned here, so that configuration published
+     * cleanly.
+     *
+     * ⚠️ **The form cannot catch it either, and that is why this is the right
+     * place.** Values are added *after* an option is created, so at creation
+     * time there is no count to validate a minimum against. A merchant sets
+     * `min: 3`, then adds two values. Publish is the one point where the whole
+     * tree is visible — which is the same argument `OPTION_HAS_NO_VALUES`
+     * makes for the zero case, one step short of this one.
+     */
+
+    tree.groups.forEach((group) => {
+      if (!group.group.isEnabled) {
+        return;
+      }
+
+      group.options.forEach(({ option, values }) => {
+        if (!option.isEnabled || !takesValues(option.presentation)) {
+          return;
+        }
+
+        const minimum = readMinimum(option.validation);
+
+        if (minimum === null) {
+          return;
+        }
+
+        const live = values.filter((value) => value.isEnabled);
+        const reachable = live.filter((value) => !hideable.has(value.id)).length;
+
+        if (reachable >= minimum) {
+          return;
+        }
+
+        /*
+         * Two messages, because two different edits fix them. Telling a
+         * merchant to "narrow what the rules hide" when no rule is involved
+         * would send them looking for something that does not exist.
+         */
+        const blamesRules = live.length >= minimum;
+
+        findings.push({
+          severity: PublishSeverity.BLOCKER,
+          code: 'SELECTION_MINIMUM_UNREACHABLE',
+          subject: `option:${option.id}`,
+          message: blamesRules
+            ? `"${option.label}" asks for at least ${minimum} choices, but rules can hide all ` +
+              `but ${reachable} of them. A customer who met those rules could not add this ` +
+              'product to their cart at all. Lower the minimum, or narrow what the rules hide.'
+            : `"${option.label}" asks for at least ${minimum} choices but only has ` +
+              `${live.length}. No customer could ever answer it, so this product could not ` +
+              'be added to a cart. Lower the minimum, or add more choices.',
+        });
+      });
+    });
+
+    return findings;
+  },
+};
+
+/**
+ * An option's `minSelections`, or `null` when it sets none.
+ *
+ * ⚠️ **Anything unusable is `null`, not zero.** `validation` is a JSON column,
+ * so a row written by an older build — or by hand — may hold anything. Refusing
+ * to publish over a malformed bound would block a set for a field the merchant
+ * cannot see; ignoring it matches what `SelectionResolver::selection_bound()`
+ * does when it reads the same value on the storefront.
+ */
+function readMinimum(validation: Record<string, unknown> | null): number | null {
+  const raw = validation?.minSelections;
+
+  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null;
+}
+
 /** The actions that carry a payload, and so can disagree about a value. */
 const PAYLOAD_ACTIONS: ReadonlySet<string> = new Set(['set_price']);
 
@@ -1048,6 +1179,7 @@ export const PUBLISH_VALIDATORS: readonly PublishValidator[] = [
   setPriceDoesNotFightOptionPricing,
   rulePayloadsDoNotConflict,
   ruleConditionsAreAList,
+  selectionMinimumsAreReachable,
   setHasAssignments,
   patternsAreSafe,
 ];

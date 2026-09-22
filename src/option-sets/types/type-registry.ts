@@ -91,6 +91,72 @@ const choiceValidationSchema = z
   });
 
 /** Display options shared by choice types. */
+/**
+ * The style tokens every option type shares (M21c.2, ADR-112).
+ *
+ * 🔴 **Four, and deliberately not more.** D6 chose a dashboard style layer *and*
+ * template overrides, with the layer bounded here rather than during the phase:
+ * `optionia-app` ships six style groups, and adopting them wholesale would have
+ * been inheriting a scope instead of choosing one. Explicitly out of scope:
+ * per-field text colours, a hover-effect taxonomy, choice direction, help-text
+ * position, locked swatch ratios, and per-side padding.
+ *
+ * ⚠️ **Defined once and spread into both display schemas**, because the text
+ * schema already says of its shared keys *"the same vocabulary, so a merchant
+ * learns it once"* — and two copies of a token list is how the two come to
+ * disagree about what a merchant may author.
+ *
+ * ⚠️ **Validated here AND again at emission** (M21c.4). This schema guards what
+ * a merchant may author; the plugin re-validates because a config document is
+ * untrusted input at the point it becomes CSS. Neither makes the other
+ * redundant — this one rejects a bad value, that one refuses to emit one.
+ */
+const styleTokens = {
+  /**
+   * The one colour that drives every selected and focus state.
+   *
+   * 🔴 **`#rrggbb` only — six digits, not shorthand.** The plugin emits this
+   * into a `style` attribute, so the pattern is the whole defence. `#f00` is
+   * valid CSS but a second spelling of the same value, and two spellings are
+   * how a strict check at one end and a loose one at the other come to
+   * disagree. `color_swatch.php` already validates merchant colours with
+   * exactly this pattern; matching it is the point.
+   */
+  accentColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Use a six-digit hex colour, like #3858e9.')
+    .optional(),
+
+  /**
+   * Corner rounding, in pixels.
+   *
+   * The most visible mismatch between a theme and an injected control. Capped
+   * at 24 because beyond it a control stops reading as the shape it is — and an
+   * uncapped number reaches a stylesheet.
+   */
+  borderRadius: z.number().int().min(0).max(24).optional(),
+
+  /**
+   * Gap between options, and between a label and its control, in pixels.
+   *
+   * Density is what makes options look native or bolted on. The floor is 0
+   * rather than 1: flush is a legitimate design, and a merchant who wants it
+   * should not have to fight a minimum.
+   */
+  spacing: z.number().int().min(0).max(48).optional(),
+
+  /**
+   * Swatch edge length in pixels, overriding `swatchSize`'s three words.
+   *
+   * ⚠️ **Alongside `swatchSize`, not replacing it.** The enum is what a merchant
+   * picks when they do not care; this is for the one who does. `swatchSize`
+   * stays the default, so an option setting neither renders exactly as it does
+   * today — and removing the enum would restyle every existing option, which is
+   * the silent restyle ADR-112 freezes styles at save time to prevent.
+   */
+  swatchPx: z.number().int().min(16).max(128).optional(),
+} as const;
+
 const choiceDisplaySchema = z
   .object({
     /** Columns in the rendered grid. One means a vertical list. */
@@ -145,6 +211,8 @@ const choiceDisplaySchema = z
      * it as focusable rather than as a `title` attribute.
      */
     tooltip: z.string().max(300).optional(),
+
+    ...styleTokens,
   })
   .strict();
 
@@ -548,6 +616,8 @@ const textDisplaySchema = z
     priceDisplay: z.enum(['delta', 'total', 'hidden']).optional(),
     collapsedByDefault: z.boolean().optional(),
     tooltip: z.string().max(300).optional(),
+
+    ...styleTokens,
   })
   .strict();
 

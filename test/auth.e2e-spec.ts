@@ -92,6 +92,9 @@ describe('AuthService (integration)', () => {
     );
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${NS}-%'`);
+    /* The suppression tests below write real rows; `beforeEach` clears them so a
+     * failed run cannot silence the next one's mail. */
+    await dataSource.query(`DELETE FROM email_suppressions WHERE email LIKE '${NS}-%'`);
   }
 
   beforeEach(async () => {
@@ -353,6 +356,86 @@ describe('AuthService (integration)', () => {
 
       expect(sentTemplates).toEqual(['password-reset']);
     }, 20_000);
+
+    /**
+     * 🔴 **An unsubscribe must never silence a password reset.**
+     *
+     * `MailService.send()` refused every mail for a suppressed address whatever
+     * the reason, and all three auth mails go through it — so a merchant who
+     * opted out of onboarding email would stop receiving resets, locking
+     * themselves out of their own account by clicking unsubscribe in a marketing
+     * message.
+     *
+     * ⚠️ **Asserted against a real row**, because the rule reads `reason` from a
+     * real `varchar(20)` column and the unit spec's fake repository returns a
+     * hand-built object. `email_suppressions` holds no rows in any environment —
+     * nothing feeds it yet — so this is the only place the branch executes
+     * against the database it will run against.
+     *
+     * ⚠️ **And on the delivery row, not `sentTemplates`**, which records what was
+     * *attempted*: a suppressed message is attempted and then refused, so the
+     * template list looks identical either way. `status` is what differs.
+     */
+    describe('a suppressed address (M20b.6, ADR-097)', () => {
+      const suppress = async (reason: string): Promise<void> => {
+        await dataSource.query(
+          `INSERT INTO email_suppressions (id, createdAt, updatedAt, email, reason, detail)
+           VALUES (UUID(), NOW(3), NOW(3), ?, ?, '')`,
+          [EMAIL, reason],
+        );
+      };
+
+      /**
+       * The status of a **named** message, not merely the newest one.
+       *
+       * ✏️ **This read `ORDER BY createdAt DESC LIMIT 1` and could not say which
+       * mail it had found.** `register()` sends a verification first — before the
+       * suppression row exists, so it is always `sent` — and the unsubscribe case
+       * expects `sent` too. Proven by pointing the helper at the *oldest* row:
+       * the `hard_bounce` case failed and the `unsubscribe` case **passed**,
+       * asserting a mail it was not testing.
+       *
+       * Selecting by template removes the ambiguity, and a missing row now reads
+       * as `undefined` rather than as some other message's status.
+       */
+      const statusOf = async (template: string): Promise<string | undefined> => {
+        const rows: Array<{ status: string }> = await dataSource.query(
+          `SELECT status FROM email_deliveries WHERE recipient = ? AND template = ?
+            ORDER BY createdAt DESC LIMIT 1`,
+          [EMAIL, template],
+        );
+
+        return rows[0]?.status;
+      };
+
+      it('still receives a password reset after unsubscribing', async () => {
+        await service.register(EMAIL, PASSWORD, 'Sam');
+        await suppress('unsubscribe');
+
+        await service.requestPasswordReset(EMAIL, '1.2.3.4', 'agent');
+
+        expect(await statusOf('password-reset')).toBe('sent');
+      }, 20_000);
+
+      /**
+       * A hard-bounced address does not work, so a reset would not arrive either
+       * — and sending to it damages delivery for every merchant who *is*
+       * reachable. Silencing everything is correct here.
+       */
+      it('receives nothing after a hard bounce', async () => {
+        await service.register(EMAIL, PASSWORD, 'Sam');
+        await suppress('hard_bounce');
+
+        await service.requestPasswordReset(EMAIL, '1.2.3.4', 'agent');
+
+        expect(await statusOf('password-reset')).toBe('suppressed');
+
+        /* ⚠️ And the verification sent *before* the bounce row still reads
+         * `sent`, so the assertion above is about the reset and not about
+         * whatever happened to arrive last. */
+        expect(await statusOf('verify-email')).toBe('sent');
+      }, 20_000);
+    });
 
     it('resolves the same way for both, so the caller learns nothing', async () => {
       await service.register(EMAIL, PASSWORD, 'Sam');

@@ -64,6 +64,8 @@ export const AuditAction = {
   OPTION_SET_UPDATED: 'option_set.updated',
   OPTION_SET_DELETED: 'option_set.deleted',
   OPTION_SET_DUPLICATED: 'option_set.duplicated',
+  /** A set rebuilt from an exported document (M20.8). */
+  OPTION_SET_IMPORTED: 'option_set.imported',
   OPTION_SET_REORDERED: 'option_set.reordered',
   OPTION_SET_PURGED: 'option_set.purged',
   OPTION_SET_PUBLISHED: 'option_set.published',

@@ -352,6 +352,82 @@ export const BINARY_RULE_OPERATORS = [
  * ---------------------------------------------------------------------- */
 
 /**
+ * Why an address is suppressed, and therefore whether it may still be mailed.
+ *
+ * 🔴 **The distinction is load-bearing, and `MailService` did not draw it.**
+ * Every mail was refused for a suppressed address, transactional included — so a
+ * merchant who opted out of onboarding email would also stop receiving **password
+ * resets and verification links**, locking themselves out of their own account by
+ * clicking unsubscribe in a marketing message.
+ *
+ * `HARD_BOUNCE` and `COMPLAINT` are facts about **deliverability**: the address
+ * does not work, or the provider has been told this sender is spam. Mailing
+ * either degrades delivery for every merchant who *is* reachable, so nothing may
+ * be sent — a password reset included, because it would not arrive anyway.
+ *
+ * `UNSUBSCRIBE` is a preference about **content**. The address works and its
+ * owner is happy to hear from us about their own account; they do not want
+ * onboarding nudges. See `MailKind`.
+ */
+export const SuppressionReason = {
+  HARD_BOUNCE: 'hard_bounce',
+  COMPLAINT: 'complaint',
+  UNSUBSCRIBE: 'unsubscribe',
+  MANUAL: 'manual',
+} as const;
+export type SuppressionReason = (typeof SuppressionReason)[keyof typeof SuppressionReason];
+
+/**
+ * What a message is for, which decides whether an unsubscribe silences it.
+ *
+ * ⚠️ **Declared per message rather than inferred from the template name.** A
+ * rule that pattern-matched `nudge-*` would silence a transactional mail the day
+ * someone named one badly, and the failure would be a merchant unable to reset
+ * their password — invisible until they complained.
+ */
+export const MailKind = {
+  /**
+   * Something the merchant asked for, or needs to use their account: verifying
+   * an address, resetting a password, being told their password changed.
+   *
+   * **Never silenced by an unsubscribe**, only by undeliverability.
+   */
+  TRANSACTIONAL: 'transactional',
+
+  /**
+   * Onboarding nudges and anything else the merchant did not ask for
+   * ([M20b.6](../../../developePlan.md)). Silenced by an unsubscribe.
+   */
+  LIFECYCLE: 'lifecycle',
+} as const;
+export type MailKind = (typeof MailKind)[keyof typeof MailKind];
+
+/**
+ * The templates allowed to call themselves transactional.
+ *
+ * 🔴 **`kind` is declared per call site, and nothing stopped a nudge claiming
+ * `TRANSACTIONAL`** — which would make it ignore unsubscribes entirely, the exact
+ * inverse of the defect `MailKind` was introduced to fix. Today all three
+ * transactional mails are genuinely transactional, so the protection rested
+ * entirely on a reviewer noticing.
+ *
+ * ⚠️ **An allow-list, not a naming convention.** A rule that pattern-matched
+ * `nudge-*` would silence a real transactional mail the day someone named one
+ * badly, and the failure would be a merchant unable to reset their password.
+ * Naming a template here is a decision someone makes deliberately; forgetting to
+ * is a loud error rather than a silent one.
+ *
+ * A message is transactional when the merchant **needs it to use their account**
+ * — not when it is merely important. Onboarding, tips and announcements are
+ * `LIFECYCLE` however urgent they feel.
+ */
+export const TRANSACTIONAL_TEMPLATES: readonly string[] = [
+  'verify-email',
+  'password-reset',
+  'password-changed',
+];
+
+/**
  * How an option set reaches products.
  *
  * `CONDITIONAL` is materially different from `MANUAL`: a product created next

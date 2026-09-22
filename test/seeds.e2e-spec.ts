@@ -213,6 +213,74 @@ describe('seeds (integration)', () => {
      * The same gap as the missing 40-option set in Phase 5: a state the schema
      * supports and the fixture never reaches.
      */
+    /**
+     * 🔴 **Every published set carries the snapshot a storefront reads (S0-2).**
+     *
+     * This seed used to mark sets `PUBLISHED` and write `publishedAt` while
+     * creating no `option_set_versions` row — a state the publish path can never
+     * produce, since it writes both in one transaction.
+     *
+     * `ConfigDocumentBuilder` looks each published set up as
+     * `optionSetId:version` and **skips** what it cannot find, deliberately, so
+     * one corrupt set cannot take a whole storefront down. The consequence was
+     * silent: a demo showed five published option sets and the storefront
+     * rendered none of them. Measured before the fix: 4 such sets.
+     */
+    it('gives every published set a snapshot at its current version', async () => {
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM option_sets o
+          WHERE o.publishedAt IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM option_set_versions v
+                             WHERE v.optionSetId = o.id AND v.version = o.version)`,
+      );
+
+      expect(Number(row.n)).toBe(0);
+    });
+
+    /**
+     * A snapshot present but empty would satisfy the check above and still serve
+     * a storefront nothing, so the content is asserted too.
+     */
+    it('fills those snapshots with the set’s groups and options', async () => {
+      const [row] = await dataSource.query(
+        `SELECT MIN(JSON_LENGTH(v.snapshot->'$.groups')) AS minGroups,
+                MIN(JSON_LENGTH(v.snapshot->'$.groups[0].options')) AS minOptions
+           FROM option_set_versions v WHERE v.note = 'Seeded demo data.'`,
+      );
+
+      expect(Number(row.minGroups)).toBeGreaterThanOrEqual(1);
+      expect(Number(row.minOptions)).toBeGreaterThanOrEqual(1);
+    });
+
+    /**
+     * 📌 **The disabled option is absent from the snapshot, and that is correct.**
+     *
+     * `toPublished` filters disabled options out of the published projection
+     * (M7.2), so the seeded set with a disabled seasonal option has two options
+     * in the database and one in its snapshot. Asserted because it is the first
+     * time that exclusion is observable in a *published document* rather than
+     * only in the serializer's own unit tests — and because a future change that
+     * started publishing disabled rows would otherwise pass every other check.
+     */
+    it('omits a disabled option from the published snapshot', async () => {
+      const [row] = await dataSource.query(
+        `SELECT COUNT(DISTINCT op.id) AS dbOptions,
+                JSON_LENGTH(v.snapshot->'$.groups[0].options') AS snapOptions
+           FROM option_sets o
+           JOIN option_set_versions v
+             ON v.optionSetId = o.id AND v.note = 'Seeded demo data.'
+           JOIN option_groups g ON g.optionSetId = o.id
+           LEFT JOIN options op ON op.optionGroupId = g.id
+          GROUP BY o.id, v.snapshot
+          HAVING dbOptions > snapOptions
+          LIMIT 1`,
+      );
+
+      // Exactly the seasonal set: more options stored than published.
+      expect(row).toBeDefined();
+      expect(Number(row.dbOptions)).toBeGreaterThan(Number(row.snapOptions));
+    });
+
     it('includes a disabled option and a disabled value', async () => {
       const [options] = await dataSource.query(
         `SELECT COUNT(*) AS n FROM options WHERE isEnabled = 0`,
