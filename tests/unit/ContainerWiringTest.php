@@ -23,6 +23,13 @@ use Optionia\Admin\ConnectionSection;
 use Optionia\Admin\SystemStatus;
 use Optionia\Api\CircuitBreaker;
 use Optionia\Api\Client;
+use Optionia\Catalogue\CatalogueCursor;
+use Optionia\Catalogue\CataloguePayload;
+use Optionia\Catalogue\CatalogueReconciler;
+use Optionia\Catalogue\CataloguePusher;
+use Optionia\Catalogue\ProductQueue;
+use Optionia\Catalogue\ProductWatcher;
+use Optionia\Catalogue\QueueDrainer;
 use Optionia\Config\Repository;
 use Optionia\Connection\Callback;
 use Optionia\Connection\Handshake;
@@ -128,6 +135,13 @@ final class ContainerWiringTest extends TestCase {
 			'cron'              => array( Cron::class ),
 			'settings'          => array( Settings::class ),
 			'logger'            => array( Logger::class ),
+			'catalogue cursor'  => array( CatalogueCursor::class ),
+			'catalogue payload' => array( CataloguePayload::class ),
+			'catalogue pusher'  => array( CataloguePusher::class ),
+			'product queue'     => array( ProductQueue::class ),
+			'product watcher'   => array( ProductWatcher::class ),
+			'queue drainer'     => array( QueueDrainer::class ),
+			'reconciler'        => array( CatalogueReconciler::class ),
 			'templates'         => array( Templates::class ),
 			'assets'            => array( Assets::class ),
 			'renderer'          => array( Renderer::class ),

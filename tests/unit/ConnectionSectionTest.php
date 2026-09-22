@@ -9,6 +9,7 @@ declare( strict_types=1 );
 
 namespace Optionia\Tests\Unit;
 
+use Optionia\Catalogue\CatalogueCursor;
 use Optionia\Config\Repository;
 use Optionia\Support\Logger;
 use Optionia\Support\Settings;
@@ -280,6 +281,81 @@ final class ConnectionSectionTest extends TestCase {
 			get_option( Keys::OPTION_STORE_TOKEN, false ),
 			'An unreachable cloud must not trap a merchant in a connected state.'
 		);
+	}
+
+	// --- Sync catalogue (M19.1) ----------------------------------------------
+
+	/**
+	 * 🔴 **The interim answer to a gap M19.2 closes.** `CatalogueCursor` records
+	 * the catalogue total once, and the walk stops on reaching it — so products
+	 * added afterwards are never pushed. Until WordPress hooks carry ongoing
+	 * changes, this button is the merchant's only way to send them.
+	 */
+	public function test_the_screen_offers_a_catalogue_sync(): void {
+		update_option( Keys::OPTION_CONNECTION_STATE, StateMachine::CONNECTED, false );
+
+		$output = $this->render();
+
+		$this->assertStringContainsString( 'optionia_sync_catalogue_submit', $output );
+		$this->assertStringContainsString( 'Sync catalogue', $output );
+	}
+
+	/**
+	 * ⚠️ **Two buttons, not one.** "Sync now" *fetches* option sets from the
+	 * cloud; this *sends* products to it. One control doing both would hide
+	 * which half failed.
+	 */
+	public function test_the_two_sync_controls_are_distinct(): void {
+		update_option( Keys::OPTION_CONNECTION_STATE, StateMachine::CONNECTED, false );
+
+		$output = $this->render();
+
+		$this->assertStringContainsString( 'optionia_sync_submit', $output );
+		$this->assertStringContainsString( 'optionia_sync_catalogue_submit', $output );
+	}
+
+	/**
+	 * 🔴 **Forgetting the cursor is the whole mechanism.** The next cron run
+	 * then finds no walk in progress and starts one against the *current*
+	 * catalogue, reading the total afresh.
+	 */
+	public function test_syncing_the_catalogue_forgets_the_cursor(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 3000 );
+		$cursor->advance( $run_id, 3000 );
+
+		$this->assertTrue( $cursor->is_complete( $cursor->read() ) );
+
+		$_POST = array(
+			'optionia_sync_catalogue_submit' => '1',
+			'optionia_sync_catalogue_nonce'  => wp_create_nonce( Keys::NONCE_SYNC_CATALOGUE ),
+		);
+
+		try {
+			$this->section()->maybe_sync_catalogue();
+			$this->fail( 'The handler should have redirected.' );
+		} catch ( \Optionia_Test_Halt $halt ) {
+			unset( $halt );
+		} finally {
+			$_POST = array();
+		}
+
+		$this->assertFalse(
+			$cursor->has_run( $cursor->read() ),
+			'a fresh walk starts on the next cron run'
+		);
+	}
+
+	/** A request without the submit field must do nothing at all. */
+	public function test_an_unrelated_request_does_not_touch_the_cursor(): void {
+		$cursor = new CatalogueCursor();
+		$cursor->start( 3000 );
+
+		$_POST = array();
+
+		$this->section()->maybe_sync_catalogue();
+
+		$this->assertTrue( $cursor->has_run( $cursor->read() ) );
 	}
 
 	/**

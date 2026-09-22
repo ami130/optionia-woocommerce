@@ -55,6 +55,9 @@ function optionia_uninstall_site( string $prefix ): void {
 		'optionia_unpriced_types',
 		'optionia_order_queue',
 		'optionia_last_order_report',
+		'optionia_catalogue_cursor',
+		'optionia_product_queue',
+		'optionia_last_reconcile',
 	);
 
 	foreach ( $options as $option ) {
@@ -67,6 +70,8 @@ function optionia_uninstall_site( string $prefix ): void {
 		'optionia_cron_sync_config',
 		'optionia_cron_report_orders',
 		'optionia_cron_heartbeat',
+		'optionia_cron_push_catalogue',
+		'optionia_cron_reconcile_catalogue',
 	);
 
 	foreach ( $hooks as $hook ) {

@@ -121,6 +121,83 @@ Compatible with High-Performance Order Storage and with Cart & Checkout Blocks.
 Every template is theme-overridable. Copy from `templates/` into
 `your-theme/woocommerce/optionia/` and it takes precedence.
 
+## Integrations
+
+Three filters are supported. Anything else is internal and may change without a
+major version.
+
+### `optionia_cart_item_rows`
+
+The option rows Optionia adds to a cart line, before WooCommerce renders them.
+
+```php
+add_filter( 'optionia_cart_item_rows', function ( array $rows, $cart_item ): array {
+    // $rows: each a ['key' => 'Finish', 'value' => 'Luxury (+£10.50)', ...]
+    return $rows;
+}, 10, 2 );
+```
+
+Use it to relabel, reorder or drop a row — for a cart drawer that renders its own
+markup, or a theme that wants the base price elsewhere.
+
+**Two rules the plugin enforces for you:**
+
+- **Return a list, or your callback is ignored.** A cart that renders nothing
+  because an integration returned `null` is worse than one that ignores it. If
+  nothing you return is usable, the plain breakdown is shown instead.
+- **Every value must be a scalar.** WooCommerce's Store API discards a whole
+  element if one is not — silently — so a malformed row would vanish on the Cart
+  block and render on the classic cart. Rows failing this are dropped
+  individually; your other rows are kept.
+
+Rows you add or change are rebuilt through Optionia's own row builder, so they
+are escaped for display and carry both hidden-row keys. That rebuild keeps `key`
+and `value` and drops anything else, so a custom key you set on a row you changed
+will not survive — set it on a row you pass through untouched, or render it in
+your own markup. Rows you pass through untouched — including WooCommerce's own
+variation attributes — are left exactly as they arrived.
+
+**To render no option rows at all, use `optionia_cart_rows_suppressed` below.**
+Returning an empty array here will not do it: an empty array is what a callback
+that crashed returns too, so Optionia restores the plain breakdown rather than
+leave a customer reading a total with nothing explaining it.
+
+**And one rule only you can keep:**
+
+- **Never compute a price.** The rows already carry what the customer is
+  charged, resolved once by the pricing engine. A second answer computed in a
+  callback is a number the server will disagree with, and nothing here can stop
+  you writing it.
+
+The same rows reach the classic cart, the Cart block, the mini-cart and the
+Checkout block's order summary — all four render through one WooCommerce filter,
+so a change here applies everywhere at once.
+
+### `optionia_cart_rows_suppressed`
+
+Whether Optionia renders no option rows on a cart line. Default `false`.
+
+```php
+add_filter( 'optionia_cart_rows_suppressed', function ( bool $suppressed, $cart_item ): bool {
+    return true; // this drawer renders the breakdown itself
+}, 10, 2 );
+```
+
+For a cart drawer or theme that renders the breakdown in its own markup and does
+not want Optionia's rows beside it. It receives the cart item, so you can
+suppress one line rather than the whole store.
+
+- **Only exactly `true` suppresses.** A truthy string or `1` is treated as a
+  mistake and ignored — this is the filter that blanks a breakdown, so it reads
+  its value strictly.
+- **Your own rows are unaffected.** Suppression drops the rows Optionia adds;
+  anything WooCommerce or another plugin already put on the line survives.
+
+### `optionia_locate_template`
+
+The resolved path of a template, after theme overrides are considered. See
+[Templates](#templates).
+
 ## License
 
 GPL-2.0-or-later

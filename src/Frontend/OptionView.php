@@ -157,6 +157,136 @@ final class OptionView {
 	}
 
 	/**
+	 * An option's style tokens, as a `style` attribute or `''` (M21c.2/M21c.4).
+	 *
+	 * 🔴 **Re-validated here even though the API already validated on the way
+	 * in.** M21c.4 is *"non-negotiable"* for one reason: the plugin renders a
+	 * config document **fetched from the cloud**, so every value is untrusted
+	 * input at the point it becomes CSS. A document can be stale, hand-edited in
+	 * the options table, replayed from a cache written before a schema
+	 * tightened, or served by something that is not the API. The backend check
+	 * rejects a bad value; this one refuses to *emit* one, and neither makes
+	 * the other redundant.
+	 *
+	 * ⚠️ **Fail to nothing, never to a guess.** M9.6's posture: an option whose
+	 * styles cannot be validated renders with defaults and the option set still
+	 * renders. A rejected token is omitted from the attribute rather than
+	 * replaced — a wrong colour is worse than the theme's own.
+	 *
+	 * ⚠️ **Custom properties, not declarations.** Everything emitted is
+	 * `--optionia-*`, so a malformed value can at worst define a variable
+	 * nothing reads. `accent_color` written straight into `color:` would put
+	 * merchant data in a property the browser acts on.
+	 *
+	 * 🔴 **No `!important`** (ADR-112): merchant CSS must always be able to win.
+	 *
+	 * ⚠️ **Templates still wrap this in `esc_attr()`, though a mutation removing
+	 * it survives.** Everything emitted is hex digits, integers and `--optionia-`
+	 * names, so escaping is a no-op on any string this method can return — the
+	 * mutant is equivalent. It stays because the escaping is what makes that
+	 * true *at the template*, where a future edit might interpolate something
+	 * this method did not produce.
+	 *
+	 * @param array<string, mixed> $option One published option.
+	 * @return string A `style` attribute value, escaped again by the caller.
+	 */
+	public static function styles( array $option ): string {
+		/*
+		 * ⚠️ **`is_array` rather than a cast, though a mutation of it survives.**
+		 * `(array) 'nonsense'` is `array( 0 => 'nonsense' )`, which carries none
+		 * of the named keys below, so nothing would be emitted either way — the
+		 * mutant is equivalent, and that is a property of the code rather than a
+		 * gap in the tests. It is spelled out because the next reader should not
+		 * have to rediscover why a surviving mutation is the right answer here.
+		 */
+		$config = isset( $option['display'] ) && is_array( $option['display'] ) ? $option['display'] : array();
+
+		$out = array();
+
+		/*
+		 * Six hex digits, and nothing else. The same pattern `color_swatch.php`
+		 * has always used for a merchant colour, and the same one the API
+		 * enforces — three spellings of one rule is how they come to disagree.
+		 *
+		 * ⚠️ **Shorthand is refused on purpose.** `#f00` is valid CSS, but it is
+		 * a second spelling of a value the authoring layer cannot produce, so
+		 * accepting it here would mean the plugin renders something the
+		 * dashboard would reject.
+		 */
+		$accent = isset( $config['accent_color'] ) && is_string( $config['accent_color'] )
+			? $config['accent_color']
+			: '';
+
+		if ( 1 === preg_match( '/^#[0-9a-fA-F]{6}$/', $accent ) ) {
+			$out[] = '--optionia-accent: ' . $accent;
+		}
+
+		/*
+		 * Integers within the authored range. `is_int` rather than `is_numeric`:
+		 * `"4"` and `4.5` both reach a stylesheet as something that renders, and
+		 * a float pixel is not a pixel count.
+		 */
+		foreach ( array(
+			'border_radius' => array( 'radius', 0, 24 ),
+			'spacing'       => array( 'gap', 0, 48 ),
+			'swatch_px'     => array( 'swatch', 16, 128 ),
+		) as $key => $spec ) {
+			list( $name, $min, $max ) = $spec;
+
+			if ( ! isset( $config[ $key ] ) || ! is_int( $config[ $key ] ) ) {
+				continue;
+			}
+
+			$value = $config[ $key ];
+
+			if ( $value < $min || $value > $max ) {
+				continue;
+			}
+
+			$out[] = '--optionia-' . $name . ': ' . $value . 'px';
+		}
+
+		return array() === $out ? '' : implode( '; ', $out ) . ';';
+	}
+
+	/**
+	 * A divider's style, re-validated at the point it becomes a class (M21c.5).
+	 *
+	 * 🔴 **Re-validated even though the API validated on the way in**, for the
+	 * same reason `styles()` is: the plugin renders a config document **fetched
+	 * from the cloud**, which can be stale, hand-edited in the options table,
+	 * replayed from a cache written before a schema tightened, or served by
+	 * something that is not the API. The backend rejects a bad value; this
+	 * refuses to emit one.
+	 *
+	 * ⚠️ **An allowlist, not a sanitiser.** The three styles are the three
+	 * `border-style` keywords ADR-113 chose, and anything else falls back to
+	 * `solid` rather than reaching a class attribute — the same stance
+	 * `display()` takes on `swatch_size`.
+	 *
+	 * @param array<string, mixed> $item One published presentational item.
+	 * @return string One of `solid`, `dashed`, `dotted`.
+	 */
+	public static function divider_style( array $item ): string {
+		$config = isset( $item['display'] ) && is_array( $item['display'] ) ? $item['display'] : array();
+
+		$style = isset( $config['style'] ) && is_scalar( $config['style'] )
+			? (string) $config['style']
+			: '';
+
+		/*
+		 * ⚠️ **`true` for strict, though a mutation to loose comparison
+		 * survives.** The `(string)` cast above means only strings reach here,
+		 * and loose and strict agree on every string — measured across `0`,
+		 * `'0'`, `true`, `3`, `''` and `'solid '`. The mutant is equivalent,
+		 * which is a property of the cast rather than a gap in the tests. Strict
+		 * stays because the cast is what makes it moot, and a later edit that
+		 * removed the cast would need it.
+		 */
+		return in_array( $style, array( 'solid', 'dashed', 'dotted' ), true ) ? $style : 'solid';
+	}
+
+	/**
 	 * The price to print beside one choice, or `''` for none.
 	 *
 	 * 🔴 **The first per-choice price this plugin shows.** Until M18.6b, prices
@@ -234,9 +364,17 @@ final class OptionView {
 	 * estimate cannot call those from JavaScript, so matching them here would
 	 * be matching something the other half cannot see.
 	 *
+	 * 📌 **Public since M21b.3, because the cart needs the same answer.**
+	 * `CartDisplay` printed `Money::to_decimal_string()` — a **wire** format,
+	 * *"suitable for handing back to WooCommerce"* — so a breakdown read
+	 * `100.00` beside a storefront label reading `£100.00`. One plugin, one
+	 * customer, two different-looking prices. Sharing this rather than copying
+	 * it means a store's separators cannot be right on one surface and wrong on
+	 * the other.
+	 *
 	 * @param int $minor Amount in integer minor units, non-negative.
 	 */
-	private static function money( int $minor ): string {
+	public static function money( int $minor ): string {
 		$decimals = function_exists( 'wc_get_price_decimals' ) ? (int) wc_get_price_decimals() : 2;
 		$decimal  = function_exists( 'wc_get_price_decimal_separator' ) ? (string) wc_get_price_decimal_separator() : '.';
 		$thousand = function_exists( 'wc_get_price_thousand_separator' ) ? (string) wc_get_price_thousand_separator() : ',';

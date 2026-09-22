@@ -45,6 +45,8 @@ final class Scheduler {
 		// already exists -- never schedules it, self-heal included.
 		self::schedule_heartbeat();
 		self::schedule_order_reports();
+		self::schedule_catalogue_push();
+		self::schedule_catalogue_reconcile();
 
 		if ( wp_next_scheduled( Keys::CRON_SYNC_CONFIG ) ) {
 			return;
@@ -141,6 +143,60 @@ final class Scheduler {
 	}
 
 	/**
+	 * Push one batch of the catalogue every fifteen minutes (M19.1).
+	 *
+	 * Shares the interval the sync and the order drain already use, for the
+	 * reason recorded above: a store pays for one quarter-hourly wake-up, and a
+	 * third schedule would triple the cron traffic to say the same thing.
+	 *
+	 * 📌 **Quarter-hourly is what makes the walk finish in days rather than
+	 * weeks.** A 100k catalogue is 400 batches at 250 products each: four an
+	 * hour is **4.2 days**, where the hourly fallback below would take 16.
+	 */
+	private static function schedule_catalogue_push(): void {
+		if ( wp_next_scheduled( Keys::CRON_PUSH_CATALOGUE ) ) {
+			return;
+		}
+
+		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- 15-minute interval is intentional and documented.
+
+		$scheduled = wp_schedule_event(
+			time() + self::INTERVAL,
+			Keys::CRON_SCHEDULE_QUARTER_HOUR,
+			Keys::CRON_PUSH_CATALOGUE
+		);
+
+		remove_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) );
+
+		if ( is_wp_error( $scheduled ) ) {
+			// Same fallback as the others: slower is worse than quarter-hourly
+			// and far better than a catalogue that never reaches the cloud.
+			wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', Keys::CRON_PUSH_CATALOGUE );
+		}
+	}
+
+	/**
+	 * Reconcile the mirror against the store, daily (M19.3).
+	 *
+	 * 📌 **Daily, not quarter-hourly.** Hooks are the fast path; this is the
+	 * backstop for what they miss -- a deletion while the site was offline, a
+	 * queue entry dropped by the cap. A 100k catalogue costs about **ten**
+	 * requests a day as an id manifest, so the cadence is bounded by usefulness
+	 * rather than cost.
+	 */
+	private static function schedule_catalogue_reconcile(): void {
+		if ( wp_next_scheduled( Keys::CRON_RECONCILE_CATALOGUE ) ) {
+			return;
+		}
+
+		/*
+		 * An hour out, like the heartbeat: a site that has just activated has a
+		 * walk to finish first, and the reconciler refuses until it has.
+		 */
+		wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', Keys::CRON_RECONCILE_CATALOGUE );
+	}
+
+	/**
 	 * Clear all scheduled events.
 	 *
 	 * Uses wp_clear_scheduled_hook() rather than unscheduling a single
@@ -151,5 +207,7 @@ final class Scheduler {
 		wp_clear_scheduled_hook( Keys::CRON_SYNC_CONFIG );
 		wp_clear_scheduled_hook( Keys::CRON_HEARTBEAT );
 		wp_clear_scheduled_hook( Keys::CRON_REPORT_ORDERS );
+		wp_clear_scheduled_hook( Keys::CRON_PUSH_CATALOGUE );
+		wp_clear_scheduled_hook( Keys::CRON_RECONCILE_CATALOGUE );
 	}
 }

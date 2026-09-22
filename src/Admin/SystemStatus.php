@@ -15,6 +15,8 @@ declare( strict_types=1 );
 namespace Optionia\Admin;
 
 use Optionia\Api\CircuitBreaker;
+use Optionia\Catalogue\CatalogueCursor;
+use Optionia\Catalogue\ProductQueue;
 use Optionia\Config\Repository;
 use Optionia\Config\Synchroniser;
 use Optionia\Connection\Heartbeat;
@@ -67,26 +69,46 @@ final class SystemStatus {
 	private CircuitBreaker $breaker;
 
 	/**
+	 * Where the catalogue push has reached.
+	 *
+	 * @var CatalogueCursor
+	 */
+	private CatalogueCursor $cursor;
+
+	/**
+	 * Product changes awaiting sync.
+	 *
+	 * @var ProductQueue
+	 */
+	private ProductQueue $queue;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param Environment    $environment Environment probe.
-	 * @param Repository     $config      Configuration cache.
-	 * @param Settings       $settings    Settings.
-	 * @param Cron           $cron        Scheduling diagnostics.
-	 * @param CircuitBreaker $breaker     API circuit breaker.
+	 * @param Environment     $environment Environment probe.
+	 * @param Repository      $config      Configuration cache.
+	 * @param Settings        $settings    Settings.
+	 * @param Cron            $cron        Scheduling diagnostics.
+	 * @param CircuitBreaker  $breaker     API circuit breaker.
+	 * @param CatalogueCursor $cursor      Catalogue push position.
+	 * @param ProductQueue    $queue       Product changes awaiting sync.
 	 */
 	public function __construct(
 		Environment $environment,
 		Repository $config,
 		Settings $settings,
 		Cron $cron,
-		CircuitBreaker $breaker
+		CircuitBreaker $breaker,
+		CatalogueCursor $cursor,
+		ProductQueue $queue
 	) {
 		$this->environment = $environment;
 		$this->config      = $config;
 		$this->settings    = $settings;
 		$this->cron        = $cron;
 		$this->breaker     = $breaker;
+		$this->cursor      = $cursor;
+		$this->queue       = $queue;
 	}
 
 	/**
@@ -173,37 +195,146 @@ final class SystemStatus {
 		$fetched_at = $this->config->fetched_at();
 
 		return array(
-			__( 'Cached', 'optionia' )               => $this->config->has_config()
+			__( 'Cached', 'optionia' )                  => $this->config->has_config()
 				? __( 'yes', 'optionia' )
 				: __( 'no', 'optionia' ),
-			__( 'Config version', 'optionia' )       => (string) $this->config->config_version(),
-			__( 'Schema version', 'optionia' )       => self::describe_schema( $this->config ),
-			__( 'Last fetch', 'optionia' )           => null === $fetched_at
+			__( 'Config version', 'optionia' )          => (string) $this->config->config_version(),
+			__( 'Schema version', 'optionia' )          => self::describe_schema( $this->config ),
+			__( 'Last fetch', 'optionia' )              => null === $fetched_at
 				? __( 'never', 'optionia' )
 				: sprintf(
 					/* translators: %s: human-readable time difference */
 					__( '%s ago', 'optionia' ),
 					human_time_diff( $fetched_at )
 				),
-			__( 'Cache size', 'optionia' )           => size_format( $this->config->size_bytes() ),
+			__( 'Cache size', 'optionia' )              => size_format( $this->config->size_bytes() ),
 
 			/*
 			 * M9.7 named this row and M10.1 owns it: a count of an index that
 			 * does not exist reads identically whether it is empty or absent,
 			 * so it shipped with the index rather than before it.
 			 */
-			__( 'Indexed products', 'optionia' )     => (string) $this->config->index_entry_count(),
+			__( 'Indexed products', 'optionia' )        => (string) $this->config->index_entry_count(),
 
 			/*
 			 * The deferral, made visible.
 			 *
-			 * `conditional` assignments and every non-product target resolve in
-			 * M19.4, so until then they are skipped. Without this row a merchant
-			 * whose set does not appear has no way to tell "deferred" from
-			 * "broken" -- and the count reaching zero is how the handover to
-			 * M19.4 is confirmed rather than assumed.
+			 * ✏️ **Taxonomy left this row at M19.6.** `category` and `tag`
+			 * targets resolve now (ADR-076), so they no longer count here. What
+			 * remains is `conditional`, which needs a condition tree that does
+			 * not exist, and `attribute` and `price_range`, whose reference
+			 * format was never defined -- counted, not guessed.
+			 *
+			 * Without this row a merchant whose set does not appear has no way
+			 * to tell "deferred" from "broken".
 			 */
-			__( 'Deferred assignments', 'optionia' ) => (string) $this->config->index_skipped_count(),
+			__( 'Deferred assignments', 'optionia' )    => (string) $this->config->index_skipped_count(),
+
+			/*
+			 * The catalogue push, in progress or finished (M19.1).
+			 *
+			 * 🔴 **A walk takes days, so "is it working?" is a real question.**
+			 * A 100k catalogue is 400 batches at four an hour -- **4.2 days** --
+			 * and for all of that time `/products` in the dashboard shows a
+			 * partial list. Without this row a merchant cannot tell a sync that
+			 * is progressing from one that stalled, and support cannot either.
+			 */
+			__( 'Catalogue sync', 'optionia' )          => $this->catalogue_progress(),
+
+			/*
+			 * Product changes waiting to reach the cloud (M19.2).
+			 *
+			 * ⚠️ **A number that should be near zero and briefly is not.** The
+			 * queue drains every fifteen minutes, so a merchant who has just
+			 * edited a product sees a small count that clears. A count that
+			 * *stays* high is the visible symptom of a store the cloud is
+			 * refusing — and the row beside it says whether that is so.
+			 */
+			__( 'Pending product changes', 'optionia' ) => (string) $this->queue->count(),
+
+			/*
+			 * When drift was last repaired (M19.3).
+			 *
+			 * ⚠️ **"never" is a real answer, not a missing one.** The sweep
+			 * refuses until the initial walk has finished, so a store still
+			 * importing shows "never" correctly — and one that shows it *after*
+			 * the walk completed has a daily job that is not running, which is
+			 * the question this row answers.
+			 */
+			__( 'Last reconciled', 'optionia' )         => $this->last_reconciled(),
+		);
+	}
+
+	/**
+	 * How far the catalogue push has reached, in words.
+	 *
+	 * ⚠️ **Three states, not two.** "Never run" and "finished" both show no work
+	 * outstanding, and a merchant reading one as the other draws the opposite
+	 * conclusion about whether anything is wrong. `CatalogueCursor` keeps them
+	 * distinct for exactly this row.
+	 */
+	private function catalogue_progress(): string {
+		$cursor = $this->cursor->read();
+
+		if ( ! $this->cursor->has_run( $cursor ) ) {
+			return __( 'not started', 'optionia' );
+		}
+
+		if ( $this->cursor->is_complete( $cursor ) ) {
+			return sprintf(
+				/* translators: %d: number of products synced. */
+				__( 'complete (%d products)', 'optionia' ),
+				$cursor['total']
+			);
+		}
+
+		$progress = sprintf(
+			/* translators: 1: products synced so far, 2: total products. */
+			__( 'in progress (%1$d of %2$d)', 'optionia' ),
+			$cursor['offset'],
+			$cursor['total']
+		);
+
+		/**
+		 * 🔴 **A stalled walk reads identically to a fresh one without this.**
+		 * `in progress (0 of 3000)` is what a merchant sees whether the push
+		 * started a minute ago or has been failing for three days — and a failed
+		 * batch only writes a log line nobody reads. The cursor already records
+		 * when it last advanced; this is the row that spends it.
+		 *
+		 * ⚠️ **The threshold allows for several missed runs, not one.** The
+		 * schedule is 900 seconds and a transient outage costs a run or two, so
+		 * flagging at the first missed interval would cry wolf on every blip.
+		 * An hour is four consecutive failures: no longer a blip.
+		 */
+		$since = time() - $cursor['updated_at'];
+
+		if ( $cursor['updated_at'] > 0 && $since >= HOUR_IN_SECONDS ) {
+			return sprintf(
+				/* translators: 1: progress description, 2: human-readable duration. */
+				__( '%1$s — stalled, no progress for %2$s', 'optionia' ),
+				$progress,
+				human_time_diff( $cursor['updated_at'] )
+			);
+		}
+
+		return $progress;
+	}
+
+	/**
+	 * When the catalogue was last reconciled, in words.
+	 */
+	private function last_reconciled(): string {
+		$at = (int) get_option( Keys::OPTION_LAST_RECONCILE, 0 );
+
+		if ( $at <= 0 ) {
+			return __( 'never', 'optionia' );
+		}
+
+		return sprintf(
+			/* translators: %s: human-readable duration, e.g. "3 hours". */
+			__( '%s ago', 'optionia' ),
+			human_time_diff( $at )
 		);
 	}
 

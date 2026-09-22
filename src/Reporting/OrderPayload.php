@@ -40,6 +40,7 @@ namespace Optionia\Reporting;
 
 use Optionia\Support\Keys;
 use Optionia\Support\Money;
+use Optionia\Support\OptionLabel;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -165,7 +166,40 @@ final class OrderPayload {
 		$out = array();
 
 		foreach ( $decoded as $option_id => $value_key ) {
-			if ( ! is_scalar( $option_id ) || ! is_scalar( $value_key ) ) {
+			if ( ! is_scalar( $option_id ) ) {
+				continue;
+			}
+
+			/*
+			 * 🔴 **A multi-select answer is a LIST, and dropping it lost the
+			 * merchant's numbers.**
+			 *
+			 * This read `! is_scalar( $value_key ) → continue`, so an option at
+			 * `cardinality: many` vanished from the report entirely. Measured:
+			 * an order carrying `{"opt-a":"lux","opt-m":["red","blue"]}` was
+			 * reported as `["opt-a"]` alone.
+			 *
+			 * ⚠️ **And when the multi-select was the line's ONLY option, the
+			 * line's revenue went with it.** `attribute_delta()` puts the whole
+			 * line's delta on `$selections[0]`, so a line with no rows at all
+			 * reports **nothing** — not a mis-attributed amount, a missing one.
+			 *
+			 * 📌 **Analytics was one of the nine consumers M18.2 named.** Eight
+			 * were carried; this one was missed, and `OrderPayloadTest` had no
+			 * multi-select case to catch it — the sixth occurrence in this
+			 * phase of a consumer that expected a scalar.
+			 *
+			 * 🔴 **One row per OPTION, not per value**, matching every other
+			 * consumer: the cart line, the order meta and `labels` all name an
+			 * option once and carry its values within. The visible meta the
+			 * labels are matched against is already one joined string —
+			 * `"Red, Blue"` — so a row per value would have nothing to match.
+			 */
+			$value_key = is_array( $value_key )
+				? implode( OptionLabel::JOIN, array_filter( $value_key, 'is_scalar' ) )
+				: $value_key;
+
+			if ( ! is_scalar( $value_key ) ) {
 				continue;
 			}
 
@@ -197,6 +231,31 @@ final class OrderPayload {
 	}
 
 	/**
+	 * A displayed value with its price suffix removed.
+	 *
+	 * `OrderLineItem::with_price()` appends ` (+£20.00)` or ` (-£20.00)` to the
+	 * value a customer saw. This reverses that for **matching only** — the
+	 * displayed string itself is never rewritten, because it is the merchant's
+	 * permanent record of what was ordered and what it cost.
+	 *
+	 * ⚠️ **Anchored to the end and to the `(+…)`/`(-…)` shape `with_price()`
+	 * writes**, which narrows but does not eliminate the overlap: a customer's
+	 * own value ending in `(+something)` is stripped too.
+	 *
+	 * ✅ **That is harmless, and only because this is used for matching alone.**
+	 * The stripped string is never stored or displayed — a false strip can only
+	 * make the comparison *miss*, which leaves the option name as its id, the
+	 * same graceful degradation as an unmatched row. Measured before relying on
+	 * it: an unanchored pattern passes the same tests, so the anchor is
+	 * belt-and-braces rather than the thing that makes this safe.
+	 *
+	 * @param string $value The value as displayed on the order.
+	 */
+	private static function without_price( string $value ): string {
+		return (string) preg_replace( '/ \([+-][^()]*\)$/u', '', $value );
+	}
+
+	/**
 	 * The human labels for one selection, with free text withheld.
 	 *
 	 * The visible order meta is keyed by the option's **label** and holds the
@@ -222,12 +281,27 @@ final class OrderPayload {
 					}
 
 					/*
-					 * Matched on the value the customer saw. A fixed choice's
-					 * displayed value differs from its key ("Luxury" vs "lux"),
-					 * so the pairing is by position in the same order the
-					 * hidden selections were written.
+					 * Matched on the value the customer saw, **with any price
+					 * suffix removed first**.
+					 *
+					 * 🔴 **A labelled choice never matches here**, and that is by
+					 * design: its displayed value is `Luxury` where its key is
+					 * `lux`, so the option name stays the id. This only ever
+					 * recovers a name for an **unlabelled** choice, where
+					 * `OptionLabel::value()` falls back to the key itself.
+					 *
+					 * ✏️ **M21b.4 broke exactly that one working case.** The
+					 * order row gained its price — `lux` became
+					 * `lux (+£20.00)` — so the equality failed and reporting
+					 * degraded `Finish` to the raw `opt-a`. Nothing caught it:
+					 * no test covered an unlabelled **priced** choice.
+					 *
+					 * ⚠️ **The suffix is stripped rather than rebuilt.**
+					 * Reconstructing `' (' . money . ')'` here would be a second
+					 * copy of `with_price()`'s format, and the two would drift
+					 * the first time either changed.
 					 */
-					if ( (string) $meta->value === $value_key ) {
+					if ( self::without_price( (string) $meta->value ) === $value_key ) {
 						$option_label = (string) $meta->key;
 					}
 				}

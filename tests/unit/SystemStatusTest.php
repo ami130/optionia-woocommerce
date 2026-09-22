@@ -17,6 +17,8 @@ namespace Optionia\Tests\Unit;
 use Optionia\Admin\SystemStatus;
 use Optionia\Api\CircuitBreaker;
 use Optionia\Api\FetchesFromCloud;
+use Optionia\Catalogue\CatalogueCursor;
+use Optionia\Catalogue\ProductQueue;
 use Optionia\Config\Repository;
 use Optionia\Config\Synchroniser;
 use Optionia\Support\Cron;
@@ -61,7 +63,9 @@ final class SystemStatusTest extends TestCase {
 				// the bug rather than the fixture.
 				new Synchroniser( $this->createMock( FetchesFromCloud::class ), $repository, $logger )
 			),
-			new CircuitBreaker( $logger )
+			new CircuitBreaker( $logger ),
+			new CatalogueCursor(),
+			new ProductQueue( $logger )
 		);
 	}
 
@@ -429,5 +433,145 @@ final class SystemStatusTest extends TestCase {
 		);
 
 		$this->assertStringContainsString( 'Last heartbeat', $this->status()->as_text() );
+	}
+
+	// --- Catalogue sync (M19.1) ----------------------------------------------
+
+	/**
+	 * 🔴 **Three states, not two.** "Never started" and "finished" both show no
+	 * work outstanding, and a merchant reading one as the other draws the
+	 * opposite conclusion about whether something is wrong.
+	 */
+	public function test_catalogue_row_says_not_started_before_any_walk(): void {
+		$this->assertSame( 'not started', $this->row( $this->status()->report(), 'Catalogue sync' ) );
+	}
+
+	/**
+	 * A walk takes **4.2 days** for a 100k catalogue, and `/products` shows a
+	 * partial list throughout. Progress is how a merchant tells a sync that is
+	 * working from one that stalled.
+	 */
+	public function test_catalogue_row_reports_progress_during_a_walk(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 3000 );
+		$cursor->advance( $run_id, 750 );
+
+		$this->assertSame(
+			'in progress (750 of 3000)',
+			$this->row( $this->status()->report(), 'Catalogue sync' )
+		);
+	}
+
+	public function test_catalogue_row_reports_completion(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 250 );
+		$cursor->advance( $run_id, 250 );
+
+		$this->assertSame(
+			'complete (250 products)',
+			$this->row( $this->status()->report(), 'Catalogue sync' )
+		);
+	}
+
+	/**
+	 * 🔴 **A stalled walk must not read as a fresh one.** `in progress (0 of
+	 * 3000)` is what a merchant sees whether the push started a minute ago or
+	 * has been failing for three days — and a failed batch only writes a log
+	 * line nobody reads.
+	 */
+	public function test_catalogue_row_flags_a_stalled_walk(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 3000 );
+		$cursor->advance( $run_id, 250 );
+
+		$stored               = $GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ];
+		$stored['updated_at'] = time() - ( 6 * HOUR_IN_SECONDS );
+
+		$GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ] = $stored;
+
+		$row = $this->row( $this->status()->report(), 'Catalogue sync' );
+
+		$this->assertStringContainsString( 'in progress (250 of 3000)', (string) $row );
+		$this->assertStringContainsString( 'stalled', (string) $row );
+	}
+
+	/**
+	 * ⚠️ **And a walk that advanced recently must not be flagged.** The schedule
+	 * is 900 seconds, so a threshold of one interval would cry wolf on every
+	 * transient blip; an hour is four consecutive failures.
+	 */
+	public function test_catalogue_row_does_not_flag_a_recent_walk(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 3000 );
+		$cursor->advance( $run_id, 250 );
+
+		$stored               = $GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ];
+		$stored['updated_at'] = time() - ( 20 * MINUTE_IN_SECONDS );
+
+		$GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ] = $stored;
+
+		$this->assertSame(
+			'in progress (250 of 3000)',
+			$this->row( $this->status()->report(), 'Catalogue sync' )
+		);
+	}
+
+	/** A finished walk is never "stalled", however long ago it finished. */
+	public function test_a_completed_walk_is_never_flagged_as_stalled(): void {
+		$cursor = new CatalogueCursor();
+		$run_id = $cursor->start( 250 );
+		$cursor->advance( $run_id, 250 );
+
+		$stored               = $GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ];
+		$stored['updated_at'] = time() - ( 30 * DAY_IN_SECONDS );
+
+		$GLOBALS['optionia_test_options'][ Keys::OPTION_CATALOGUE_CURSOR ] = $stored;
+
+		$this->assertSame(
+			'complete (250 products)',
+			$this->row( $this->status()->report(), 'Catalogue sync' )
+		);
+	}
+
+	/**
+	 * ⚠️ **A number that should be near zero and briefly is not.** The queue
+	 * drains every fifteen minutes, so a small count after an edit is normal.
+	 * One that *stays* high is the visible symptom of a store the cloud is
+	 * refusing — and the connection row beside it says whether that is so.
+	 */
+	public function test_pending_product_changes_are_reported(): void {
+		$queue = new ProductQueue( new Logger( new Settings() ) );
+		$queue->push( 10, ProductQueue::ACTION_UPSERT );
+		$queue->push( 20, ProductQueue::ACTION_REMOVE );
+
+		$this->assertSame( '2', $this->row( $this->status()->report(), 'Pending product changes' ) );
+	}
+
+	public function test_pending_product_changes_is_zero_when_nothing_waits(): void {
+		$this->assertSame( '0', $this->row( $this->status()->report(), 'Pending product changes' ) );
+	}
+
+	/**
+	 * ⚠️ **"never" is a real answer, not a missing one.** The sweep refuses
+	 * until the initial walk finishes, so a store still importing shows this
+	 * correctly — and one that shows it *after* the walk completed has a daily
+	 * job that is not running, which is the question this row answers.
+	 */
+	public function test_last_reconciled_says_never_before_any_sweep(): void {
+		$this->assertSame( 'never', $this->row( $this->status()->report(), 'Last reconciled' ) );
+	}
+
+	public function test_last_reconciled_reports_how_long_ago(): void {
+		update_option( Keys::OPTION_LAST_RECONCILE, time() - ( 3 * HOUR_IN_SECONDS ), false );
+
+		$this->assertStringContainsString(
+			'ago',
+			(string) $this->row( $this->status()->report(), 'Last reconciled' )
+		);
+	}
+
+	/** The row reaches the copy-for-support text, which is what merchants paste. */
+	public function test_catalogue_row_appears_in_the_text_report(): void {
+		$this->assertStringContainsString( 'Catalogue sync', $this->status()->as_text() );
 	}
 }

@@ -86,6 +86,42 @@ else
   ok "all $COUNT_HOOKS cron hooks are cleared on uninstall"
 fi
 
+# --- Cron hooks, on deactivation ---------------------------------------------
+#
+# 🔴 `uninstall.php` is only reached when a merchant *deletes* the plugin.
+# Deactivation runs `Activation\Scheduler::clear()`, which enumerates hooks by
+# hand -- and until M19.1 nothing checked it. A hook missing there stays
+# scheduled on every deactivated install, firing against code WordPress is no
+# longer loading, which is the failure `uninstall.php`'s own comment warns of.
+#
+# The same `EXPECTED_HOOKS` list, because the two must clear the same set: a
+# hook worth removing on delete is worth removing on deactivate.
+SCHEDULER="src/Activation/Scheduler.php"
+
+if [ ! -f "$SCHEDULER" ]; then
+  fail "missing $SCHEDULER"
+else
+  MISSING_DEACTIVATION=""
+
+  for hook in $EXPECTED_HOOKS; do
+    # Matched against the constant, not the string: `clear()` calls
+    # `wp_clear_scheduled_hook( Keys::CRON_* )`, never the literal.
+    constant=$(grep -oE "CRON_[A-Z_]+ *= *'${hook}'" "$KEYS" | grep -oE "CRON_[A-Z_]+" | head -1)
+
+    if [ -n "$constant" ]; then
+      grep -q "wp_clear_scheduled_hook( Keys::${constant} )" "$SCHEDULER" \
+        || MISSING_DEACTIVATION="$MISSING_DEACTIVATION $hook"
+    fi
+  done
+
+  if [ -n "$MISSING_DEACTIVATION" ]; then
+    fail "Scheduler::clear() never clears:$MISSING_DEACTIVATION"
+    printf '        A deactivated plugin leaves the event firing against unloaded code.\n'
+  else
+    ok "all $COUNT_HOOKS cron hooks are cleared on deactivation"
+  fi
+fi
+
 # --- Database tables ---------------------------------------------------------
 #
 # Same failure mode as the options list, one category over: `uninstall.php`

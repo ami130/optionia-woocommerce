@@ -58,6 +58,163 @@ final class OrderPayloadTest extends TestCase {
 		return $item;
 	}
 
+	/**
+	 * A line whose option took several answers.
+	 *
+	 * 🔴 **The shape `OrderPayloadTest` had never seen.** Analytics was one of
+	 * the nine consumers M18.2 named; eight were carried through and this one
+	 * was missed, because no test here ever posed a list.
+	 *
+	 * @param array<int, string> $value_keys What the customer chose.
+	 * @param string             $delta      The line's option delta.
+	 * @return object An order line item.
+	 */
+	private function multi_line( array $value_keys, string $delta = '3.00' ): object {
+		$item = optionia_test_order_item();
+
+		$item->add_meta_data(
+			Keys::META_SELECTIONS,
+			wp_json_encode( array( 'extras' => $value_keys ) ),
+			true
+		);
+		$item->add_meta_data( Keys::META_PRICE_DELTA, $delta, true );
+		$item->add_meta_data( Keys::META_CONFIG_VERSION, '7', true );
+
+		// The visible meta an order carries for a multi-select: one joined string.
+		$item->add_meta_data( 'Extras', implode( ', ', $value_keys ), true );
+
+		return $item;
+	}
+
+	// --- Multi-select (M18.8c) ------------------------------------------------
+
+	/**
+	 * 🔴 **A multi-select reaches the report at all**, which it did not before.
+	 *
+	 * `selections()` filtered `! is_scalar( $value_key ) → continue`, so an
+	 * option at `cardinality: many` vanished. Measured: an order carrying
+	 * `{"opt-a":"lux","opt-m":["red","blue"]}` reported `["opt-a"]` alone.
+	 */
+	public function test_a_multi_select_appears_in_the_report(): void {
+		$order          = optionia_test_order( 1, '20.00', 'GBP' );
+		$order->items[] = $this->multi_line( array( 'red', 'blue' ) );
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertCount( 1, $selections, 'One row per option, as every other consumer reads it.' );
+		$this->assertSame( 'extras', $selections[0]['option_key'] );
+		$this->assertSame( 'red, blue', $selections[0]['value_key'] );
+	}
+
+	/**
+	 * 🔴 **The line's revenue is reported, and it was being LOST.**
+	 *
+	 * `attribute_delta()` puts the whole line's delta on `$selections[0]`, so a
+	 * line whose only option was a multi-select produced **no rows at all** and
+	 * reported **nothing** — not a mis-attributed amount, a missing one. A
+	 * merchant's option revenue was simply wrong, with nothing to indicate it.
+	 */
+	public function test_a_multi_select_only_line_still_reports_its_revenue(): void {
+		$order          = optionia_test_order( 1, '20.00', 'GBP' );
+		$order->items[] = $this->multi_line( array( 'red', 'blue' ), '3.00' );
+
+		$body = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( 300, $body['option_revenue_minor'] );
+	}
+
+	/**
+	 * ⚠️ **One row per OPTION, never one per value.**
+	 *
+	 * The cart line, the order meta and `labels` all name an option once and
+	 * carry its values within — and the *visible* meta these rows are matched
+	 * against is already one joined string, so a row per value would have
+	 * nothing to match.
+	 */
+	public function test_a_multi_select_is_one_row_however_many_values(): void {
+		$order          = optionia_test_order( 1, '20.00', 'GBP' );
+		$order->items[] = $this->multi_line( array( 'red', 'blue', 'green' ) );
+
+		$this->assertCount( 1, ( new OrderPayload() )->build( $order )['selections'] );
+	}
+
+	/**
+	 * ⚠️ **A nested array is dropped from the join, not coerced.**
+	 *
+	 * The hostile shape. `(string)` on an array emits a notice and yields
+	 * `"Array"`, which would reach the merchant's report as a value key.
+	 */
+	public function test_a_nested_array_is_dropped_from_the_join(): void {
+		$item = optionia_test_order_item();
+
+		$item->add_meta_data(
+			Keys::META_SELECTIONS,
+			'{"extras":["red",["nested"]]}',
+			true
+		);
+		$item->add_meta_data( Keys::META_PRICE_DELTA, '1.00', true );
+
+		$order          = optionia_test_order( 1, '10.00', 'GBP' );
+		$order->items[] = $item;
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertSame( 'red', $selections[0]['value_key'] );
+		$this->assertStringNotContainsString( 'Array', (string) $selections[0]['value_key'] );
+	}
+
+	/**
+	 * ⚠️ The control: a single-value option is unchanged.
+	 *
+	 * Without it, the assertions above would be satisfied by a decoder that had
+	 * started joining everything.
+	 */
+	public function test_a_single_value_option_is_unchanged(): void {
+		$order          = optionia_test_order( 1, '10.00', 'GBP' );
+		$order->items[] = $this->line();
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertCount( 1, $selections );
+		$this->assertSame( 'lux', $selections[0]['value_key'] );
+	}
+
+	/**
+	 * 🔴 **An unlabelled choice keeps its option name once the row is priced.**
+	 *
+	 * This match is the only way an option's display name is recovered, and it
+	 * only ever works for an **unlabelled** choice — a labelled one shows
+	 * `Luxury` against a key of `lux` and never matches, by design.
+	 *
+	 * ✏️ **M21b.4 broke that one working case.** The order row gained its price,
+	 * so `lux` became `lux (+£20.00)`, the equality failed, and reporting
+	 * degraded `Finish` to the raw `opt-a`. **No test covered an unlabelled
+	 * priced choice**, so 26 of them stayed green over it.
+	 */
+	public function test_an_unlabelled_priced_choice_still_names_its_option(): void {
+		$order          = optionia_test_order( 1, '10.00', 'GBP' );
+		$order->items[] = $this->line( 'finish', 'lux', '20.00', 'Finish', 'lux (+£20.00)' );
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertSame( 'Finish', $selections[0]['option_label'] );
+	}
+
+	/**
+	 * ⚠️ **A value the customer typed is left alone.** The suffix is stripped
+	 * only in the shape `with_price()` writes it — anchored to the end — so an
+	 * engraving reading `Engrave "(+5)" here` is not quietly truncated while
+	 * matching.
+	 */
+	public function test_a_typed_value_that_looks_like_a_price_is_not_stripped(): void {
+		$order          = optionia_test_order( 1, '10.00', 'GBP' );
+		$order->items[] = $this->line( 'finish', 'Engrave (+5) here', '0.00', 'Finish', 'Engrave (+5) here' );
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertSame( 'Finish', $selections[0]['option_label'] );
+	}
+
 	// --- The shape the API requires ------------------------------------------
 
 	/** Every field the endpoint validates is present and correct. */

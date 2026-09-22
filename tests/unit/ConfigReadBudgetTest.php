@@ -41,10 +41,23 @@ final class ConfigReadBudgetTest extends TestCase {
 
 	/**
 	 * Reset stubs between tests.
+	 *
+	 * ⚠️ **Every counter this file asserts on, not just the option one.**
+	 * It reset options alone, so meta and term counts leaked between tests —
+	 * harmless while one test wrote each, and wrong the moment two did.
+	 * Measured when the term counter arrived: `has_term costs one read not two`
+	 * saw **three** reads, two of them from the test before it.
+	 *
+	 * A budget test whose counters carry over is measuring the suite's order
+	 * rather than the code's cost.
 	 */
 	protected function setUp(): void {
 		$GLOBALS['optionia_test_options']      = array();
 		$GLOBALS['optionia_test_option_reads'] = array();
+		$GLOBALS['optionia_test_meta']         = array();
+		$GLOBALS['optionia_test_meta_reads']   = array();
+		$GLOBALS['optionia_test_terms']        = array();
+		$GLOBALS['optionia_test_term_reads']   = array();
 	}
 
 	/**
@@ -156,6 +169,95 @@ final class ConfigReadBudgetTest extends TestCase {
 			$GLOBALS['optionia_test_meta_reads']['optionia_probe'] ?? 0,
 			'The harness must count post meta reads, or the budget assertion is vacuous.'
 		);
+	}
+
+	/**
+	 * 🔴 **Resolving products touches no taxonomy, and nothing could see that
+	 * before M19.0a.**
+	 *
+	 * The harness counted `get_option` and `get_post_meta` and stubbed **no term
+	 * function at all** — so a `has_term()` call on the render path would have
+	 * satisfied this whole file while querying. That is the same blind spot
+	 * `test_resolving_products_touches_no_post_meta` records for meta, one
+	 * dimension over, and it was open the entire time that test stood guard.
+	 *
+	 * ⚠️ **Asserted before ADR-068's taxonomy resolution is built, deliberately.**
+	 * A counter added alongside the feature it measures is written by someone
+	 * who already knows the answer. Today it reads zero because nothing reads
+	 * terms; when M19.4 lands it will read whatever the design actually costs,
+	 * and the number will be a measurement rather than a hope.
+	 *
+	 * ✏️ **M19.4 landed, and this still reads zero — for a reason worth
+	 * stating.** A document with no taxonomy assignment carries no taxonomy
+	 * target, so resolution has nothing to look up. That is the common case and
+	 * it must stay free; `test_taxonomy_resolution_reads_one_taxonomy_per_page`
+	 * below is the budget for the case that is not.
+	 */
+	public function test_resolving_products_touches_no_taxonomy(): void {
+		$this->cache_a_document();
+
+		$repository = new Repository( $this->logger() );
+
+		for ( $product = 1; $product <= 25; $product++ ) {
+			$repository->sets_for_product( $product );
+		}
+
+		$this->assertSame(
+			array(),
+			$GLOBALS['optionia_test_term_reads'],
+			'A term read here means resolution moved without the budget following it.'
+		);
+	}
+
+	/**
+	 * The term counter counts, so the assertion above means something.
+	 *
+	 * 🔴 **Asserting a counter reads zero is exactly what a broken counter also
+	 * reports.** The meta counter needed this proof after it was measured
+	 * failing silently; the term counter gets it on the day it is written,
+	 * rather than after the same lesson is learned twice.
+	 */
+	public function test_the_harness_counts_term_reads(): void {
+		optionia_test_set_terms( 20, 'product_cat', array( 'shirts' ) );
+
+		has_term( 'shirts', 'product_cat', 20 );
+		has_term( 'hats', 'product_cat', 20 );
+
+		$this->assertSame(
+			2,
+			$GLOBALS['optionia_test_term_reads']['product_cat'] ?? 0,
+			'The harness must count term reads, or the budget assertion is vacuous.'
+		);
+	}
+
+	/**
+	 * ⚠️ **`has_term()` counts ONE read, not two.**
+	 *
+	 * It resolves through `get_the_terms`, as WordPress's own does through the
+	 * term cache. Counting both would report two reads where a product page
+	 * performs one — and a budget test that **overstates** is as useless as one
+	 * that understates, because the next reader tunes against a number that was
+	 * never real.
+	 */
+	public function test_has_term_costs_one_read_not_two(): void {
+		optionia_test_set_terms( 20, 'product_cat', array( 'shirts' ) );
+
+		has_term( 'shirts', 'product_cat', 20 );
+
+		$this->assertSame( 1, $GLOBALS['optionia_test_term_reads']['product_cat'] ?? 0 );
+	}
+
+	/**
+	 * A product with no terms reads `false`, the way WordPress answers.
+	 *
+	 * ⚠️ **Not an empty array.** `get_the_terms()` returns `false` for a post
+	 * with none, and code written against a stub that returned `array()` would
+	 * take a branch production never takes — a harness that is wrong in a
+	 * comfortable direction.
+	 */
+	public function test_a_product_with_no_terms_reads_false(): void {
+		$this->assertFalse( get_the_terms( 99, 'product_cat' ) );
+		$this->assertFalse( has_term( 'shirts', 'product_cat', 99 ) );
 	}
 
 	/**
@@ -319,5 +421,103 @@ final class ConfigReadBudgetTest extends TestCase {
 
 		$this->assertNotNull( $repository->get(), 'The write must be visible.' );
 		$this->assertSame( $before, $this->reads( Keys::OPTION_CONFIG ), 'And must not cost a read.' );
+	}
+
+	/**
+	 * The cost of taxonomy resolution, measured rather than hoped (M19.4).
+	 *
+	 * 🔴 **AC3 binds at ≤1 extra DB read per product page, and this is the
+	 * guard on it.** `has_term()` reads a product's terms for one taxonomy and
+	 * WordPress caches that per post — so the budget is **one read per
+	 * taxonomy per page**, no matter how many assignments name it.
+	 *
+	 * ⚠️ **The counter counts calls, not queries, and the two genuinely
+	 * differ.** Measured against a running site: ten `has_term()` calls after
+	 * one `get_the_terms()` cost **0** database queries, and after the
+	 * `WP_Query` a product page already runs, the first costs 0 too — WordPress
+	 * primes term relationships with the post. So this asserts the **fan-out**:
+	 * that resolution does not multiply *taxonomies* touched, which is the part
+	 * a design change could silently break.
+	 */
+	public function test_taxonomy_resolution_reads_one_taxonomy_per_page(): void {
+		( new Repository( $this->logger() ) )->store(
+			array(
+				'schema_version' => 1,
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-cat',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'category',
+								'target_ref'  => 'hoodies',
+								'priority'    => 0,
+							),
+						),
+					),
+				),
+			),
+			'W/"store-7"'
+		);
+
+		$GLOBALS['optionia_test_term_reads'] = array();
+
+		$repository = new Repository( $this->logger() );
+
+		$repository->sets_for_product( 20 );
+
+		$this->assertSame(
+			array( 'product_cat' ),
+			array_keys( $GLOBALS['optionia_test_term_reads'] ),
+			'only the taxonomy actually assigned is touched'
+		);
+		$this->assertSame(
+			1,
+			$GLOBALS['optionia_test_term_reads']['product_cat'],
+			'one assignment, one lookup'
+		);
+	}
+
+	/**
+	 * ⚠️ **And the option budget still holds with taxonomy in play.** Resolution
+	 * moved to render; if it had also moved the *index* read, AC3's headline
+	 * number would have changed without anyone noticing.
+	 */
+	public function test_taxonomy_resolution_adds_no_option_reads(): void {
+		( new Repository( $this->logger() ) )->store(
+			array(
+				'schema_version' => 1,
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-cat',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'category',
+								'target_ref'  => 'hoodies',
+								'priority'    => 0,
+							),
+						),
+					),
+				),
+			),
+			'W/"store-7"'
+		);
+
+		$GLOBALS['optionia_test_option_reads'] = array();
+
+		$repository = new Repository( $this->logger() );
+
+		for ( $product = 1; $product <= 25; $product++ ) {
+			$repository->sets_for_product( $product );
+		}
+
+		$this->assertLessThanOrEqual(
+			1,
+			$GLOBALS['optionia_test_option_reads'][ Keys::OPTION_PRODUCT_INDEX ] ?? 0,
+			'the index is read once per request, not once per product'
+		);
 	}
 }

@@ -80,6 +80,16 @@ final class SettingsPage {
 				Keys::SETTING_DEBUG_LOGGING       => Request::post_bool( Keys::SETTING_DEBUG_LOGGING ),
 				Keys::SETTING_DELETE_ON_UNINSTALL => Request::post_bool( Keys::SETTING_DELETE_ON_UNINSTALL ),
 				Keys::SETTING_API_BASE_URL        => Request::post_url( Keys::SETTING_API_BASE_URL ),
+
+				/*
+				 * ⚠️ **Constrained to the two modes, not taken as typed.**
+				 * `post_text()` accepts any string, and an unrecognised value
+				 * would read as `subtotal` to `CartDisplay`'s `!== 'subtotal'`
+				 * test — so a typo would silently change how every cart renders.
+				 */
+				Keys::SETTING_CART_BREAKDOWN      => 'subtotal' === Request::post_text( Keys::SETTING_CART_BREAKDOWN )
+					? 'subtotal'
+					: 'itemised',
 			)
 		);
 
@@ -146,6 +156,25 @@ final class SettingsPage {
 			esc_html__( 'Debug logging', 'optionia' ),
 			checked( $this->settings->is_debug_logging_enabled(), true, false ),
 			esc_html__( 'Write verbose logs to WooCommerce → Status → Logs. Enable only while troubleshooting.', 'optionia' )
+		);
+
+		// --- Cart breakdown (M21b.1, ADR-110) --------------------------------
+		$breakdown = (string) $this->settings->get( Keys::SETTING_CART_BREAKDOWN, 'itemised' );
+
+		printf(
+			'<tr><th scope="row"><label for="%1$s">%2$s</label></th><td>
+				<select id="%1$s" name="%1$s">
+					<option value="itemised" %3$s>%4$s</option>
+					<option value="subtotal" %5$s>%6$s</option>
+				</select>
+				<p class="description">%7$s</p></td></tr>',
+			esc_attr( Keys::SETTING_CART_BREAKDOWN ),
+			esc_html__( 'Cart breakdown', 'optionia' ),
+			selected( $breakdown, 'itemised', false ),
+			esc_html__( 'Itemised — base price and each priced choice', 'optionia' ),
+			selected( $breakdown, 'subtotal', false ),
+			esc_html__( 'Subtotal — base price and one customisation line', 'optionia' ),
+			esc_html__( 'How a customised line explains its price in the cart. Itemised lets a customer check the arithmetic; subtotal is shorter.', 'optionia' )
 		);
 
 		// --- API base URL ----------------------------------------------------

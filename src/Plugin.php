@@ -52,6 +52,13 @@ use Optionia\Upload\UploadSweeper;
 use Optionia\Connection\StateMachine;
 use Optionia\Api\CircuitBreaker;
 use Optionia\Api\ResponseValidator;
+use Optionia\Catalogue\CatalogueCursor;
+use Optionia\Catalogue\CataloguePayload;
+use Optionia\Catalogue\CatalogueReconciler;
+use Optionia\Catalogue\CataloguePusher;
+use Optionia\Catalogue\ProductQueue;
+use Optionia\Catalogue\ProductWatcher;
+use Optionia\Catalogue\QueueDrainer;
 use Optionia\Config\Repository;
 use Optionia\Config\Synchroniser;
 use Optionia\Frontend\Assets;
@@ -458,6 +465,56 @@ final class Plugin {
 			)
 		);
 
+		// --- Catalogue push (M19.1) ------------------------------------------
+		$this->container->set(
+			CatalogueCursor::class,
+			static fn (): CatalogueCursor => new CatalogueCursor()
+		);
+
+		$this->container->set(
+			CataloguePayload::class,
+			static fn (): CataloguePayload => new CataloguePayload()
+		);
+
+		$this->container->set(
+			CataloguePusher::class,
+			static fn ( Container $c ): CataloguePusher => new CataloguePusher(
+				$c->get( Client::class ),
+				$c->get( CatalogueCursor::class ),
+				$c->get( CataloguePayload::class ),
+				$c->get( Logger::class )
+			)
+		);
+
+		$this->container->set(
+			CatalogueReconciler::class,
+			static fn ( Container $c ): CatalogueReconciler => new CatalogueReconciler(
+				$c->get( Client::class ),
+				$c->get( CatalogueCursor::class ),
+				$c->get( Logger::class )
+			)
+		);
+
+		$this->container->set(
+			ProductQueue::class,
+			static fn ( Container $c ): ProductQueue => new ProductQueue( $c->get( Logger::class ) )
+		);
+
+		$this->container->set(
+			ProductWatcher::class,
+			static fn ( Container $c ): ProductWatcher => new ProductWatcher( $c->get( ProductQueue::class ) )
+		);
+
+		$this->container->set(
+			QueueDrainer::class,
+			static fn ( Container $c ): QueueDrainer => new QueueDrainer(
+				$c->get( Client::class ),
+				$c->get( ProductQueue::class ),
+				$c->get( CataloguePayload::class ),
+				$c->get( Logger::class )
+			)
+		);
+
 		// --- Presentation ---------------------------------------------------
 		$this->container->set(
 			Templates::class,
@@ -527,7 +584,8 @@ final class Plugin {
 		$this->container->set(
 			CartDisplay::class,
 			static fn ( Container $c ): CartDisplay => new CartDisplay(
-				$c->get( Repository::class )
+				$c->get( Repository::class ),
+				$c->get( Settings::class )
 			)
 		);
 
@@ -544,7 +602,9 @@ final class Plugin {
 				$c->get( Repository::class ),
 				$c->get( Settings::class ),
 				$c->get( Cron::class ),
-				$c->get( CircuitBreaker::class )
+				$c->get( CircuitBreaker::class ),
+				$c->get( CatalogueCursor::class ),
+				$c->get( ProductQueue::class )
 			)
 		);
 
@@ -581,6 +641,18 @@ final class Plugin {
 		// on cron. An admin-only registration would queue nothing and drain
 		// nothing -- the feature would be silently absent in production.
 		$this->container->get( OrderReporter::class )->register();
+		// Registered outside `is_admin()`: the push runs on cron, which is
+		// neither an admin request nor a front-end one. An admin-only
+		// registration would leave the catalogue never syncing, with the cron
+		// event scheduled and nothing listening -- silent in every test.
+		$this->container->get( CataloguePusher::class )->register();
+		// Registered outside `is_admin()`: a product can be saved by a REST
+		// request, WP-CLI or an importer as well as by the admin screen, and an
+		// admin-only registration would miss every one of those — silently, with
+		// the mirror drifting until a reconciliation noticed.
+		$this->container->get( ProductWatcher::class )->register();
+		$this->container->get( QueueDrainer::class )->register();
+		$this->container->get( CatalogueReconciler::class )->register();
 		// Registered outside `is_admin()`: a REST request is neither an admin
 		// request nor a cron one, so an admin-only registration would leave the
 		// route undeclared exactly when the cloud tries to use it.

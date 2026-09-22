@@ -255,6 +255,11 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	$GLOBALS['optionia_test_meta']               = array();
 	$GLOBALS['optionia_test_meta_reads']         = array();
 	$GLOBALS['optionia_test_meta_writes']        = array();
+	$GLOBALS['optionia_test_terms']              = array();
+	$GLOBALS['optionia_test_product_queries']    = 0;
+	$GLOBALS['optionia_test_attachments']        = array();
+	$GLOBALS['optionia_test_post_types']         = array();
+	$GLOBALS['optionia_test_term_reads']         = array();
 	$GLOBALS['optionia_test_http_calls']         = array();
 	$GLOBALS['optionia_test_enqueued']           = array();
 	$GLOBALS['optionia_test_localized']          = array();
@@ -611,6 +616,112 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	}
 
 	/**
+	 * An attachment's URL, as WordPress returns it.
+	 *
+	 * ⚠️ **`false` for an unknown attachment**, which is what WordPress itself
+	 * returns — not an empty string. `CataloguePayload` guards with `is_string`,
+	 * and a stub answering `''` would leave that guard unexercised.
+	 *
+	 * @param int    $attachment_id Attachment id.
+	 * @param string $size          Image size.
+	 * @return string|false
+	 */
+	function wp_get_attachment_image_url( int $attachment_id, string $size = 'thumbnail' ) {
+		unset( $size );
+
+		return $GLOBALS['optionia_test_attachments'][ $attachment_id ] ?? false;
+	}
+
+	/**
+	 * A page of the catalogue, as `wc_get_products()` returns it.
+	 *
+	 * 🔴 **Honours `orderby`, `order`, `offset` and `limit` for real**, because
+	 * the catalogue walk's correctness *is* its ordering. `CataloguePayload`
+	 * orders by **ID ascending** so a product created mid-walk lands past the
+	 * cursor instead of shifting every later page — the defect
+	 * `ProductsRepository` records for `OFFSET` in the backend. A stub that
+	 * ignored ordering would let that guarantee be deleted with every test
+	 * still green.
+	 *
+	 * With `paginate`, returns the `{ products, total, max_num_pages }` object
+	 * WooCommerce returns; without it, a bare array.
+	 *
+	 * @param array<string, mixed> $args Query arguments.
+	 * @return object|array<int, object>
+	 */
+	function wc_get_products( array $args = array() ) {
+		$products = array_values( $GLOBALS['optionia_test_products'] ?? array() );
+
+		usort(
+			$products,
+			static function ( $a, $b ): int {
+				return $a->get_id() <=> $b->get_id();
+			}
+		);
+
+		if ( isset( $args['order'] ) && 'DESC' === strtoupper( (string) $args['order'] ) ) {
+			$products = array_reverse( $products );
+		}
+
+		/*
+		 * 🔴 **`status` is honoured, because a stub that ignored it made the
+		 * filter untestable.** `CataloguePayload` asks for every status --
+		 * `publish`, `draft`, `pending`, `private` -- so a merchant can assign
+		 * options to a product *before* publishing it, and the picker can say
+		 * "draft -- not visible on your storefront". With the argument ignored,
+		 * deleting it entirely left every test green while the real plugin
+		 * mirrored only published products.
+		 */
+		if ( isset( $args['status'] ) ) {
+			$wanted   = (array) $args['status'];
+			$products = array_values(
+				array_filter(
+					$products,
+					static function ( $product ) use ( $wanted ): bool {
+						return ! method_exists( $product, 'get_status' )
+							|| in_array( $product->get_status(), $wanted, true );
+					}
+				)
+			);
+		}
+
+		$total  = count( $products );
+		$offset = isset( $args['offset'] ) ? max( 0, (int) $args['offset'] ) : 0;
+		$limit  = isset( $args['limit'] ) ? (int) $args['limit'] : -1;
+		$page   = $limit < 0 ? array_slice( $products, $offset ) : array_slice( $products, $offset, $limit );
+
+		++$GLOBALS['optionia_test_product_queries'];
+
+		/*
+		 * 🔴 **`return => 'ids'` is honoured, because WooCommerce honours it.**
+		 * `class-wc-product-data-store-cpt.php:2470` returns `$query->posts`
+		 * rather than hydrated products for this argument, and
+		 * `Catalogue\CatalogueReconciler` depends on it: a manifest needs ids,
+		 * and hydrating 100k products to read their ids would be the cost the
+		 * manifest exists to avoid. A stub that always returned objects made
+		 * that path fatal -- found by the first test that ran it.
+		 */
+		if ( isset( $args['return'] ) && 'ids' === $args['return'] ) {
+			$page = array_map(
+				static function ( $product ): int {
+					return $product->get_id();
+				},
+				$page
+			);
+		}
+
+		if ( ! empty( $args['paginate'] ) ) {
+			return (object) array(
+				'products'      => $page,
+				'total'         => $total,
+				'max_num_pages' => $limit > 0 ? (int) ceil( $total / $limit ) : 1,
+			);
+		}
+
+		return $page;
+	}
+
+	/**
 	 * The product double itself.
 	 *
 	 * @param int    $id    Product id.
@@ -675,6 +786,85 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 			/** The weight, exactly as WooCommerce hands it back. */
 			public function get_weight() {
 				return $this->weight;
+			}
+
+			/**
+			 * The product's name (M19.1).
+			 *
+			 * Public properties rather than constructor arguments, matching
+			 * `$weight` above: every existing caller builds a product for its
+			 * price or type, and adding required arguments would rewrite each of
+			 * them to say nothing.
+			 *
+			 * ⚠️ **Defaults are what WooCommerce actually returns for an unset
+			 * field, not what is convenient.** `get_sku()` answers `''` rather
+			 * than null, and a stub returning null would hide the difference
+			 * between "no SKU" and "not a product" at every caller.
+			 *
+			 * @var string
+			 */
+			public string $name = 'Test Product';
+
+			/**
+			 * The SKU; `''` when unset, as WooCommerce returns.
+			 *
+			 * @var string
+			 */
+			public string $sku = '';
+
+			/**
+			 * Post status: `publish`, `draft`, `pending` or `private`.
+			 *
+			 * @var string
+			 */
+			public string $status = 'publish';
+
+			/**
+			 * The product's permalink.
+			 *
+			 * @var string
+			 */
+			public string $permalink = '';
+
+			public function get_name(): string {
+				return $this->name;
+			}
+
+			public function get_sku() {
+				return $this->sku;
+			}
+
+			public function get_status(): string {
+				return $this->status;
+			}
+
+			public function get_permalink() {
+				return $this->permalink;
+			}
+
+			/**
+			 * Attachment id of the product's main image; 0 when there is none.
+			 *
+			 * @var int
+			 */
+			public int $image_id = 0;
+
+			public function get_image_id() {
+				return $this->image_id;
+			}
+
+			/**
+			 * When the product last changed.
+			 *
+			 * `null` when unset, which is what `WC_Product::get_date_modified()`
+			 * returns for a product that has never been edited — not a zero date.
+			 *
+			 * @var object|null
+			 */
+			public $date_modified = null;
+
+			public function get_date_modified() {
+				return $this->date_modified;
 			}
 
 			/**
@@ -1366,6 +1556,48 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	}
 
 	/*
+	 * A v4-shaped UUID, distinct on every call.
+	 *
+	 * 🔴 **Not built on `wp_rand`, and that is the whole point.** This harness's
+	 * `wp_rand()` returns `$min` so that tests are deterministic -- so a UUID
+	 * composed from it is the *same string every time*, and any guard that
+	 * distinguishes one identity from another becomes untestable. Measured:
+	 * `CatalogueCursor`'s run-id guard, which stops a late response from a
+	 * previous walk advancing the current one, passed trivially until this
+	 * counter replaced it.
+	 *
+	 * A counter rather than real randomness: distinctness is the property under
+	 * test, and a reproducible sequence is worth more in a harness than entropy.
+	 */
+	/**
+	 * A post's type, as WordPress reports it.
+	 *
+	 * 🔴 **Defaults to `post`, not `product`.** `Catalogue\ProductWatcher`
+	 * listens to WordPress's `trashed_post` and `before_delete_post`, which fire
+	 * for **every** post type — a page, a menu item, an order — and the filter
+	 * to products is what stops an unrelated deletion queueing a product sync.
+	 * A stub answering `product` for everything would leave that filter
+	 * unexercised, which is the whole reason it exists.
+	 *
+	 * @param int $post_id Post id.
+	 * @return string|false
+	 */
+	function get_post_type( int $post_id = 0 ) {
+		return $GLOBALS['optionia_test_post_types'][ $post_id ] ?? 'post';
+	}
+
+	function wp_generate_uuid4(): string {
+		static $counter = 0;
+
+		++$counter;
+
+		return sprintf(
+			'00000000-0000-4000-8000-%012x',
+			$counter
+		);
+	}
+
+	/*
 	 * Post meta, counted the same way options are.
 	 *
 	 * Phase 10 Stage 2 decides where the product index lives, and M9.2's
@@ -1407,10 +1639,130 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 		return true;
 	}
 
+	/**
+	 * Taxonomy reads, counted the way post meta is.
+	 *
+	 * 🔴 **`ConfigReadBudgetTest` could not see a taxonomy read at all.** It
+	 * counts `get_option` and `get_post_meta`, and no term function was stubbed
+	 * or counted — so once ADR-068 puts taxonomy resolution in the plugin, a
+	 * `has_term()` call would **pass the budget test while performing
+	 * queries**.
+	 *
+	 * ⚠️ **That is the same blind spot the budget test exists to close**, one
+	 * dimension over. Its own note records the first instance: `get_post_meta`
+	 * was undefined, so an index stored there *"would have satisfied the budget
+	 * while a shop page performed twenty-five meta reads — a check inspecting
+	 * nothing, inside the test written to prevent exactly that."*
+	 *
+	 * Defined before any taxonomy code exists, deliberately. A counter added
+	 * alongside the feature it measures is a counter written by someone who
+	 * already knows the answer.
+	 *
+	 * @param int    $post_id  The product.
+	 * @param string $taxonomy Taxonomy name.
+	 * @return array<int, object>|false Terms, or false when there are none.
+	 */
+	function get_the_terms( int $post_id, string $taxonomy ) {
+		$GLOBALS['optionia_test_term_reads'][ $taxonomy ] =
+			( $GLOBALS['optionia_test_term_reads'][ $taxonomy ] ?? 0 ) + 1;
+
+		$terms = $GLOBALS['optionia_test_terms'][ $post_id ][ $taxonomy ] ?? array();
+
+		if ( array() === $terms ) {
+			// WordPress returns false, not an empty array, when a post has none.
+			return false;
+		}
+
+		return array_map(
+			static function ( $slug ): object {
+				return (object) array(
+					'slug' => (string) $slug,
+					'name' => (string) $slug,
+				);
+			},
+			$terms
+		);
+	}
+
+	/**
+	 * Whether a product carries a term.
+	 *
+	 * ⚠️ **Counted through `get_the_terms`, not separately.** WordPress's own
+	 * `has_term()` resolves through the term cache the same way, so counting it
+	 * twice would report two reads where a product page performs one — and a
+	 * budget test that overstates is as useless as one that understates.
+	 *
+	 * @param string|array<int, string> $term     Slug or slugs to look for.
+	 * @param string                    $taxonomy Taxonomy name.
+	 * @param int                       $post_id  The product.
+	 */
+	function has_term( $term, string $taxonomy, int $post_id ): bool {
+		$terms = get_the_terms( $post_id, $taxonomy );
+
+		if ( false === $terms ) {
+			return false;
+		}
+
+		$slugs  = array_map( static fn( object $found ): string => $found->slug, $terms );
+		$wanted = is_array( $term ) ? $term : array( $term );
+
+		foreach ( $wanted as $one ) {
+			if ( in_array( (string) $one, $slugs, true ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Attach terms to a product, for a test that needs some.
+	 *
+	 * Not a WordPress function — the harness's own seeder, named to read like
+	 * one. Writes are not counted: the budget is about what a *page render*
+	 * costs, and no render writes a term.
+	 *
+	 * @param int                  $post_id  The product.
+	 * @param string               $taxonomy Taxonomy name.
+	 * @param array<int, string>   $slugs    Term slugs.
+	 */
+	function optionia_test_set_terms( int $post_id, string $taxonomy, array $slugs ): void {
+		$GLOBALS['optionia_test_terms'][ $post_id ][ $taxonomy ] = $slugs;
+	}
+
 	function wc_get_price_decimals(): int {
 		return isset( $GLOBALS['optionia_test_decimals'] )
 			? (int) $GLOBALS['optionia_test_decimals']
 			: 2;
+	}
+
+	/*
+	 * 🔴 **Currency formatting, stubbed so the difference is observable.**
+	 *
+	 * `OptionView::money()` reads these; without them it falls back to no symbol
+	 * and `.`/`,`, which is **exactly what the wire format produces** — so a test
+	 * asserting the cart formats "the storefront way" passed whichever formatter
+	 * it used. Measured: reverting `CartDisplay` to the wire format killed no
+	 * test until these existed.
+	 */
+	function get_woocommerce_currency_symbol( string $currency = '' ): string {
+		/*
+		 * `$currency` is unused and must stay: WooCommerce's own signature takes
+		 * it, and a stub that dropped it would accept calls the real function
+		 * refuses — which is the harness-fidelity defect `CartHarnessFidelityTest`
+		 * exists for.
+		 */
+		unset( $currency );
+
+		return (string) ( $GLOBALS['optionia_test_currency_symbol'] ?? '£' );
+	}
+
+	function wc_get_price_decimal_separator(): string {
+		return (string) ( $GLOBALS['optionia_test_decimal_separator'] ?? '.' );
+	}
+
+	function wc_get_price_thousand_separator(): string {
+		return (string) ( $GLOBALS['optionia_test_thousand_separator'] ?? ',' );
 	}
 }
 

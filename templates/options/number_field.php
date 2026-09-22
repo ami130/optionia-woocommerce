@@ -67,6 +67,7 @@ $optionia_input_id = 'optionia-' . $optionia_id;
  */
 $optionia_guidance = OptionView::guidance( $optionia_option );
 $optionia_display  = OptionView::display( $optionia_option );
+$optionia_styles   = OptionView::styles( $optionia_option );
 $optionia_describe = OptionView::described_by( $optionia_option );
 $optionia_place    = (string) ( $optionia_option['placeholder'] ?? '' );
 $optionia_default  = (string) ( $optionia_option['default_value'] ?? '' );
@@ -103,7 +104,7 @@ $optionia_step = isset( $optionia_validation['step'] ) && is_numeric( $optionia_
 		: ( empty( $optionia_validation['integer_only'] ) ? '' : '1' );
 
 ?>
-<div class="optionia-option optionia-option--number optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>">
+<div class="optionia-option optionia-option--number optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>>
 	<label class="optionia-option__label" for="<?php echo esc_attr( $optionia_input_id ); ?>">
 		<?php echo esc_html( (string) ( $optionia_option['label'] ?? '' ) ); ?>
 		<?php if ( $optionia_required ) : ?>

@@ -25,7 +25,7 @@ fi
 FAILED=0
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
-section "1/10  Syntax (php -l)"
+section "1/14  Syntax (php -l)"
 COUNT=0
 BAD=0
 while IFS= read -r file; do
@@ -47,28 +47,40 @@ else
   FAILED=$((FAILED + 1))
 fi
 
-section "2/10  JavaScript guards"
+section "2/14  JavaScript guards"
 # `OPTIONIA_PHP` is passed down because the JavaScript gate renders its template
 # fixtures with PHP, and a bare `php` is not on PATH in a Studio environment —
 # which this script has already resolved above.
 OPTIONIA_PHP="$PHP" bash bin/check-js.sh || FAILED=$((FAILED + 1))
 
-section "3/10  Shared cross-repo fixtures"
+section "3/14  Shared cross-repo fixtures"
 bash bin/check-shared-fixtures.sh || FAILED=$((FAILED + 1))
 
-section "4/10  Architecture guards"
+section "4/14  Architecture guards"
 if bash bin/check-architecture.sh; then :; else FAILED=$((FAILED + 1)); fi
 
-section "5/10  Uninstall completeness"
+section "5/14  Uninstall completeness"
 if bash bin/check-uninstall.sh; then :; else FAILED=$((FAILED + 1)); fi
 
-section "6/10  Secret scan (AC8)"
+section "6/14  Secret scan (AC8)"
 if bash bin/check-secrets.sh; then :; else FAILED=$((FAILED + 1)); fi
 
-section "7/10  Wire contract (response envelope)"
+section "7/14  Wire contract (response envelope)"
 if bash bin/check-envelope.sh; then :; else FAILED=$((FAILED + 1)); fi
 
-section "8/10  Coding standards (PHPCS, WordPress-Extra)"
+section "8/14  Public filter contract (M21b.5)"
+if bash bin/check-public-filters.sh; then :; else FAILED=$((FAILED + 1)); fi
+
+section "9/14  Theme inheritance (M21c.1)"
+if bash bin/check-theme-inheritance.sh; then :; else FAILED=$((FAILED + 1)); fi
+
+section "10/14  Style token reachability (M21c.2)"
+if bash bin/check-style-tokens.sh; then :; else FAILED=$((FAILED + 1)); fi
+
+section "11/14  Distributable package (M20b.3)"
+if bash bin/check-package.sh; then :; else FAILED=$((FAILED + 1)); fi
+
+section "12/14  Coding standards (PHPCS, WordPress-Extra)"
 if [ -x vendor/bin/phpcs ]; then
   if "$PHP" vendor/bin/phpcs -q --report=summary; then
     printf '\033[32mok\033[0m    PHPCS clean\n'
@@ -79,7 +91,7 @@ else
   printf '\033[33mskip\033[0m  vendor/ not installed — run: composer install\n'
 fi
 
-section "9/10  Unit tests (PHPUnit)"
+section "13/14  Unit tests (PHPUnit)"
 if [ -x vendor/bin/phpunit ]; then
   if "$PHP" vendor/bin/phpunit --testsuite=unit; then :; else FAILED=$((FAILED + 1)); fi
 else
@@ -98,7 +110,7 @@ fi
 # percentage. Line coverage needs Xdebug, which Studio's PHP does not ship, and
 # would fail the gate for an environment reason rather than a code one. Counting
 # the classes a test file imports is cruder and always available.
-section "10/10  Test coverage floor"
+section "14/14  Test coverage floor"
 SRC_CLASSES=$(find src -name '*.php' -not -name 'Autoloader.php' | wc -l | tr -d ' ')
 TESTED=$(grep -ohE 'use Optionia\\[A-Za-z\\]+' tests/unit/*.php 2>/dev/null | sort -u | wc -l | tr -d ' ')
 

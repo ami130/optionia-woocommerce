@@ -72,7 +72,7 @@ final class OrderLineItemTest extends TestCase {
 	public function test_options_are_written_under_their_labels(): void {
 		$item = $this->attach_line();
 
-		$this->assertSame( 'Luxury', $item->get_meta( 'Finish' ) );
+		$this->assertSame( 'Luxury (+£20.00)', $item->get_meta( 'Finish' ) );
 		$this->assertNull( $item->get_meta( 'opt-a' ), 'An id must not appear where a label belongs.' );
 	}
 
@@ -82,8 +82,8 @@ final class OrderLineItemTest extends TestCase {
 	public function test_every_selected_option_is_written(): void {
 		$item = $this->attach_line();
 
-		$this->assertSame( 'Luxury', $item->get_meta( 'Finish' ) );
-		$this->assertSame( 'Yes', $item->get_meta( 'Engraving' ) );
+		$this->assertSame( 'Luxury (+£20.00)', $item->get_meta( 'Finish' ) );
+		$this->assertSame( 'Yes (+£5.00)', $item->get_meta( 'Engraving' ) );
 	}
 
 	/**
@@ -97,8 +97,16 @@ final class OrderLineItemTest extends TestCase {
 
 		$item = $this->attach_line( array( 'opt-a' => 'lux' ), $long );
 
-		$this->assertSame( $long, $item->get_meta( 'Finish' ) );
-		$this->assertSame( 200, strlen( (string) $item->get_meta( 'Finish' ) ) );
+		$this->assertSame( $long . ' (+£20.00)', $item->get_meta( 'Finish' ) );
+
+		/*
+		 * ✏️ **Asserted as `strlen() === 200` until M21b.4**, when the row gained
+		 * its price suffix and the number changed for a reason that has nothing
+		 * to do with truncation. The property under test is that **every
+		 * character the customer typed survives** — an engraving cut short is a
+		 * wrong product manufactured — so it is asserted directly.
+		 */
+		$this->assertStringContainsString( $long, (string) $item->get_meta( 'Finish' ) );
 	}
 
 	/**
@@ -209,7 +217,7 @@ final class OrderLineItemTest extends TestCase {
 		$item = optionia_test_order_item();
 		( new OrderLineItem() )->attach( $item, 'cart-key', $line );
 
-		$this->assertSame( 'lux', $item->get_meta( 'opt-a' ) );
+		$this->assertSame( 'lux (+£20.00)', $item->get_meta( 'opt-a' ) );
 	}
 
 	// --- SKU suffixes (M16.8) ------------------------------------------------
@@ -706,6 +714,96 @@ final class OrderLineItemTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **The order says what the cart said** (M21b.4).
+	 *
+	 * The cart shows `Finish: Luxury (+£20.00)`; the order used to show
+	 * `Finish: Luxury`. A merchant answering *"why is this line £100?"* had to
+	 * open the hidden `_optionia_price_delta`, which carries the **summed**
+	 * figure — so a two-option line could not be explained from the order at all.
+	 *
+	 * ⚠️ **Same source as the cart**, `CartItemPayload::trusted_deltas()`, so the
+	 * customer's confirmation and the merchant's fulfilment record cannot
+	 * disagree about a number the customer was charged.
+	 */
+	public function test_each_option_records_the_price_the_customer_paid(): void {
+		$item = $this->attach_line(
+			array(
+				'opt-a' => 'lux',
+				'opt-b' => 'yes',
+			)
+		);
+
+		$this->assertSame( 'Luxury (+£20.00)', $item->get_meta( 'Finish' ) );
+		$this->assertSame( 'Yes (+£5.00)', $item->get_meta( 'Engraving' ) );
+	}
+
+	/**
+	 * 🔴 **A discount records its own sign.** A negative `amount_minor` is how
+	 * `PRICING-SPEC.md` expresses one, and an order reading `Luxury (+£20.00)`
+	 * for a £20 *reduction* is a permanent record of the opposite of what
+	 * happened.
+	 */
+	public function test_a_discount_records_a_negative(): void {
+		$item = $this->attach_discounted_line();
+
+		$this->assertSame( 'Luxury (-£20.00)', $item->get_meta( 'Finish' ) );
+	}
+
+	/**
+	 * ⚠️ **A free choice carries no suffix**, exactly as in the cart:
+	 * `Finish: Luxury (+£0.00)` reads as a mistake on a permanent record just as
+	 * it does in a basket.
+	 */
+	public function test_a_free_choice_records_no_price(): void {
+		$item = $this->attach_free_line();
+
+		$this->assertSame( 'Luxury', $item->get_meta( 'Finish' ) );
+	}
+
+	/**
+	 * A line whose `lux` option is priced at the given amount.
+	 *
+	 * @param int $minor Minor units; negative is a discount.
+	 */
+	private function attach_priced_line( int $minor ): object {
+		$item = optionia_test_order_item();
+		$line = $this->line( array( 'opt-a' => 'lux' ) );
+
+		/*
+		 * Re-stored rather than patched in place: `Repository` caches within a
+		 * request, so editing the option behind it leaves the cache holding the
+		 * old document.
+		 */
+		$config = get_option( Keys::OPTION_CONFIG, array() );
+
+		$config['option_sets'][0]['groups'][0]['options'][0]['values'][0]['price_config'] = array(
+			'type'         => 'fixed',
+			'amount_minor' => $minor,
+		);
+
+		( new Repository( new Logger( new Settings() ) ) )->store( $config );
+
+		$_POST[ Keys::FIELD_PREFIX ] = array( 'opt-a' => 'lux' );
+		$line                        = ( new CartItemData( new Repository( new Logger( new Settings() ) ) ) )
+			->attach( array(), self::PRODUCT_ID, 0, 1 );
+		unset( $_POST[ Keys::FIELD_PREFIX ] );
+
+		( new OrderLineItem() )->attach( $item, 'cart-key', $line );
+
+		return $item;
+	}
+
+	/** A line whose option is a £20 discount. */
+	private function attach_discounted_line(): object {
+		return $this->attach_priced_line( -2000 );
+	}
+
+	/** A line whose option costs nothing. */
+	private function attach_free_line(): object {
+		return $this->attach_priced_line( 0 );
+	}
+
+	/**
 	 * But the selections and labels are still recorded.
 	 *
 	 * The freeze failing is not a reason to lose the order's *contents*. A
@@ -720,6 +818,13 @@ final class OrderLineItemTest extends TestCase {
 		$item = optionia_test_order_item();
 		( new OrderLineItem() )->attach( $item, 'cart-key', $line );
 
+		/*
+		 * ⚠️ **No price here, deliberately.** The freeze failed, so
+		 * `trusted_deltas()` returns null and there is no quoted figure to show —
+		 * *"only the quoted price is unknown"*. A row inventing one from live
+		 * configuration would put a number on a **permanent** record that the
+		 * customer was never charged.
+		 */
 		$this->assertSame( 'Luxury', $item->get_meta( 'Finish' ) );
 		$this->assertSame(
 			array(
@@ -1029,7 +1134,7 @@ final class OrderLineItemTest extends TestCase {
 
 		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( array( 'red', 'blue' ) ) );
 
-		$this->assertSame( 'Red, Blue', $item->get_meta( 'Extras' ) );
+		$this->assertSame( 'Red, Blue (+£3.00)', $item->get_meta( 'Extras' ) );
 		$this->assertNull( $item->get_meta( 'opt-a' ), 'An id must never appear where a label belongs.' );
 	}
 
@@ -1059,7 +1164,7 @@ final class OrderLineItemTest extends TestCase {
 
 		( new OrderLineItem() )->attach( $item, 'cart-key', $this->many_line( 'red', 'one' ) );
 
-		$this->assertSame( 'Red', $item->get_meta( 'Extras' ) );
+		$this->assertSame( 'Red (+£1.00)', $item->get_meta( 'Extras' ) );
 		$this->assertNull( $item->get_meta( 'opt-a' ) );
 	}
 

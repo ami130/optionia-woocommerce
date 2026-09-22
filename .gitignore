@@ -24,6 +24,21 @@
 .env.*
 !.env.example
 
+# Keys and certificates (added 2026-09-22). None are here today; the rules cost
+# nothing and the omission is only cheap until it is not. A plugin ships to
+# merchant infrastructure, so a key committed here would travel furthest.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+
+# A local database file is data, not code. WordPress under Studio uses SQLite,
+# and a stray copy here would carry real rows.
+*.sqlite
+*.sqlite3
+
 # OS / editor
 .DS_Store
 Thumbs.db

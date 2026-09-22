@@ -232,6 +232,7 @@ final class Renderer {
 	 */
 	private function groups_with_markup( array $sets ): array {
 		$groups = array();
+		$seq    = 0;
 
 		foreach ( $sets as $set ) {
 			$set_groups = isset( $set['groups'] ) && is_array( $set['groups'] ) ? $set['groups'] : array();
@@ -257,6 +258,25 @@ final class Renderer {
 				 * a group.
 				 */
 				$groups[] = array(
+
+					/*
+					 * 🔴 **Carried so the groups can be SORTED, which nothing
+					 * did before M18.8b.**
+					 *
+					 * `sort_order` has been published on every group since
+					 * Phase 5 and read by nothing here — this loop walked the
+					 * array as it arrived. Ordering worked only because the
+					 * repository queries `ASC` and the serializer preserves
+					 * that, which is a **convention** rather than a guarantee,
+					 * and AC4 makes the document input rather than authority.
+					 *
+					 * ⚠️ **It was also the last published field read by
+					 * nothing** — the ADR-055 shape this phase withdrew three
+					 * fields for, sitting on the very field M18.6 exists to let
+					 * a merchant control.
+					 */
+					'sort'           => $this->sort_order( $group ),
+					'seq'            => $seq++,
 					'id'             => isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '',
 					'label'          => isset( $group['label'] ) ? (string) $group['label'] : '',
 					'description'    => isset( $group['description'] ) ? (string) $group['description'] : '',
@@ -305,6 +325,34 @@ final class Renderer {
 				);
 			}
 		}
+
+		/*
+		 * Stable, for the reason the entry sort inside a group records: two
+		 * groups sharing a `sort_order` could otherwise swap between requests
+		 * and a page would render differently on refresh.
+		 *
+		 * ⚠️ **The tiebreak is load-bearing on PHP 7.4 and dead weight on 8.**
+		 * `usort` became stable in PHP 8.0; this plugin supports **7.4**
+		 * (`OPTIONIA_MIN_PHP`), so the guard is real for the oldest stores it
+		 * runs on — and **a mutation test cannot prove it**, because the test
+		 * runtime is 8.4 and sorts stably with or without it. Recorded rather
+		 * than deleted as an equivalent mutant: it is equivalent *here*, not
+		 * where it matters.
+		 *
+		 * ⚠️ **Sorted across ALL sets, not within each.** A product may be
+		 * assigned several option sets, and a merchant ordering their groups
+		 * sees one sequence — sorting per set would render them in blocks by
+		 * set, which is the shape the entry sort above rejects for options and
+		 * items.
+		 */
+		usort(
+			$groups,
+			static function ( array $a, array $b ): int {
+				$by_order = $a['sort'] <=> $b['sort'];
+
+				return 0 !== $by_order ? $by_order : ( $a['seq'] <=> $b['seq'] );
+			}
+		);
 
 		return $groups;
 	}

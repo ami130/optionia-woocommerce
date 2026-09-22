@@ -22,5 +22,16 @@
 declare( strict_types=1 );
 
 defined( 'ABSPATH' ) || exit;
+
+use Optionia\Frontend\OptionView;
+
+$optionia_item  = isset( $optionia['item'] ) && is_array( $optionia['item'] ) ? $optionia['item'] : array();
+$optionia_style = OptionView::divider_style( $optionia_item );
+
+unset( $optionia_item );
 ?>
-<hr class="optionia-item optionia-item--divider" data-optionia="item" aria-hidden="true" />
+<hr
+	class="optionia-item optionia-item--divider optionia-item--divider-<?php echo esc_attr( $optionia_style ); ?>"
+	data-optionia="item"
+	aria-hidden="true"
+/>

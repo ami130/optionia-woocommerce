@@ -50,9 +50,10 @@ $optionia_required = ! empty( $optionia_option['is_required'] );
  */
 $optionia_guidance = OptionView::guidance( $optionia_option );
 $optionia_display  = OptionView::display( $optionia_option );
+$optionia_styles   = OptionView::styles( $optionia_option );
 $optionia_describe = OptionView::described_by( $optionia_option );
 ?>
-<div class="optionia-option optionia-option--color-swatch optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?> optionia-option--swatch-<?php echo esc_attr( $optionia_display['swatch_size'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>">
+<div class="optionia-option optionia-option--color-swatch optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?> optionia-option--swatch-<?php echo esc_attr( $optionia_display['swatch_size'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>>
 	<fieldset
 		class="optionia-option__field"
 		<?php echo $optionia_required ? ' aria-required="true"' : ''; ?>

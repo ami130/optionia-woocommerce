@@ -129,6 +129,20 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	}
 
 	/**
+	 * DELETE request.
+	 *
+	 * Retry, timeout and circuit breaking are `request()`'s, exactly as for a
+	 * POST -- which is the reason this is three lines rather than its own
+	 * transport. `null` for the body: a DELETE names its resource in the path.
+	 *
+	 * @param string                $path    Path relative to the API base.
+	 * @param array<string, string> $headers Extra headers.
+	 */
+	public function delete( string $path, array $headers = array() ): Response {
+		return $this->request( 'DELETE', $path, null, array(), $headers );
+	}
+
+	/**
 	 * Perform a request with retry and circuit breaking.
 	 *
 	 * @param string                    $method  HTTP method.

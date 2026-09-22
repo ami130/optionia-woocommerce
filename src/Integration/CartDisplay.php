@@ -67,8 +67,9 @@ use Optionia\Support\StoreClock;
 use Optionia\Config\Repository;
 use Optionia\Engine\SelectionResolver;
 use Optionia\Support\Keys;
+use Optionia\Support\Settings;
 use Optionia\Support\BasePrice;
-use Optionia\Support\Money;
+use Optionia\Frontend\OptionView;
 use Optionia\Support\OptionLabel;
 
 defined( 'ABSPATH' ) || exit;
@@ -105,12 +106,37 @@ final class CartDisplay {
 	private Repository $config;
 
 	/**
+	 * Merchant settings, for the breakdown mode (M21b.1, ADR-110).
+	 *
+	 * @var Settings
+	 */
+	private Settings $settings;
+
+	/**
 	 * Build over the configuration cache.
 	 *
-	 * @param Repository $config Configuration cache.
+	 * @param Repository $config   Configuration cache.
+	 * @param Settings   $settings Merchant settings.
 	 */
-	public function __construct( Repository $config ) {
-		$this->config = $config;
+	public function __construct( Repository $config, Settings $settings ) {
+		$this->config   = $config;
+		$this->settings = $settings;
+	}
+
+	/**
+	 * How this storefront shows a customised line (M21b.1, ADR-110).
+	 *
+	 * 🔴 **A storefront preference, not an option-set one.** A product carrying
+	 * two option sets must render one way, and `PublishedOptionSet` has no
+	 * settings field by design — so this lives in the plugin's own settings,
+	 * where `get()` already falls back for a key nobody has set.
+	 *
+	 * `itemised` is the default because it is the honest framing: a customer
+	 * seeing *"Finish: Luxury (+10.50)"* can check the arithmetic, where a bare
+	 * *"Customisation: +10.50"* asks them to trust it.
+	 */
+	private function itemised(): bool {
+		return 'subtotal' !== $this->settings->get( Keys::SETTING_CART_BREAKDOWN, 'itemised' );
 	}
 
 	/**
@@ -121,13 +147,187 @@ final class CartDisplay {
 	}
 
 	/**
-	 * Add a row per chosen option.
+	 * Add a row per chosen option, and let an integration adjust them.
+	 *
+	 * 🔴 **The one supported way another plugin reaches this breakdown**
+	 * (M21b.5, ADR-111). A cart drawer that renders its own markup, a theme that
+	 * wants the base row elsewhere, or an integration that must relabel a row has
+	 * a named filter rather than a choice between copying `SelectionResolver` and
+	 * scraping the DOM.
+	 *
+	 * ⚠️ **Filtered HERE rather than inside the builder**, which has **five**
+	 * return points — an early exit for a line with no options, no payload, no
+	 * selections, and the subtotal mode's own return. A filter on one of those
+	 * would silently not apply to the other four.
+	 *
+	 * ⚠️ **AC4 applies to a filter as much as to a document.** A callback that
+	 * returns something other than a list of rows is ignored rather than
+	 * trusted: a cart that renders nothing because an integration returned
+	 * `null` is worse than one that ignores it, and *"anything unrecognised must
+	 * degrade to correct totals with a plain breakdown, never to a wrong
+	 * number."*
 	 *
 	 * @param mixed $item_data Rows other plugins and core have already added.
 	 * @param mixed $cart_item The cart item.
 	 * @return array<int, array<string, mixed>>
 	 */
 	public function item_data( $item_data, $cart_item = null ): array {
+		$rows = $this->rows_for( $item_data, $cart_item );
+
+		/**
+		 * Filters the option rows Optionia adds to a cart line.
+		 *
+		 * @param array<int, array<string, mixed>> $rows      The rows, each a
+		 *                                                    `key`/`value` pair
+		 *                                                    with both hidden
+		 *                                                    flags set.
+		 * @param mixed                            $cart_item The cart item.
+		 */
+		$filtered = apply_filters( 'optionia_cart_item_rows', $rows, $cart_item );
+
+		/*
+		 * A callback that returned a non-list is ignored entirely. `is_array()`
+		 * alone is not enough, though — see `sanitise()`, which is what makes
+		 * the README's *"every value must be a scalar"* a rule the plugin
+		 * enforces rather than one it asks integrations to remember.
+		 */
+		if ( ! is_array( $filtered ) ) {
+			return $rows;
+		}
+
+		/**
+		 * Filters whether Optionia renders no option rows on this cart line.
+		 *
+		 * 🔴 **The documented use case needed a way to say "none", and an empty
+		 * array could not be it** (F20). A cart drawer that renders its own
+		 * markup returns no rows — and so does a callback that crashed halfway
+		 * or mistyped a variable name. `sanitise()` cannot tell those apart, so
+		 * it restores the breakdown rather than let a broken integration leave
+		 * a customer reading a total with nothing explaining it.
+		 *
+		 * ⚠️ **Suppression is therefore declared, not inferred.** Returning
+		 * `true` here is a sentence an integration can only write on purpose,
+		 * which is exactly the difference the empty array could not carry.
+		 *
+		 * @param bool  $suppressed Whether to render no option rows.
+		 * @param mixed $cart_item  The cart item.
+		 */
+		if ( true === apply_filters( 'optionia_cart_rows_suppressed', false, $cart_item ) ) {
+			/*
+			 * The rows this class would have added are dropped; anything core
+			 * and other plugins had already put on the line survives, because
+			 * suppressing Optionia's breakdown is not licence to erase a
+			 * variation attribute.
+			 */
+			return is_array( $item_data ) ? $item_data : array();
+		}
+
+		return $this->sanitise( $filtered, $rows );
+	}
+
+	/**
+	 * Rows an integration returned, reduced to the ones both carts can render.
+	 *
+	 * 🔴 **`is_array()` on the return value was never the whole guard.** A
+	 * callback can return a perfectly good list containing one bad row, and the
+	 * bad row is the dangerous case: `CartItemSchema::get_item_data()` discards
+	 * the **whole element** if any value is not scalar, with no error and no log
+	 * line, while the classic cart template renders it happily.
+	 *
+	 * Measured before this existed: a callback appending
+	 * `array( 'key' => 'Gift note', 'value' => array( 'a', 'b' ) )` produced
+	 * **four rows on classic and three on blocks** — the precise divergence this
+	 * class's docblock opens by describing, reintroduced through the filter that
+	 * was added to prevent integrations from needing their own renderer.
+	 *
+	 * ⚠️ **A bad row is dropped; the rest are kept.** Discarding the callback's
+	 * whole result over one malformed row would throw away correct work, and
+	 * returning the unfiltered rows would silently undo an integration the
+	 * merchant installed on purpose. Dropping the single row is the only
+	 * outcome where every surface still agrees.
+	 *
+	 * ⚠️ **A row that arrived unchanged is passed through untouched.** Rewriting
+	 * every row through `row()` was the first attempt and it was wrong: the
+	 * classic cart hands this filter WooCommerce's **own** rows — variation
+	 * attributes, and rows from other plugins — and normalising those stamped
+	 * Optionia's `display` and hidden keys onto data belonging to someone else.
+	 * Five existing tests caught it. Only rows the callback actually introduced
+	 * or altered are rebuilt.
+	 *
+	 * @param array<mixed>                     $filtered What the callback returned.
+	 * @param array<int, array<string, mixed>> $fallback The rows as built here.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function sanitise( array $filtered, array $fallback ): array {
+		$clean = array();
+
+		foreach ( $filtered as $row ) {
+			/*
+			 * ⚠️ **Explicit, though the scalar check below would also catch a
+			 * non-array.** `'not a row'['key'] ?? null` is `null` rather than a
+			 * warning, so removing this line changes no behaviour — a mutation
+			 * of it **survives**, and that is a property of the code, not a gap
+			 * in the tests. It stays because the next reader should not have to
+			 * rediscover that `??` silently swallows an illegal string offset.
+			 */
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			/*
+			 * Untouched rows go straight through. `in_array()` with strict
+			 * comparison is the test for "this is one of the rows we handed
+			 * over", which covers both our own rows and the ones core and
+			 * other plugins had already added.
+			 */
+			if ( in_array( $row, $fallback, true ) ) {
+				$clean[] = $row;
+
+				continue;
+			}
+
+			$key   = $row['key'] ?? null;
+			$value = $row['value'] ?? null;
+
+			/*
+			 * Both halves must be scalar. `key` is the option's name and
+			 * `value` what was chosen; either one non-scalar makes the Store
+			 * API drop the row, so neither can be trusted from a callback.
+			 */
+			if ( ! is_scalar( $key ) || ! is_scalar( $value ) ) {
+				continue;
+			}
+
+			$clean[] = $this->row( (string) $key, (string) $value );
+		}
+
+		/*
+		 * 🔴 **A callback that produced nothing usable is ignored**, exactly as
+		 * one that returned `null` is. AC4: *"anything unrecognised must degrade
+		 * to correct totals with a plain breakdown, never to a wrong number"* —
+		 * and a cart line showing no breakdown at all, beside a total that
+		 * includes the options, is a wrong number by omission.
+		 *
+		 * ⚠️ **Deliberately not `array() === $clean` alone.** An integration
+		 * whose honest answer is *"show no option rows on this line"* returns an
+		 * empty array from a `$fallback` that was also empty — a line with no
+		 * options — and that must stay empty rather than be overridden.
+		 */
+		if ( array() === $clean && array() !== $fallback ) {
+			return $fallback;
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * The rows themselves, before any integration has seen them.
+	 *
+	 * @param mixed $item_data Rows other plugins and core have already added.
+	 * @param mixed $cart_item The cart item.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function rows_for( $item_data, $cart_item = null ): array {
 		/*
 		 * The block path starts from `array()` while the classic template passes
 		 * a populated list, so this appends rather than replacing -- a callback
@@ -154,6 +354,77 @@ final class CartDisplay {
 
 		$labels = is_array( $optionia[ Keys::CART_ITEM_LABELS ] ?? null ) ? $optionia[ Keys::CART_ITEM_LABELS ] : array();
 		$deltas = $this->deltas_for( $cart_item, $selections );
+
+		/*
+		 * 🔴 **The base, so the breakdown adds up** (M21b.1).
+		 *
+		 * Without it a customer reads *"Finish: Luxury (+10.50)"* beside a line
+		 * total of £110.50 and has to infer the £100 — which is the arithmetic
+		 * this phase exists to stop them doing. The deltas are already resolved
+		 * against this same number by `deltas_for()`, so showing it cannot
+		 * disagree with what is charged.
+		 *
+		 * ⚠️ **Omitted when it is zero**, not printed as `0.00`: a product with
+		 * no price of its own is a configuration a merchant should see as blank
+		 * rather than as free.
+		 */
+		$base = BasePrice::minor(
+			(int) ( $cart_item['product_id'] ?? 0 ),
+			(int) ( $cart_item['variation_id'] ?? 0 )
+		);
+
+		if ( ! $this->itemised() ) {
+			/*
+			 * One "customisation" line instead of one per option (ADR-110). The
+			 * sum is over the same deltas the itemised rows would print, so the
+			 * two modes cannot disagree about the total.
+			 */
+			$total = 0;
+
+			foreach ( $deltas as $delta ) {
+				$total += (int) $delta;
+			}
+
+			if ( 0 !== $base ) {
+				$rows[] = $this->row(
+					__( 'Base price', 'optionia' ),
+					OptionView::money( $base )
+				);
+			}
+
+			/*
+			 * 🔴 **"Nothing priced" and "the prices cancelled" are different
+			 * facts, and only the first is silence.**
+			 *
+			 * ✏️ **This tested `0 !== $total` and hid both.** A `+10.50` option
+			 * beside a `-10.50` discount — authorable, since *"a discount is
+			 * expressed by a negative `amount_minor`"* — summed to zero and the
+			 * row vanished, so the customer saw a base price and no sign that
+			 * two options had priced at all. Itemised mode showed both rows, so
+			 * the two modes disagreed about **visibility** while agreeing about
+			 * the amount.
+			 *
+			 * ⚠️ **The zero rule was borrowed from `with_price()`, where it
+			 * means something else.** There, a zero says *"this one choice is
+			 * free"*. Summed across a line it says *"these choices cancel out"*,
+			 * which is information a customer checking their total needs.
+			 *
+			 * `$deltas` carries an entry per **priced** option whatever its
+			 * amount, so its emptiness is the honest test for "nothing priced".
+			 */
+			if ( array() !== $deltas ) {
+				$rows[] = $this->row( __( 'Customisation', 'optionia' ), $this->signed( $total ) );
+			}
+
+			return $rows;
+		}
+
+		if ( 0 !== $base ) {
+			$rows[] = $this->row(
+				__( 'Base price', 'optionia' ),
+				OptionView::money( $base )
+			);
+		}
 
 		foreach ( $selections as $option_id => $value_key ) {
 			$option_id = (string) $option_id;
@@ -270,10 +541,47 @@ final class CartDisplay {
 			return $value;
 		}
 
-		$amount = Money::from_minor( $minor )->to_decimal_string();
-		$signed = $minor > 0 ? '+' . $amount : $amount;
+		return $value . ' (' . $this->signed( $minor ) . ')';
+	}
 
-		return $value . ' (' . $signed . ')';
+	/**
+	 * A contribution with its sign, as both breakdown modes print it.
+	 *
+	 * ⚠️ **Shared deliberately.** The itemised rows and the single subtotal must
+	 * format the same amount the same way, or a merchant switching modes sees a
+	 * number change that did not.
+	 *
+	 * @param int $minor Minor units; negative is a discount.
+	 */
+	private function signed( int $minor ): string {
+		/*
+		 * 🔴 **Formatted the way the storefront formats**, not as a wire value.
+		 *
+		 * ✏️ **This printed `Money::to_decimal_string()`**, documented as
+		 * *"suitable for handing back to WooCommerce"* — so a breakdown showed
+		 * `10.50` beside a storefront label showing `£10.50`, and a store with
+		 * comma decimals or a thousands separator saw them on one surface and
+		 * not the other. `OptionView::money()` is the one answer to *"how does
+		 * this store write money"*, shared rather than copied.
+		 *
+		 * ⚠️ **Tax is deliberately not applied here**, on any surface.
+		 * `PRICING-SPEC.md`: *"the figure above is given in the store's own
+		 * convention and inclusive/exclusive correctness follows. A plugin that
+		 * adjusts for tax here taxes twice."*
+		 */
+		$amount = OptionView::money( abs( $minor ) );
+
+		if ( 0 === $minor ) {
+			/*
+			 * ⚠️ **Zero is neither a surcharge nor a discount**, and reaches here
+			 * only when a line's contributions cancel (F11) — `-0.00` would read
+			 * as a discount of nothing. Measured: taking the absolute value
+			 * without this branch produced exactly that.
+			 */
+			return $amount;
+		}
+
+		return $minor > 0 ? '+' . $amount : '-' . $amount;
 	}
 
 	/**
@@ -311,30 +619,5 @@ final class CartDisplay {
 			self::HIDDEN_CLASSIC => false,
 			self::HIDDEN_BLOCK   => false,
 		);
-	}
-
-	/**
-	 * A displayable string from a possibly-missing label.
-	 *
-	 * Arrays are joined rather than passed through: a non-scalar value makes the
-	 * Store API discard the **entire row**, silently, while the classic cart
-	 * renders it. That asymmetry is the single easiest way to ship a cart that
-	 * looks right in testing and loses a row in production.
-	 *
-	 * @param mixed  $label    The label, if there is one.
-	 * @param string $fallback What to show when there is not.
-	 */
-	private function text( $label, string $fallback ): string {
-		if ( is_array( $label ) ) {
-			$label = implode( ', ', array_filter( $label, 'is_scalar' ) );
-		}
-
-		if ( ! is_scalar( $label ) ) {
-			return $fallback;
-		}
-
-		$text = trim( (string) $label );
-
-		return '' !== $text ? $text : $fallback;
 	}
 }

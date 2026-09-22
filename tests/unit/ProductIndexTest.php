@@ -238,12 +238,19 @@ final class ProductIndexTest extends TestCase {
 	}
 
 	/**
-	 * A non-product target is skipped too, even in manual mode.
+	 * ✏️ **A category target is no longer skipped — M19.4 resolves it.**
 	 *
-	 * `category`, `tag`, `attribute` and `price_range` resolve against
-	 * WordPress-side data the document does not carry.
+	 * This test asserted `skipped_count() === 1` for exactly this assignment,
+	 * and it was right until taxonomy resolution landed. It now asserts the
+	 * opposite half of the same fact: the target is **carried** rather than
+	 * skipped, and `for_product()` matches it against the live product.
+	 *
+	 * 🔴 **Carried, not expanded.** `entry_count()` stays 0 because no product
+	 * is written into the index: expanding `category:hoodies` into ids would
+	 * make the index scale with the **catalogue** instead of with assignments
+	 * (ADR-068).
 	 */
-	public function test_a_non_product_target_is_skipped(): void {
+	public function test_a_taxonomy_target_is_carried_rather_than_skipped(): void {
 		$index = ProductIndex::build(
 			$this->document(
 				array(
@@ -260,8 +267,181 @@ final class ProductIndexTest extends TestCase {
 			)
 		);
 
-		$this->assertSame( 0, ProductIndex::entry_count( $index ) );
-		$this->assertSame( 1, ProductIndex::skipped_count( $index ) );
+		$this->assertSame( 0, ProductIndex::skipped_count( $index ) );
+		$this->assertSame( 0, ProductIndex::entry_count( $index ), 'no product is expanded into the index' );
+		$this->assertCount( 1, $index['terms'] );
+	}
+
+	// --- Taxonomy resolution (M19.4) -----------------------------------------
+
+	/** An index holding one category assignment. */
+	private function category_index( string $slug = 'hoodies', int $priority = 0 ): array {
+		return ProductIndex::build(
+			$this->document(
+				array(
+					$this->set(
+						'set-category',
+						array(
+							'mode'        => 'manual',
+							'target_type' => 'category',
+							'target_ref'  => $slug,
+							'priority'    => $priority,
+						)
+					),
+				)
+			)
+		);
+	}
+
+	/**
+	 * 🔴 **The acceptance of M19.4, in one test.** A category assignment
+	 * authored in the dashboard now reaches a product that is in that category —
+	 * resolved at render against the live term, not expanded at write time.
+	 */
+	public function test_a_product_in_the_category_gets_the_set(): void {
+		optionia_test_set_terms( 20, 'product_cat', array( 'hoodies' ) );
+
+		$this->assertSame(
+			array( 'set-category' ),
+			ProductIndex::for_product( $this->category_index(), 20 )
+		);
+	}
+
+	public function test_a_product_outside_the_category_does_not(): void {
+		optionia_test_set_terms( 20, 'product_cat', array( 'shirts' ) );
+
+		$this->assertSame( array(), ProductIndex::for_product( $this->category_index(), 20 ) );
+	}
+
+	public function test_a_product_with_no_terms_does_not_match(): void {
+		$this->assertSame( array(), ProductIndex::for_product( $this->category_index(), 20 ) );
+	}
+
+	/**
+	 * ⚠️ **The taxonomy must match, not just the slug.** A *tag* called
+	 * `hoodies` is not the category `hoodies`, and matching on the slug alone
+	 * would apply a set the merchant never assigned.
+	 */
+	public function test_a_matching_slug_in_the_wrong_taxonomy_does_not_match(): void {
+		optionia_test_set_terms( 20, 'product_tag', array( 'hoodies' ) );
+
+		$this->assertSame( array(), ProductIndex::for_product( $this->category_index(), 20 ) );
+	}
+
+	public function test_a_tag_assignment_resolves_against_tags(): void {
+		optionia_test_set_terms( 20, 'product_tag', array( 'sale' ) );
+
+		$index = ProductIndex::build(
+			$this->document(
+				array(
+					$this->set(
+						'set-tag',
+						array(
+							'mode'        => 'manual',
+							'target_type' => 'tag',
+							'target_ref'  => 'sale',
+							'priority'    => 0,
+						)
+					),
+				)
+			)
+		);
+
+		$this->assertSame( array( 'set-tag' ), ProductIndex::for_product( $index, 20 ) );
+	}
+
+	/**
+	 * 📌 **A product added to the category later must match** — which is the
+	 * whole reason this resolves at render. A write-time index would be stale
+	 * for exactly this case, and it is the ordinary one: a merchant assigns to
+	 * "Summer" and then adds products to it.
+	 */
+	public function test_a_product_added_to_the_category_later_matches(): void {
+		$index = $this->category_index();
+
+		$this->assertSame( array(), ProductIndex::for_product( $index, 20 ) );
+
+		optionia_test_set_terms( 20, 'product_cat', array( 'hoodies' ) );
+
+		$this->assertSame( array( 'set-category' ), ProductIndex::for_product( $index, 20 ) );
+	}
+
+	/**
+	 * 📌 **Ten rules are ten `has_term()` calls and ONE database read.**
+	 *
+	 * ⚠️ **The harness counter counts calls, not queries**, and conflating the
+	 * two is easy: this asserts 10 because that is how many times the code asks.
+	 * What matters for AC3 is the *database* cost, and that is where the two
+	 * part company — measured against a running site, ten `has_term()` calls
+	 * after one `get_the_terms()` cost **0 queries**, because WordPress caches a
+	 * post's terms per taxonomy.
+	 *
+	 * 🔴 So the number below is a **fan-out** check — that resolution does not
+	 * multiply reads per *taxonomy* — and `ConfigReadBudgetTest` is what guards
+	 * the database budget itself.
+	 */
+	public function test_many_category_rules_read_one_taxonomy(): void {
+		$GLOBALS['optionia_test_term_reads'] = array();
+		optionia_test_set_terms( 20, 'product_cat', array( 'hoodies' ) );
+
+		$assignments = array();
+
+		foreach ( range( 1, 10 ) as $n ) {
+			$assignments[] = $this->set(
+				"set-{$n}",
+				array(
+					'mode'        => 'manual',
+					'target_type' => 'category',
+					'target_ref'  => "cat-{$n}",
+					'priority'    => 0,
+				)
+			);
+		}
+
+		ProductIndex::for_product(
+			ProductIndex::build( $this->document( $assignments ) ),
+			20
+		);
+
+		$reads = $GLOBALS['optionia_test_term_reads'];
+
+		$this->assertSame( 10, $reads['product_cat'] ?? 0, 'ten calls, all to one taxonomy' );
+		$this->assertSame( array( 'product_cat' ), array_keys( $reads ), 'and no other taxonomy is touched' );
+	}
+
+	/**
+	 * ⚠️ **`attribute` and `price_range` are still skipped**, and that is the
+	 * honest state: neither has an interpreter, because the *format* was never
+	 * defined — `price_range: "10-20"` exists only as an example string
+	 * (ADR-076). Counted rather than guessed at.
+	 */
+	public function test_attribute_and_price_range_are_still_skipped(): void {
+		$index = ProductIndex::build(
+			$this->document(
+				array(
+					$this->set(
+						'set-attribute',
+						array(
+							'mode'        => 'manual',
+							'target_type' => 'attribute',
+							'target_ref'  => 'pa_color:red',
+							'priority'    => 0,
+						)
+					),
+					$this->set(
+						'set-price',
+						array(
+							'mode'        => 'manual',
+							'target_type' => 'price_range',
+							'target_ref'  => '10-20',
+							'priority'    => 0,
+						)
+					),
+				)
+			)
+		);
+
+		$this->assertSame( 2, ProductIndex::skipped_count( $index ) );
 	}
 
 	/**
@@ -649,5 +829,78 @@ final class ProductIndexTest extends TestCase {
 	public function test_an_unconfigured_store_resolves_nothing(): void {
 		$this->assertSame( array(), $this->repository()->sets_for_product( 20 ) );
 		$this->assertSame( 0, $this->repository()->index_entry_count() );
+	}
+
+	/**
+	 * A set the index names but the document does not hold is **skipped**.
+	 *
+	 * 🔴 **The storefront's half of a failed write.** `store()` writes the
+	 * document and the index separately -- options are not transactional -- and
+	 * the index goes second precisely so a failure between them leaves a *stale*
+	 * index rather than one naming sets that are gone. This is the state that
+	 * failure produces, and the guard that keeps it from reaching a customer.
+	 *
+	 * ⚠️ **Found by mutation, not by reading.** Replacing the `isset()` guard
+	 * with `$by_id[ $set_id ] ?? array( 'id' => $set_id )` survived the entire
+	 * 1702-test suite: nothing anywhere asserted that a dangling id is dropped.
+	 * Under that mutant a renderer receives a set with no `groups` key at all.
+	 */
+	public function test_a_set_the_document_lost_is_skipped(): void {
+		$repository = $this->repository();
+
+		$repository->store(
+			$this->document(
+				array(
+					$this->set( 'set-a', $this->manual( '20' ) ),
+					$this->set( 'set-b', $this->manual( '20' ) ),
+				)
+			),
+			'W/"store-7"'
+		);
+
+		/*
+		 * The document loses `set-b` while the index still names it -- exactly
+		 * what a write that failed between the two leaves behind. Written
+		 * through the repository so the *document* is the only thing that
+		 * changes; the index option is deliberately left as it was.
+		 */
+		update_option(
+			Keys::OPTION_CONFIG,
+			$this->document( array( $this->set( 'set-a', $this->manual( '20' ) ) ) ),
+			false
+		);
+
+		/*
+		 * ⚠️ **A fresh repository, because the writer caches.** `get()` holds
+		 * the document in memory once read, so the instance that stored it
+		 * would answer from its own cache and never see the loss. A new
+		 * instance is also what really happens: the failed write is one
+		 * request, and the customer's page load is the next.
+		 */
+		$sets = $this->repository()->option_sets_for_product( 20 );
+
+		$this->assertCount( 1, $sets, 'the set the document lost should be dropped' );
+		$this->assertSame( 'set-a', $sets[0]['id'] );
+	}
+
+	/**
+	 * Every resolved set is a whole set, not an id standing in for one.
+	 *
+	 * Separate from the count above on purpose: a mutant that substitutes a
+	 * stub for the missing set keeps the count right and breaks the *shape*,
+	 * and a renderer reading `groups` on it would fatal on the storefront.
+	 */
+	public function test_a_resolved_set_carries_its_document_body(): void {
+		$repository = $this->repository();
+
+		$repository->store(
+			$this->document( array( $this->set( 'set-a', $this->manual( '20' ) ) ) ),
+			'W/"store-7"'
+		);
+
+		foreach ( $repository->option_sets_for_product( 20 ) as $set ) {
+			$this->assertArrayHasKey( 'groups', $set );
+			$this->assertArrayHasKey( 'rules', $set );
+		}
 	}
 }

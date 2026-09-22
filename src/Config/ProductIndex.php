@@ -53,6 +53,18 @@ final class ProductIndex {
 	private const MODE_MANUAL = 'manual';
 
 	/**
+	 * Assignment target types that resolve against WordPress taxonomy.
+	 *
+	 * Mapped to the taxonomy `has_term()` takes, because the wire vocabulary and
+	 * WordPress's are different spellings of the same thing -- and the mapping
+	 * belongs in one place rather than at each call site.
+	 */
+	private const TAXONOMIES = array(
+		'category' => 'product_cat',
+		'tag'      => 'product_tag',
+	);
+
+	/**
 	 * Build the index from a configuration document.
 	 *
 	 * Returns the structure written to `OPTION_PRODUCT_INDEX`:
@@ -61,7 +73,9 @@ final class ProductIndex {
 	 * array(
 	 *   'products' => array( 20 => array( 'set-a' ), 23 => array( 'set-a', 'set-b' ) ),
 	 *   'all'      => array( 'set-c' ),
-	 *   'skipped'  => 2,
+	 *   'terms'    => array( array( 'set_id' => 'set-d', 'taxonomy' => 'product_cat',
+	 *                              'slug' => 'shirts', 'priority' => 0 ) ),
+	 *   'skipped'  => 1,
 	 * )
 	 * ```
 	 *
@@ -71,11 +85,16 @@ final class ProductIndex {
 	 * from "applies to nothing".
 	 *
 	 * @param array<string, mixed> $document Configuration document.
-	 * @return array{products: array<int, array<int, string>>, all: array<int, string>, skipped: int}
+	 * `terms` holds taxonomy **targets**, not expanded products: the index stays
+	 * assignment-scaled, and `for_product()` resolves them against the live
+	 * product at render (ADR-068).
+	 *
+	 * @return array{products: array<int, array<int, string>>, all: array<int, string>, terms: array<int, array<string, mixed>>, skipped: int}
 	 */
 	public static function build( array $document ): array {
 		$products = array();
 		$all      = array();
+		$terms    = array();
 		$skipped  = 0;
 
 		$sets = isset( $document['option_sets'] ) && is_array( $document['option_sets'] )
@@ -110,9 +129,54 @@ final class ProductIndex {
 					continue;
 				}
 
-				if ( self::MODE_MANUAL !== $mode || 'product' !== ( $assignment['target_type'] ?? null ) ) {
-					// `conditional`, and every non-product target, resolve in
-					// M19.4. Counted so the deferral is visible.
+				if ( self::MODE_MANUAL !== $mode ) {
+					// `conditional` needs a condition tree that does not exist
+					// (ADR-069, ADR-076). Counted so the deferral stays visible.
+					++$skipped;
+					continue;
+				}
+
+				$target_type = isset( $assignment['target_type'] ) && is_string( $assignment['target_type'] )
+					? $assignment['target_type']
+					: '';
+
+				/**
+				 * Taxonomy targets are **carried, not expanded** (ADR-068).
+				 *
+				 * 🔴 Expanding `category:shirts` into product ids here would
+				 * make this index scale with the **catalogue** rather than with
+				 * assignments — inverting the size premise its own docblock
+				 * claims, silently, because there is no cap on it. A store with
+				 * 100k products and one category rule would carry 100k entries
+				 * for a single assignment.
+				 *
+				 * So the target travels as a target, and `for_product()`
+				 * resolves it against the live product at render. That is also
+				 * the only way it can be **correct**: a product added to the
+				 * category tomorrow must match, and a write-time index is stale
+				 * by construction for exactly that case.
+				 */
+				if ( isset( self::TAXONOMIES[ $target_type ] ) ) {
+					$ref = $assignment['target_ref'] ?? null;
+
+					if ( ! is_string( $ref ) || '' === $ref ) {
+						++$skipped;
+						continue;
+					}
+
+					$terms[] = array(
+						'set_id'   => $set_id,
+						'taxonomy' => self::TAXONOMIES[ $target_type ],
+						'slug'     => $ref,
+						'priority' => isset( $assignment['priority'] ) ? (int) $assignment['priority'] : 0,
+					);
+
+					continue;
+				}
+
+				if ( 'product' !== $target_type ) {
+					// `attribute` and `price_range` have no interpreter: their
+					// format was never defined (ADR-076). Counted, not guessed.
 					++$skipped;
 					continue;
 				}
@@ -177,8 +241,59 @@ final class ProductIndex {
 		return array(
 			'products' => $products,
 			'all'      => $all,
+			'terms'    => $terms,
 			'skipped'  => $skipped,
 		);
+	}
+
+	/**
+	 * Taxonomy assignments this product matches.
+	 *
+	 * 📌 **At most one `get_the_terms()` per taxonomy, whatever the assignment
+	 * count.** `has_term()` reads a product's terms for the taxonomy named, and
+	 * WordPress caches that per post — so ten category rules cost the same as
+	 * one. Measured against a running site: after the `WP_Query` a product page
+	 * already runs, both taxonomies cost **zero** database queries, because
+	 * term relationships are primed with the post.
+	 *
+	 * ⚠️ That priming is what makes AC3's *"≤1 extra DB read per product page"*
+	 * satisfiable, and `ConfigReadBudgetTest` is the guard on it.
+	 *
+	 * @param array<string, mixed> $index      A built index.
+	 * @param int                  $product_id WooCommerce product id.
+	 * @return array<string, int> Set id to priority.
+	 */
+	private static function matching_terms( array $index, int $product_id ): array {
+		$terms = isset( $index['terms'] ) && is_array( $index['terms'] ) ? $index['terms'] : array();
+
+		if ( array() === $terms || ! function_exists( 'has_term' ) ) {
+			return array();
+		}
+
+		$matched = array();
+
+		foreach ( $terms as $target ) {
+			if ( ! is_array( $target ) || ! isset( $target['set_id'], $target['taxonomy'], $target['slug'] ) ) {
+				continue;
+			}
+
+			$set_id = $target['set_id'];
+
+			/*
+			 * Already matched by a higher-priority rule for the same set: a set
+			 * assigned to two of a product's categories applies once, and the
+			 * first match is enough to say so.
+			 */
+			if ( isset( $matched[ $set_id ] ) ) {
+				continue;
+			}
+
+			if ( has_term( (string) $target['slug'], (string) $target['taxonomy'], $product_id ) ) {
+				$matched[ $set_id ] = isset( $target['priority'] ) ? (int) $target['priority'] : 0;
+			}
+		}
+
+		return $matched;
 	}
 
 	/**
@@ -220,6 +335,24 @@ final class ProductIndex {
 		 */
 		$merged = $all;
 
+		/**
+		 * Taxonomy sits between `all` and a named product (ADR-076).
+		 *
+		 * 🔴 **Precedence is `all` < taxonomy < product**, and it is stated
+		 * rather than assumed. With two tiers the rule was obvious — naming a
+		 * product is more specific than "everything". With three it stops being
+		 * obvious, and a merchant whose category rule silently beat their
+		 * product rule would have no way to see why.
+		 *
+		 * ⚠️ **Resolved here, at render, against the live product** — never
+		 * expanded into the index. A product added to the category tomorrow must
+		 * match, and a write-time index is stale by construction for exactly
+		 * that case.
+		 */
+		foreach ( self::matching_terms( $index, $product_id ) as $set_id => $priority ) {
+			$merged[ $set_id ] = $priority;
+		}
+
 		foreach ( $own as $set_id => $priority ) {
 			$merged[ $set_id ] = $priority;
 		}
@@ -251,9 +384,11 @@ final class ProductIndex {
 	/**
 	 * How many assignments this index could not resolve.
 	 *
-	 * The handover signal to M19.4: when conditional and taxonomy-scoped targets
-	 * resolve, this reaches zero. Until then a merchant can see that something
-	 * was deferred rather than wondering why a set does not appear.
+	 * ✏️ **Taxonomy stopped counting here at M19.6.** `category` and `tag`
+	 * targets resolve (ADR-076), so what remains is `conditional`, `attribute`
+	 * and `price_range` -- the three whose interpreters do not exist yet. A
+	 * merchant can still see that something was deferred rather than wondering
+	 * why a set does not appear.
 	 *
 	 * @param array<string, mixed> $index A built index.
 	 */

@@ -84,6 +84,27 @@ final class Keys {
 	 */
 	public const OPTION_PRODUCT_INDEX = 'optionia_product_index';
 
+	/** When the catalogue was last reconciled (M19.3). Autoload OFF. */
+	public const OPTION_LAST_RECONCILE = 'optionia_last_reconcile';
+
+	/**
+	 * Products awaiting incremental sync (M19.2). Autoload OFF.
+	 *
+	 * Keyed by product id so a product edited five times before the next drain
+	 * is one entry, not five -- and so the newest intent wins without the queue
+	 * having to reason about order.
+	 */
+	public const OPTION_PRODUCT_QUEUE = 'optionia_product_queue';
+
+	/**
+	 * Where the catalogue push has reached (M19.1). Autoload OFF.
+	 *
+	 * A position, a total and a run id -- not a queue of products. The
+	 * catalogue is already stored in WooCommerce; copying 100k ids into an
+	 * option to walk them would be a second copy of the thing being walked.
+	 */
+	public const OPTION_CATALOGUE_CURSOR = 'optionia_catalogue_cursor';
+
 	/** Store credential returned by the connection handshake. Autoload OFF. */
 	public const OPTION_STORE_TOKEN = 'optionia_store_token';
 
@@ -114,6 +135,16 @@ final class Keys {
 	public const SETTING_DEBUG_LOGGING       = 'debug_logging';
 	public const SETTING_DELETE_ON_UNINSTALL = 'delete_on_uninstall';
 	public const SETTING_API_BASE_URL        = 'api_base_url';
+
+	/**
+	 * How a customised cart line shows its price (M21b.1, ADR-110).
+	 *
+	 * `itemised` lists the base and every priced selection; `subtotal` shows one
+	 * "customisation" line. A **storefront** preference, not an option-set one:
+	 * a product carrying two sets must render one way, and `PublishedOptionSet`
+	 * has no settings field by design.
+	 */
+	public const SETTING_CART_BREAKDOWN = 'cart_breakdown';
 
 	// Order / cart item meta.
 	//
@@ -289,6 +320,12 @@ final class Keys {
 	/** Drains the queue of unreported orders (M12.7). */
 	public const CRON_REPORT_ORDERS = 'optionia_cron_report_orders';
 
+	/** Pushes one batch of the catalogue to the cloud (M19.1). */
+	public const CRON_PUSH_CATALOGUE = 'optionia_cron_push_catalogue';
+
+	/** Reconciles the mirror against the store, daily (M19.3). */
+	public const CRON_RECONCILE_CATALOGUE = 'optionia_cron_reconcile_catalogue';
+
 	/**
 	 * Orders awaiting report to the cloud (M12.7).
 	 *
@@ -366,6 +403,9 @@ final class Keys {
 	public const NONCE_CONNECT    = 'optionia_connect';
 	public const NONCE_DISCONNECT = 'optionia_disconnect';
 	public const NONCE_SYNC_NOW   = 'optionia_sync_now';
+
+	/** Nonce for the manual catalogue push (M19.1). */
+	public const NONCE_SYNC_CATALOGUE = 'optionia_sync_catalogue';
 
 	/**
 	 * The storefront upload nonce.

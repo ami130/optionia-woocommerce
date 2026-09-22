@@ -51,8 +51,14 @@ final class OptionLabel {
 	 * ⚠️ **A comma and a space, matching how a person writes a list.** The cart
 	 * row and the order meta both name an option once and print what was chosen
 	 * for it, so `Extras: Red, Blue` is one row rather than two.
+	 *
+	 * 🔴 **Public because `Reporting\OrderPayload` joins the same values for
+	 * the same reason** (M18.8c). Its rows are matched against the *visible*
+	 * order meta this class produced, so a second separator would mean the
+	 * report looked for a string the order does not contain — two spellings of
+	 * one fact, which is the shape this phase withdrew three fields for.
 	 */
-	private const JOIN = ', ';
+	public const JOIN = ', ';
 
 	/**
 	 * The option's own name, or the fallback when nothing usable was stored.

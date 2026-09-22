@@ -31,6 +31,15 @@ final class Settings {
 		Keys::SETTING_DEBUG_LOGGING       => false,
 		Keys::SETTING_DELETE_ON_UNINSTALL => false,
 		Keys::SETTING_API_BASE_URL        => '',
+
+		/*
+		 * How a customised cart line shows its price (M21b.1, ADR-110).
+		 *
+		 * `itemised` by default because it is the honest framing: a customer
+		 * seeing `Finish: Luxury (+10.50)` can check the arithmetic, where a
+		 * bare `Customisation: +10.50` asks them to trust it.
+		 */
+		Keys::SETTING_CART_BREAKDOWN      => 'itemised',
 	);
 
 	/**

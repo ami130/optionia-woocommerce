@@ -59,6 +59,7 @@ declare( strict_types=1 );
 
 namespace Optionia\Integration;
 
+use Optionia\Frontend\OptionView;
 use Optionia\Support\Keys;
 use Optionia\Support\Money;
 use Optionia\Support\OptionLabel;
@@ -164,9 +165,59 @@ final class OrderLineItem {
 	 * @param array<string, mixed> $selections Option id to value key.
 	 * @param array<string, mixed> $optionia   The line's Optionia payload.
 	 */
+	/**
+	 * A value with its price appended, when there is one worth showing.
+	 *
+	 * ⚠️ **Deliberately identical to `CartDisplay::with_price()`**, down to the
+	 * zero rule: `Gift wrap: Yes (+£0.00)` reads as a mistake on an order exactly
+	 * as it does in a cart. The two are separate methods because the order's
+	 * record is **permanent** and the cart's is not — but a customer comparing
+	 * their confirmation against the cart must read the same line twice.
+	 *
+	 * @param string   $value The chosen value's label.
+	 * @param int|null $minor The option's contribution, in minor units.
+	 */
+	private function with_price( string $value, ?int $minor ): string {
+		if ( null === $minor || 0 === $minor ) {
+			return $value;
+		}
+
+		$amount = OptionView::money( abs( $minor ) );
+
+		return $value . ' (' . ( $minor > 0 ? '+' : '-' ) . $amount . ')';
+	}
+
+	/**
+	 * The human-readable pairs a merchant fulfils from.
+	 *
+	 * Falls back to the id when no label was snapshotted, so a line always
+	 * renders something rather than vanishing from the packing slip.
+	 *
+	 * @param object               $item       The order line item.
+	 * @param array<string, mixed> $selections Option id to value key.
+	 * @param array<string, mixed> $optionia   The line's Optionia payload.
+	 */
 	private function add_visible_meta( object $item, array $selections, array $optionia ): void {
 		$labels = $optionia[ Keys::CART_ITEM_LABELS ] ?? array();
 		$labels = is_array( $labels ) ? $labels : array();
+
+		/*
+		 * 🔴 **The price the customer was shown, on the record the merchant
+		 * fulfils from** (M21b.4).
+		 *
+		 * The cart said `Finish: Luxury (+£10.50)`; this said `Finish: Luxury`.
+		 * A merchant answering *"why is this line £90.50?"* had to open the
+		 * hidden `_optionia_price_delta`, which carries the **summed** figure and
+		 * not the per-option one — so a two-option line could not be explained
+		 * from the order at all.
+		 *
+		 * ⚠️ **Same source as the cart**, `CartItemPayload::trusted_deltas()`,
+		 * so the two cannot disagree. A second answer computed here is the defect
+		 * this class's own docblock warns about: *"Two other consumers asked the
+		 * same question their own way; all three now ask it once."*
+		 */
+		$deltas = CartItemPayload::trusted_deltas( array( Keys::CART_ITEM_KEY => $optionia ), $selections );
+		$deltas = is_array( $deltas ) ? $deltas : array();
 
 		foreach ( $selections as $option_id => $value_key ) {
 			$option_id = (string) $option_id;
@@ -195,7 +246,7 @@ final class OrderLineItem {
 			 * characters and a truncated engraving is a wrong product
 			 * manufactured. M12.6b names this explicitly.
 			 */
-			$item->add_meta_data( $name, $value, true );
+			$item->add_meta_data( $name, $this->with_price( $value, $deltas[ $option_id ] ?? null ), true );
 		}
 	}
 

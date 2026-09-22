@@ -57,6 +57,7 @@ $optionia_input_id = 'optionia-' . $optionia_id;
 
 $optionia_guidance = OptionView::guidance( $optionia_option );
 $optionia_display  = OptionView::display( $optionia_option );
+$optionia_styles   = OptionView::styles( $optionia_option );
 $optionia_describe = OptionView::described_by( $optionia_option );
 
 $optionia_rules = isset( $optionia_option['validation'] ) && is_array( $optionia_option['validation'] )
@@ -101,7 +102,7 @@ unset( $optionia_option, $optionia_rules );
 <div
 	class="optionia-option optionia-option--file<?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>"
 	data-optionia="option"
-	data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"
+	data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>
 	data-optionia-upload="1"
 	<?php if ( $optionia_max_mb > 0 ) : ?>
 		data-optionia-max-mb="<?php echo esc_attr( (string) $optionia_max_mb ); ?>"

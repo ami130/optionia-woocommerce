@@ -50,7 +50,7 @@ final class OptionValuePriceTest extends TestCase {
 	 * the page only as `data-optionia-price` for the running estimate.
 	 */
 	public function test_a_delta_prints_a_signed_amount(): void {
-		$this->assertSame( '+10.00', OptionView::value_price( self::value( 1000 ), 'delta' ) );
+		$this->assertSame( '+£10.00', OptionView::value_price( self::value( 1000 ), 'delta' ) );
 	}
 
 	/**
@@ -58,7 +58,7 @@ final class OptionValuePriceTest extends TestCase {
 	 * number. The same shape `CartDisplay::with_price()` uses on a cart line.
 	 */
 	public function test_a_discount_prints_a_minus(): void {
-		$this->assertSame( '-5.00', OptionView::value_price( self::value( -500 ), 'delta' ) );
+		$this->assertSame( '-£5.00', OptionView::value_price( self::value( -500 ), 'delta' ) );
 	}
 
 	/**

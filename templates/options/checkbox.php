@@ -95,9 +95,10 @@ $optionia_mark     = $optionia_required && ! $optionia_many;
  */
 $optionia_guidance = OptionView::guidance( $optionia_option );
 $optionia_display  = OptionView::display( $optionia_option );
+$optionia_styles   = OptionView::styles( $optionia_option );
 $optionia_describe = OptionView::described_by( $optionia_option );
 ?>
-<div class="optionia-option optionia-option--checkbox optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>">
+<div class="optionia-option optionia-option--checkbox optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>>
 	<?php
 	/*
 	 * A `fieldset` for the same reason radio uses one: several inputs form a

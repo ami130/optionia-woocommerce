@@ -1128,7 +1128,7 @@ final class RendererTest extends TestCase {
 		$markup = $this->render_for( 20, 'simple' );
 
 		$this->assertStringContainsString( 'optionia-value__price', $markup );
-		$this->assertStringContainsString( '+10.00', $markup );
+		$this->assertStringContainsString( '+£10.00', $markup );
 	}
 
 	/**
@@ -1153,7 +1153,7 @@ final class RendererTest extends TestCase {
 		$markup = $this->render_for( 20, 'simple' );
 
 		$this->assertStringNotContainsString( 'optionia-value__price', $markup );
-		$this->assertStringNotContainsString( '+10.00', $markup );
+		$this->assertStringNotContainsString( '+£10.00', $markup );
 		$this->assertStringContainsString( 'data-optionia-price="1000"', $markup );
 	}
 
@@ -1177,8 +1177,152 @@ final class RendererTest extends TestCase {
 
 		$markup = $this->render_for( 20, 'simple' );
 
-		$this->assertStringContainsString( 'Luxury +10.00', $markup );
+		$this->assertStringContainsString( 'Luxury +£10.00', $markup );
 		$this->assertStringNotContainsString( 'optionia-value__price', $markup );
+	}
+
+	/**
+	 * 🔴 **Groups render in `sort_order`, which nothing enforced before M18.8b.**
+	 *
+	 * `sort_order` has been published on every group since Phase 5 and the
+	 * renderer walked the array as it arrived. Ordering worked only because the
+	 * repository queries `ASC` and the serializer preserves that — a
+	 * **convention**, not a guarantee, and AC4 makes the document input rather
+	 * than authority.
+	 *
+	 * ⚠️ **It was the last published field read by nothing** — the ADR-055 shape
+	 * this phase withdrew three fields for, sitting on the field M18.6 exists to
+	 * let a merchant control.
+	 */
+	public function test_groups_render_in_sort_order(): void {
+		$this->cache_ordered_groups(
+			array(
+				'Third'  => 30,
+				'First'  => 10,
+				'Second' => 20,
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertSame(
+			array( 'First', 'Second', 'Third' ),
+			self::group_labels_in( $markup ),
+			'A document may arrive in any order; the merchant ordered these.'
+		);
+	}
+
+	/**
+	 * ⚠️ **A group with no `sort_order` goes last, not first.**
+	 *
+	 * The same reasoning `sort_order()` records for options: defaulting to `0`
+	 * would hoist a malformed or older-schema entry above everything the
+	 * merchant *did* order.
+	 */
+	public function test_a_group_without_a_sort_order_goes_last(): void {
+		$this->cache_ordered_groups(
+			array(
+				'Ordered'   => 20,
+				'Unordered' => null,
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertSame( array( 'Ordered', 'Unordered' ), self::group_labels_in( $markup ) );
+	}
+
+	/**
+	 * 🔴 **Ties break by arrival, so a refresh renders the same page.**
+	 *
+	 * `usort` is not stable. Without the sequence tiebreak, two groups sharing a
+	 * `sort_order` could swap between requests — the defect the entry sort
+	 * inside a group already guards against.
+	 */
+	public function test_groups_sharing_a_sort_order_keep_their_arrival_order(): void {
+		$this->cache_ordered_groups(
+			array(
+				'Alpha' => 10,
+				'Beta'  => 10,
+				'Gamma' => 10,
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertSame( array( 'Alpha', 'Beta', 'Gamma' ), self::group_labels_in( $markup ) );
+	}
+
+	/**
+	 * The group labels a page rendered, in the order they appear.
+	 *
+	 * @param string $markup Rendered storefront markup.
+	 * @return array<int, string>
+	 */
+	private static function group_labels_in( string $markup ): array {
+		preg_match_all( '/optionia-group__label[^>]*>([^<]+)</', $markup, $found );
+
+		return array_map( 'trim', $found[1] );
+	}
+
+	/**
+	 * Cache a set whose groups carry the given labels and sort orders.
+	 *
+	 * @param array<string, int|null> $groups Label to `sort_order`, in document order.
+	 */
+	private function cache_ordered_groups( array $groups ): void {
+		$built = array();
+		$index = 0;
+
+		foreach ( $groups as $label => $order ) {
+			$group = array(
+				'id'      => 'group-' . $index,
+				'label'   => $label,
+				'options' => array(
+					array(
+						'id'     => 'opt-' . $index,
+						'type'   => 'radio',
+						'label'  => $label . ' option',
+						'values' => array(
+							array(
+								'value_key' => 'v' . $index,
+								'label'     => 'Value',
+							),
+						),
+					),
+				),
+			);
+
+			if ( null !== $order ) {
+				$group['sort_order'] = $order;
+			}
+
+			$built[] = $group;
+			++$index;
+		}
+
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'schema_version' => 1,
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-a',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => '20',
+								'priority'    => 0,
+							),
+						),
+						'groups'      => $built,
+						'rules'       => array(),
+					),
+				),
+			),
+			'W/"ordered-' . count( $built ) . '"'
+		);
 	}
 
 	/**
@@ -1911,6 +2055,81 @@ final class RendererTest extends TestCase {
 	 * duplicate display configuration that already exists, and give merchants
 	 * two ways to describe one thing.
 	 */
+	/**
+	 * 🔴 **The style tokens reach the markup** (M21c.2).
+	 *
+	 * `OptionView::styles()` can be perfect and reach nothing — that is the
+	 * *absent code* shape five gates in this project exist for. What is asserted
+	 * here is the wiring: a validated token becomes a custom property on the
+	 * option's own wrapper, where the stylesheet reads it.
+	 */
+	public function test_style_tokens_reach_the_option_wrapper(): void {
+		$this->cache_typed(
+			'image_swatch',
+			array( 'image_url' => 'https://optionia.local/a.png' ),
+			array(
+				'display' => array(
+					'accent_color'  => '#3858e9',
+					'border_radius' => 6,
+					'spacing'       => 10,
+					'swatch_px'     => 40,
+				),
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( '--optionia-accent: #3858e9', $markup );
+		$this->assertStringContainsString( '--optionia-radius: 6px', $markup );
+		$this->assertStringContainsString( '--optionia-gap: 10px', $markup );
+		$this->assertStringContainsString( '--optionia-swatch: 40px', $markup );
+	}
+
+	/**
+	 * 🔴 **A hostile colour never reaches the page** (M21c.4).
+	 *
+	 * The plugin renders a config document fetched from the cloud, so this is
+	 * the last check before a merchant value becomes CSS. A document can be
+	 * stale, hand-edited, or served by something that is not the API.
+	 */
+	public function test_a_hostile_style_value_never_reaches_the_markup(): void {
+		$this->cache_typed(
+			'image_swatch',
+			array( 'image_url' => 'https://optionia.local/a.png' ),
+			array(
+				'display' => array(
+					'accent_color'  => '#3858e9; background: url(//evil)',
+					'border_radius' => 999,
+				),
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( 'evil', $markup );
+		$this->assertStringNotContainsString( '--optionia-accent', $markup );
+		$this->assertStringNotContainsString( '999', $markup );
+	}
+
+	/**
+	 * ⚠️ **An unstyled option carries no `style` attribute at all.**
+	 *
+	 * Not an empty one: `style=""` is markup that says a decision was made when
+	 * none was, and it is the difference between inheriting the theme and
+	 * declaring nothing.
+	 */
+	public function test_an_unstyled_option_carries_no_style_attribute(): void {
+		$this->cache_typed(
+			'image_swatch',
+			array( 'image_url' => 'https://optionia.local/a.png' )
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringNotContainsString( 'style=""', $markup );
+		$this->assertStringNotContainsString( '--optionia-', $markup );
+	}
+
 	public function test_a_swatch_grid_is_columns_and_a_size(): void {
 		$this->cache_typed(
 			'image_swatch',
@@ -2249,6 +2468,77 @@ final class RendererTest extends TestCase {
 	 * the merchant authored survives to the page, rather than all headings
 	 * collecting at one end.
 	 */
+	/**
+	 * 🔴 **A divider's style reaches the markup** (M21c.5).
+	 *
+	 * `divider_style()` can be perfect and reach nothing — the *absent code*
+	 * shape seven gates in this project exist for. What is asserted here is the
+	 * wiring: an authored style becomes the class the stylesheet reads.
+	 */
+	public function test_a_divider_style_reaches_the_markup(): void {
+		$this->cache_with_items(
+			array(
+				array(
+					'kind'       => 'divider',
+					'content'    => '',
+					'sort_order' => 30,
+					'display'    => array( 'style' => 'dashed' ),
+				),
+			)
+		);
+
+		$this->assertStringContainsString(
+			'optionia-item--divider-dashed',
+			$this->render_for( 20, 'simple' )
+		);
+	}
+
+	/**
+	 * 🔴 **A style the document should not carry never reaches a class.**
+	 *
+	 * The API refuses it, and this is the second layer: a stale or hand-edited
+	 * document must degrade to `solid` rather than emit an attribute nobody
+	 * validated.
+	 */
+	public function test_an_unsupported_divider_style_degrades_to_solid(): void {
+		$this->cache_with_items(
+			array(
+				array(
+					'kind'       => 'divider',
+					'content'    => '',
+					'sort_order' => 30,
+					'display'    => array( 'style' => 'solid" onload="alert(1)' ),
+				),
+			)
+		);
+
+		$markup = $this->render_for( 20, 'simple' );
+
+		$this->assertStringContainsString( 'optionia-item--divider-solid', $markup );
+		$this->assertStringNotContainsString( 'onload', $markup );
+	}
+
+	/**
+	 * An unconfigured divider carries the `solid` class, so the stylesheet has
+	 * one rule to read rather than two states to reason about.
+	 */
+	public function test_an_unconfigured_divider_carries_the_solid_class(): void {
+		$this->cache_with_items(
+			array(
+				array(
+					'kind'       => 'divider',
+					'content'    => '',
+					'sort_order' => 30,
+				),
+			)
+		);
+
+		$this->assertStringContainsString(
+			'optionia-item--divider-solid',
+			$this->render_for( 20, 'simple' )
+		);
+	}
+
 	public function test_items_and_options_render_in_the_merchants_order(): void {
 		$this->cache_with_items(
 			array(

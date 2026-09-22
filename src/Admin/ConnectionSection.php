@@ -22,11 +22,15 @@ namespace Optionia\Admin;
 
 use Optionia\Api\AllowsDeliberateRetry;
 use Optionia\Api\PostsToCloud;
+use Optionia\Catalogue\CatalogueCursor;
+use Optionia\Catalogue\ProductQueue;
 use Optionia\Config\Synchroniser;
 use Optionia\Connection\Callback;
 use Optionia\Connection\Handshake;
 use Optionia\Connection\StateMachine;
 use Optionia\Support\Keys;
+use Optionia\Support\Logger;
+use Optionia\Support\Settings;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -43,6 +47,9 @@ final class ConnectionSection {
 
 	/** A merchant-initiated sync failed; the shop keeps its saved copy. */
 	private const RESULT_SYNC_FAILED = 'sync_failed';
+
+	/** Outcome flag: a fresh catalogue walk was started (M19.1). */
+	private const RESULT_CATALOGUE_QUEUED = 'catalogue_queued';
 
 	/**
 	 * Handshake starter.
@@ -110,6 +117,7 @@ final class ConnectionSection {
 		add_action( 'admin_init', array( $this, 'maybe_connect' ) );
 		add_action( 'admin_init', array( $this, 'maybe_disconnect' ) );
 		add_action( 'admin_init', array( $this, 'maybe_sync' ) );
+		add_action( 'admin_init', array( $this, 'maybe_sync_catalogue' ) );
 	}
 
 	/**
@@ -221,6 +229,46 @@ final class ConnectionSection {
 	}
 
 	/**
+	 * Start a fresh catalogue walk (M19.1).
+	 *
+	 * 🔴 **The interim answer to a gap M19.2 closes.** `CatalogueCursor` records
+	 * the catalogue total **once**, when a walk starts, and the walk stops on
+	 * reaching it — so products added afterwards sit past the cursor and are
+	 * never pushed. M19.2's WordPress hooks are what carry ongoing changes, and
+	 * until they exist a merchant who adds a product has no way to send it.
+	 *
+	 * ⚠️ **Forgetting the cursor is the whole mechanism**, and it is deliberate
+	 * rather than a shortcut: the next cron run finds no walk in progress and
+	 * starts one against the current catalogue, reading the total afresh. The
+	 * push is idempotent — `uq_store_products_external` upserts — so re-sending
+	 * products the cloud already has costs requests, not correctness.
+	 *
+	 * 📌 **It queues rather than pushing here.** A walk is hundreds of batches
+	 * over days; doing any of it inside an admin request would block the page
+	 * for one batch and finish none of the rest. The button starts the walk, and
+	 * the schedule that already exists does the work.
+	 */
+	public function maybe_sync_catalogue(): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- presence check only; verified below.
+		if ( ! isset( $_POST['optionia_sync_catalogue_submit'] ) ) {
+			return;
+		}
+
+		Request::require_post( Keys::NONCE_SYNC_CATALOGUE, 'optionia_sync_catalogue_nonce' );
+
+		/*
+		 * The same reasoning as "Sync now" above: a merchant pressing this is
+		 * the person who has noticed something is wrong, and refusing them
+		 * locally would make the escape hatch useless exactly when it is needed.
+		 */
+		$this->breaker->allow_deliberate_retry();
+
+		( new CatalogueCursor() )->forget();
+
+		$this->redirect_with( self::RESULT_CATALOGUE_QUEUED );
+	}
+
+	/**
 	 * Forget the credential locally.
 	 *
 	 * The cloud is told separately — a merchant disconnecting from the dashboard
@@ -266,6 +314,24 @@ final class ConnectionSection {
 		delete_option( Keys::OPTION_STORE_TOKEN );
 		delete_option( Keys::OPTION_CONNECTION_STORE );
 		delete_option( Keys::OPTION_CONNECTION_TENANT );
+
+		/*
+		 * 🔴 **The catalogue walk is forgotten too, or a reconnect resumes into
+		 * the wrong store.** The cursor holds an offset against *a* cloud
+		 * catalogue. Disconnect, reconnect to a **different** store, and the
+		 * walk carries on at offset 40,000 against an empty mirror — products
+		 * 0-39,999 never pushed, and nothing reporting it. Reconnecting to the
+		 * *same* store costs one re-walk, which M19.1 is idempotent about.
+		 */
+		( new CatalogueCursor() )->forget();
+
+		/*
+		 * ⚠️ **And the pending changes with it.** Queue entries name products
+		 * whose state *this* cloud has not been told about; a reconnect to a
+		 * different store would push one store's edits into another's mirror.
+		 */
+		( new ProductQueue( new Logger( new Settings() ) ) )->clear();
+
 		Handshake::forget();
 
 		StateMachine::transition( StateMachine::DISCONNECTED );
@@ -330,6 +396,27 @@ final class ConnectionSection {
 		echo '<p class="description">'
 			. esc_html__(
 				'Fetches the latest option sets from Optionia. Your product pages keep working while it runs.',
+				'optionia'
+			)
+			. '</p>';
+		echo '</form>';
+
+		/**
+		 * "Sync catalogue" (M19.1).
+		 *
+		 * Separate from "Sync now" above because the two move data in opposite
+		 * directions: that one **fetches** option sets from the cloud, this one
+		 * **sends** products to it. A single button doing both would hide which
+		 * half failed.
+		 */
+		echo '<form method="post">';
+		wp_nonce_field( Keys::NONCE_SYNC_CATALOGUE, 'optionia_sync_catalogue_nonce' );
+		echo '<p><button type="submit" name="optionia_sync_catalogue_submit" class="button">'
+			. esc_html__( 'Sync catalogue', 'optionia' )
+			. '</button></p>';
+		echo '<p class="description">'
+			. esc_html__(
+				'Sends your products to Optionia again, from the beginning. Use this after adding products, or if the assignment picker is missing something.',
 				'optionia'
 			)
 			. '</p>';
@@ -403,21 +490,25 @@ final class ConnectionSection {
 		}
 
 		$messages = array(
-			Callback::RESULT_CONNECTED => array( 'success', __( 'Connected to Optionia.', 'optionia' ) ),
-			'disconnected'             => array( 'success', __( 'Disconnected. Saved options keep working.', 'optionia' ) ),
-			Callback::RESULT_REFUSED   => array(
+			Callback::RESULT_CONNECTED    => array( 'success', __( 'Connected to Optionia.', 'optionia' ) ),
+			'disconnected'                => array( 'success', __( 'Disconnected. Saved options keep working.', 'optionia' ) ),
+			Callback::RESULT_REFUSED      => array(
 				'error',
 				__( 'That connection link did not match this shop. Start again from the button below.', 'optionia' ),
 			),
-			self::RESULT_SYNCED        => array(
+			self::RESULT_SYNCED           => array(
 				'success',
 				__( 'Options are up to date.', 'optionia' ),
 			),
-			self::RESULT_SYNC_FAILED   => array(
+			self::RESULT_SYNC_FAILED      => array(
 				'error',
 				__( 'Optionia could not fetch the latest options. Your product pages keep working from the saved copy — try again in a moment.', 'optionia' ),
 			),
-			Callback::RESULT_FAILED    => array(
+			self::RESULT_CATALOGUE_QUEUED => array(
+				'success',
+				__( 'Your catalogue will be sent again shortly. A large catalogue arrives in batches — check the Catalogue sync row on the Optionia dashboard for progress.', 'optionia' ),
+			),
+			Callback::RESULT_FAILED       => array(
 				'error',
 				__( 'Optionia could not reach the connection service. This is usually temporary — wait a moment and try again. If it keeps happening, check that this site can make outbound HTTPS requests.', 'optionia' ),
 			),
