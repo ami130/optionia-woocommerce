@@ -1,0 +1,7 @@
+Git does not store empty directories, and `bin/package.sh` lists `languages/`
+among the paths a distributable build requires — so without this file the
+directory exists on a developer machine, vanishes on checkout, and the
+packaging gate fails with "did not build" on CI alone.
+
+WordPress reads translation files from here. It is empty until the first
+`.po`/`.mo` pair ships.

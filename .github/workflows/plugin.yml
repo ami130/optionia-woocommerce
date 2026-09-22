@@ -70,15 +70,6 @@ jobs:
           path: optioniaWooCommercePlugin/vendor
           key: composer-${{ matrix.php }}-${{ hashFiles('optioniaWooCommercePlugin/composer.json') }}
 
-      # 🔴 **`zip` is not on `ubuntu-latest`.** `bin/package.sh` shells out to it
-      # to build the distributable archive, and `check-package.sh` fails with
-      # *"did not build"* without it — which reads as a packaging defect rather
-      # than a missing tool. macOS ships `zip`, so this passed locally and
-      # failed on the first CI run.
-      - name: Install zip
-        run: sudo apt-get install -y --no-install-recommends zip
-        working-directory: .
-
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
