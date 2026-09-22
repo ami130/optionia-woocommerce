@@ -1,0 +1,45 @@
+name: CI
+
+# The dashboard was the one repository of the three with tests and no pipeline:
+# 21 files and 463 assertions that ran only when somebody remembered. Recorded as
+# F1 in the plan's STATUS block on 2026-09-02, marked "fix now", and still open
+# three phases later — which is precisely how a regression enters unnoticed while
+# attention is elsewhere.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  verify:
+    name: Lint, typecheck, test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors the backend: 20 is the supported floor, 24 is what development
+        # runs on. Testing one and shipping the other makes the other an
+        # untested claim.
+        node: ['20', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+
+      # --omit=dev because a devDependency advisory does not reach a merchant's
+      # browser and would block CI on something only a developer can reach.
+      # This dashboard renders merchant-authored option config, so a high
+      # advisory in a runtime dependency is a real exposure rather than hygiene.
+      - name: Dependency advisories
+        run: npm audit --omit=dev --audit-level=high

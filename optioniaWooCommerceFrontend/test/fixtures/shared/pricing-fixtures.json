@@ -1,0 +1,1011 @@
+{
+  "$comment": "SHARED ACROSS TWO REPOSITORIES. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/ and optioniaWooCommerceBackend/test/fixtures/shared/. Both are gated on this file's SHA-256 and on case_count, so an edit to one fails both builds until the other matches. See M11.0c.",
+  "version": 1,
+  "case_count": 16,
+  "cases": [
+    {
+      "name": "no options selected leaves the base untouched",
+      "base_minor": 3000,
+      "deltas": [],
+      "expect_minor": 3000
+    },
+    {
+      "name": "one fixed delta adds once",
+      "base_minor": 3000,
+      "deltas": [
+        500
+      ],
+      "expect_minor": 3500
+    },
+    {
+      "name": "several fixed deltas sum in order",
+      "base_minor": 3000,
+      "deltas": [
+        500,
+        250,
+        125
+      ],
+      "expect_minor": 3875
+    },
+    {
+      "name": "a zero delta changes nothing and is not an error",
+      "base_minor": 3000,
+      "deltas": [
+        0
+      ],
+      "expect_minor": 3000
+    },
+    {
+      "name": "a negative delta is a discount",
+      "base_minor": 3000,
+      "deltas": [
+        -500
+      ],
+      "expect_minor": 2500
+    },
+    {
+      "name": "a discount larger than the base clamps the LINE at zero, not the delta",
+      "base_minor": 3000,
+      "deltas": [
+        -5000
+      ],
+      "expect_minor": 0
+    },
+    {
+      "name": "clamping applies to the total, so a later addition cannot revive a clamped line",
+      "base_minor": 3000,
+      "deltas": [
+        -5000,
+        400
+      ],
+      "expect_minor": 0
+    },
+    {
+      "name": "mixed signs settle above zero and are not clamped",
+      "base_minor": 3000,
+      "deltas": [
+        -500,
+        200
+      ],
+      "expect_minor": 2700
+    },
+    {
+      "name": "a zero base with no deltas is zero, not an error",
+      "base_minor": 0,
+      "deltas": [],
+      "expect_minor": 0
+    },
+    {
+      "name": "a zero base with a negative delta clamps at zero",
+      "base_minor": 0,
+      "deltas": [
+        -100
+      ],
+      "expect_minor": 0
+    },
+    {
+      "name": "minor units are scale-free: the same arithmetic serves a zero-decimal currency (JPY 1500 = 1500 yen)",
+      "base_minor": 1000,
+      "deltas": [
+        500
+      ],
+      "expect_minor": 1500
+    },
+    {
+      "name": "and a three-decimal one (KWD 4500 = 4.500) — decimals never enter the sum, only the display",
+      "base_minor": 3000,
+      "deltas": [
+        1500
+      ],
+      "expect_minor": 4500
+    },
+    {
+      "name": "an amount at the schema's maximum survives addition",
+      "base_minor": 1000000000,
+      "deltas": [
+        1000000000
+      ],
+      "expect_minor": 2000000000
+    },
+    {
+      "name": "fifty maximum deltas stay exact — a hundredth of what one option set structurally allows",
+      "base_minor": 1000000000,
+      "deltas": [
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000,
+        1000000000
+      ],
+      "expect_minor": 51000000000
+    },
+    {
+      "name": "a maximum discount against a maximum base lands exactly on zero",
+      "base_minor": 1000000000,
+      "deltas": [
+        -1000000000
+      ],
+      "expect_minor": 0
+    },
+    {
+      "name": "a maximum discount below a smaller base still clamps at zero",
+      "base_minor": 3000,
+      "deltas": [
+        -1000000000
+      ],
+      "expect_minor": 0
+    }
+  ],
+  "measure_case_count": 11,
+  "measure_cases": [
+    {
+      "name": "plain text counts every character",
+      "text": "ABCD",
+      "expect": 4
+    },
+    {
+      "name": "an inner space is engraved, so it counts",
+      "text": "AB CD",
+      "expect": 5
+    },
+    {
+      "name": "leading and trailing whitespace is a typing artefact",
+      "text": "  AB CD  ",
+      "expect": 5
+    },
+    {
+      "name": "a name keeps the space between its parts",
+      "text": "John Smith",
+      "expect": 10
+    },
+    {
+      "name": "a combining accent is one character, not two",
+      "text": "café",
+      "expect": 4
+    },
+    {
+      "name": "a ZWJ family emoji is one mark in the material",
+      "text": "👨‍👩‍👧",
+      "expect": 1
+    },
+    {
+      "name": "a flag is one mark, not two regional indicators",
+      "text": "🇬🇧",
+      "expect": 1
+    },
+    {
+      "name": "a skin-tone modifier does not add a character",
+      "text": "👋🏽",
+      "expect": 1
+    },
+    {
+      "name": "whitespace-only input measures zero",
+      "text": "   ",
+      "expect": 0
+    },
+    {
+      "name": "empty input measures zero",
+      "text": "",
+      "expect": 0
+    },
+    {
+      "name": "a combining accent is one character, not two (spec §5 table)",
+      "text": "café",
+      "expect": 4
+    }
+  ],
+  "rounding_case_count": 8,
+  "rounding_cases": [
+    {
+      "name": "positive half rounds up",
+      "minor": 10,
+      "basis_points": 500,
+      "expect": 1
+    },
+    {
+      "name": "positive one-and-a-half rounds up",
+      "minor": 30,
+      "basis_points": 500,
+      "expect": 2
+    },
+    {
+      "name": "NEGATIVE half rounds away from zero, not toward it",
+      "minor": 10,
+      "basis_points": -500,
+      "expect": -1
+    },
+    {
+      "name": "NEGATIVE one-and-a-half rounds away from zero (Math.round gives -1)",
+      "minor": 30,
+      "basis_points": -500,
+      "expect": -2
+    },
+    {
+      "name": "NEGATIVE two-and-a-half rounds away from zero (Math.round gives -2)",
+      "minor": 10,
+      "basis_points": -2500,
+      "expect": -3
+    },
+    {
+      "name": "a negative that is not a tie rounds normally",
+      "minor": 1005,
+      "basis_points": -1500,
+      "expect": -151
+    },
+    {
+      "name": "a small negative percentage of a larger base still rounds away",
+      "minor": 100,
+      "basis_points": -50,
+      "expect": -1
+    },
+    {
+      "name": "positive two-and-a-half rounds up (spec §4 example)",
+      "minor": 10,
+      "basis_points": 2500,
+      "expect": 3
+    }
+  ],
+  "generated_case_count": 2,
+  "generated_cases": [
+    {
+      "name": "one full option set at maximum price stays exact (100 groups x 200 options, AUTHORING_LIMITS)",
+      "base_minor": 1000000000,
+      "repeat_delta": 1000000000,
+      "repeat_count": 20000,
+      "expect_minor": 20001000000000
+    },
+    {
+      "name": "the same size, all discounts, clamps to zero rather than going hugely negative",
+      "base_minor": 1000000000,
+      "repeat_delta": -1000000000,
+      "repeat_count": 20000,
+      "expect_minor": 0
+    }
+  ],
+  "bound_minor": 9007199254740991,
+  "bound_case_count": 6,
+  "bound_cases": [
+    {
+      "name": "the shared bound itself is accepted, not refused",
+      "base_minor": 9007199254740991,
+      "deltas": [],
+      "expect_minor": 9007199254740991,
+      "throws": false
+    },
+    {
+      "name": "one minor unit past the bound is refused",
+      "base_minor": 9007199254740991,
+      "deltas": [
+        1
+      ],
+      "expect_minor": null,
+      "throws": true
+    },
+    {
+      "name": "reaching the bound from below is accepted",
+      "base_minor": 9007199254740990,
+      "deltas": [
+        1
+      ],
+      "expect_minor": 9007199254740991,
+      "throws": false
+    },
+    {
+      "name": "a sum that leaves the range and returns is still refused",
+      "base_minor": 9007199254740991,
+      "deltas": [
+        1,
+        -1
+      ],
+      "expect_minor": null,
+      "throws": true
+    },
+    {
+      "name": "the bound applies to a single delta, not only to the total",
+      "base_minor": 0,
+      "deltas": [
+        9007199254740992
+      ],
+      "expect_minor": null,
+      "throws": true
+    },
+    {
+      "name": "the negative bound is accepted before clamping",
+      "base_minor": -9007199254740991,
+      "deltas": [],
+      "expect_minor": 0,
+      "throws": false
+    }
+  ],
+  "config_case_count": 10,
+  "config_cases": [
+    {
+      "name": "a fixed config contributes its amount",
+      "base_minor": 8000,
+      "config": {
+        "type": "fixed",
+        "amount_minor": 500
+      },
+      "expect_delta": 500
+    },
+    {
+      "name": "a fixed config may be negative",
+      "base_minor": 8000,
+      "config": {
+        "type": "fixed",
+        "amount_minor": -500
+      },
+      "expect_delta": -500
+    },
+    {
+      "name": "a percentage is taken of the base, not of the running total",
+      "base_minor": 8000,
+      "config": {
+        "type": "percentage",
+        "basis_points": 5000
+      },
+      "expect_delta": 4000
+    },
+    {
+      "name": "a percentage rounds half up away from zero",
+      "base_minor": 10,
+      "config": {
+        "type": "percentage",
+        "basis_points": 500
+      },
+      "expect_delta": 1
+    },
+    {
+      "name": "a NEGATIVE percentage rounds away from zero, not toward it",
+      "base_minor": 10,
+      "config": {
+        "type": "percentage",
+        "basis_points": -500
+      },
+      "expect_delta": -1
+    },
+    {
+      "name": "a percentage of a zero base is zero",
+      "base_minor": 0,
+      "config": {
+        "type": "percentage",
+        "basis_points": 5000
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a zero percentage contributes nothing",
+      "base_minor": 8000,
+      "config": {
+        "type": "percentage",
+        "basis_points": 0
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a config with no type contributes nothing",
+      "base_minor": 8000,
+      "config": {},
+      "expect_delta": 0
+    },
+    {
+      "name": "a type this build cannot price contributes nothing",
+      "base_minor": 8000,
+      "config": {
+        "type": "tiered"
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "tiered"
+    },
+    {
+      "name": "a percentage that cannot be computed is reported, not thrown",
+      "base_minor": 900719925474099,
+      "config": {
+        "type": "percentage",
+        "basis_points": 100000
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "percentage"
+    }
+  ],
+  "text_price_case_count": 9,
+  "text_price_cases": [
+    {
+      "name": "every character is charged when none are free",
+      "text": "HELLO",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 0
+      },
+      "expect_delta": 250
+    },
+    {
+      "name": "free characters are subtracted from the COUNT, not the charge",
+      "text": "HELLO",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 3
+      },
+      "expect_delta": 100
+    },
+    {
+      "name": "a string shorter than the free allowance is free, never a refund",
+      "text": "HI",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 3
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "exactly the free allowance costs nothing",
+      "text": "ABC",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 3
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a negative amount discounts per charged character",
+      "text": "HELLO",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": -50,
+        "free_characters": 3
+      },
+      "expect_delta": -100
+    },
+    {
+      "name": "a single character is charged once",
+      "text": "A",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 0
+      },
+      "expect_delta": 50
+    },
+    {
+      "name": "a grapheme cluster is ONE character, not its code points",
+      "text": "AB CD",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 0
+      },
+      "expect_delta": 250
+    },
+    {
+      "name": "a family emoji is one character",
+      "text": "👨‍👩‍👧",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 100,
+        "free_characters": 0
+      },
+      "expect_delta": 100
+    },
+    {
+      "name": "surrounding whitespace is trimmed before counting",
+      "text": "  HI  ",
+      "pricing": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 0
+      },
+      "expect_delta": 100
+    }
+  ],
+  "unit_price_case_count": 11,
+  "unit_price_cases": [
+    {
+      "name": "every unit is charged",
+      "quantity": "3",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 600
+    },
+    {
+      "name": "one unit is charged once",
+      "quantity": "1",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 200
+    },
+    {
+      "name": "a zero quantity costs nothing",
+      "quantity": "0",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a NEGATIVE quantity floors at zero, never a refund",
+      "quantity": "-5",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a negative amount discounts per unit",
+      "quantity": "3",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": -200
+      },
+      "expect_delta": -600
+    },
+    {
+      "name": "a fractional quantity is charged pro rata",
+      "quantity": "1.5",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 250
+      },
+      "expect_delta": 375
+    },
+    {
+      "name": "a fractional product rounds half up away from zero",
+      "quantity": "0.5",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 3
+      },
+      "expect_delta": 2
+    },
+    {
+      "name": "a NEGATIVE fractional product rounds away from zero",
+      "quantity": "0.5",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": -3
+      },
+      "expect_delta": -2
+    },
+    {
+      "name": "a canonicalised quantity charges the same as its plain form",
+      "quantity": "007",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 1400
+    },
+    {
+      "name": "a product beyond the safe range is reported, not thrown",
+      "quantity": "99999999",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 1000000000
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "per_unit"
+    },
+    {
+      "name": "a quantity over the absolute ceiling is reported, never silently free",
+      "quantity": "1000001",
+      "pricing": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "per_unit"
+    }
+  ],
+  "tier_price_case_count": 12,
+  "tier_price_cases": [
+    {
+      "name": "the first tier prices a quantity inside it",
+      "quantity": "5",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 500
+    },
+    {
+      "name": "min_quantity is INCLUSIVE -- exactly the lower bound",
+      "quantity": "10",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 800
+    },
+    {
+      "name": "max_quantity is INCLUSIVE -- exactly the upper bound",
+      "quantity": "9",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 900
+    },
+    {
+      "name": "one below a boundary stays in the lower tier",
+      "quantity": "49",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 3920
+    },
+    {
+      "name": "one above a boundary crosses into the next",
+      "quantity": "50",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 3000
+    },
+    {
+      "name": "the open-ended tier prices everything above it",
+      "quantity": "1000",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 60000
+    },
+    {
+      "name": "the whole quantity is priced at the matched rate, not just the excess",
+      "quantity": "10",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 800
+    },
+    {
+      "name": "a single open-ended tier prices every quantity",
+      "quantity": "7",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": null,
+            "amount_minor": 250
+          }
+        ]
+      },
+      "expect_delta": 1750
+    },
+    {
+      "name": "a negative quantity floors at zero, never a refund",
+      "quantity": "-5",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 0
+    },
+    {
+      "name": "a fractional quantity is bracketed by its own value",
+      "quantity": "9.5",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 950
+    },
+    {
+      "name": "a quantity no tier covers is reported, never silently free",
+      "quantity": "3",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 5,
+            "max_quantity": null,
+            "amount_minor": 100
+          }
+        ]
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "tiered"
+    },
+    {
+      "name": "a quantity over the absolute ceiling is reported",
+      "quantity": "1000001",
+      "pricing": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": 9,
+            "amount_minor": 100
+          },
+          {
+            "min_quantity": 10,
+            "max_quantity": 49,
+            "amount_minor": 80
+          },
+          {
+            "min_quantity": 50,
+            "max_quantity": null,
+            "amount_minor": 60
+          }
+        ]
+      },
+      "expect_delta": 0,
+      "expect_unpriced": "tiered"
+    }
+  ],
+  "currency_case_count": 5,
+  "currency_cases": [
+    {
+      "name": "a fixed amount does not follow a converted base",
+      "config": {
+        "type": "fixed",
+        "amount_minor": 500
+      },
+      "base_minor_a": 8000,
+      "base_minor_b": 10000,
+      "expect_delta_a": 500,
+      "expect_delta_b": 500,
+      "converts": false
+    },
+    {
+      "name": "a percentage DOES follow a converted base, because it is relative",
+      "config": {
+        "type": "percentage",
+        "basis_points": 5000
+      },
+      "base_minor_a": 8000,
+      "base_minor_b": 10000,
+      "expect_delta_a": 4000,
+      "expect_delta_b": 5000,
+      "converts": true
+    },
+    {
+      "name": "a per_unit amount does not follow a converted base",
+      "config": {
+        "type": "per_unit",
+        "amount_minor": 200
+      },
+      "base_minor_a": 8000,
+      "base_minor_b": 10000,
+      "expect_delta_a": 600,
+      "expect_delta_b": 600,
+      "converts": false,
+      "answer": "3"
+    },
+    {
+      "name": "a per_char amount does not follow a converted base",
+      "config": {
+        "type": "per_char",
+        "amount_minor": 50,
+        "free_characters": 0
+      },
+      "base_minor_a": 8000,
+      "base_minor_b": 10000,
+      "expect_delta_a": 250,
+      "expect_delta_b": 250,
+      "converts": false,
+      "answer": "HELLO"
+    },
+    {
+      "name": "a tiered amount does not follow a converted base",
+      "config": {
+        "type": "tiered",
+        "tiers": [
+          {
+            "min_quantity": 1,
+            "max_quantity": null,
+            "amount_minor": 100
+          }
+        ]
+      },
+      "base_minor_a": 8000,
+      "base_minor_b": 10000,
+      "expect_delta_a": 500,
+      "expect_delta_b": 500,
+      "converts": false,
+      "answer": "5"
+    }
+  ]
+}

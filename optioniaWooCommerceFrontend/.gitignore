@@ -1,0 +1,70 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp
+
+# Keys and certificates. `*.pem` was here from the Next.js template; the rest
+# were added 2026-09-22 so one file extension is not the whole defence.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+
+# A local database file is data, not code. WordPress under Studio uses SQLite,
+# and a stray copy here would carry real rows.
+*.sqlite
+*.sqlite3
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# ...except the example, which documents what a developer must set and holds no
+# value. Excluding it means a new checkout has no record of the variables the
+# app needs, and the first symptom is a blank screen.
+!.env.local.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Playwright
+# Traces and screenshots from a failed E2E run. Useful locally, and large —
+# a retained trace is a zip of every DOM snapshot in the flow.
+/test-results/
+/playwright-report/
+/blob-report/
