@@ -30,6 +30,21 @@ import dataSource from '../src/config/data-source';
  * never is — and never touches the demo seed.
  */
 export default async function teardown(): Promise<void> {
+  /*
+   * 🔴 **Pinned here as well as in `setup-e2e.ts`, because this runs in its own
+   * process.** `globalTeardown` does not load `setupFiles`, so the database
+   * pinned for the suites is not pinned for the sweep — and the sweep is the
+   * half that deletes. Without this it would run `DELETE FROM tenants` against
+   * whatever `.env` names, which on a developer machine is the development
+   * database.
+   *
+   * Set before `loadDotenv()`: dotenv never overwrites an existing variable, so
+   * this wins over `.env` while a deliberate `DB_NAME` from CI still wins over
+   * this.
+   */
+  process.env.DB_NAME ??= 'optionia_woo_test';
+  process.env.NODE_ENV ??= 'test';
+
   loadDotenv();
 
   await dataSource.initialize();

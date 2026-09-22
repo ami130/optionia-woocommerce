@@ -17,6 +17,26 @@ import { config as loadDotenv } from 'dotenv';
  * existing variable, so anything defined here wins over `.env` and a developer
  * can still override it from their shell.
  */
+/**
+ * 🔴 **The e2e run gets its own database, or it gets the developer's.**
+ *
+ * Nothing pinned `DB_NAME`, so the suite used whatever `.env` said — and a
+ * developer `.env` points at the development database. Measured 2026-09-22: a
+ * local run against `optionia_woo_dev` created tenants in it (36 → 39) and
+ * **34 of 1038 tests failed** on state a clean database does not have, while
+ * the identical commit passed 1038/1038 on CI, which sets `DB_NAME` itself.
+ *
+ * ⚠️ **The teardown is what makes this more than untidy.** It runs
+ * `DELETE FROM tenants` for every tenant with no members, option sets or
+ * stores — correct against a test database, and a sweep of real rows against a
+ * development one. Only `demo-merchant` is exempt.
+ *
+ * `??=` so a deliberate override still wins: CI sets `DB_NAME` in the job env,
+ * and that value is left alone.
+ */
+process.env.DB_NAME ??= 'optionia_woo_test';
+process.env.NODE_ENV ??= 'test';
+
 process.env.THROTTLE_SHORT_LIMIT ??= '100000';
 process.env.THROTTLE_DEFAULT_LIMIT ??= '100000';
 process.env.THROTTLE_SUSTAINED_LIMIT ??= '100000';
