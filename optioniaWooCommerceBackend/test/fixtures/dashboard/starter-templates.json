@@ -1,0 +1,330 @@
+{
+  "tshirt": {
+    "version": 1,
+    "name": "T-shirt printing",
+    "groups": [
+      {
+        "label": "Size and colour",
+        "description": "What the customer chooses before printing.",
+        "displayType": "inline",
+        "isCollapsible": false,
+        "isEnabled": true,
+        "sortOrder": 10,
+        "options": [
+          {
+            "key": "size",
+            "label": "Size",
+            "presentation": "dropdown",
+            "isRequired": true,
+            "isEnabled": true,
+            "sortOrder": 10,
+            "helpText": "Chest measurements are on the size guide.",
+            "values": [
+              {
+                "valueKey": "s",
+                "label": "Small",
+                "sortOrder": 10,
+                "priceType": "fixed",
+                "priceAmountMinor": 0
+              },
+              {
+                "valueKey": "m",
+                "label": "Medium",
+                "sortOrder": 20,
+                "priceType": "fixed",
+                "priceAmountMinor": 0
+              },
+              {
+                "valueKey": "l",
+                "label": "Large",
+                "sortOrder": 30,
+                "priceType": "fixed",
+                "priceAmountMinor": 0
+              },
+              {
+                "valueKey": "xl",
+                "label": "Extra large",
+                "sortOrder": 40,
+                "priceType": "fixed",
+                "priceAmountMinor": 200,
+                "skuSuffix": "-XL"
+              }
+            ]
+          },
+          {
+            "key": "colour",
+            "label": "Colour",
+            "presentation": "color_swatch",
+            "isRequired": true,
+            "isEnabled": true,
+            "sortOrder": 20,
+            "values": [
+              {
+                "valueKey": "white",
+                "label": "White",
+                "sortOrder": 10,
+                "priceType": "fixed",
+                "priceAmountMinor": 0,
+                "colorHex": "#ffffff",
+                "isDefault": true
+              },
+              {
+                "valueKey": "black",
+                "label": "Black",
+                "sortOrder": 20,
+                "priceType": "fixed",
+                "priceAmountMinor": 0,
+                "colorHex": "#111111"
+              },
+              {
+                "valueKey": "navy",
+                "label": "Navy",
+                "sortOrder": 30,
+                "priceType": "fixed",
+                "priceAmountMinor": 150,
+                "colorHex": "#1b2a4a"
+              },
+              {
+                "valueKey": "forest",
+                "label": "Forest green",
+                "sortOrder": 40,
+                "priceType": "fixed",
+                "priceAmountMinor": 150,
+                "colorHex": "#2c4f3a"
+              }
+            ]
+          }
+        ],
+        "items": [
+          {
+            "kind": "heading",
+            "content": "Choose your shirt",
+            "sortOrder": 10
+          }
+        ]
+      }
+    ],
+    "rules": []
+  },
+  "engraving": {
+    "version": 1,
+    "name": "Engraving",
+    "groups": [
+      {
+        "label": "Engraving",
+        "description": "Added to the piece before it ships.",
+        "displayType": "inline",
+        "isCollapsible": false,
+        "isEnabled": true,
+        "sortOrder": 10,
+        "options": [
+          {
+            "key": "engraving_text",
+            "label": "Engraving text",
+            "presentation": "text_field",
+            "isRequired": false,
+            "isEnabled": true,
+            "sortOrder": 10,
+            "placeholder": "e.g. With love, 2026",
+            "helpText": "Up to 30 characters. The first 5 are free.",
+            "validation": {
+              "maxLength": 30,
+              "allowedCharset": "latin"
+            },
+            "display": {
+              "characterCounter": true
+            },
+            "pricing": {
+              "type": "per_char",
+              "amountMinor": 50,
+              "freeCharacters": 5
+            },
+            "values": []
+          },
+          {
+            "key": "engraving_font",
+            "label": "Font",
+            "presentation": "radio",
+            "isRequired": false,
+            "isEnabled": true,
+            "sortOrder": 20,
+            "values": [
+              {
+                "valueKey": "script",
+                "label": "Script",
+                "sortOrder": 10,
+                "priceType": "fixed",
+                "priceAmountMinor": 0,
+                "isDefault": true
+              },
+              {
+                "valueKey": "block",
+                "label": "Block capitals",
+                "sortOrder": 20,
+                "priceType": "fixed",
+                "priceAmountMinor": 0
+              }
+            ]
+          }
+        ],
+        "items": []
+      }
+    ],
+    "rules": []
+  },
+  "gift-wrap": {
+    "version": 1,
+    "name": "Gift wrap",
+    "groups": [
+      {
+        "label": "Gift options",
+        "description": "Offered at checkout.",
+        "displayType": "inline",
+        "isCollapsible": true,
+        "isEnabled": true,
+        "sortOrder": 10,
+        "options": [
+          {
+            "key": "gift_wrap",
+            "label": "Gift wrapping",
+            "presentation": "radio",
+            "isRequired": false,
+            "isEnabled": true,
+            "sortOrder": 10,
+            "values": [
+              {
+                "valueKey": "none",
+                "label": "No wrapping",
+                "sortOrder": 10,
+                "priceType": "fixed",
+                "priceAmountMinor": 0,
+                "isDefault": true
+              },
+              {
+                "valueKey": "standard",
+                "label": "Gift wrapped",
+                "sortOrder": 20,
+                "priceType": "fixed",
+                "priceAmountMinor": 350,
+                "skuSuffix": "-GW",
+                "weightDeltaGrams": 40
+              }
+            ]
+          },
+          {
+            "key": "gift_message",
+            "label": "Gift message",
+            "presentation": "textarea",
+            "isRequired": false,
+            "isEnabled": true,
+            "sortOrder": 20,
+            "placeholder": "Written on the card, not the invoice.",
+            "helpText": "Up to 200 characters.",
+            "validation": {
+              "maxLength": 200
+            },
+            "display": {
+              "characterCounter": true
+            },
+            "values": []
+          }
+        ],
+        "items": []
+      }
+    ],
+    "rules": []
+  },
+  "dimensions": {
+    "version": 1,
+    "name": "Made-to-order dimensions",
+    "groups": [
+      {
+        "label": "Made to measure",
+        "description": "Priced by the centimetre.",
+        "displayType": "inline",
+        "isCollapsible": false,
+        "isEnabled": true,
+        "sortOrder": 10,
+        "options": [
+          {
+            "key": "width_cm",
+            "label": "Width (cm)",
+            "presentation": "number_field",
+            "isRequired": true,
+            "isEnabled": true,
+            "sortOrder": 10,
+            "helpText": "Between 20 cm and 300 cm.",
+            "defaultValue": "100",
+            "validation": {
+              "min": 20,
+              "max": 300,
+              "integerOnly": true
+            },
+            "pricing": {
+              "type": "per_unit",
+              "amountMinor": 25
+            },
+            "values": []
+          },
+          {
+            "key": "drop_cm",
+            "label": "Drop (cm)",
+            "presentation": "number_field",
+            "isRequired": true,
+            "isEnabled": true,
+            "sortOrder": 20,
+            "helpText": "Between 20 cm and 300 cm.",
+            "defaultValue": "150",
+            "validation": {
+              "min": 20,
+              "max": 300,
+              "integerOnly": true
+            },
+            "pricing": {
+              "type": "per_unit",
+              "amountMinor": 25
+            },
+            "values": []
+          },
+          {
+            "key": "lining",
+            "label": "Lining",
+            "presentation": "dropdown",
+            "isRequired": true,
+            "isEnabled": true,
+            "sortOrder": 30,
+            "values": [
+              {
+                "valueKey": "unlined",
+                "label": "Unlined",
+                "sortOrder": 10,
+                "priceType": "fixed",
+                "priceAmountMinor": 0,
+                "isDefault": true
+              },
+              {
+                "valueKey": "blackout",
+                "label": "Blackout",
+                "sortOrder": 20,
+                "priceType": "percentage",
+                "priceAmountMinor": 0,
+                "priceConfig": {
+                  "type": "percentage",
+                  "basisPoints": 1500
+                }
+              }
+            ]
+          }
+        ],
+        "items": [
+          {
+            "kind": "paragraph",
+            "content": "Measure the recess, not the existing blind.",
+            "sortOrder": 10
+          }
+        ]
+      }
+    ],
+    "rules": []
+  }
+}

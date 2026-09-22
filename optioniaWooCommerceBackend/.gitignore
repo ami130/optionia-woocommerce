@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Environment — NEVER commit a real credential.
+#
+# 🔴 A real `.env` lives in this directory and holds live values. It is matched
+# below; `git check-ignore -v .env` is the way to prove that rather than assume
+# it, and it should be run before any first push.
+#
+# ⚠️ **`.env.example` is tracked and must contain placeholders only.** It
+# documents what a developer has to set; excluding it means a fresh checkout has
+# no record of the variables the API needs, and the first symptom is a service
+# that will not boot.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# Keys and certificates. None are here today — which is exactly what every
+# repository that later leaked one could have said.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+
+# Dependencies
+/node_modules/
+
+# Build output
+/dist/
+/build/
+*.tsbuildinfo
+
+# Test / coverage
+/coverage/
+coverage-e2e/
+/.nyc_output/
+
+# A local database file is data, not code, and can hold real merchant rows.
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
+*.swp

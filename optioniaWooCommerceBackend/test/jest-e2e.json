@@ -1,0 +1,31 @@
+{
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
+  "rootDir": "..",
+  "testEnvironment": "node",
+  "testRegex": "test/.*\\.e2e-spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/src/$1"
+  },
+  "maxWorkers": 1,
+  "collectCoverageFrom": [
+    "src/**/*.ts",
+    "!src/**/*.spec.ts",
+    "!src/**/*.entity.ts",
+    "!src/migrations/**",
+    "!src/main.ts"
+  ],
+  "coverageDirectory": "coverage-e2e",
+  "setupFiles": [
+    "<rootDir>/test/setup-e2e.ts"
+  ],
+  "globalTeardown": "<rootDir>/test/teardown-e2e.ts",
+  "testTimeout": 120000,
+  "forceExit": true
+}

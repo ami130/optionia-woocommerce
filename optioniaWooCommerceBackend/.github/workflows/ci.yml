@@ -1,0 +1,246 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # Runs first and independently: a leaked credential must fail the build even
+  # if every other check would pass.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-secrets.sh
+
+  # Two repositories hold byte-identical copies of the same fixtures, because CI
+  # checks out one at a time and neither suite can read the other's files. This
+  # gate is what stops them drifting: it hashes each copy, so an edit in either
+  # repository fails **both** builds until both are updated. The plugin runs the
+  # same script against its own copies.
+  shared-fixtures:
+    name: Shared cross-repo fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-shared-fixtures.sh
+
+  # M9.4b: a change a storefront can see must move `config_version`, or every
+  # connected store answers 304 and keeps serving what the merchant deleted.
+  # Reads source only — no database, so it runs beside the other cheap gates.
+  invalidation:
+    name: Published changes advance config_version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash bin/check-config-invalidation.sh
+
+  # A script pointing at a file that does not exist makes a working repository
+  # look broken to anyone who clones it.
+  scripts:
+    name: Script integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: bash bin/check-scripts.sh
+
+  verify:
+    name: Lint, typecheck, test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor declared in package.json engines; 24 is what
+        # development runs on. Testing one and shipping the other makes the
+        # unsupported version an untested claim.
+        node: ['20', '24']
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: optionia_woo_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+      # Migrations must run forward AND back. An irreversible migration is a
+      # production incident waiting for a bad deploy.
+      - name: Migrations up and down
+        run: |
+          npm run migration:run
+          npm run migration:revert
+          npm run migration:run
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      - run: npm run test
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      # A dependency with a known advisory ships silently otherwise. Caught
+      # once by hand — nodemailer 7 had six advisories including CRLF header
+      # injection, which matters directly for a mailer that puts user-supplied
+      # names into headers. Nothing would have said so.
+      #
+      # --omit=dev because a devDependency advisory does not reach production
+      # and would block CI on something only a developer can reach.
+      - name: Dependency advisories
+        run: npm audit --omit=dev --audit-level=high
+
+      # docs/DATABASE.md has drifted from the schema twice. Both times a person
+      # found it by reading, which is the slowest detector available.
+      - name: Documentation matches schema
+        run: bash bin/check-docs.sh
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      # The contract is consumed by a plugin that cannot be redeployed across
+      # merchant sites, so drift is more expensive here than elsewhere.
+      - name: API contract matches the routes
+        run: bash bin/check-api-contract.sh
+
+      # M8.1b: connection state is written in one place, or the illegal
+      # transitions are the ones nobody wrote down.
+      - name: Connection state machine is the only writer
+        run: bash bin/check-store-state.sh
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      # AC5's enforcement. Asserts that **every tenant-scoped route has a
+      # negative test** — the check that stops a new route shipping with no
+      # cross-tenant coverage at all.
+      #
+      # It existed for three phases and was never wired here, so the one gate
+      # standing behind tenant isolation ran only when someone invoked it by
+      # hand. A gate that does not run is worse than no gate: it reads as
+      # coverage in the list and verifies nothing in the pipeline.
+      - name: Every tenant-scoped route has a negative test
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+        run: bash bin/check-isolation.sh
+
+      # The spec a client developer reads. Asserts every [built] route appears
+      # in it, all three realms are declared, and every guarded operation
+      # references one — a scheme defined and applied to nothing would have a
+      # generated client treat the API as public.
+      - name: Generated spec describes every route and realm
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+        run: bash bin/check-openapi.sh
+
+      # Seeds must be idempotent and must refuse production. Both were
+      # previously verified by hand, once — so a regression would have passed CI
+      # and been found by a developer discovering six plans.
+      - name: Seed the database
+        run: |
+          npm run db:seed
+          npm run db:seed:demo
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000
+
+      # Schema constraints live in MySQL and no unit test can observe them.
+      # A delete rule regressing to RESTRICT would make GDPR user erasure
+      # impossible, and migration:run would still pass.
+      # Coverage, not just pass/fail. The unit report shows the security code at
+      # 0% because it has no unit tests by design (ADR-023), so this is the only
+      # place the real figure is visible.
+      - name: Schema and seed guarantees
+        run: npm run test:e2e:cov
+        env:
+          NODE_ENV: test
+          PORT: 4000
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: optionia_woo_test
+          DB_USER: root
+          DB_PASSWORD: ci_root_password
+          DB_SSL: false
+          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+          CORS_ORIGINS: http://localhost:3000

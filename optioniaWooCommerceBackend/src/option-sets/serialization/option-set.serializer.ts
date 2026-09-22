@@ -1,0 +1,423 @@
+import { Injectable } from '@nestjs/common';
+
+import { OptionGroup } from '../entities/option-group.entity';
+import { OptionSet } from '../entities/option-set.entity';
+import { OptionRule } from '../entities/option-rule.entity';
+import { OptionValue } from '../entities/option-value.entity';
+import { Option } from '../entities/option.entity';
+import { PresentationalItem } from '../entities/presentational-item.entity';
+import { toPublishedPriceConfig } from './price-config';
+import {
+  toPublishedDisplay,
+  toPublishedOptionPricing,
+  toPublishedRule,
+  toPublishedValidation,
+} from './option-config';
+import type {
+  AuthoringGroup,
+  AuthoringOption,
+  AuthoringOptionSet,
+  AuthoringOptionValue,
+  AuthoringPresentationalItem,
+  AuthoringRule,
+  PublishedGroup,
+  PublishedItem,
+  PublishedOption,
+  PublishedOptionSet,
+  PublishedValue,
+} from './projections';
+
+/** An option set with its children loaded, in display order. */
+export interface OptionSetTree {
+  readonly set: OptionSet;
+  /**
+   * The set's conditional rules, live only, in list order (M17.5).
+   *
+   * ⚠️ **Flat, beside the groups rather than inside them.** A rule's target may
+   * be a group, an option or a value anywhere in the set, and its conditions may
+   * name options in any group — so no branch of the tree owns it.
+   */
+  readonly rules: readonly OptionRule[];
+  readonly groups: ReadonlyArray<{
+    readonly group: OptionGroup;
+    readonly items: readonly PresentationalItem[];
+    readonly options: ReadonlyArray<{
+      readonly option: Option;
+      readonly values: readonly OptionValue[];
+    }>;
+  }>;
+}
+
+/**
+ * The one serializer (M7.2b).
+ *
+ * ## Why every field is written out
+ *
+ * Nothing here spreads an entity. Each projection lists its fields explicitly,
+ * so **adding a column to an entity does not silently appear in the config
+ * document** — and the acceptance M7.2b asks for ("adding a field requires an
+ * explicit decision about whether it appears in the published projection")
+ * becomes a property of the code rather than a note in a document someone has
+ * to remember.
+ *
+ * A spread would do the opposite: a new column would flow into the published
+ * document by default, which is exactly the wrong default for data sitting on
+ * merchant servers.
+ *
+ * ## What the published projection leaves out, and why
+ *
+ * - `tenantId` — the plugin has no use for it and it identifies the merchant's
+ *   account, not their storefront.
+ * - `rowVersion` — an optimistic lock for the dashboard; meaningless to a
+ *   renderer.
+ * - `createdAt` / `updatedAt` / `deletedAt` — audit fields; the document carries
+ *   `generated_at` and `config_version` for freshness.
+ * - `isEnabled` — a disabled thing is **absent** from the document entirely, so
+ *   the flag has nothing left to say.
+ * - Parent ids (`optionSetId`, `optionGroupId`, `optionId`) — the document is
+ *   already a tree; a child that names its parent is the same fact twice, and
+ *   two ways to disagree.
+ *
+ * Group, option **and value** `id` are included: the plugin reports analytics
+ * events and order selections against them, so they are the join key between a
+ * storefront and the dashboard — and since M17.5 a rule may **target** any of
+ * the three, which the plugin resolves by id.
+ *
+ * ✏️ A value's `id` was absent until M17.8 needed it. `value_key` is unique
+ * within one option and so cannot identify a value across a set.
+ */
+@Injectable()
+export class OptionSetSerializer {
+  /* ---------------------------------------------------------------------
+   * Authoring
+   * ------------------------------------------------------------------ */
+
+  toAuthoring(tree: OptionSetTree): AuthoringOptionSet {
+    const { set } = tree;
+
+    return {
+      id: set.id,
+      storeId: set.storeId,
+      name: set.name,
+      status: set.status,
+      version: set.version,
+      rowVersion: set.rowVersion,
+      publishedAt: iso(set.publishedAt),
+      publishedBy: set.publishedBy,
+      publishedConfigVersion: set.publishedConfigVersion,
+      createdAt: iso(set.createdAt) as string,
+      updatedAt: iso(set.updatedAt) as string,
+      groups: tree.groups.map((node) => this.groupToAuthoring(node)),
+      /*
+       * ⚠️ **Every rule, disabled ones included** — the opposite of the
+       * published projection. A merchant must see a rule the cascade switched
+       * off and why; a storefront never receives one, so the flag has nothing to
+       * say there.
+       */
+      rules: tree.rules.map((rule) => this.ruleToAuthoring(rule)),
+    };
+  }
+
+  private ruleToAuthoring(rule: OptionRule): AuthoringRule {
+    return {
+      id: rule.id,
+      targetType: rule.targetType,
+      targetId: rule.targetId,
+      action: rule.action,
+      matchType: rule.matchType,
+      /*
+       * Passed through as stored. The dashboard authored these in camelCase and
+       * reads them back in it; the published projection is the one place they
+       * are rewritten for a PHP reader, which is what keeps the two conventions
+       * from leaking into each other.
+       *
+       * ⚠️ **Cast through `unknown`, because the column is typed loosely and the
+       * projection is not (M17.10).** `OptionRule.conditions` is
+       * `Record<string, unknown>[]` — the shape a JSON column has before
+       * anything validates it. What is *stored* is narrower: every write goes
+       * through `ruleConditionsSchema`, which is `.strict()`.
+       *
+       * 🔴 **Nothing downstream trusts the narrowing anyway.** Both evaluators
+       * treat an unknown operator as `false` and a malformed condition as one
+       * that never fires, because AC4 makes a document input rather than
+       * authority. The type is a contract for the **dashboard's builder**, which
+       * had none, rather than a claim about what the database contains.
+       */
+      conditions: Array.isArray(rule.conditions)
+        ? (rule.conditions as unknown as AuthoringRule['conditions'])
+        : [],
+      actionValue: rule.actionValue,
+      sortOrder: rule.sortOrder,
+      isEnabled: rule.isEnabled,
+      disabledReason: rule.disabledReason,
+      createdAt: iso(rule.createdAt) as string,
+      updatedAt: iso(rule.updatedAt) as string,
+    };
+  }
+
+  private groupToAuthoring(node: OptionSetTree['groups'][number]): AuthoringGroup {
+    const { group } = node;
+
+    return {
+      id: group.id,
+      label: group.label,
+      description: group.description,
+      displayType: group.displayType,
+      sortOrder: group.sortOrder,
+      isCollapsible: group.isCollapsible,
+      isEnabled: group.isEnabled,
+      createdAt: iso(group.createdAt) as string,
+      updatedAt: iso(group.updatedAt) as string,
+      options: node.options.map((child) => this.optionToAuthoring(child.option, child.values)),
+      items: node.items.map((item) => this.itemToAuthoring(item)),
+    };
+  }
+
+  private optionToAuthoring(option: Option, values: readonly OptionValue[]): AuthoringOption {
+    return {
+      id: option.id,
+      key: option.key,
+      valueKind: option.valueKind,
+      cardinality: option.cardinality,
+      presentation: option.presentation,
+      label: option.label,
+      description: option.description,
+      placeholder: option.placeholder,
+      helpText: option.helpText,
+      isRequired: option.isRequired,
+      isEnabled: option.isEnabled,
+      sortOrder: option.sortOrder,
+      defaultValue: option.defaultValue,
+      validation: option.validation,
+      pricing: option.pricing,
+      display: option.display,
+      createdAt: iso(option.createdAt) as string,
+      updatedAt: iso(option.updatedAt) as string,
+      values: values.map((value) => this.valueToAuthoring(value)),
+    };
+  }
+
+  private valueToAuthoring(value: OptionValue): AuthoringOptionValue {
+    return {
+      id: value.id,
+      valueKey: value.valueKey,
+      label: value.label,
+      sortOrder: value.sortOrder,
+      priceType: value.priceType,
+      priceAmountMinor: value.priceAmountMinor,
+      priceConfig: value.priceConfig,
+      imageUrl: value.imageUrl,
+      colorHex: value.colorHex,
+      groupLabel: value.groupLabel,
+      skuSuffix: value.skuSuffix,
+      weightDeltaGrams: value.weightDeltaGrams,
+      isDefault: value.isDefault,
+      isEnabled: value.isEnabled,
+      createdAt: iso(value.createdAt) as string,
+      updatedAt: iso(value.updatedAt) as string,
+    };
+  }
+
+  private itemToAuthoring(item: PresentationalItem): AuthoringPresentationalItem {
+    return {
+      id: item.id,
+      kind: item.kind,
+      content: item.content,
+      sortOrder: item.sortOrder,
+      display: item.display,
+      createdAt: iso(item.createdAt) as string,
+      updatedAt: iso(item.updatedAt) as string,
+    };
+  }
+
+  /* ---------------------------------------------------------------------
+   * Published
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The config-document shape (M7.5).
+   *
+   * **Disabled things are dropped, not flagged.** A disabled option is work the
+   * merchant kept but does not want shown, and shipping it with a flag makes
+   * every consumer — renderer, evaluator, PHP and TS alike — responsible for
+   * remembering to check it. One of them will forget, and the failure is an
+   * option appearing on a storefront the merchant switched off.
+   */
+  toPublished(tree: OptionSetTree): PublishedOptionSet {
+    return {
+      id: tree.set.id,
+      version: tree.set.version,
+      /**
+       * `assignments` stays empty here **by design**, not because it is unbuilt.
+       *
+       * Phase 10 Stage 1 made assignments reach a storefront, and deliberately
+       * did not do it from here. A snapshot records what was *published*, and an
+       * assignment is not part of that: the same published set is assigned and
+       * unassigned with no republish. Writing them into a snapshot would make
+       * every assignment change require a new version, and would leave every set
+       * published before that stage carrying `[]` for ever, since snapshots are
+       * immutable. So `ConfigDocumentBuilder` joins them **live** and overwrites
+       * whatever stands here.
+       *
+       * `rules` **are** in the snapshot, unlike assignments, and deliberately:
+       * a rule is published configuration, so changing one *should* require a
+       * republish. The same immutability applies, though — every set published
+       * before M17.5 keeps `rules: []` for ever, which is correct, because those
+       * documents genuinely had none.
+       *
+       * Present rather than omitted: 7k freezes this document for v1, and a
+       * plugin written against a shape lacking these keys would need a
+       * `schema_version` bump to gain them. An empty array is a shape a reader
+       * handles from its first release.
+       *
+       * ✅ **M19.1' re-opened this decision and kept it** — the treatment
+       * ADR-064 gave a withdrawal. Opening the four non-product target types
+       * needed **no change here**, because the live join in
+       * `ConfigDocumentBuilder` maps `target_type`/`target_ref` from whatever
+       * the row holds and never filtered on `product`. Mutation-proven: making
+       * that join drop non-product targets, and hardcoding `target_type` to
+       * `'product'`, are each killed by
+       * `assignments.e2e-spec.ts` → *"a category assignment authored through
+       * the API reaches the document"*.
+       */
+      assignments: [],
+      groups: tree.groups
+        .filter((node) => node.group.isEnabled)
+        .map((node) => this.groupToPublished(node)),
+      /*
+       * 🔴 **Disabled rules are absent entirely**, exactly as a disabled group,
+       * option or value is — the flag has nothing left to say once the thing it
+       * describes is not in the document.
+       *
+       * M17.3's `RULE_TARGET_NOT_PUBLISHED` warning depends on this being true:
+       * it warns a merchant that a rule pointing at a *disabled target* will not
+       * fire, which would be incoherent if disabled rules shipped anyway.
+       *
+       * ⚠️ **A rule the cascade disabled is dropped by the same filter**, and
+       * that is the intended outcome — its target is gone, so publishing it
+       * would ship logic that can never apply. `rulesHaveTargets` warns the
+       * merchant at publish; this is what makes the warning true.
+       */
+      rules: tree.rules
+        .filter((rule) => rule.isEnabled)
+        .map((rule) => toPublishedRule(rule)),
+    };
+  }
+
+  private groupToPublished(node: OptionSetTree['groups'][number]): PublishedGroup {
+    const { group } = node;
+
+    return {
+      id: group.id,
+      label: group.label,
+      ...optional('description', group.description),
+      display_type: group.displayType,
+      sort_order: group.sortOrder,
+      is_collapsible: group.isCollapsible,
+      options: node.options
+        .filter((child) => child.option.isEnabled)
+        .map((child) => this.optionToPublished(child.option, child.values)),
+      items: node.items.map((item) => this.itemToPublished(item)),
+    };
+  }
+
+  private optionToPublished(option: Option, values: readonly OptionValue[]): PublishedOption {
+    return {
+      id: option.id,
+      key: option.key,
+      // `type` rather than `presentation`: the config contract names it that,
+      // and the plugin is the client that cannot be redeployed easily.
+      type: option.presentation,
+      value_kind: option.valueKind,
+      cardinality: option.cardinality,
+      label: option.label,
+      ...optional('description', option.description),
+      ...optional('placeholder', option.placeholder),
+      ...optional('help_text', option.helpText),
+      is_required: option.isRequired,
+      sort_order: option.sortOrder,
+      ...optional('default_value', option.defaultValue),
+      ...optional('validation', toPublishedValidation(option.validation)),
+      ...optional('pricing', toPublishedOptionPricing(option.pricing)),
+      ...optional('display', toPublishedDisplay(option.display)),
+      values: values
+        .filter((value) => value.isEnabled)
+        .map((value) => this.valueToPublished(value)),
+    };
+  }
+
+  /**
+   * A value's price, always as a `price_config` object in the document's
+   * own convention.
+   *
+   * The table carries both a `price_type` + `price_amount_minor` pair and a
+   * nullable `price_config` JSON. The document carries **one** shape, because
+   * two ways to express a price is two ways for the TS and PHP evaluators to
+   * disagree — and M11.4 shares fixtures between them precisely to stop that.
+   *
+   * The stored JSON is `camelCase` (its Zod schema is TypeScript); the document
+   * is `snake_case` (its reader is PHP). `toPublishedPriceConfig` converts
+   * per type rather than passing the object through, which previously put
+   * `amountMinor` and `amount_minor` in the same document depending on which
+   * path produced the value.
+   *
+   * Money stays an integer in minor units on the wire (ADR-013).
+   */
+  private valueToPublished(value: OptionValue): PublishedValue {
+    return {
+      /*
+       * A rule may target a value (`RuleTargetType.VALUE`), and the plugin
+       * resolves a target by id — so a value without one is a target the
+       * storefront cannot find. `value_key` is unique only within one option.
+       */
+      id: value.id,
+      value_key: value.valueKey,
+      label: value.label,
+      sort_order: value.sortOrder,
+      price_config: toPublishedPriceConfig(value.priceConfig, {
+        priceType: value.priceType,
+        priceAmountMinor: value.priceAmountMinor,
+      }),
+      ...optional('image_url', value.imageUrl),
+      ...optional('color_hex', value.colorHex),
+      // `<optgroup>` heading (M14.3). Absent when ungrouped, so an ordinary
+      // dropdown's document is byte-identical to what it was before grouping
+      // existed.
+      ...optional('group_label', value.groupLabel),
+      ...optional('sku_suffix', value.skuSuffix),
+      ...optional('weight_delta_grams', value.weightDeltaGrams),
+      // Only ever present when true: a renderer asks "which is default?", and
+      // `is_default: false` on every other value is noise on every request.
+      ...(value.isDefault ? { is_default: true as const } : {}),
+    };
+  }
+
+  private itemToPublished(item: PresentationalItem): PublishedItem {
+    return {
+      kind: item.kind,
+      content: item.content,
+      sort_order: item.sortOrder,
+      ...optional('display', item.display),
+    };
+  }
+}
+
+/**
+ * Include a key only when it carries a value.
+ *
+ * `null` and `undefined` are dropped rather than serialized. The config document
+ * is fetched on a schedule by every storefront that uses it, and a null for
+ * every unset optional on every option is bytes paid for on every fetch to say
+ * nothing.
+ */
+function optional<K extends string, V>(
+  key: K,
+  value: V | null | undefined,
+): Record<K, V> | Record<string, never> {
+  return value === null || value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
+
+/** An ISO timestamp, or null. */
+function iso(value: Date | null): string | null {
+  return value === null ? null : value.toISOString();
+}
