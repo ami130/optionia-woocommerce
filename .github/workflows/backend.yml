@@ -151,7 +151,16 @@ jobs:
       # --omit=dev because a devDependency advisory does not reach production
       # and would block CI on something only a developer can reach.
       - name: Dependency advisories
-        run: npm audit --omit=dev --audit-level=high
+        # 🔴 **`npm audit` plus a recorded exception list**, rather than a
+        # lowered `--audit-level`. `multer` carries two DoS advisories through
+        # `@nestjs/platform-express@11` and needs a multipart endpoint this API
+        # does not have; dropping the threshold to `critical` would have
+        # silenced every future *high* finding to accept that one.
+        #
+        # `.npm-audit-exceptions.md` carries the reasoning, and the gate fails
+        # both ways: an unexcepted advisory, and an exception for a package that
+        # is no longer flagged.
+        run: bash bin/check-advisories.sh
 
       # docs/DATABASE.md has drifted from the schema twice. Both times a person
       # found it by reading, which is the slowest detector available.
