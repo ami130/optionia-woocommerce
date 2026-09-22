@@ -12,6 +12,11 @@ name: Cross-repo gates
 # with `bash bin/install-hooks.sh`. CI is the backstop, not the only guard.
 
 on:
+  # 📌 **Manually runnable.** A path filter means a workflow can sit on a stale
+  # result for commits that did not touch it — three of these showed failures
+  # from two commits earlier, which reads as broken rather than skipped.
+  workflow_dispatch:
+
   push:
     branches: [main, develop]
   pull_request:
