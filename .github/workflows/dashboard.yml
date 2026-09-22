@@ -56,7 +56,23 @@ jobs:
           # no longer holds one — so the path is given explicitly.
           cache-dependency-path: optioniaWooCommerceFrontend/package-lock.json
 
-      - run: npm ci
+      # 🔴 **`npm install`, not `npm ci`, and the reason is platform-specific.**
+      #
+      # `@emnapi/runtime` and `@emnapi/core` are Linux-only optional
+      # dependencies of `@img/sharp-wasm32` and `@tailwindcss/oxide-wasm32-wasi`.
+      # A lockfile generated on macOS never resolves that branch, so `npm ci`
+      # refuses with EUSAGE — *"Missing: @emnapi/runtime from lock file"* — while
+      # the same lockfile installs perfectly on the machine that wrote it.
+      #
+      # ⚠️ **Regenerating the lockfile does not fix it.** Tried with
+      # `--package-lock-only`, `--include=optional` and `--force`: npm cannot
+      # resolve a Linux-only optional tree from macOS, and `--force` produced a
+      # lockfile that broke on *both* platforms.
+      #
+      # `npm install` resolves the tree on the runner. It gives up `ci`'s
+      # guarantee that the lockfile is authoritative — a real cost, recorded
+      # here rather than hidden — in exchange for a build that runs at all.
+      - run: npm install
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test

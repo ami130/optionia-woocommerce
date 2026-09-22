@@ -341,6 +341,14 @@ fi
 HOOK_CLASSES=''
 UNREGISTERED=''
 
+# 🔴 **Read once, not piped into `grep -q` per class.** `-q` exits the moment it
+# matches, closing the pipe while the producing `grep` is still writing — a race
+# macOS absorbs and Linux reports as `grep: write error: Broken pipe`. On CI that
+# made this check fail for `Notices`, a class `Plugin.php` registers on line 137.
+# A gate that passes on one platform and fails on another is worse than one that
+# fails on both.
+PLUGIN_BODY=$(grep -vE '^[[:space:]]*(\*|//|#|/\*)' src/Plugin.php)
+
 while IFS= read -r file; do
   class=$(basename "$file" .php)
 
@@ -360,7 +368,7 @@ while IFS= read -r file; do
   HOOK_CLASSES="${HOOK_CLASSES}${class} "
 
   # Called via the container, or constructed inline with arguments.
-  if grep -vE '^[[:space:]]*(\*|//|#|/\*)' src/Plugin.php \
+  if printf '%s\n' "$PLUGIN_BODY" \
      | grep -qE "(${class}::class \)|new ${class}\()[^;]*->register\(\)"; then
     continue
   fi
