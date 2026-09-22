@@ -32,10 +32,12 @@ Thumbs.db
 *.swp
 
 # The plugin is its own repository — see optioniaWooCommercePlugin/.git
-/optioniaWooCommercePlugin/
+# (merged into this repository 2026-09-22 — no longer a separate repo)
+#/optioniaWooCommercePlugin/
 
 # The backend is its own repository — see optioniaWooCommerceBackend/.git
-/optioniaWooCommerceBackend/
+# (merged into this repository 2026-09-22 — no longer a separate repo)
+#/optioniaWooCommerceBackend/
 
 # The dashboard is its own repository — see optioniaWooCommerceFrontend/.git
 #
@@ -44,7 +46,8 @@ Thumbs.db
 # "unignored neighbour a broad add could reach" the optionia-app note below
 # describes — and it had just received its first real commit, 96 files of Phase
 # 13. A `git add -A` here would have nested a git repository inside another.
-/optioniaWooCommerceFrontend/
+# (merged into this repository 2026-09-22 — no longer a separate repo)
+#/optioniaWooCommerceFrontend/
 
 # The Shopify Optionia app is a **separate project** that happens to sit here for
 # reference while its features are ported. It has nothing to do with this
