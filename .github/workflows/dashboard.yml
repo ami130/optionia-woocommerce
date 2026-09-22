@@ -22,10 +22,10 @@ on:
 
   push:
     branches: [main, develop]
-    paths: ['optioniaWooCommerceFrontend/**', '.github/workflows/dashboard.yml']
+    paths: ['optioniaWooCommerceFrontend/**', 'optioniaWooCommercePlugin/templates/**', '.github/workflows/dashboard.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['optioniaWooCommerceFrontend/**', '.github/workflows/dashboard.yml']
+    paths: ['optioniaWooCommerceFrontend/**', 'optioniaWooCommercePlugin/templates/**', '.github/workflows/dashboard.yml']
 
 defaults:
   run:
@@ -75,6 +75,25 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run typecheck
+      # 🔴 **The fidelity test reads real storefront markup from the plugin**
+      # (ADR-109) — `optioniaWooCommercePlugin/tests/js/rendered-fixtures.json`,
+      # which is **generated, not committed**, so that it cannot drift from the
+      # templates it describes. It exists on a developer machine and not on a
+      # fresh checkout, so this job failed with ENOENT while passing locally.
+      #
+      # ⚠️ **A cost of the merge, not a defect.** The dashboard could reach the
+      # plugin's directory the moment the two repositories became one; before
+      # that, this test could not have run in CI at all.
+      - name: Set up PHP for the plugin's fixture generator
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Generate the storefront fixtures
+        run: php tests/js/generate-fixtures.php
+        working-directory: optioniaWooCommercePlugin
+
       - run: npm run test
 
       # --omit=dev because a devDependency advisory does not reach a merchant's
