@@ -19,13 +19,21 @@ backend owns the architecture; it does not.
 
 ---
 
-## The three repositories
+## The three services
+
+> ✏️ **Titled "the three repositories" until 2026-09-22**, when all four were
+> merged into one at `github.com/ami130/optionia-woocommerce` with their full
+> histories — 277 commits. **Nothing below changes**: they remain three
+> independently deployed services that speak only to the backend, and the
+> directory layout is unchanged. What changed is where the git history lives,
+> which the diagram never described.
+
 
 ```text
 optioniaWooCommerceFrontend  ──▶  optioniaWooCommerceBackend  ◀──  optioniaWooCommercePlugin
    Next.js · TypeScript             NestJS · TypeORM · MySQL          PHP 7.4+ · WordPress
    the merchant's dashboard         the multi-tenant SaaS             the merchant's storefront
-   ~188 TS/TSX files                79 routes                         ~93 PHP files
+   ~191 TS/TSX files                79 routes                         ~93 PHP files in src/
 ```
 
 **They never talk to each other.** The dashboard and the plugin share no code and
