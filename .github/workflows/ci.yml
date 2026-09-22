@@ -1,17 +1,15 @@
 name: Cross-repo gates
 
-# ⚠️ **DORMANT UNTIL A REMOTE EXISTS.**
+# The 17 cross-repository gates, on every push.
 #
-# 🔴 None of the four repositories is pushed anywhere. This file is written and
-# correct, and it runs **nothing** — GitHub Actions needs a GitHub repository,
-# and the three sub-repositories it checks out have no remotes either.
+# ✅ **Live since 2026-09-22.** This ran nothing for its first day: the four
+# repositories had no remote, and the job tried to check out three sub-repos
+# that did not exist. Both are fixed — the three were merged into this
+# repository with their full histories (265 commits), so the single checkout
+# below has everything the gates read.
 #
-# It is committed now so that the day a remote appears, enforcement is one push
-# away rather than one more thing to remember. Until then the gates are enforced
-# by `bin/pre-commit.sh`, installed with `bash bin/install-hooks.sh` — see F5.
-#
-# 📌 **What to change when remotes exist:** the three `repository:` lines below,
-# and nothing else. They are placeholders, deliberately obvious.
+# 📌 **The gates are also enforced locally** by `bin/pre-commit.sh`, installed
+# with `bash bin/install-hooks.sh`. CI is the backstop, not the only guard.
 
 on:
   push:
@@ -28,27 +26,6 @@ jobs:
       - name: Check out the parent
         uses: actions/checkout@v4
 
-      # 🔴 **The gates read all three repositories**, which is the whole point of
-      # them — type parity, capability parity, fixture hashes, wire keys. A run
-      # with a sub-repository missing does not fail loudly; several gates simply
-      # find nothing to compare. So each checkout is required, not optional.
-      - name: Check out the backend
-        uses: actions/checkout@v4
-        with:
-          repository: REPLACE-ME/optioniaWooCommerceBackend
-          path: optioniaWooCommerceBackend
-
-      - name: Check out the dashboard
-        uses: actions/checkout@v4
-        with:
-          repository: REPLACE-ME/optioniaWooCommerceFrontend
-          path: optioniaWooCommerceFrontend
-
-      - name: Check out the plugin
-        uses: actions/checkout@v4
-        with:
-          repository: REPLACE-ME/optioniaWooCommercePlugin
-          path: optioniaWooCommercePlugin
 
       # 📌 **No Node, no PHP, no Composer.** Verified 2026-09-22 by running the
       # suite under `env -i` with only /usr/bin and /bin on PATH: all 17 gates

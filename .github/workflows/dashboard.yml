@@ -1,15 +1,30 @@
-name: CI
+name: Dashboard
 
 # The dashboard was the one repository of the three with tests and no pipeline:
 # 21 files and 463 assertions that ran only when somebody remembered. Recorded as
 # F1 in the plan's STATUS block on 2026-09-02, marked "fix now", and still open
 # three phases later — which is precisely how a regression enters unnoticed while
 # attention is elsewhere.
+# ✏️ **Moved to the repository root 2026-09-22.** It lived at
+# `optioniaWooCommerceFrontend/.github/workflows/ci.yml` until the three repositories were merged into
+# one — where GitHub never reads it, because only `/.github` at the root is
+# honoured. Three workflows that looked like CI and ran nothing.
+#
+# 📌 **Unchanged apart from three things**: the name (so three can coexist), a
+# path filter (so a plugin change does not rebuild the backend), and
+# `working-directory` (so every `run:` still executes where it used to).
+
 on:
   push:
     branches: [main, develop]
+    paths: ['optioniaWooCommerceFrontend/**', '.github/workflows/dashboard.yml']
   pull_request:
     branches: [main, develop]
+    paths: ['optioniaWooCommerceFrontend/**', '.github/workflows/dashboard.yml']
+
+defaults:
+  run:
+    working-directory: optioniaWooCommerceFrontend
 
 jobs:
   verify:
@@ -31,6 +46,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+          # ⚠️ **`working-directory` does not reach a `uses:` step.** The
+          # cache action resolves its lockfile from the repository root, which
+          # no longer holds one — so the path is given explicitly.
+          cache-dependency-path: optioniaWooCommerceFrontend/package-lock.json
 
       - run: npm ci
       - run: npm run lint

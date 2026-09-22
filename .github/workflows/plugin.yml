@@ -1,10 +1,25 @@
-name: CI
+name: Plugin
+
+# ✏️ **Moved to the repository root 2026-09-22.** It lived at
+# `optioniaWooCommercePlugin/.github/workflows/ci.yml` until the three repositories were merged into
+# one — where GitHub never reads it, because only `/.github` at the root is
+# honoured. Three workflows that looked like CI and ran nothing.
+#
+# 📌 **Unchanged apart from three things**: the name (so three can coexist), a
+# path filter (so a plugin change does not rebuild the backend), and
+# `working-directory` (so every `run:` still executes where it used to).
 
 on:
   push:
     branches: [main, develop]
+    paths: ['optioniaWooCommercePlugin/**', '.github/workflows/plugin.yml']
   pull_request:
     branches: [main, develop]
+    paths: ['optioniaWooCommercePlugin/**', '.github/workflows/plugin.yml']
+
+defaults:
+  run:
+    working-directory: optioniaWooCommercePlugin
 
 jobs:
   quality:
@@ -39,12 +54,21 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+          # ⚠️ **`working-directory` does not reach a `uses:` step.** The
+          # cache action resolves its lockfile from the repository root, which
+          # no longer holds one — so the path is given explicitly.
+          cache-dependency-path: optioniaWooCommercePlugin/package-lock.json
 
       - name: Cache Composer
         uses: actions/cache@v4
         with:
-          path: vendor
-          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json') }}
+          # ⚠️ **Both paths are repository-root relative**, because a `uses:`
+          # step ignores `working-directory`. `vendor` and `composer.json`
+          # resolved correctly when this plugin was its own repository; after
+          # the merge they would have cached the wrong directory and keyed on a
+          # file that is not there.
+          path: optioniaWooCommercePlugin/vendor
+          key: composer-${{ matrix.php }}-${{ hashFiles('optioniaWooCommercePlugin/composer.json') }}
 
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
