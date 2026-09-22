@@ -126,6 +126,13 @@ Every template is theme-overridable. Copy from `templates/` into
 Three filters are supported. Anything else is internal and may change without a
 major version.
 
+🔴 **The order record is deliberately not among them.** `OrderLineItem` applies
+no filter, so what a merchant packs from and what a customer is shown they
+bought cannot be rewritten by a third party after the sale. The cart breakdown
+is adjustable; the record of what was actually sold is not. If your integration
+needs that, open an issue with the use case rather than filtering the cart and
+hoping the order follows — it will not.
+
 ### `optionia_cart_item_rows`
 
 The option rows Optionia adds to a cart line, before WooCommerce renders them.
