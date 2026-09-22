@@ -54,6 +54,22 @@ printf 'Checking config-document key spelling...\n'
 # decided.
 EMITTED=$(grep -oE "[a-zA-Z]+: '[a-zA-Z_]+'," "$MAP" | sed "s/.*: '//;s/',//" | sort -u)
 
+# ⚠️ **A presentational item's display keys are published too, and they have no
+# rename map** (M21c.5). `option-config.ts` renames an option's camelCase keys;
+# a presentational item's are authored snake_case already, so the serializer
+# publishes them untouched and there is no map to read them from.
+#
+# 🔴 **Read from the schema instead**, which is the source of truth for what a
+# merchant may author — so a key added there and forgotten in the plugin, or
+# read by the plugin and never added there, still fails.
+PRESENTATIONAL_SCHEMA="optioniaWooCommerceBackend/src/option-sets/types/presentational-display.ts"
+
+if [ -f "$PRESENTATIONAL_SCHEMA" ]; then
+  PRESENTATIONAL_KEYS=$(grep -oE "^    [a-z_]+: z\." "$PRESENTATIONAL_SCHEMA" \
+    | sed 's/^ *//;s/: z\.$//' | sort -u)
+  EMITTED=$(printf '%s\n%s\n' "$EMITTED" "$PRESENTATIONAL_KEYS" | grep -v '^$' | sort -u)
+fi
+
 if [ -z "$EMITTED" ]; then
   fail "read no key mappings from option-config.ts — has its shape changed?"
 else

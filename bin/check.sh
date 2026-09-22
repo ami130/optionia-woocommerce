@@ -18,6 +18,23 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
+# 🔴 **The interpreters the gates actually need, checked before any of them run**
+# (F51). Twelve gate lines invoke `python3`; the rest are shell, awk, sed and
+# grep. A missing interpreter makes a gate fail for a reason that has nothing to
+# do with what it checks -- or worse, makes one *pass* because the command that
+# would have found the problem never ran.
+#
+# ⚠️ **This replaces an assertion.** `.github/workflows/ci.yml` claimed python3 is
+# *"present on ubuntu-latest"*, which is true today and had nothing to catch it
+# changing. A guard that fails loudly beats a comment that is currently right.
+for tool in python3 awk sed grep; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf '\033[31mMissing interpreter: %s\033[0m\n' "$tool"
+    printf 'The cross-repo gates need it. Install it and re-run.\n'
+    exit 1
+  fi
+done
+
 FAILED=0
 TOTAL=0
 

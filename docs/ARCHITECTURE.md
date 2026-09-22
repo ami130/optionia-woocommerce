@@ -11,6 +11,7 @@ one describes why those interfaces exist where they do.
 | `optioniaWooCommerceBackend/docs/API-CONTRACT.md` | Every route, and who may call it |
 | `optioniaWooCommerceBackend/docs/DATABASE.md` | Tables, keys, and tenancy |
 | `*/[test\|tests]/fixtures/shared/PRICING-SPEC.md` | The pricing rules both engines implement |
+| `docs/PREVIEW-FIDELITY.md` | Where the live preview and the storefront agree, and where they deliberately do not — **generated**, never hand-written (ADR-102) |
 
 This file lives at the **repository root**, not inside any one of the three,
 because it describes all of them. Putting it in the backend would imply the
@@ -24,7 +25,7 @@ backend owns the architecture; it does not.
 optioniaWooCommerceFrontend  ──▶  optioniaWooCommerceBackend  ◀──  optioniaWooCommercePlugin
    Next.js · TypeScript             NestJS · TypeORM · MySQL          PHP 7.4+ · WordPress
    the merchant's dashboard         the multi-tenant SaaS             the merchant's storefront
-   ~78 TS/TSX files                 67 routes                         ~84 PHP files
+   ~188 TS/TSX files                79 routes                         ~93 PHP files
 ```
 
 **They never talk to each other.** The dashboard and the plugin share no code and
@@ -119,9 +120,28 @@ a gate:
 | The dashboard's rule vocabulary matches the API's | `bin/check-rule-vocabulary-parity.sh` |
 | No backend module is reached only from its own tests | `optioniaWooCommerceBackend/bin/check-reachable.ts` |
 | The config document's keys are spelled the way PHP reads them | `bin/check-wire-keys.sh` |
+| Every documented public filter still exists, and every filter is documented | `optioniaWooCommercePlugin/bin/check-public-filters.sh` |
+| A phase whose exit criteria are all met is not left unticked | `bin/check-ledger.sh` |
+| Unstyled options inherit the theme; no absolute colour, no `!important` | `optioniaWooCommercePlugin/bin/check-theme-inheritance.sh` |
+| Every style token emitted is consumed where it can inherit | `optioniaWooCommercePlugin/bin/check-style-tokens.sh` |
 | A storefront never blocks on the SaaS | no synchronous call in any render path |
 
 **Run every cross-repository gate with `bin/check.sh`** from the repository root.
+
+🔴 **And on this machine they run themselves.** `bash bin/install-hooks.sh` points
+this repository's `pre-commit` at `bin/pre-commit.sh`, which runs all 17 before a
+commit lands. A gate nobody runs is a gate that decays — this project has recorded
+that lesson six times.
+
+⚠️ **"Once per clone" is the design and not yet the state** (F49, F50). The hook
+scripts and **12 of the 21 gates** are untracked, so a fresh clone gets 8 files
+from `bin/` and runs 6 gates. Until they are tracked, this is enforcement on one
+laptop rather than on the repository.
+
+⚠️ **`.github/workflows/ci.yml` exists and is dormant.** None of the four
+repositories has a git remote, so Actions has nothing to run and no sub-repository
+to check out. It is committed so enforcement is one push away when that changes;
+until then the hook is the enforcement, and the workflow says so in its own header.
 It discovers `bin/check-*.sh` rather than listing them, so a gate added tomorrow
 runs without anyone editing the runner — and a glob that matches nothing fails
 rather than reporting a green run over zero checks.

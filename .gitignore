@@ -1,3 +1,27 @@
+# ---------------------------------------------------------------------------
+# Credentials and keys (added 2026-09-22)
+#
+# 🔴 **This repository had no secret rule at all**, while all three sub-repos
+# did. It holds no `.env` today — and "holds none today" is what every
+# repository that later leaked one could have said. The rules are cheap; the
+# omission is only cheap until it is not.
+#
+# ⚠️ **`.env.example` is deliberately allowed back.** It documents what a
+# developer must set and holds no value; excluding it means a fresh checkout has
+# no record of the variables the project needs.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+*.sqlite
+*.sqlite3
+
 # OS
 .DS_Store
 Thumbs.db

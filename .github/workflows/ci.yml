@@ -1,0 +1,62 @@
+name: Cross-repo gates
+
+# ⚠️ **DORMANT UNTIL A REMOTE EXISTS.**
+#
+# 🔴 None of the four repositories is pushed anywhere. This file is written and
+# correct, and it runs **nothing** — GitHub Actions needs a GitHub repository,
+# and the three sub-repositories it checks out have no remotes either.
+#
+# It is committed now so that the day a remote appears, enforcement is one push
+# away rather than one more thing to remember. Until then the gates are enforced
+# by `bin/pre-commit.sh`, installed with `bash bin/install-hooks.sh` — see F5.
+#
+# 📌 **What to change when remotes exist:** the three `repository:` lines below,
+# and nothing else. They are placeholders, deliberately obvious.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  gates:
+    name: 17 cross-repo gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the parent
+        uses: actions/checkout@v4
+
+      # 🔴 **The gates read all three repositories**, which is the whole point of
+      # them — type parity, capability parity, fixture hashes, wire keys. A run
+      # with a sub-repository missing does not fail loudly; several gates simply
+      # find nothing to compare. So each checkout is required, not optional.
+      - name: Check out the backend
+        uses: actions/checkout@v4
+        with:
+          repository: REPLACE-ME/optioniaWooCommerceBackend
+          path: optioniaWooCommerceBackend
+
+      - name: Check out the dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: REPLACE-ME/optioniaWooCommerceFrontend
+          path: optioniaWooCommerceFrontend
+
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+        with:
+          repository: REPLACE-ME/optioniaWooCommercePlugin
+          path: optioniaWooCommercePlugin
+
+      # 📌 **No Node, no PHP, no Composer.** Verified 2026-09-22 by running the
+      # suite under `env -i` with only /usr/bin and /bin on PATH: all 17 gates
+      # passed. They need shell, awk, sed, grep and python3.
+      #
+      # ⚠️ **That list is enforced, not assumed.** `bin/check.sh` refuses to run
+      # if any of the four is missing (F51) — so this job fails with a named
+      # interpreter rather than with a gate failing for the wrong reason. Adding
+      # setup steps "just in case" would hide the day one grows a real dependency.
+      - name: All cross-repo gates
+        run: bash bin/check.sh

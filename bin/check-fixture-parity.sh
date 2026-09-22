@@ -41,6 +41,19 @@ cd "$(dirname "$0")/.." || exit 1
 PLUGIN_DIR='optioniaWooCommercePlugin/tests/fixtures/shared'
 BACKEND_DIR='optioniaWooCommerceBackend/test/fixtures/shared'
 
+# 🔴 **The dashboard became the THIRD holder in M20.6** (ADR-083), and this gate
+# compared two directories. Measured before the fix: corrupting the dashboard's
+# `rule-fixtures.json` left this reporting *"all 4 shared fixture(s) are
+# byte-identical across both repositories"* — the exact shape of M17.9, where a
+# third copy lived where no gate looked.
+#
+# ⚠️ **A SUBSET, deliberately.** The dashboard holds the two fixtures its
+# evaluators execute plus the normative spec; `assignment-wire.json` describes a
+# plugin/backend handshake it has no part in. So the rule is "every file the
+# dashboard holds must match", not "the dashboard holds every file" — and the
+# floor below keeps that from decaying into "the dashboard holds nothing".
+DASHBOARD_DIR='optioniaWooCommerceFrontend/test/fixtures/shared'
+
 FAILURES=0
 
 fail() {
@@ -100,6 +113,47 @@ for file in "$BACKEND_DIR"/*; do
   fi
 done
 
+# Every fixture the DASHBOARD holds must match the backend's copy byte for byte.
+#
+# 📌 Compared against the backend rather than the plugin only because the backend
+# is where the dashboard's copies came from; all three are byte-identical by the
+# time this passes, so the choice of reference is arbitrary.
+DASH_COUNT=0
+
+if [ ! -d "$DASHBOARD_DIR" ]; then
+  fail "the dashboard's shared fixture directory is missing"
+else
+  for file in "$DASHBOARD_DIR"/*; do
+    [ -e "$file" ] || continue
+
+    NAME=$(basename "$file")
+    OTHER="$BACKEND_DIR/$NAME"
+    DASH_COUNT=$((DASH_COUNT + 1))
+
+    if [ ! -f "$OTHER" ]; then
+      fail "$NAME exists in the dashboard but not the backend"
+      continue
+    fi
+
+    if ! cmp -s "$file" "$OTHER"; then
+      fail "$NAME differs between the dashboard and the backend"
+      printf '        dashboard %s\n' "$(shasum -a 256 "$file" | awk '{print $1}')"
+      printf '        backend   %s\n' "$(shasum -a 256 "$OTHER" | awk '{print $1}')"
+    fi
+  done
+fi
+
+# 🔴 **Its own floor.** Without this, deleting the dashboard's fixtures would
+# make its loop compare nothing and this gate would pass while the evaluators it
+# ships went unproven -- which is precisely the failure being closed.
+DASH_FLOOR=3
+
+if [ "$DASH_COUNT" -lt "$DASH_FLOOR" ]; then
+  fail "only $DASH_COUNT dashboard fixture(s) compared (floor $DASH_FLOOR) -- the search is wrong, not the code"
+else
+  pass "all $DASH_COUNT dashboard fixture(s) match the backend"
+fi
+
 # A check that compares no files passes for the wrong reason.
 FLOOR=3
 
@@ -120,7 +174,29 @@ elif [ "$PLUGIN_PINS" != "$BACKEND_PINS" ]; then
   printf '        plugin:\n%s\n' "$(printf '%s\n' "$PLUGIN_PINS" | sed 's/^/          /')"
   printf '        backend:\n%s\n' "$(printf '%s\n' "$BACKEND_PINS" | sed 's/^/          /')"
 else
-  pass "both gates pin the same hashes"
+  pass "the plugin and backend gates pin the same hashes"
+fi
+
+# 🔴 **The dashboard's gate pins hashes too, and nothing compared them.** Its own
+# gate verifies its own files against its own pins, so rewriting a fixture *and*
+# its pinned hash together passes there — the failure this script's header calls
+# out, one repository further along.
+#
+# ⚠️ **A SUBSET check, not equality.** The dashboard holds no
+# `assignment-wire.json`, so it pins no wire hash; requiring the three sets to
+# match exactly would fail on a difference that is correct by design. Every hash
+# it DOES pin must be one the backend pins for the same file.
+DASH_PINS=$(grep -oE "EXPECTED[A-Z_]*_SHA='[a-f0-9]+'" optioniaWooCommerceFrontend/bin/check-shared-fixtures.sh | grep -oE "'[a-f0-9]+'" | sort)
+BACKEND_HASHES=$(printf '%s\n' "$BACKEND_PINS" | grep -oE "'[a-f0-9]+'" | sort)
+
+if [ -z "$DASH_PINS" ]; then
+  fail "could not read the pinned hashes from the dashboard gate -- the pattern is wrong, not the code"
+elif [ -n "$(comm -23 <(printf '%s\n' "$DASH_PINS") <(printf '%s\n' "$BACKEND_HASHES"))" ]; then
+  fail "the dashboard gate pins a hash the backend does not"
+  printf '        unmatched:\n%s\n' \
+    "$(comm -23 <(printf '%s\n' "$DASH_PINS") <(printf '%s\n' "$BACKEND_HASHES") | sed 's/^/          /')"
+else
+  pass "every hash the dashboard pins is one the backend pins"
 fi
 
 # The gates themselves must not diverge either. One repository lowering its own
@@ -156,7 +232,7 @@ else
 fi
 
 if [ "$FAILURES" -eq 0 ]; then
-  pass "all $COUNT shared fixture(s) are byte-identical across both repositories"
+  pass "all $COUNT shared fixture(s) are byte-identical across the plugin and the backend"
 fi
 
 echo
