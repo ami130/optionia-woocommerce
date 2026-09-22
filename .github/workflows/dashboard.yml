@@ -90,6 +90,13 @@ jobs:
           php-version: '8.4'
           coverage: none
 
+      # The generator boots the plugin's test bootstrap, which requires its
+      # Composer autoloader. `--no-dev` is enough: the fixtures need the
+      # plugin's own classes, not PHPUnit.
+      - name: Install the plugin's runtime dependencies
+        run: composer install --no-interaction --prefer-dist --no-dev
+        working-directory: optioniaWooCommercePlugin
+
       - name: Generate the storefront fixtures
         run: php tests/js/generate-fixtures.php
         working-directory: optioniaWooCommercePlugin
