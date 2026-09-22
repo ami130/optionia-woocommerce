@@ -22,6 +22,48 @@ defaults:
     working-directory: optioniaWooCommercePlugin
 
 jobs:
+  # 🔴 **The floor is syntax-checked, not unit-tested, and that is deliberate.**
+  #
+  # The plugin header says *"Requires PHP: 7.4"* and merchants on shared hosting
+  # genuinely still run it — so shipping code that does not parse there would be
+  # a real defect. But PHPUnit 9.6's own dependencies now require PHP 8
+  # (`doctrine/instantiator` needs ^8.4, `myclabs/deep-copy` needs ^8.0), so
+  # `composer install` cannot resolve on 7.4 at all.
+  #
+  # ⚠️ **Dropping 7.4 from CI was the alternative and it was rejected**: the
+  # comment this replaces said testing one version and shipping the other makes
+  # the unsupported one an untested claim. That argument holds. So the floor
+  # keeps a job — it installs runtime dependencies only and parses every shipped
+  # file, which is exactly the claim the header makes.
+  floor:
+    name: PHP 7.4 parses the shipped code
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP 7.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+          tools: composer:v2
+
+      # `--no-dev` is the whole point: the runtime tree resolves on 7.4, the
+      # test tooling does not, and only the runtime tree ships to a merchant.
+      - name: Install runtime dependencies only
+        run: composer install --no-interaction --prefer-dist --no-dev
+
+      - name: Every shipped file parses on the declared floor
+        run: |
+          set -e
+          count=0
+          while IFS= read -r file; do
+            php -l "$file" > /dev/null
+            count=$((count + 1))
+          done < <(find src templates optionia.php uninstall.php -name '*.php')
+          printf 'ok    %s file(s) parse on PHP 7.4\n' "$count"
+
   quality:
     name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
@@ -29,10 +71,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 7.4 is the floor declared in the plugin header; merchants on shared
-        # hosting genuinely still run it. 8.4 is what development runs on.
-        # Testing only one makes the other an untested claim.
-        php: ['7.4', '8.4']
+        # 8.4 is what development runs on and the only version the test tooling
+        # resolves on. The 7.4 floor is covered by the `floor` job above.
+        php: ['8.4']
 
     steps:
       - uses: actions/checkout@v4
