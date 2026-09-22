@@ -237,20 +237,6 @@ jobs:
           JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
           CORS_ORIGINS: http://localhost:3000
         run: bash bin/check-isolation.sh
-        # Boots the app to enumerate tenant-scoped routes, so it needs the same
-        # configuration. Verified by running it with JWT_SECRET unset: it fails
-        # with the same ConfigurationError the API contract step did.
-        env:
-          NODE_ENV: test
-          PORT: 4000
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_NAME: optionia_woo_test
-          DB_USER: root
-          DB_PASSWORD: ci_root_password
-          DB_SSL: false
-          JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
-          CORS_ORIGINS: http://localhost:3000
 
       # The spec a client developer reads. Asserts every [built] route appears
       # in it, all three realms are declared, and every guarded operation
