@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  quality:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4 is the floor declared in the plugin header; merchants on shared
+        # hosting genuinely still run it. 8.4 is what development runs on.
+        # Testing only one makes the other an untested claim.
+        php: ['7.4', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      # Node runs two things for `bin/check-js.sh`: `node --check` on the
+      # storefront runtime, and the Vitest suite that drives it through jsdom.
+      # Neither is optional -- a plugin whose storefront JavaScript does not
+      # parse, or whose price estimate silently totals zero, looks fine until a
+      # customer tries to choose an option.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json') }}
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      # 🔴 **Without this the JavaScript tests do not run and the gate says so
+      # quietly.** `check-js.sh` skips its behavioural check when
+      # `node_modules/` is absent -- correct on a developer machine that has not
+      # opted in, and wrong here, where absent tooling must be a failure rather
+      # than a pass. `CI=true` (set by GitHub Actions) turns that skip into a
+      # hard failure, so this step going missing breaks the build instead of
+      # silently deleting the suite.
+      - name: Install JavaScript test tooling
+        run: npm ci
+
+      # PHP syntax, JavaScript guards, architecture, uninstall completeness,
+      # secrets, wire contract, coding standards, unit tests, coverage floor.
+      # The same nine gates `bash bin/check.sh` runs
+      # locally -- invoked through that script rather than listed here, so a
+      # gate added locally cannot be one CI silently skips.
+      #
+      # These matter more here than in the backend: this plugin runs on
+      # merchant infrastructure we do not control, and its owner does not read
+      # PHP. Automated enforcement is the review.
+      - name: All gates
+        run: bash bin/check.sh

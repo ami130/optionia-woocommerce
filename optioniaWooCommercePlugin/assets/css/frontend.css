@@ -1,0 +1,550 @@
+/**
+ * Optionia storefront styles.
+ *
+ * ## What this file is for, and what it deliberately is not
+ *
+ * 🔴 **Every template shipped with classes and this file was one comment line.**
+ * Thirty-seven class names across fourteen option templates, the group wrapper
+ * and the presentational items had no styling at all — so a swatch grid rendered
+ * as a vertical list of radio buttons, and `columns: 3` did nothing whatsoever.
+ * Phase 10's exit criteria never mentioned CSS, which is how it passed a full
+ * checklist while being invisible.
+ *
+ * ⚠️ **This styles layout, not appearance.** Colours, fonts, borders and spacing
+ * belong to the merchant's theme: an option block that imposes its own palette
+ * looks pasted onto every storefront it lands on. What a theme *cannot* infer is
+ * structure — that six swatches form a grid, that a counter sits under its
+ * field, that a divider separates sections. So the rules here are grid, flex and
+ * spacing, and everything visual inherits.
+ *
+ * `currentColor` and `em` throughout for the same reason: both follow whatever
+ * the theme already set.
+ *
+ * Loaded only when a product actually has options — `Frontend\Assets` enqueues
+ * conditionally, so a store with no options ships no CSS.
+ *
+ * @package Optionia
+ */
+
+/* -------------------------------------------------------------------------
+ * The block, and groups
+ * ---------------------------------------------------------------------- */
+
+.optionia-options {
+	margin: 1.5em 0;
+}
+
+.optionia-group {
+	/* Reset the UA's fieldset chrome; the theme's own borders take over. */
+	border: 0;
+	margin: 0 0 1.5em;
+	padding: 0;
+	min-width: 0; /* A fieldset defaults to min-content, which breaks grid children. */
+}
+
+.optionia-group__label {
+	font-weight: 600;
+	padding: 0;
+	margin-bottom: 0.5em;
+}
+
+.optionia-group__description {
+	margin: 0 0 1em;
+	opacity: 0.8;
+}
+
+/* A choice's own price (M18.6b, ADR-065).
+ *
+ * Muted and beside the label rather than aligned in a column: the label and
+ * the price are one sentence a customer reads together, and a column needs a
+ * width this stylesheet cannot know without owning the theme's layout.
+ */
+.optionia-value__price {
+	margin-left: 0.35em;
+	opacity: 0.75;
+	font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------
+ * Group layouts (M18.4, ADR-059 and ADR-063)
+ *
+ * Three of `GroupDisplayType`'s four values are drawn here. `stepped` ships in
+ * its own stage and falls back to `inline`, because a wizard needs a second
+ * reason for a group to be hidden and the rule runtime recomputes visibility
+ * from scratch on every change.
+ *
+ * EVERY LAYOUT KEEPS EVERY OPTION REACHABLE WITHOUT JAVASCRIPT. This form
+ * decides what a customer is charged, so a layout that hid an option from
+ * someone with no JS would hide a price, not a decoration. That rules out a
+ * scripted tab interface: `tabs` is drawn as labelled panels, which is a
+ * weaker visual than true tabs and a stronger guarantee.
+ * ---------------------------------------------------------------------- */
+
+/* A folded group -- `accordion`, or `inline` with `is_collapsible`. */
+/* ----------------------------------------------------------------------
+ * Theme-derived surfaces (M21c.1)
+ *
+ * 🔴 **These were absolute black on every theme** -- a fixed low-alpha black
+ * for borders and surfaces. On a light theme that reads as a hairline; on a
+ * dark one it is invisible, and the exit criterion names Twenty Twenty-Five,
+ * which ships dark styles. The swatch's own comment already said
+ * *"`currentColor` at low alpha: an outline that works on any theme"* while the
+ * declaration beneath it used black -- the intent was documented and the code
+ * had drifted from it.
+ *
+ * `color-mix` in sRGB against `currentColor` keeps the same visual weight on a
+ * light theme and inverts with the text colour on a dark one. `transparent` is
+ * the second operand rather than a background colour, because the background
+ * behind an option is the theme's, not ours to name.
+ *
+ * ⚠️ **No `!important` anywhere in this file** (ADR-112). A merchant's CSS must
+ * always be able to win.
+ * ---------------------------------------------------------------------- */
+:root {
+	/*
+	 * ⚠️ **A browser without `color-mix` must not lose the borders entirely**
+	 * (F28). `color-mix` needs Chrome 111 / Safari 16.2 / Firefox 113, and an
+	 * unsupported value makes the whole declaration invalid — so these were
+	 * *absent*, not degraded, on an older browser: a folded group with no
+	 * outline at all.
+	 *
+	 * 🔴 **Declared twice, cascade order load-bearing.** The fallback is bare
+	 * `currentColor` — heavier than the mix, and the only inheriting value every
+	 * browser with custom properties understands. A grey would have been closer
+	 * to the intended weight and was rejected: it cannot inherit, so it would
+	 * have failed `check-theme-inheritance.sh` for exactly the reason that gate
+	 * exists. A visible hairline in the theme's own colour beats a hairline in
+	 * ours, and both beat none.
+	 *
+	 * ⚠️ **`--optionia-surface` falls back to `transparent`**, not to
+	 * `currentColor`: a summary background at full text colour would render
+	 * black-on-black. No background is the honest degradation.
+	 */
+	--optionia-line: currentColor;
+	--optionia-line-strong: currentColor;
+	--optionia-surface: transparent;
+}
+
+@supports ( color: color-mix( in srgb, currentColor 50%, transparent ) ) {
+	:root {
+		--optionia-line: color-mix( in srgb, currentColor 14%, transparent );
+		--optionia-line-strong: color-mix( in srgb, currentColor 20%, transparent );
+		--optionia-surface: color-mix( in srgb, currentColor 5%, transparent );
+	}
+}
+
+/*
+ * 🔴 **No `--optionia-radius` here, and that is the fix rather than the gap.**
+ *
+ * A custom property inherits **downward only**, and this `<details>` is an
+ * *ancestor* of the option wrappers that set the token:
+ *
+ * ```text
+ * <details class="optionia-group__fold">        <- would read it
+ *   <div class="optionia-option" style="--optionia-radius: 6px">  <- sets it
+ * ```
+ *
+ * ✏️ **It read `var( --optionia-radius, 3px )` until 2026-09-22 (F25)**, which
+ * could only ever resolve to the fallback. The radius was half-wired — working
+ * on the swatch, silently inert here — and a merchant seeing *some* effect
+ * reasonably assumes the rest works.
+ *
+ * A group is not an option, so a per-option token is the wrong thing to reach
+ * for. Shop-level defaults (M21c.2's *"per-shop defaults with per-option
+ * overrides"*) are what could style a group, and they are not built yet.
+ */
+.optionia-group__fold {
+	border: 1px solid var( --optionia-line );
+	border-radius: 3px;
+	padding: 0.75em 1em;
+}
+
+.optionia-group__summary {
+	cursor: pointer;
+
+	/*
+	 * `list-item` keeps the native disclosure triangle, which is the affordance
+	 * telling a customer the group opens. Removing it is a common accordion
+	 * style and it leaves no visible cue that anything is hidden.
+	 */
+	display: list-item;
+	margin-bottom: 0;
+}
+
+.optionia-group__fold[open] .optionia-group__summary {
+	margin-bottom: 0.75em;
+}
+
+/*
+ * `tabs`, drawn as labelled panels.
+ *
+ * A real tab interface needs JavaScript, ARIA roles and roving focus -- and
+ * hides every panel but one, which is precisely what must not happen to an
+ * option that carries a price. Panels give the merchant the visual separation
+ * they asked for while every control stays in the document and in the tab
+ * order.
+ */
+.optionia-group--tabs {
+	border: 1px solid var( --optionia-line );
+	border-radius: 3px;
+	padding: 1em;
+}
+
+.optionia-group--tabs > .optionia-group__label {
+	/*
+	 * Reads as a tab strip: the label sits on the panel's top edge rather than
+	 * above it.
+	 */
+	margin: -1em -1em 1em;
+	padding: 0.6em 1em;
+	background: var( --optionia-surface );
+	border-bottom: 1px solid var( --optionia-line );
+	float: none;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+/* -------------------------------------------------------------------------
+ * One option
+ * ---------------------------------------------------------------------- */
+
+.optionia-option {
+	margin-bottom: 1.25em;
+}
+
+.optionia-option__label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 0.35em;
+}
+
+.optionia-option__required {
+	/*
+	 * Inherits the theme's colour rather than forcing red: a required marker
+	 * that fails contrast against a dark storefront is worse than a subtle one,
+	 * and the `(required)` text beside it is what a screen reader announces.
+	 */
+	opacity: 0.7;
+	margin-left: 0.15em;
+}
+
+.optionia-option__field {
+	max-width: 100%;
+
+	/*
+	 * The merchant's corner rounding (M21c.2).
+	 *
+	 * 🔴 **No fallback, deliberately.** An unresolved `var()` makes the property
+	 * *invalid at computed-value time*, which for a non-inherited property means
+	 * the declaration behaves as though it were never written — so a theme's own
+	 * `input { border-radius: 4px }` applies untouched. That is exactly the
+	 * intent, and it is the only spelling that achieves it.
+	 *
+	 * ✏️ **This read `var( --optionia-radius, inherit )` until 2026-09-22 (F29).**
+	 * A `var()` fallback is **textual substitution**, not the `inherit` keyword
+	 * behaving contextually: with no token set it resolved to
+	 * `border-radius: inherit`, which takes the **parent's** computed value.
+	 * The parent is `.optionia-option`, a plain `<div>` with no radius — so
+	 * every unstyled input was forced square, overriding the theme. A
+	 * regression against M21c.1, introduced while fixing F25's inheritance bug.
+	 *
+	 * ⚠️ **`.optionia-option__field` is not only text inputs.** It is on the
+	 * `<fieldset>` for `radio`, `checkbox` and both swatches — 4 of 14
+	 * templates — where `.optionia-option > fieldset` resets `border: 0`, so a
+	 * radius there is inert rather than wrong. The visible effect is on the 10
+	 * templates whose field is a real `input`, `select` or `textarea`.
+	 */
+	border-radius: var( --optionia-radius );
+}
+
+/**
+ * The inner `<fieldset>` that carries a choice question.
+ *
+ * Reset unconditionally: `radio`, `checkbox` and both swatches wrap their values
+ * in one, and the UA's default border and padding would draw a box the theme
+ * never asked for. `min-width: 0` because a fieldset defaults to `min-content`,
+ * which breaks both grid and flex children.
+ */
+.optionia-option > fieldset {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+}
+
+.optionia-option > fieldset > legend {
+	font-weight: 600;
+	padding: 0;
+	margin-bottom: 0.35em;
+}
+
+/**
+ * The character counter and the range readout.
+ *
+ * Both are written by `frontend.js` and must not shift the layout when they
+ * appear — `min-height` reserves the line before there is text in it.
+ */
+.optionia-option__counter,
+.optionia-option__range-value {
+	display: block;
+	font-size: 0.85em;
+	opacity: 0.75;
+	margin-top: 0.25em;
+	min-height: 1.2em;
+}
+
+/**
+ * ⚠️ **`--collapsed` hides nothing.**
+ *
+ * `collapsed_by_default` is a merchant's *preference*, and honouring it in CSS
+ * alone would hide a control from sighted customers while leaving it in the tab
+ * order and the accessibility tree — the worst of both. Until a disclosure
+ * widget exists (with a real button and `aria-expanded`), this only de-emphasises
+ * the block. A customer can still see and use every control.
+ */
+.optionia-option--collapsed {
+	opacity: 0.92;
+}
+
+/* ----------------------------------------------------------------------
+ * The merchant's accent (M21c.2, ADR-112)
+ *
+ * One value drives every selected and focus state, so a merchant sets their
+ * brand colour once. `accent-color` is the native property: the browser draws
+ * the radio, checkbox and range in it and works out the contrasting mark
+ * itself, which no hand-rolled colour pair does as reliably.
+ *
+ * ⚠️ **Falls back to `currentColor`**, not to a colour of ours. An option that
+ * sets nothing keeps the theme's own accent.
+ * ---------------------------------------------------------------------- */
+.optionia-option input[type="radio"],
+.optionia-option input[type="checkbox"],
+.optionia-option input[type="range"] {
+	accent-color: var( --optionia-accent, currentColor );
+}
+
+/* -------------------------------------------------------------------------
+ * Values: the choice types
+ * ---------------------------------------------------------------------- */
+
+.optionia-value {
+	display: flex;
+	align-items: center;
+
+	/*
+	 * 🔴 **The default option is a single column, and this is where its spacing
+	 * lives** (F26).
+	 *
+	 * ✏️ **`--optionia-gap` reached only the grid rule until 2026-09-22.** A
+	 * merchant setting spacing on an ordinary radio list — `cols-1`, the default
+	 * and the commonest case — saw nothing change, because that list renders
+	 * through here and never through the grid. The token was tested on an
+	 * `image_swatch`, which happens to be a grid, so it looked wired.
+	 *
+	 * ⚠️ **Two gaps, one token.** The flex `gap` is the space between a control
+	 * and its label; `margin-bottom` is the space between one choice and the
+	 * next. Both scale from the same value, so "spacing" means one thing.
+	 */
+	gap: var( --optionia-gap, 0.5em );
+	margin-bottom: calc( var( --optionia-gap, 0.5em ) * 0.7 );
+	cursor: pointer;
+}
+
+/**
+ * Multi-column layout for choice values.
+ *
+ * ⚠️ **The grid goes on the inner `<fieldset>`, not on a values wrapper.**
+ * Written first against `.optionia-option__values`, which does not exist —
+ * `radio`, `checkbox` and both swatches put their `.optionia-value` labels
+ * directly inside the fieldset that carries the question. Those rules styled
+ * nothing at all, and nothing would have said so.
+ *
+ * `columns` is validated to 1–6 by `OptionView::display()` before it reaches a
+ * class name, so a single attribute-prefix selector covers every value that can
+ * be rendered — and `--cols-1` deliberately does not match, because one column
+ * is the default flow and needs no grid.
+ *
+ * `auto-fit` with `minmax` rather than a fixed count: on a narrow phone a
+ * six-column swatch grid is unusable, and this collapses toward one column
+ * without a media query per breakpoint.
+ */
+.optionia-option--cols-2 > fieldset,
+.optionia-option--cols-3 > fieldset,
+.optionia-option--cols-4 > fieldset,
+.optionia-option--cols-5 > fieldset,
+.optionia-option--cols-6 > fieldset {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(7em, 1fr));
+	/*
+	 * `--optionia-gap` is the merchant's pixel override (M21c.2). The column
+	 * gap stays proportional to it, so a denser grid does not become a wide one.
+	 */
+	gap: var( --optionia-gap, 0.5em ) calc( var( --optionia-gap, 0.5em ) * 2 );
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+}
+
+/**
+ * The legend must span the grid rather than become a cell.
+ *
+ * A `<legend>` inside a grid container is laid out as a grid item in every
+ * browser, so without this the question would sit in the first column and the
+ * first value beside it.
+ */
+.optionia-option--cols-2 > fieldset > legend,
+.optionia-option--cols-3 > fieldset > legend,
+.optionia-option--cols-4 > fieldset > legend,
+.optionia-option--cols-5 > fieldset > legend,
+.optionia-option--cols-6 > fieldset > legend {
+	grid-column: 1 / -1;
+}
+
+.optionia-option--cols-2 .optionia-value,
+.optionia-option--cols-3 .optionia-value,
+.optionia-option--cols-4 .optionia-value,
+.optionia-option--cols-5 .optionia-value,
+.optionia-option--cols-6 .optionia-value {
+	margin-bottom: 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Swatches
+ * ---------------------------------------------------------------------- */
+
+.optionia-value--swatch {
+	/* The chip and its label read as one target. */
+	align-items: center;
+}
+
+/**
+ * The colour chip or image.
+ *
+ * A fixed aspect ratio so a non-square merchant image does not distort the row,
+ * and `object-fit: cover` so it fills the chip rather than letter-boxing.
+ * `background-color` is set inline from the merchant's validated hex.
+ */
+.optionia-value__swatch {
+	display: inline-block;
+	/*
+	 * `--optionia-swatch` is the merchant's pixel override (M21c.2); `2em` is
+	 * the theme-relative default, so an option setting nothing is unchanged.
+	 */
+	width: var( --optionia-swatch, 2em );
+	height: var( --optionia-swatch, 2em );
+	border-radius: var( --optionia-radius, 3px );
+	/* `currentColor` at low alpha: an outline that works on any theme. */
+	box-shadow: inset 0 0 0 1px var( --optionia-line-strong );
+	background-size: cover;
+	background-position: center;
+	flex: 0 0 auto;
+}
+
+.optionia-value__swatch img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
+	border-radius: inherit;
+}
+
+/* `swatch_size` is validated to exactly these three by `OptionView::display()`. */
+.optionia-option--swatch-small .optionia-value__swatch {
+	width: 1.5em;
+	height: 1.5em;
+}
+
+.optionia-option--swatch-large .optionia-value__swatch {
+	width: 3em;
+	height: 3em;
+}
+
+/* -------------------------------------------------------------------------
+ * Presentational items (M5.4c)
+ * ---------------------------------------------------------------------- */
+
+.optionia-item {
+	margin: 0 0 0.75em;
+}
+
+/**
+ * ⚠️ **A heading is a `<p>`, styled to read as one.**
+ *
+ * The template deliberately does not emit an `<h3>`: the block already sits
+ * inside a `<fieldset>` with a `<legend>`, and the plugin cannot know whether the
+ * theme's product title is an `h1` or an `h2`, so any fixed level risks skipping
+ * one (a WCAG 1.3.1 failure). The weight and size here give it the *appearance*
+ * of a heading without claiming structure it cannot verify.
+ */
+.optionia-item--heading {
+	font-weight: 600;
+	font-size: 1.05em;
+	margin-top: 1.25em;
+}
+
+.optionia-item--paragraph {
+	opacity: 0.85;
+}
+
+.optionia-item--divider {
+	border: 0;
+	border-top: 1px solid currentColor;
+	opacity: 0.18;
+	margin: 1.25em 0;
+}
+
+/*
+ * The three divider styles (M21c.5, ADR-113).
+ *
+ * 🔴 **Three, because `border-style` gives all three for free.** `optionia-app`
+ * ships ten, of which three have no CSS equivalent and are synthesized — an
+ * inline-SVG sine wave as a repeating data URI, a `repeating-linear-gradient`
+ * faking a triple rule, and a forced floor for bevels invisible below 3px.
+ * These three are one keyword each on a border already drawn: nothing to
+ * synthesize, nothing to floor, no data URI to escape.
+ *
+ * ⚠️ **`solid` is declared even though it is the base rule's own value.** The
+ * plugin falls back to `solid` for anything unrecognised, so the class is
+ * always present — and a rule that exists for two of three values reads as an
+ * oversight rather than a default.
+ */
+.optionia-item--divider-solid {
+	border-top-style: solid;
+}
+
+.optionia-item--divider-dashed {
+	border-top-style: dashed;
+}
+
+.optionia-item--divider-dotted {
+	border-top-style: dotted;
+	/*
+	 * A dotted rule at 1px is nearly invisible at the 0.18 opacity the divider
+	 * uses, so it is drawn slightly heavier. Measured, not guessed: at 1px the
+	 * dots vanish against a light theme.
+	 */
+	border-top-width: 2px;
+}
+
+/* -------------------------------------------------------------------------
+ * The running estimate
+ * ---------------------------------------------------------------------- */
+
+.optionia-estimate {
+	font-weight: 600;
+	margin: 0.75em 0 0.25em;
+}
+
+/**
+ * ⚠️ Marked an estimate in the markup *and* here.
+ *
+ * AC4 makes the server authoritative on price. This note must stay legible
+ * rather than shrink into decoration, because a customer who reads the number
+ * above it and not this line has been told a price the page cannot promise.
+ */
+.optionia-estimate__note {
+	font-size: 0.85em;
+	opacity: 0.75;
+	margin: 0 0 0.5em;
+}

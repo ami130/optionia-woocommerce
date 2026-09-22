@@ -1,0 +1,47 @@
+{
+    "name": "parselab/optionia-woocommerce",
+    "description": "Advanced product options for WooCommerce, managed from the Optionia dashboard.",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=7.4",
+        "ext-intl": "*",
+        "ext-mbstring": "*"
+    },
+    "require-dev": {
+        "squizlabs/php_codesniffer": "^3.9",
+        "wp-coding-standards/wpcs": "^3.1",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "phpunit/phpunit": "^9.6",
+        "yoast/phpunit-polyfills": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Optionia\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Optionia\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        },
+        "sort-packages": true
+    },
+    "scripts": {
+        "lint": "phpcs",
+        "lint:fix": "phpcbf",
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite=unit",
+        "check:architecture": "bash bin/check-architecture.sh",
+        "check": [
+            "@lint",
+            "@check:architecture",
+            "@test"
+        ]
+    }
+}
