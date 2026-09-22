@@ -281,6 +281,33 @@ jobs:
       # Coverage, not just pass/fail. The unit report shows the security code at
       # 0% because it has no unit tests by design (ADR-023), so this is the only
       # place the real figure is visible.
+      # 🔴 **The e2e suite needs a built plugin archive.** `plugin-download`
+      # asserts `GET /v1/plugin/latest` returns 200 and then reads the version
+      # from it — the suite's own comment says *"`bash bin/package.sh` in the
+      # plugin repo is what makes them meaningful"*, and without it fifteen
+      # tests fail on 404 rather than passing vacuously.
+      #
+      # `dist/` is gitignored, correctly: a build artefact does not belong in
+      # git. So CI builds one. The default `PLUGIN_DIST_DIR` is
+      # `../optioniaWooCommercePlugin/dist`, which the merge preserved, so no
+      # configuration changes.
+      #
+      # ⚠️ **PHP is needed only for this.** `package.sh` reads the version from
+      # the plugin header and stages the shipped files; `--no-dev` is enough
+      # because packaging touches no test tooling.
+      - name: Set up PHP to build the plugin archive
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+
+      - name: Build the plugin archive the download route serves
+        run: |
+          composer install --no-interaction --prefer-dist --no-dev
+          bash bin/package.sh
+        working-directory: optioniaWooCommercePlugin
+
       - name: Schema and seed guarantees
         run: npm run test:e2e:cov
         env:
