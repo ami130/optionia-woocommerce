@@ -92,3 +92,39 @@ export function verifyEmail(email: string): void {
     { stdio: ['ignore', 'ignore', 'ignore'] },
   );
 }
+
+/**
+ * Give this merchant a connected store, without spending the handshake budget.
+ *
+ * 🔴 **A precondition, not the behaviour under test.** `POST /connect/initiate`
+ * allows **10 per hour** — the cap that made Gate 1 look flaky until it was
+ * measured — and a usability walkthrough that burns one per run would exhaust
+ * it in ten runs while proving nothing about the handshake. The canonical suite
+ * already tests the real connection; these tests need only its *result*.
+ *
+ * ⚠️ **Keyed to the merchant's tenant**, so each run seeds its own store and
+ * nothing is shared between them.
+ */
+export function seedConnectedStore(email: string, storeUrl = 'https://usability.test'): void {
+  const escaped = email.replace(/'/g, "''");
+
+  execFileSync(
+    'mysql',
+    [
+      `-h${DB.host}`,
+      `-P${DB.port}`,
+      `-u${DB.user}`,
+      `-p${DB.password}`,
+      DB.name,
+      '-e',
+      `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, connectedAt)
+       SELECT UUID(), tm.tenantId, 'woocommerce', 'Usability store', '${storeUrl}',
+              'connected', NOW(3)
+         FROM users u
+         JOIN tenant_members tm ON tm.userId = u.id
+        WHERE u.email = '${escaped}'
+        LIMIT 1`,
+    ],
+    { stdio: ['ignore', 'ignore', 'ignore'] },
+  );
+}

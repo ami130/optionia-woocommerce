@@ -248,9 +248,10 @@ export default function OptionSetsPage() {
               stores={stores.data ?? []}
               storeState={storeState}
               onCancel={() => setCreating(false)}
-              onCreated={() => {
+              onCreated={(id) => {
                 setCreating(false);
                 refresh();
+                router.push(`/option-sets/${id}`);
               }}
             />
           </CardContent>
@@ -323,7 +324,26 @@ export default function OptionSetsPage() {
                     <ErrorState error={fromTemplate.error} />
                   )}
 
-                  <Button variant="outline" onClick={() => setCreating(true)}>
+                  {/*
+                    🔴 **Disabled when there is no store, because clicking it
+                    otherwise does nothing a merchant can see.** `NewSetForm`
+                    answers `storeState === 'none'` with the very alert this
+                    empty state is already showing — so the button replaced one
+                    copy of *"Connect a store first"* with two, left itself
+                    enabled, and read as broken. Found by walking the flow as a
+                    new merchant with no store, which is the first state every
+                    tester meets.
+
+                    📌 **`templateUnavailable` decides, not a second copy of the
+                    condition.** Its own docblock says why: three call sites
+                    asking the same question separately is how two of them end
+                    up disagreeing about one tenant.
+                  */}
+                  <Button
+                    variant="outline"
+                    disabled={templateUnavailable(storeState) !== null}
+                    onClick={() => setCreating(true)}
+                  >
                     Start from scratch
                   </Button>
                 </div>
@@ -403,7 +423,17 @@ function NewSetForm({
    */
   storeState: 'unknown' | 'none' | 'some';
   onCancel: () => void;
-  onCreated: () => void;
+  /**
+   * 🔴 **Takes the new set's id, because the merchant should land in it.**
+   * Creating from a template already routes into the editor, and its own
+   * comment says why: *"a merchant who starts from a template lands in the
+   * editor and learns by seeing one; landing back on a list teaches nothing
+   * and costs a click more than the blank canvas it was meant to beat."*
+   * Starting from scratch did the thing that comment calls wrong — it closed
+   * the form and left them on the list, with no sign anything had opened.
+   * Found by walking the flow as a new merchant.
+   */
+  onCreated: (id: string) => void;
 }) {
   /*
    * A set belongs to a store, and the API requires the id rather than inferring
@@ -438,8 +468,9 @@ function NewSetForm({
       submitLabel="Create"
       pendingLabel="Creating…"
       onSubmit={async (values) => {
-        await createSet(values.name, values.storeId);
-        onCreated();
+        const created = await createSet(values.name, values.storeId);
+
+        onCreated(created.id);
       }}
     >
       {(form) => (
