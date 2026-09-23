@@ -495,6 +495,7 @@ one place this plan's ordering works against you.
 | B6 | **Tax handling under ADR-114** — ParseLab is merchant of record, so EU VAT and US sales tax are **yours**, not your merchants'. D1's own table says it: *"You handle EU VAT and US sales tax yourself."* 📌 **Recommended: Stripe Tax** (~0.5% per transaction) — it is Stripe's own product, fits ADR-114 without revisiting it, and costs far less than VAT registration plus quarterly filings. Alternatives: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee but reopens D1; handling it in-house is cheapest per transaction and means registrations, filings and nexus monitoring. ⚠️ **Blocks M22.3**, because it decides what is stored per customer and what an invoice must carry | [Phase 22](#phase-22--billing-integration) | **You** |
 | B7 | **The lapse policy (M24.3)** — what a storefront does when a subscription lapses. 🔴 **Blocks the M22.1a schema**, not merely the UI: it decides what subscription state the plugin must know, and therefore what the config document carries. Does the last published config keep serving, or does the storefront go dark? The first is kinder and risks unpaid use; the second is enforceable and risks breaking a live shop over a failed card | [M24.3](#phase-24--production-readiness) | **You** |
 | B8 | **Do limit changes reach existing subscribers?** A **price** rise must never touch someone who already subscribed (M22.1a builds immutable price versions for exactly that). A **limit** rise is arguably different — giving people more is not a billing surprise — but a limit *cut* is. 📌 Recorded as open rather than guessed at; it is a product call | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | **You** |
+| B9 | **What billing identity is collected, and when** — 🔴 **surfaced by the Phase 22 audit (G10)**: `tenants` carries `name`, `slug`, `planId`, `trialEndsAt` and **no country, address or VAT number**, so B6's recommended Stripe Tax has nothing to compute against and an EU B2B invoice cannot apply the reverse charge. The decision is *when* to ask: at registration (friction on signup, but every tenant is billable from day one) or at first paid checkout (clean signup, but the free tier then holds tenants with no tax location — which matters the moment one upgrades). ⚠️ **Blocks the M22.3 schema**, and pairs with B6 | [Phase 22](#phase-22--billing-integration) | **You** |
 
 **Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
 21c, and Stage 4B); B1 was withdrawn. Work continues now.
@@ -29204,66 +29205,104 @@ rich_text_html      —       —          yes
 Every number must be **measurable in code** and metered in `usage_records`. A limit that
 cannot be measured cannot be sold.
 
-#### 🔍 Phase 22 deep audit, 2026-09-23 — five gaps, two of them structural
+#### 🔍 Phase 22 audit — the complete finding list, 2026-09-23
 
-**Read against the code, not against the plan's own summary.** Four findings are real
-gaps; two apparent ones were checked and dismissed, and saying which is part of the
-result.
+**Two passes, read against the code rather than against the plan's own summary.** The
+second pass looked where a first pass does not — duplicated state, missing columns, and
+flags nothing reads — and found four more. **Eleven findings; three are structural.**
 
-🔴 **G1 — `subscriptions.planId` is a foreign key to a MUTABLE row.** The entity
-declares `@ManyToOne(() => Plan, { onDelete: 'RESTRICT' })`. Editing a plan's price
-therefore re-prices **every existing subscriber on it**, including merchants who signed
-up under different terms. This is [M22.1a](#m221a--plans-are-data-editable-by-platform-staff)'s
-defect proven in the schema rather than argued: the dynamic-pricing decision makes plan
-rows editable, and nothing currently stops an edit reaching people who already bought.
+##### 🔴 Structural — these change the schema and must be settled first
 
-🔴 **G2 — `UsageMetric` is a union of ONE.** `usage.service.ts` declares
-`export type UsageMetric = 'file_storage_mb'` and exposes a single `recordStorage()`.
-M22.1's table sells **nine** metrics — option sets, products assigned, option types,
-storage, conditional rules, analytics, stores, team seats, rich text. ⚠️ **Eight of
-nine are unmeasurable today**, and M22.1's own rule is the judgement: *"a limit that
-cannot be measured cannot be sold."* Phase 24's M24.1 owns metering, so this is a
-**sequencing** gap rather than a missing intention — but M22.1 cannot honestly ship a
-price list whose limits Phase 24 has not yet made real.
+**G1 — `subscriptions.planId` is a foreign key to a MUTABLE row.**
+`@ManyToOne(() => Plan, { onDelete: 'RESTRICT' })`. Editing a plan's price therefore
+re-prices **every existing subscriber on it**, including merchants who signed up under
+different terms — a billing error they discover on a card statement. The
+dynamic-pricing decision is what makes this reachable, so it must be fixed *inside*
+Phase 22. ✅ Answer: immutable price versions, existing subscriptions pinned to what
+they bought (M22.1a).
 
-⚠️ **G3 — M22.5 promises invoice history; there is no `invoices` table.** The billing
-schema is `plans`, `subscriptions`, `usage_records` and `webhook_deliveries` — no
-invoice storage anywhere. Either invoices are read live from the provider (a decision,
-with a rate-limit and availability cost) or they are mirrored locally (a table nobody
-has specified). 📌 **Not a defect yet, but an unstated choice inside a milestone that
-reads as settled.**
+**G6 — the plan is stored TWICE, and nothing reads either.** `tenants.planId` **and**
+`subscriptions.planId` both exist, both with a `@JoinColumn`. `trialEndsAt` is
+duplicated the same way. 🔴 **No code reads either one**, so the divergence has not
+happened yet — but the moment a webhook updates one, *which is authoritative?* is an
+unanswered question in production. 📌 **Decide before writing billing code**: the
+subscription is the honest owner (a tenant may be between subscriptions), with the
+tenant column either dropped or made a read-through.
 
-⚠️ **G4 — M22.4's lifecycle and `SubscriptionStatus` do not agree.** The plan writes
-*"Trial → active → past_due → grace → cancelled → reactivated"*; the enum ships
-`trialing, active, past_due, grace, cancelled, **expired**`. `expired` appears nowhere
-in Phase 22, and *"reactivated"* is a transition rather than a state. A lifecycle whose
-prose and enum disagree is how an unhandled state reaches production.
+**G7 — there is no `providerCustomerId` anywhere.** `subscriptions` stores `provider`
+and `providerSubscriptionId`; Stripe's **customer** is what the billing portal, saved
+payment methods and invoice history all key on. ⚠️ A subscription id alone cannot open
+a portal session, so M22.5's *"payment method management"* has nothing to call.
 
-📌 **G5 — nothing bumps `configVersion` on a plan change**, confirmed by search across
-`plans/`, `subscriptions/` and `tenants/`. This is Gate 2's open criterion *"Plan change
-alone invalidates cached config"* and carry-forward rule 4, both already recorded as
-owned by Phase 23 — noted here because **M22.1a makes it worse**: when a platform staff
-member can change a plan's limits at will, a cached config that does not notice is no
-longer an edge case but a routine one.
+##### 🔴 Selling what cannot be measured or enforced
 
-✅ **Two things checked and found SOUND**, recorded so they are not re-audited:
+**G2 — `UsageMetric` is a union of ONE.** `export type UsageMetric = 'file_storage_mb'`,
+with a single `recordStorage()`. M22.1's table sells **nine** metrics. Eight are
+unmeasurable today, and M22.1's own rule is the judgement: *"a limit that cannot be
+measured cannot be sold."*
+
+**G8 — `plans.isActive` is read by NOTHING.** Deactivating a plan therefore hides it
+from nowhere: it stays offerable at signup. M22.1a's exit requires that deactivating
+hides a plan **without cancelling anyone on it**, and today neither half exists.
+
+##### ⚠️ Unstated choices inside milestones that read as settled
+
+**G3 — M22.5 promises invoice history; there is no `invoices` table.** Either invoices
+are read live from the provider (a rate-limit and availability cost, and nothing to show
+if the provider is down) or mirrored locally (a table nobody has specified).
+
+**G9 — `plans.currency` is one column, so a plan is single-currency.** A tenant has **no
+country and no currency field at all**. Multi-currency pricing — the first thing asked of
+a dynamic pricing admin — is therefore not a UI feature but a schema change, and it is
+unaddressed.
+
+**G10 — 🔴 Stripe Tax cannot work without a customer country, and `tenants` has none.**
+The entity carries `name`, `slug`, `planId`, `trialEndsAt` — no country, no address, no
+VAT number. B6's recommended answer (Stripe Tax) **requires** a tax location, and EU B2B
+sales additionally need a VAT id to apply the reverse charge. ⚠️ **This is a blocker for
+M22.3, not a detail**: it decides what registration collects and what an invoice can
+legally carry.
+
+##### 📌 Smaller, but recorded
+
+**G4 — the lifecycle prose and the enum disagree.** M22.4 writes *"Trial → active →
+past_due → grace → cancelled → reactivated"*; the enum ships `expired`, which appears
+nowhere in Phase 22, and *"reactivated"* is a transition rather than a state.
+
+**G5 — nothing bumps `configVersion` on a plan change**, confirmed across `plans/`,
+`subscriptions/` and `tenants/`. Already Gate 2's open criterion and carry-forward rule
+4 — noted because **M22.1a makes it routine rather than an edge case**: staff can now
+change limits at will.
+
+##### ✅ Checked and SOUND — recorded so they are not re-audited
 
 - **Webhook idempotency is correctly specified.** `webhook_deliveries` is keyed on
-  `storeId` and cannot deduplicate a Stripe event — but Phase 23's M23.2 names a
-  separate `billing_events` table with a UNIQUE `provider_event_id`, which is the right
-  design. The existing table was never intended for billing.
-- **Free-plan provisioning already works and is well-reasoned.**
-  `tenant-provisioning.service.ts` assigns the `free` plan at registration and records
-  why the trial is expressed through `status`/`trialEndsAt` rather than plan membership:
-  *"a tenant whose trial lapses should keep working at free limits, not lose its plan
-  row."*
+  `storeId` and cannot deduplicate a Stripe event — but that table was never meant for
+  billing: Phase 23's M23.2 names a separate `billing_events` with a UNIQUE
+  `provider_event_id`, which is the right design.
+- **Free-plan provisioning works, and its reasoning is good.** A new tenant is put on
+  `free` at registration, and the trial is expressed through `status`/`trialEndsAt`
+  rather than plan membership, so *"a tenant whose trial lapses should keep working at
+  free limits, not lose its plan row."*
+- **The `billing` role is real, not decorative.** `Capability.BILLING_VIEW` and
+  `BILLING_MANAGE` exist and are gated by `check-capability-parity.sh` across both
+  repositories.
+- **Downgrade-over-limit policy is already decided** in M24.4: *"block new creation,
+  keep existing working, prompt for"* — so Phase 22 does not need to invent it.
 
-📌 **Sequencing conclusion.** Phase 22 declares `Depends on: Gate 2`, but the sharper
-dependency is **Phase 24**: M22.1 sells nine limits, M24.1 makes them measurable, and
-M24.2 enforces them. Shipping billing first means selling limits that cannot be checked.
-⚠️ **G1 is the one that must be fixed inside Phase 22 itself** — every other gap can
-follow, but a price change reaching an existing subscriber is a billing error the
-merchant finds on a card statement.
+##### 📌 The execution order this audit implies
+
+1. **Answer B7 (lapse policy)** — it decides what subscription state the plugin must
+   know, and therefore the shape of the tables below it.
+2. **Settle G6, G7, G9, G10 as one schema change** — plan ownership, provider customer,
+   currency, and tax location are all the same migration, and doing them separately
+   means migrating billing tables three times.
+3. **Build M22.1a on price versions (G1)**, with `isActive` actually read (G8).
+4. **Phase 24's metering (G2) before Phase 22 sells the limits** — M22.1 sells nine
+   metrics, M24.1 makes them measurable, M24.2 enforces them. ⚠️ **Phase 22 declares
+   `Depends on: Gate 2`, but the sharper dependency is Phase 24.**
+5. **Then M22.2–M22.6**, with G3 (invoices) and G4 (lifecycle) resolved as they are
+   reached.
 
 
 ### M22.1a — Plans are DATA, editable by platform staff
