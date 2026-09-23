@@ -1,4 +1,5 @@
 import { cleanupPreviousRuns, residue } from './cleanup';
+import { apiSmtpHost } from './fixtures';
 import { checkServices, SERVICES } from './services';
 
 /**
@@ -45,8 +46,48 @@ function assertLocal(): void {
   }
 }
 
+/**
+ * Refuse to run while the API would really send the mail these tests provoke.
+ *
+ * 🔴 **Measured, in someone's inbox.** Every run registers a merchant at
+ * `e2e-<stamp>@optionia.test`, a domain that does not resolve. With SMTP
+ * configured the API sends the verification message for real, the receiving
+ * server rejects it, and the bounce — *"Address not found"* — lands in the
+ * mailbox `SMTP_USER` signs in as. The project's owner got one per run, from a
+ * suite nobody thought was touching mail.
+ *
+ * ⚠️ **`.env.example` already documented this and it happened anyway.** A note
+ * asking a person to remember is not a mechanism; this is the mechanism. The
+ * same lesson the phase ledger records: *"a ledger nobody updates is a ledger
+ * nobody can trust."*
+ *
+ * 📌 **Refuses rather than rewrites.** Emptying `SMTP_HOST` from a test harness
+ * would edit configuration the developer chose, silently, and leave them
+ * wondering why delivery stopped working. Failing with the reason costs one
+ * line to fix and cannot surprise anyone.
+ */
+function assertMailIsNotSent(): void {
+  const host = apiSmtpHost();
+
+  if (host === '') {
+    return;
+  }
+
+  throw new Error(
+    `SMTP_HOST is set to "${host}", so this suite would send real verification ` +
+      'email to e2e-…@optionia.test — a domain that does not resolve — and every ' +
+      'run would bounce into the mailbox SMTP_USER signs in as.\n\n' +
+      'Empty SMTP_HOST in optioniaWooCommerceBackend/.env and restart the API ' +
+      '(a rebuild is not enough: nest start --watch keeps the environment it ' +
+      'booted with). Messages then go to the ops log, verification link included, ' +
+      'which is all these tests need — verifyEmail() marks the address verified ' +
+      'in the database directly.',
+  );
+}
+
 export default async function globalSetup(): Promise<void> {
   assertLocal();
+  assertMailIsNotSent();
 
   const checks = await checkServices();
   const down = checks.filter((check) => !check.ok);

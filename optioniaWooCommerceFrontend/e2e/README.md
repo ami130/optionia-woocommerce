@@ -106,6 +106,24 @@ suspecting the flow.
 response.** Eleven lines mentioning `/connect/initiate` is ten calls, not
 eleven. Count distinct `requestId`s.
 
+🔴 **Empty `SMTP_HOST` before running these, or every run emails you.** Each
+run registers a merchant at `e2e-<stamp>@optionia.test` — a domain that does
+not resolve. With SMTP configured the API really sends the verification
+message, the receiving server rejects it, and the bounce lands in the
+mailbox that `SMTP_USER` signs in as. **Observed in the wild**: the owner of
+this project got one *"Address not found"* per run, from a suite nobody
+thought was touching mail at all.
+
+With `SMTP_HOST` empty the message goes to the ops log instead — it is
+printed in full, verification link included, under `context: "LogTransport"`
+— which is the documented development default and is all these tests need.
+`verifyEmail()` marks the address verified directly in the database, so the
+suite never reads the mail either way. Restore your SMTP values only while
+deliberately testing delivery, and empty the host again afterwards.
+
+⚠️ **The API must be restarted, not just rebuilt** — see the note on
+`nest start --watch` below.
+
 **`POST /auth/refresh` allows 60 per hour, and its failure names the wrong
 thing.** A run signs in and refreshes repeatedly, so a few runs exhaust the
 bucket — and from then on every navigation lands on **Sign in** while the suite

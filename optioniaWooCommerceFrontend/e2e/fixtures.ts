@@ -32,6 +32,18 @@ function backendEnv(): Record<string, string> {
 
 const ENV = backendEnv();
 
+/**
+ * What the **API** is configured to do with mail, read from its own `.env`.
+ *
+ * ⚠️ **Not `process.env.SMTP_HOST`.** Playwright runs in the dashboard's
+ * process, which never loads the backend's environment — so reading it there
+ * returns `undefined` no matter how the API is configured, and a guard built on
+ * it would be permanently satisfied while sending real email.
+ */
+export function apiSmtpHost(): string {
+  return (ENV.SMTP_HOST ?? '').trim();
+}
+
 export const DB = {
   host: process.env.E2E_DB_HOST ?? ENV.DB_HOST ?? '127.0.0.1',
   port: process.env.E2E_DB_PORT ?? ENV.DB_PORT ?? '3306',
