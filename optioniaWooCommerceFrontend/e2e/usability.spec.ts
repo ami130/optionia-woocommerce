@@ -300,6 +300,55 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
       await expect(page.getByText(/has no enabled options or content/).first()).toBeVisible();
     });
 
+    await test.step('re-enabling clears it again, so the state is reversible', async () => {
+      /*
+       * ⚠️ **A blocker that appears and never leaves is its own dead end.** A
+       * merchant who disables something to see what happens must be able to
+       * undo that and find the editor as they left it.
+       */
+      await page.getByRole('button', { name: /^Enable Engraving text$/ }).click();
+
+      await expect(page.getByText(/has no enabled options or content/)).toHaveCount(0);
+    });
+
+    await test.step('assignment explains itself, including when nothing has synced', async () => {
+      /*
+       * 🔴 **A draft that assigns nothing reaches no customer**, and a merchant
+       * who does not know that publishes into silence. The panel says both
+       * halves: assignments *"are saved now and reach your storefront when you
+       * publish"*, and right now *"not assigned to anything yet, so it will not
+       * appear on your storefront"*.
+       *
+       * ⚠️ **And an empty catalogue is explained, not merely empty.** A store
+       * whose products have not synced yet gets the reason and a place to look
+       * — *Optionia → System Status*, the Catalogue sync row — rather than a
+       * blank list that reads as a broken integration.
+       */
+      await expect(page.getByText(/Assignments are saved now/).first()).toBeVisible();
+      await expect(page.getByText(/not appear on your storefront/i).first()).toBeVisible();
+      await expect(page.getByText(/No products have arrived from your store yet/).first())
+        .toBeVisible();
+    });
+
+    await test.step('she publishes, and her storefront is named', async () => {
+      /*
+       * 🔴 **The finish line, and no persona reached it until now.** Everything
+       * before this is preparation; a merchant who cannot publish has built
+       * nothing a customer will ever see.
+       *
+       * ⚠️ **The confirmation must name a version and a configuration**, not
+       * merely say "done": those are what a merchant checks their storefront
+       * against when they go looking for their change.
+       */
+      const publish = page.getByRole('button', { name: 'Publish', exact: true });
+
+      await expect(publish).toBeEnabled();
+      await publish.click();
+
+      await expect(page.getByText(/Published version \d+/)).toBeVisible();
+      await expect(page.getByText(/reaches configuration v\d+/)).toBeVisible();
+    });
+
     await test.step('the merchant can reach the reason and act on it', async () => {
       /*
        * ⚠️ **The findings live in the panel below, not in the header.** A
@@ -337,6 +386,41 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
       await addValue(page, 'Small', '5.00');
       await addValue(page, 'Large', '12.50');
 
+    });
+
+    await test.step('an unassigned set warns rather than blocks', async () => {
+      /*
+       * 📌 **The right call, and worth pinning so it stays that way.** A set
+       * assigned to no product publishes to nothing — but that is a merchant's
+       * decision to make, not a reason to refuse. The panel says *"publishing
+       * it will not change any storefront"*, which is the fact they need, and
+       * the button stays live.
+       */
+      await expect(
+        page.getByText(/is not assigned to any product/).first(),
+      ).toBeVisible();
+
+      await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    });
+
+    await test.step('she publishes, and is told what her storefront will do', async () => {
+      /*
+       * 🔴 **The moment the work becomes real**, and no persona had reached it.
+       * A confirmation that merely said "done" would prove nothing: what a
+       * merchant needs is the version their storefront will serve and when.
+       */
+      await page.getByRole('button', { name: 'Publish', exact: true }).click();
+
+      await expect(page.getByText(/Published version \d+/)).toBeVisible();
+    });
+
+    await test.step('the header stops calling it a draft', async () => {
+      /*
+       * ⚠️ **The badge is the one fact deciding whether a merchant believes
+       * they are live.** It read as a sentence until F58 made it a state; this
+       * asserts the state actually changes when they publish.
+       */
+      await expect(page.getByText(/Published · v\d+/).first()).toBeVisible();
     });
 
     await test.step('the customer preview shows both sizes and their prices', async () => {

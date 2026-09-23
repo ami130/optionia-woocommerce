@@ -27,6 +27,15 @@ const seed = (client: QueryClient, setId: string) => {
   client.setQueryData(optionSetKeys.publishCheck(setId), { seeded: true });
   client.setQueryData(optionSetKeys.unpublished(setId, 3), { seeded: true });
   client.setQueryData(optionSetKeys.versions(setId, 3), { seeded: true });
+
+  /*
+   * ⚠️ **`version` is the lock token; `versions` is the published history.**
+   * One character apart and unrelated — and this helper seeded only the
+   * second, so a test asserting the token was refetched read an empty list and
+   * failed no matter what the code did. Both are cached by the editor, so both
+   * belong here.
+   */
+  client.setQueryData(optionSetKeys.version(setId), 3);
 };
 
 const invalidated = (client: QueryClient) =>
@@ -115,6 +124,30 @@ describe('invalidateAfterEdit', () => {
   });
 
   /**
+   * 🔴 **A create advances `rowVersion` too, and this did not refetch it (F79).**
+   *
+   * `patchTree` — the path for edits *in place* — refetches the version, with
+   * the reasoning recorded there: *"every child edit advances the parent set's
+   * `rowVersion` server-side"*. **Every** edit, not only in-place ones. This
+   * function serves every create, delete and reorder, and left the token at
+   * whatever the page loaded with.
+   *
+   * ⚠️ **Measured end to end**: a merchant adds two values to a dropdown and
+   * presses Publish 131ms later; the API answers **409** and the editor says
+   * *"Someone else changed this"* — naming a conflict they caused themselves,
+   * alone, in a set they had just built.
+   */
+  it('refreshes the row version, which every create advances', async () => {
+    const client = new QueryClient();
+
+    seed(client, 's1');
+    invalidateAfterEdit(client, 's1');
+    await Promise.resolve();
+
+    expect(invalidated(client)).toContain('option-set/s1/row-version');
+  });
+
+  /**
    * The count is the headline: **three**, where it used to be four, and where a
    * naive prefix invalidation would take everything.
    *
@@ -128,14 +161,20 @@ describe('invalidateAfterEdit', () => {
    * drops `exact: true` and the prefix quietly takes the published history with
    * it — a regression that costs a whole document fetch per keystroke.
    */
-  it('invalidates three queries, not the whole prefix', async () => {
+  it('invalidates four queries, not the whole prefix', async () => {
     const client = new QueryClient();
 
     seed(client, 's1');
     invalidateAfterEdit(client, 's1');
     await Promise.resolve();
 
-    expect(invalidated(client)).toHaveLength(3);
+    /*
+     * ✏️ Two, then three (F73's publish-check), now **four** — the lock token
+     * an edit advances (F79). Each rise is a sibling whose answer an edit
+     * genuinely changes; the published history is still left alone, which is
+     * what this count exists to prove.
+     */
+    expect(invalidated(client)).toHaveLength(4);
   });
 });
 
@@ -152,7 +191,13 @@ describe('invalidateAfterPublish', () => {
     invalidateAfterPublish(client, 's1');
     await Promise.resolve();
 
-    expect(invalidated(client)).toHaveLength(4);
+    /*
+     * ✏️ **Five, not four** — the seed now includes the row-version key the
+     * editor really caches (F79). A publish invalidates the whole set prefix
+     * deliberately: it moves the version, writes a history row and settles the
+     * draft-versus-live question, so everything about the set has changed.
+     */
+    expect(invalidated(client)).toHaveLength(5);
   });
 });
 

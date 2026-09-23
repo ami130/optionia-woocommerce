@@ -94,6 +94,27 @@ export function invalidateAfterEdit(client: QueryClient, setId: string): void {
   });
 
   void client.invalidateQueries({ queryKey: optionSetKeys.publishCheck(setId) });
+
+  /*
+   * 🔴 **And the lock token, because a create advances it too (F79).**
+   * `patchTree` already refetches this and states the reason — *"every child
+   * edit advances the parent set's `rowVersion` server-side"*. **Every** edit:
+   * this function serves every create, delete and reorder, and left the token
+   * at whatever the page loaded with.
+   *
+   * ⚠️ **Measured end to end, not reasoned.** A merchant adds two values to a
+   * dropdown and presses Publish 131ms later; the API answers **409** and the
+   * editor says *"Someone else changed this. Reload to see their changes
+   * first."* — naming a conflict they caused themselves, alone, in a set they
+   * had just built. The worst kind of error message: confidently wrong about
+   * who is at fault.
+   *
+   * 📌 **Refetched, never incremented**, for the reason `patchTree` records: a
+   * guessed version can coincidentally match the row under a concurrent edit,
+   * the write succeeds, and another merchant's work is lost with no error at
+   * all — the precise failure the lock exists to prevent.
+   */
+  void client.invalidateQueries({ queryKey: optionSetKeys.version(setId) });
 }
 
 /**
