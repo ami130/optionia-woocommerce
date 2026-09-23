@@ -462,4 +462,197 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
       await expect(page.getByText('Draft').first()).toBeVisible();
     });
   });
+
+  /**
+   * **Persona 4 — the hurried merchant.** Wants something working now and
+   * reaches for the template, which the empty state offers *before* "Start
+   * from scratch". The first control a real tester is likely to press, and
+   * until now walked by nothing.
+   */
+  test('persona 4: a starter template, from empty to editing', async ({ page }) => {
+    const merchant = await signInAsNewMerchant(page);
+
+    seedConnectedStore(merchant.email);
+
+    await test.step('the templates say what they are for, not merely their names', async () => {
+      await page.goto('/option-sets');
+
+      /*
+       * 📌 **A name alone makes a merchant guess.** *"Engraving"* could be a
+       * text box or a swatch; the line beneath it — *"Text priced per
+       * character, with a free allowance and a length limit"* — is what lets
+       * someone choose without opening all four.
+       */
+      await expect(page.getByText(/Start from a template and adapt it/)).toBeVisible();
+      await expect(
+        page.getByText(/Text priced per character, with a free allowance/),
+      ).toBeVisible();
+    });
+
+    await test.step('choosing one lands her in the editor, already populated', async () => {
+      await page.getByRole('button', { name: /^Engraving/ }).click();
+
+      await page.waitForURL(/\/option-sets\/[0-9a-f-]{36}/, { timeout: 30_000 });
+
+      /*
+       * 🔴 **The whole promise of a template.** Landing in an *empty* editor
+       * would be worse than starting from scratch — the merchant would have
+       * paid a click to arrive exactly where the other button leads.
+       */
+      await expect(page.getByText(/Nothing here yet/)).toHaveCount(0);
+    });
+
+    await test.step('she inherits a real group and a real option, not a shell', async () => {
+      /*
+       * ⚠️ **Waited for the tree, not read mid-render.** A first probe called
+       * `innerText()` the instant the URL changed and got an empty string —
+       * which looked like a blank editor and was really the fetch in flight.
+       * The lesson is the assertion, not the incident: wait for the thing.
+       */
+      await expect(page.getByRole('heading', { name: 'Engraving', level: 2 })).toBeVisible();
+      await expect(page.getByText('Engraving text').first()).toBeVisible();
+    });
+
+    await test.step('and it is publishable as it arrives', async () => {
+      /*
+       * 🔴 **A template a merchant must repair before using is not a starting
+       * point.** It should have everything a publish needs, and the only thing
+       * the panel says is the one fact no template can know — that nothing is
+       * assigned to a product yet.
+       */
+      await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+
+      await expect(page.getByText(/has no enabled options or content/)).toHaveCount(0);
+      await expect(page.getByText(/is not assigned to any product/).first()).toBeVisible();
+    });
+
+    await test.step('she publishes it unchanged', async () => {
+      await page.getByRole('button', { name: 'Publish', exact: true }).click();
+
+      await expect(page.getByText(/Published version \d+/)).toBeVisible();
+      await expect(page.getByText(/Published · v\d+/).first()).toBeVisible();
+    });
+  });
+
+  /**
+   * **Persona 5 — the shirt printer.** Sells shirts where *"Print colour"*
+   * only applies if the customer chose a printed style. That is conditional
+   * logic — the headline feature — and nothing has ever created a rule through
+   * the UI.
+   */
+  test('persona 5: a rule, written without documentation', async ({ page }) => {
+    const merchant = await signInAsNewMerchant(page);
+
+    seedConnectedStore(merchant.email);
+    await createSet(page, 'Shirt options');
+
+    await addGroup(page, 'Style');
+    await addOption(page, 'Choose a style', 'Dropdown');
+    await addValue(page, 'Plain');
+    await addValue(page, 'Printed');
+
+    await addOption(page, 'Print colour', 'Dropdown');
+
+    await test.step('the rule builder reads as a sentence, not a schema', async () => {
+      /*
+       * 📌 **"Do this / To this / When" is the whole reason a merchant can
+       * write one.** The API's vocabulary is `action`, `targetType`,
+       * `operator`, `matchType`; none of that appears on screen. Pinned
+       * because a later refactor that leaked those words would be a
+       * regression no type checker could see.
+       */
+      await expect(page.getByText(/Show, hide or require an option depending on/)).toBeVisible();
+      await expect(page.getByText(/A rule needs at least one condition/)).toBeVisible();
+    });
+
+    await test.step('every operator is plain English, none of the wire vocabulary', async () => {
+      await page.getByRole('button', { name: /add condition/i }).click();
+
+      /*
+       * 🔴 **The API says `eq`, `neq`, `in`, `contains`, `gt`, `lt`.** A
+       * merchant reads *"is", "is not", "is one of", "contains", "is more
+       * than", "is less than"* — plus *"is empty"* and *"is answered"*, which
+       * are the two nobody guesses the spelling of. Pinned because leaking
+       * one of the wire words is a regression no type checker can see.
+       */
+      /*
+       * ⚠️ **Asserted as the select's own options, not as visible text.** They
+       * live inside a closed `<select>`, so `toBeVisible()` reports `hidden`
+       * for every one of them — a first draft failed on correct markup.
+       */
+      const operators = page.locator('select').filter({ hasText: 'is one of' }).first();
+
+      await expect(operators).toContainText('is one of');
+      await expect(operators).toContainText('is empty');
+      await expect(operators).toContainText('is answered');
+      await expect(operators).toContainText('is more than');
+
+      /* And none of the wire spellings a refactor might leak. */
+      const html = await operators.innerHTML();
+
+      expect(html).not.toMatch(/>(eq|neq|gt|lt|in|nin)</);
+
+      await expect(page.getByText(/Give something to compare against/)).toBeVisible();
+    });
+
+    await test.step('a value target names its option, so two "Plain"s cannot be confused', async () => {
+      /*
+       * 📌 **`Choose a style: Plain`, not `Plain`.** Two options in one set can
+       * both offer a value called *Plain*; a bare label would make the merchant
+       * guess which they were acting on, and guess wrong half the time.
+       */
+      const targets = page.locator('select').filter({ hasText: 'Choose a style: Plain' });
+
+      await expect(targets.first()).toContainText('Choose a style: Plain');
+    });
+
+    await test.step('she writes it: hide Print colour unless the style is Printed', async () => {
+      /*
+       * 📌 **Addressed by accessible name, not by content.** Every control here
+       * has one — *"To this"*, *"Which answer"*, *"Comparison"*, *"Value"* — and
+       * a first draft matched on option text instead, which picked the target
+       * select when it meant the comparison value and left the rule incomplete.
+       * The form was right: it said *"Give something to compare against."*
+       */
+      await page.getByRole('combobox', { name: 'To this' }).selectOption({ label: 'Print colour' });
+
+      await page
+        .getByRole('combobox', { name: 'Which answer' })
+        .selectOption({ label: 'Choose a style' });
+
+      await page.getByRole('combobox', { name: 'Comparison' }).selectOption({ label: 'is' });
+      await page.getByRole('combobox', { name: 'Value' }).selectOption({ label: 'Plain' });
+
+      await page.getByRole('button', { name: /^add rule$/i }).click();
+
+      /*
+       * 🔴 **The rule must appear in the list, not merely leave the form.** A
+       * form that clears itself and creates nothing is the same defect F77
+       * recorded one level up.
+       */
+      await expect(page.getByText(/No rules yet/)).toHaveCount(0);
+    });
+
+    await test.step('the saved rule reads back as the sentence she wrote', async () => {
+      /*
+       * 🔴 **A rule a merchant cannot re-read is a rule they cannot trust.**
+       * Weeks later they must be able to look at the list and know what it
+       * does without reconstructing it from the builder's controls.
+       */
+      await expect(page.getByText(/Hide/).first()).toBeVisible();
+      await expect(page.getByText(/Print colour/).first()).toBeVisible();
+    });
+
+    await test.step('and it survives a reload, so it was really saved', async () => {
+      /*
+       * ⚠️ **The assertion that catches a form which clears and creates
+       * nothing** — the defect class F77 recorded for options and values. A
+       * reload reads from the API, so nothing cached can fake it.
+       */
+      await page.reload();
+
+      await expect(page.getByText(/No rules yet/)).toHaveCount(0);
+    });
+  });
+
 });
