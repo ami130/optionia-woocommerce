@@ -115,8 +115,26 @@ describe.each(fetching.map((p) => [label(p), p]))('%s', (_name, path) => {
     );
   });
 
+  /**
+   * 🔴 **`isError` is how React Query actually spells it, and this missed it.**
+   * The pattern was `\berror\b`, which does not match `isError` — no word
+   * boundary before a capital — so a screen handling errors correctly through
+   * `release.isError` satisfied this only by *importing* `ErrorState` and
+   * never using it. Deleting that unused import, which lint had been flagging,
+   * turned a green guard red without changing behaviour by one line.
+   *
+   * ⚠️ **The guard was passing for the wrong reason, which is worse than
+   * failing.** An import proves nothing: a page can import `ErrorState`,
+   * render a permanent skeleton on failure, and pass. Matching the state flags
+   * asks whether the error was *looked at*.
+   *
+   * 📌 **Its range, stated:** this reads the whole file, so a screen with two
+   * error paths still passes when one is removed — verified by mutation, both
+   * of `install/page.tsx`'s had to go before it failed. It catches a screen
+   * that ignores errors entirely, not one that half-handles them.
+   */
   it('reports errors', () => {
-    expect(/\b(error|ErrorState|ConflictAwareError)\b/.test(source)).toBe(true);
+    expect(/\b(isError|error|ErrorState|ConflictAwareError)\b/.test(source)).toBe(true);
   });
 
   /**

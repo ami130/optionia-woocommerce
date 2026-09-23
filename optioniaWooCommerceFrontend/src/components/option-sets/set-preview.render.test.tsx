@@ -490,9 +490,19 @@ describe('SetPreview docked', () => {
    */
   it('starts at phone, not at a width the column would clamp', () => {
     const markup = docked();
-    const phone = markup.indexOf('aria-pressed="true"');
 
-    expect(phone).toBeGreaterThan(-1);
+    /*
+     * ⚠️ **Scoped to the picker, because `aria-pressed` is not unique.** Every
+     * value swatch carries one too (M21.3 makes them real controls), so an
+     * unscoped search for `aria-pressed="true"` passes on a chosen swatch in a
+     * fixture that happens to have one — and the first version of this test did
+     * exactly that, holding only because this fixture has no chosen value.
+     */
+    const picker = markup.slice(markup.indexOf('aria-label="Preview width"'));
+    const phone = picker.slice(0, picker.indexOf('</div>'));
+
+    expect(phone).toContain('aria-pressed="true"');
+    expect(phone).toContain('Phone');
     expect(markup).toContain('max-width:23.4rem');
   });
 

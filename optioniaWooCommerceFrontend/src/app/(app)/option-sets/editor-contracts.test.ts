@@ -29,15 +29,23 @@ import { describe, expect, it } from 'vitest';
  * ## Why source-reading rather than rendering
  *
  * The page is `'use client'` and depends on `useParams`, React Query and a
- * session provider, so mounting it needs a renderer this repository does not
- * have (`@testing-library/react` is not a dependency) plus four provider
- * wrappers. A source contract costs nothing, needs no dependency, and protects
- * the refactor **today** — which is worth more than a better test that arrives
- * after the code has moved.
+ * session provider, so mounting the **whole page** means standing up four
+ * provider wrappers around a four-thousand-line component. A source contract
+ * costs nothing and protects the Phase 20 refactor today.
+ *
+ * ⚠️ **This paragraph used to say `@testing-library/react` is not a
+ * dependency, and that stopped being true.** It is (`^16.3.3`), and sibling
+ * tests in this directory mount real components with it — so the original
+ * reason for reading source had expired while the justification stayed,
+ * leaving the next reader a constraint that no longer exists. What remains
+ * true is narrower and worth keeping: **the cost is the page's providers, not
+ * the renderer**, and a component small enough to mount should be mounted.
+ * Where that is possible these assertions belong in a render test, and
+ * `editor-help.render.test.tsx` is where several already are.
  *
  * ⚠️ It is weaker than a render test and stronger than the nothing that let the
- * mutation above survive. When a renderer is added — 20-1d, if M20.10 earns it
- * — these assertions move into it rather than being deleted.
+ * mutation above survive. As the page decomposes, these assertions move into
+ * render tests rather than being deleted.
  *
  * ## What this CANNOT see, stated so it is not mistaken for coverage
  *
@@ -125,6 +133,17 @@ const code = (path: string): string =>
  * `lib/option-sets/entries`, already covered by `entries.test.ts` — listing it
  * here would guard arithmetic twice and the network not at all.
  */
+/**
+ * Calls that match the shape this file scans for and reach no network.
+ *
+ * 🔴 **Each one is a decision extracted *because* it was unreachable.**
+ * `publishGate` shipped as inline expressions that nothing could assert —
+ * deleting the blocker check let a set with unresolved blockers publish to a
+ * live storefront past 1752 green tests. Extracting it is what made it
+ * testable; this set is what stops the extraction tripping the write count.
+ */
+const PURE_HELPERS = new Set(['reorderPayloads', 'publishGate', 'publishResultIsCurrent']);
+
 const WRITES = [
   'createGroup',
   'createOption',
@@ -239,13 +258,19 @@ describe('option-set editor', () => {
       /*
        * Local helpers, tested where they live — see the note on WRITES.
        *
-       * 📌 **`publishGate` is a pure decision, not a request.** It matches the
-       * `publish[A-Z]` shape this regex looks for and performs no network call
-       * at all; listing it in `WRITES` would assert a `mutationFn` that cannot
-       * exist. Its own tests kill the mutations that matter, and the wiring is
-       * asserted by `publishing consults its gate` below.
+       * 📌 **Pure decisions, not requests.** `publishGate` and
+       * `publishResultIsCurrent` both match the `publish[A-Z]` shape this regex
+       * looks for and perform no network call at all; listing either in
+       * `WRITES` would assert a `mutationFn` that cannot exist. They are tested
+       * in `lib/option-sets/publish-gate.test.ts`, and the wiring that matters
+       * is asserted by `publishing consults its gate` below.
+       *
+       * ⚠️ **Named individually rather than excluded by a pattern.** A rule
+       * like "anything imported from `lib/`" would silently swallow a real API
+       * function the day one is added there, which is the failure this count
+       * exists to catch. A list that must be edited is the point.
        */
-      .filter((name) => name !== 'reorderPayloads' && name !== 'publishGate');
+      .filter((name) => !PURE_HELPERS.has(name));
 
     expect([...new Set(called)].sort()).toEqual([...WRITES].sort());
   });

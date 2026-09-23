@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PublishFinding } from '@/lib/option-sets/api';
-import { publishGate } from './publish-gate';
+import { publishGate, publishResultIsCurrent } from './publish-gate';
 
 const finding = (severity: PublishFinding['severity'], code: string): PublishFinding => ({
   severity,
@@ -71,5 +71,39 @@ describe('publishGate', () => {
     expect(publishGate([finding('blocker', 'a'), finding('warning', 'b')]).summary).toBe(
       '1 thing to fix',
     );
+  });
+});
+
+describe('publishResultIsCurrent', () => {
+  /**
+   * 🔴 **The defect this exists for.** "Published version 7" stayed at the top
+   * of the page while `UnpublishedChangesNotice` rendered directly below it
+   * saying the storefront was serving something older — two contradictory
+   * sentences, stacked, with the stale one first.
+   */
+  it('expires once something differs from the published version', () => {
+    expect(publishResultIsCurrent(true, ['Finish: added Matte black'])).toBe(false);
+  });
+
+  /** Nothing differs, so the storefront really does match: the message holds. */
+  it('keeps the confirmation while nothing has changed', () => {
+    expect(publishResultIsCurrent(true, [])).toBe(true);
+  });
+
+  /**
+   * ⚠️ **`undefined` is "not asked yet", not "something changed".** The diff is
+   * a query, and it is `undefined` on every refetch — expiring on it would
+   * blank the confirmation most of the time, including immediately after the
+   * publish that produced it.
+   */
+  it('does not expire while the answer is still pending', () => {
+    expect(publishResultIsCurrent(true, undefined)).toBe(true);
+  });
+
+  /** No result recorded renders nothing, whatever the diff says. */
+  it('shows nothing when no publish has been attempted', () => {
+    expect(publishResultIsCurrent(false, [])).toBe(false);
+    expect(publishResultIsCurrent(false, undefined)).toBe(false);
+    expect(publishResultIsCurrent(false, ['a change'])).toBe(false);
   });
 });

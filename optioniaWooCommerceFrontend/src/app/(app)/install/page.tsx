@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { ErrorState, LoadingRows } from '@/components/layout/states';
+import { LoadingRows } from '@/components/layout/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardContent } from '@/components/ui/card';
 import { ConnectionCheck, Download } from '@/components/install/install-display';

@@ -55,7 +55,7 @@ import {
   parseOptionValidation,
   readOptionValidation,
 } from '@/lib/option-sets/option-validation';
-import { publishGate } from '@/lib/option-sets/publish-gate';
+import { publishGate, publishResultIsCurrent } from '@/lib/option-sets/publish-gate';
 import { parsePortable } from '@/lib/option-sets/portable-import';
 import { toPortable } from '@/lib/option-sets/portable';
 import { parseTextRules, readTextRules } from '@/lib/option-sets/text-rules';
@@ -185,12 +185,29 @@ export default function OptionSetEditorPage() {
   const canPublish = roleCan(me?.role, 'option_sets:publish');
 
   /**
-   * What the last publish attempt said, rendered below the header.
+   * What the last publish attempt said, and the edit it was true for.
    *
    * ⚠️ **Held here rather than read from the mutation**, because the mutation
    * lives inside the header's action and its result needs the page's width.
    * `null` is "nothing attempted this session" — not "it succeeded", which is
    * what an empty render would imply.
+   *
+   * 🔴 **It must expire, and the first version of this did not.** A publish
+   * confirmation that outlives the state it describes says *"Published version
+   * 7"* at the top of the page while `UnpublishedNotice` renders directly
+   * below it saying the storefront is serving something older — two
+   * contradictory sentences, stacked, with the stale one on top. ⚠️ **The
+   * previous code had the same flaw** (`publish.data` also lived until
+   * unmount); moving the message from a buried panel to the top of the page is
+   * what turned a barely-visible staleness into a prominent contradiction.
+   *
+   * 📌 **Keyed on the `rowVersion` the result was recorded at, not on the
+   * current one.** Publishing itself advances the version — `invalidateAfterPublish`
+   * refetches the tree — so comparing against today's value would erase the
+   * confirmation in the same tick that produced it. Recording the version
+   * *observed when the result arrived* means the message survives the publish
+   * that created it and disappears at the merchant's next edit, which is
+   * exactly when it stops being true.
    */
   const [publishResult, setPublishResult] = useState<React.ReactNode>(null);
 
@@ -334,6 +351,14 @@ export default function OptionSetEditorPage() {
     record: history.record,
   };
 
+  /*
+   * 📌 **Called before the guards, as the rules of hooks require.** It answers
+   * two questions on this page — what the notice lists, and whether a publish
+   * confirmation is still true — so it is asked once here rather than
+   * separately by each reader.
+   */
+  const unpublished = useUnpublishedChanges(query.data);
+
   if (query.isLoading) {
     return <FullPageLoading />;
   }
@@ -356,14 +381,24 @@ export default function OptionSetEditorPage() {
         set={set}
         action={
           canPublish ? (
-            <PublishAction set={set} onPublished={reloadAfterPublish} onResult={setPublishResult} />
+            <PublishAction
+              set={set}
+              onPublished={reloadAfterPublish}
+              onResult={setPublishResult}
+            />
           ) : undefined
         }
       />
 
-      {publishResult}
+      {/*
+        📌 **Shown only while it is still true.** The confirmation expires at
+        the merchant's next edit rather than living until they navigate away.
+        `publishResultIsCurrent` records why this is keyed on the diff and not
+        on any of the three version numbers that look like they would do.
+      */}
+      {publishResultIsCurrent(publishResult !== null, unpublished.data) ? publishResult : null}
 
-      <UnpublishedNotice set={set} canPublish={canPublish} />
+      <UnpublishedNotice set={set} canPublish={canPublish} changes={unpublished.data} />
 
       {set.groups.length === 0 ? (
         <Alert>
@@ -719,7 +754,16 @@ export function EditorHeader({
   );
 }
 
-function UnpublishedNotice({ set, canPublish }: { set: AuthoringSet; canPublish: boolean }) {
+/**
+ * What differs from the published version, asked once for the whole page.
+ *
+ * 📌 **Two readers, one question.** The notice renders the list; the publish
+ * confirmation uses the same answer to decide whether it is still true. Asking
+ * twice would be two full-document comparisons per edit for one fact — and
+ * React Query would dedupe the request while leaving the duplication in the
+ * code, where it reads as two independent sources that could disagree.
+ */
+function useUnpublishedChanges(set: AuthoringSet | undefined) {
   /*
    * 🔴 **Named changes, not a boolean** (M20.9's `diff-vs-published`). This
    * asked `hasUnpublishedChanges`, which fetched *both* documents and reduced
@@ -727,10 +771,18 @@ function UnpublishedNotice({ set, canPublish }: { set: AuthoringSet; canPublish:
    * something differed and never what. `unpublishedChanges` makes the same two
    * requests and keeps the comparison.
    */
-  const dirty = useQuery({
-    queryKey: ['option-set', set.id, 'unpublished', set.rowVersion],
-    queryFn: () => unpublishedChanges(set.id, set.version),
-    enabled: set.status === 'published' && set.version > 0,
+  return useQuery({
+    queryKey: ['option-set', set?.id, 'unpublished', set?.rowVersion],
+    queryFn: () => unpublishedChanges(set!.id, set!.version),
+
+    /*
+     * ⚠️ **`set` may be undefined**, because the page's loading and error
+     * guards return before the tree resolves and a hook cannot be called after
+     * them. `enabled` already gates every case that would dereference it; the
+     * `!` marks the invariant `enabled` enforces rather than asserting one the
+     * reader has to take on trust.
+     */
+    enabled: set !== undefined && set.status === 'published' && set.version > 0,
     /*
      * Keyed on `rowVersion` so every edit re-asks: the answer changes the moment
      * a merchant changes anything, and a cached "no changes" is exactly the
@@ -738,26 +790,32 @@ function UnpublishedNotice({ set, canPublish }: { set: AuthoringSet; canPublish:
      */
     retry: false,
   });
+}
 
+function UnpublishedNotice({
+  set,
+  canPublish,
+  changes,
+}: {
+  set: AuthoringSet;
+  canPublish: boolean;
+  changes: readonly string[] | undefined;
+}) {
   /*
    * ⚠️ **An empty array is "nothing changed"; `undefined` is "not asked yet".**
    * Treating the two alike would flash the notice on every load.
    */
-  if (dirty.data === undefined || dirty.data.length === 0) {
+  if (changes === undefined || changes.length === 0) {
     return null;
   }
 
   /*
    * The markup lives in `option-set-display`, where it can be rendered from a
-   * test. What stays here is the only part that cannot: the network question
-   * above deciding whether to show it at all.
+   * test. What stays here is the only part that cannot: the question above
+   * deciding whether to show it at all.
    */
   return (
-    <UnpublishedChangesNotice
-      version={set.version}
-      canPublish={canPublish}
-      changes={dirty.data}
-    />
+    <UnpublishedChangesNotice version={set.version} canPublish={canPublish} changes={changes} />
   );
 }
 
@@ -4068,7 +4126,12 @@ function usePublishCheck(set: AuthoringSet) {
  * a trigger; it deliberately does not try to reproduce `FindingList` in a
  * header, where a long list would push the whole editor down.
  */
-function PublishAction({
+/**
+ * ⚠️ **Exported so it can be mounted.** `EditorHeader` is exported for the same
+ * reason, and this is the control that decides whether a merchant can ship — it
+ * had no render coverage at all until this export made one possible.
+ */
+export function PublishAction({
   set,
   onPublished,
   onResult,
@@ -4082,6 +4145,9 @@ function PublishAction({
    * conflict — both are sentences, and a sentence in a title row either
    * truncates or pushes the name off its line. The action reports upward and
    * the page renders it full width, directly below.
+   *
+   * 📌 **The `rowVersion` goes with it**, because the page cannot know when the
+   * message stops being true without knowing the edit it was true for.
    */
   onResult: (node: React.ReactNode) => void;
 }) {

@@ -59,3 +59,51 @@ export function publishGate(findings: readonly PublishFinding[] | undefined): Pu
           : `${blockers.length} things to fix`,
   };
 }
+
+/**
+ * Whether a publish confirmation still describes the set in front of the merchant.
+ *
+ * 🔴 **A confirmation that outlives its state contradicts the page it sits
+ * on.** Publishing writes *"Published version 7"* at the top; the merchant then
+ * edits, and `UnpublishedChangesNotice` renders below it saying the storefront
+ * is serving something older. Both sentences are on screen, and the stale one
+ * is first. ⚠️ **The previous code had this flaw too** — `publish.data` also
+ * lived until unmount — but it sat in a panel below the product picker, so
+ * moving the message to the top is what made a quiet staleness loud.
+ *
+ * ## Why unpublished changes, and not a version number
+ *
+ * 📌 **Three plausible keys were wrong, each for its own reason**, and they are
+ * recorded because the next person will reach for them in the same order:
+ *
+ * - `set.version` is the **published** version. It does not move when a
+ *   merchant edits, so the message would survive exactly the edits it needs to
+ *   expire on.
+ * - `set.rowVersion` is the optimistic lock and does move on every edit — but
+ *   **publishing moves it too**, and `invalidateAfterPublish` refetches the
+ *   tree asynchronously, so a version captured in `onSuccess` is the
+ *   *pre*-publish one and the incoming refetch erases the message in the tick
+ *   that produced it.
+ * - `PublishResult.rowVersion` would settle it and **does not exist**; the
+ *   response carries `version`, `publishedAt`, `configVersion` and `warnings`.
+ *   Guessing the lock token is the class of defect the lock exists to prevent.
+ *
+ * What the message actually claims is *"your storefront matches what you have
+ * here"*. The question already asked on this page is whether anything differs
+ * from the published version — so the confirmation is true exactly while that
+ * answer is empty, and no version arithmetic is needed.
+ *
+ * ⚠️ **`undefined` is "not asked yet", and must not expire the message.** The
+ * diff is a query; treating its pending state as "something changed" would
+ * blank the confirmation on every refetch, which is most of the time.
+ */
+export function publishResultIsCurrent(
+  hasResult: boolean,
+  unpublishedChanges: readonly string[] | undefined,
+): boolean {
+  if (!hasResult) {
+    return false;
+  }
+
+  return unpublishedChanges === undefined || unpublishedChanges.length === 0;
+}

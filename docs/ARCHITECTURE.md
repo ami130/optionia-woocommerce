@@ -33,7 +33,7 @@ backend owns the architecture; it does not.
 optioniaWooCommerceFrontend  ──▶  optioniaWooCommerceBackend  ◀──  optioniaWooCommercePlugin
    Next.js · TypeScript             NestJS · TypeORM · MySQL          PHP 7.4+ · WordPress
    the merchant's dashboard         the multi-tenant SaaS             the merchant's storefront
-   ~191 TS/TSX files                79 routes                         ~93 PHP files in src/
+   ~203 TS/TSX files                79 routes                         ~93 PHP files in src/
 ```
 
 **They never talk to each other.** The dashboard and the plugin share no code and
