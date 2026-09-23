@@ -458,7 +458,7 @@ one place this plan's ordering works against you.
 | # | Blocker | Blocks | Who resolves |
 |---|---|---|---|
 | ~~B1~~ | ~~`optionia-app-api` not on this machine~~ — **WITHDRAWN 2026-08-27.** Not a blocker. Your NestJS backend already owns the schema (808-line `DATABASE.md`, 32 entities, 5 applied migrations, Phase 7 closed). The Shopify app's schema is Shopify-shaped (shop domains, GIDs, one DB per merchant) and its multi-tenant design is **worse** than yours. [M5.0](#m50--review-the-existing-schema-against-optionia-apps-option-model) is a review of the *existing* schema, needing no external file | — |
-| B2 | **D1 — billing provider** undecided (Stripe vs Paddle vs Lemon Squeezy) | [Phase 22](#phase-22--billing-integration) | **You** — needs company jurisdiction |
+| ~~B2~~ | ~~**D1 — billing provider** undecided~~ ✅ **DECIDED 2026-09-23 (ADR-114): Stripe.** ParseLab already runs it across several projects. ⚠️ **Merchant of record is therefore ParseLab**, so Phase 22 must budget for EU VAT and US sales-tax handling a merchant-of-record provider would have supplied | [Phase 22](#phase-22--billing-integration) | ~~You~~ — done |
 | ~~B3~~ | ~~**D6 — styling ownership** undecided (theme templates / dashboard / both)~~ ✅ **DECIDED 2026-09-21 (ADR-112)**: both, with a **bounded** four-token layer — accent colour, border radius/width, spacing, swatch size. `optionia-app`'s six style groups are explicitly out of scope, and M21c.3 (presets) is deferred to [Phase 24](#phase-24--plan-limits--enforcement) | [Phase 21c](#phase-21c--option-styling--presentation-control) | ~~You~~ — done |
 | B4 | **D7 — Design Lab in or out** | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) | **You** — [M1.10](#m110--decide-d7-design-lab-scope-and-position) |
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
@@ -874,6 +874,30 @@ structure, tax obligations, company setup, and the pricing page.
 
 **Recommendation: Paddle or Lemon Squeezy**, unless the operating company is incorporated
 somewhere with working Stripe access — then Stripe.
+
+##### ADR-114 — D1 is decided: Stripe
+
+**Decided 2026-09-23**, closing [M1.3](#m13--decide-d1-billing-provider) and unblocking
+[Phase 22](#phase-22--billing-integration).
+
+**Stripe Billing.** ParseLab already runs Stripe across several projects, so the account,
+the company structure and the operational familiarity exist — which is the half of this
+decision the plan could not see when it recommended a merchant-of-record provider.
+
+⚠️ **The recommendation above assumed no incumbent**, and its own escape clause covers
+this: *"unless the operating company is incorporated somewhere with working Stripe
+access — then Stripe."* That clause is now the operative one.
+
+🔴 **The tax burden is real and is ours.** Merchant of record means ParseLab handles EU
+VAT registration and returns, US sales-tax nexus, and filing in every jurisdiction it
+sells into. Paddle and Lemon Squeezy would have absorbed that for a higher rate. This is
+a deliberate trade, not an oversight — and [Phase 22](#phase-22--billing-integration)
+must budget for tax handling that a merchant-of-record provider would have supplied.
+
+📌 **[M22.2](#m222--billingprovider-abstraction)'s `BillingProvider` interface still
+ships.** It exists so D1 is reversible, and a decision made on an existing account is
+exactly the kind that can change when the tax work is costed. One provider is
+implemented; the seam stays.
 
 Reasoning: the buyers are global WooCommerce merchants. Merchant-of-record means no tax
 logic to build, no VAT returns to file, and no tax integration blocking launch. The extra
@@ -1624,7 +1648,7 @@ reference it and the estimate includes it.
 [ ] Secret scanning active; no real credential in any repo, ever
 [ ] No hardcoded config fallbacks; missing env throws
 [ ] Three environments defined with separate credentials
-[ ] D1 decided — billing provider, jurisdiction confirmed
+[x] D1 decided — Stripe (ADR-114, 2026-09-23); ParseLab is merchant of record
 [ ] D2 decided — free tier shape
 [ ] D3 decided — positioning statement written
 [ ] Competitive analysis complete, with weaknesses identified
