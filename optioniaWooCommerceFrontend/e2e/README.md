@@ -88,10 +88,23 @@ that port — on the machine this was written on, an unrelated project.
 
 ## Things that will bite you
 
-**`POST /connect/initiate` allows 10 per hour.** Each run spends one. After about
-five runs the handshake answers `429`, the plugin redirects to
+**`POST /connect/initiate` allows 10 per hour.** Each run spends one, so the
+**eleventh** run in an hour answers `429`, the plugin redirects to
 `?optionia_connection=failed`, and it looks exactly like a broken handshake. The
-test names the cause when it sees that; restarting the API resets the counter.
+test names the cause when it sees that.
+
+⚠️ **Restarting the API resets the counter, and that is what makes it look
+random.** The throttler's store is in memory: a restart — including any
+recompile under `nest start --watch` — refills the budget. Measured while
+diagnosing this: ten consecutive runs passed after a restart and the eleventh
+failed with three `429`s on that endpoint, while earlier sessions that
+restarted the API mid-run saw failures scattered at roughly one run in three
+with no apparent pattern. If the rate looks erratic, count restarts before
+suspecting the flow.
+
+📌 **Counting calls in the API log: it prints a line for the request *and* the
+response.** Eleven lines mentioning `/connect/initiate` is ten calls, not
+eleven. Count distinct `requestId`s.
 
 **`POST /auth/refresh` allows 60 per hour, and its failure names the wrong
 thing.** A run signs in and refreshes repeatedly, so a few runs exhaust the
