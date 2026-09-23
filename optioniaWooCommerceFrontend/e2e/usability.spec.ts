@@ -108,14 +108,75 @@ async function addOption(page: Page, label: string, type: string) {
    * a dead end.
    */
   await page.getByRole('button', { name: type, exact: true }).first().click();
-  await page.getByRole('textbox', { name: 'Label', exact: true }).first().fill(label);
+
+  /*
+   * 📌 **Typed rather than `fill()`ed, because a merchant types.**
+   *
+   * ✏️ **An earlier version of this comment claimed `fill()` leaves the form
+   * invalid. That was wrong, and the correction is kept because the mistake is
+   * easy to repeat.** A probe read the submit button *immediately* after
+   * `fill()` and saw `disabled: true`, then read it after typing and saw
+   * `false` — which looked like a validation difference and was really React
+   * not having re-rendered yet. Measured properly: `fill()` passes this test
+   * three runs out of three. `pressSequentially` is kept for fidelity, not
+   * because the other is broken.
+   */
+  const labelBox = page.getByRole('textbox', { name: 'Label', exact: true }).first();
+
+  await labelBox.click();
+  await labelBox.pressSequentially(label, { delay: 15 });
 
   const submit = page.getByRole('button', { name: 'Add option', exact: true }).first();
 
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  await expect(page.getByText(label).first()).toBeVisible();
+  /*
+   * ⚠️ **The group must stop saying it is empty.** A page-wide `getByText`
+   * matched the label still sitting in the input *and* the form's own live
+   * preview — so the first version of this passed while nothing was created
+   * at all, which is how the `fill()` problem above stayed hidden.
+   */
+  await expect(page.getByText('Nothing in this group yet')).toHaveCount(0);
+}
+
+/**
+ * Add a choice to an option, the way a merchant does.
+ *
+ * ⚠️ **Scoped to the value form, not the page.** Several inputs are labelled
+ * "Label" — the option's own, and every value row's — so an unscoped locator
+ * picks whichever renders first and edits the wrong thing.
+ */
+async function addValue(page: Page, label: string, price?: string) {
+  /*
+   * 📌 **No disclosure step here either.** The value form is already open under
+   * the option — *"Value label"*, *"Key"*, *"Price"*, *"Group (optional)"* —
+   * and *"Add value"* at the end is the submit, disabled until a label exists.
+   * A first draft clicked that button expecting it to *open* the form and
+   * waited three minutes for a control that was never going to enable.
+   *
+   * ⚠️ **`Value label`, not `Label`.** The option's own field is *"Label"*, so
+   * a loose match edits the option instead of the value.
+   */
+  const box = page.getByRole('textbox', { name: 'Value label', exact: true }).last();
+
+  await box.click();
+  await box.pressSequentially(label, { delay: 15 });
+
+  if (price !== undefined) {
+    const priceBox = page.getByRole('textbox', { name: 'Price', exact: true }).last();
+
+    await priceBox.click();
+    await priceBox.pressSequentially(price, { delay: 15 });
+  }
+
+  const submit = page.getByRole('button', { name: 'Add value', exact: true }).last();
+
+  await expect(submit).toBeEnabled();
+  await submit.click();
+
+  /* The field clears on success, so an empty box is the signal it landed. */
+  await expect(box).toHaveValue('');
 }
 
 test.describe('Gate 2 — can a merchant build what they came to build?', () => {
@@ -272,6 +333,22 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
        * decides whether they finish. Asserted by walking it.
        */
       await expect(page.getByRole('button', { name: /add value/i }).first()).toBeVisible();
+
+      await addValue(page, 'Small', '5.00');
+      await addValue(page, 'Large', '12.50');
+
+    });
+
+    await test.step('the customer preview shows both sizes and their prices', async () => {
+      /*
+       * 🔴 **The whole reason the preview exists.** A merchant who has added
+       * two priced sizes needs to see two priced sizes — anything else means
+       * the work did not land where the customer will meet it.
+       */
+      const preview = page.getByRole('region', { name: /what your customer sees/i });
+
+      await expect(preview.getByText('Small')).toBeVisible();
+      await expect(preview.getByText('Large')).toBeVisible();
     });
   });
 

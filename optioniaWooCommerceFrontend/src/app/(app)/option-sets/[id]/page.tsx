@@ -3963,23 +3963,45 @@ function AddValue({
         <label className="text-xs font-medium" htmlFor={`value-label-${optionId}`}>
           Value label
         </label>
+        {/*
+          🔴 **The key is derived from the label, as the option form already
+          does.** It was not, and the value form requires one — so a merchant
+          typed a label and a price, the *"Add value"* button stayed grey, and
+          **nothing on screen said a key was missing**. The option form two
+          inches above fills its key automatically and says so (*"Filled in
+          from the label"*); this one demanded a field it never explained.
+          Found by walking the flow as a merchant adding sizes to a dropdown —
+          the second thing anyone tries.
+
+          📌 **`keyFromLabel`, the same helper**, rather than a second rule that
+          could disagree about what a key may contain.
+        */}
         <Input
           id={`value-label-${optionId}`}
           value={label}
           placeholder="Luxury"
-          onChange={(e) => setLabel(e.target.value)}
+          onChange={(e) => {
+            setLabel(e.target.value);
+            setValueKey(keyFromLabel(e.target.value));
+          }}
         />
       </div>
       <div className="flex-1 space-y-1.5">
         <label className="text-xs font-medium" htmlFor={`value-key-${optionId}`}>
           Key
         </label>
+        {/*
+          ⚠️ **Still editable.** A merchant who wants `lux` rather than
+          `luxury` must be able to say so — the derivation is a default, not a
+          lock, which is how the option form treats it too.
+        */}
         <Input
           id={`value-key-${optionId}`}
           value={valueKey}
           placeholder="lux"
           onChange={(e) => setValueKey(e.target.value)}
         />
+        <p className="text-muted-foreground text-xs">Filled in from the label.</p>
       </div>
       <div className="w-28 space-y-1.5">
         <label className="text-xs font-medium" htmlFor={`value-price-${optionId}`}>
