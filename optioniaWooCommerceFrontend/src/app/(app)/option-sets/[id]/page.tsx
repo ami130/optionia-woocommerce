@@ -30,6 +30,7 @@ import {
   FullPageLoading,
 } from '@/components/layout/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -382,6 +383,21 @@ export default function OptionSetEditorPage() {
         />
       ) : null}
 
+      {/*
+        🔴 **The preview belongs beside the work, not beneath it.**
+        A merchant builds an option set *in order to* see it — and the preview
+        sat below the groups, the rules and a border, which on a set with more
+        than two groups means below the fold. They were editing blind and
+        scrolling to check, which is the loop this pane exists to remove.
+
+        ⚠️ **One column under `lg`, deliberately.** A 24rem preview beside a
+        cramped editor is worse than a preview underneath it; the storefront
+        itself ships no `@media` queries (ADR-108) and this frame already
+        offers phone, tablet and desktop widths, so the small-screen answer is
+        to stack rather than to shrink.
+      */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
+        <div className="min-w-0 space-y-6">
       <GroupList
         setId={setId}
         groups={set.groups}
@@ -403,6 +419,18 @@ export default function OptionSetEditorPage() {
        * being able to change them.
        */}
       <RulesPanel set={set} canEdit={canEdit} />
+        </div>
+
+        {/*
+          📌 **Sticky, so it stays visible while the merchant works down a long
+          set.** `top-6` clears the header; `max-h`/`overflow-y-auto` keep a
+          preview taller than the viewport scrollable within itself rather
+          than pushing the page.
+        */}
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+          <SetPreviewSection set={set} />
+        </aside>
+      </div>
 
       {/*
        * The live preview sits at **set scope**, beside the rules rather than as a
@@ -413,9 +441,6 @@ export default function OptionSetEditorPage() {
        * ⚠️ **Below the rules deliberately.** A rule changes what a customer
        * sees, so the preview reads as the result of everything above it.
        */}
-      <div className="border-t pt-6">
-        <SetPreviewSection set={set} />
-      </div>
 
       {/*
        * Assignment is a property of the set, so it sits with the set's own
@@ -558,10 +583,27 @@ export function EditorHeader({ set }: { set: AuthoringSet }) {
       <Link href="/option-sets" className="text-muted-foreground text-sm hover:underline">
         ← All option sets
       </Link>
-      <h1 className="text-2xl font-semibold">{set.name}</h1>
-      <p className="text-muted-foreground text-sm">
-        {set.status === 'published' ? `Published, version ${set.version}` : 'Draft'}
-      </p>
+
+      {/*
+        🔴 **Draft versus published is a state, and it read as a sentence.**
+        It is the single fact that decides whether a merchant's work is live,
+        and it sat in muted body text below the title — the same weight as the
+        version number beside it. A badge is read before it is parsed.
+
+        ⚠️ **`secondary` for draft rather than a warning colour.** A draft is
+        the normal state of work in progress, not a problem; the unpublished
+        notice below already raises the case that needs attention.
+      */}
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-semibold">{set.name}</h1>
+        {set.status === 'published' ? (
+          <Badge variant="secondary" className="border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400">
+            Published · v{set.version}
+          </Badge>
+        ) : (
+          <Badge variant="secondary">Draft</Badge>
+        )}
+      </div>
 
       {/*
         🔴 **Where the merchant builds, not only where they start** (ADR-098).
