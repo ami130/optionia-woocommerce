@@ -209,9 +209,26 @@ test.describe('Gate 1 — the canonical flow', () => {
        */
       await expect(page.locator('#user_login')).toBeVisible();
 
+      /*
+       * 🔴 **Both fields, not just the first — and the failure names the wrong
+       * step either way.** Waiting on `#user_login` alone still let a fill run
+       * against an unrendered `#user_pass`: caught in a failing run whose page
+       * snapshot showed **the password sitting in the username box**, with the
+       * error reported thirty seconds later as "no admin bar".
+       */
+      await expect(page.locator('#user_pass')).toBeVisible();
+
       /* Studio prints these on `studio start`; overridable for another site. */
       await page.locator('#user_login').fill(process.env.E2E_WP_USER ?? 'admin');
       await page.locator('#user_pass').fill(process.env.E2E_WP_PASSWORD ?? 'StrongPassword123!');
+
+      /*
+       * ⚠️ **Assert what was typed before submitting.** A fill that silently
+       * landed elsewhere is otherwise invisible until the admin bar times out,
+       * and the two are indistinguishable from the error.
+       */
+      await expect(page.locator('#user_login')).toHaveValue(process.env.E2E_WP_USER ?? 'admin');
+
       await page.locator('#wp-submit').click();
 
       /*

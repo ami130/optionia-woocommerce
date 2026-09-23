@@ -163,10 +163,20 @@ export function setSession(tokens: { accessToken: string; refreshToken: string }
  * Called when a refresh fails: the session is unrecoverable, and leaving a dead
  * token in place would make every subsequent request fail one at a time instead
  * of once.
+ *
+ * 🔴 **The claim goes too, and the first version of this forgot it.** A
+ * merchant who signs out *while a refresh is in flight* leaves a claim behind
+ * — that context's `finally` never runs, because the sign-out cleared the
+ * tokens underneath it. Measured: the **next** session's first refresh is then
+ * blocked outright, and its request stalls the full wait before failing. The
+ * TTL bounds the damage to ten seconds rather than forever, which is why this
+ * was a degraded window and not a lockout — but a fresh sign-in must not
+ * inherit the previous session's coordination state at all.
  */
 export function clearSession(): void {
   setAccessToken(null);
   setRefreshToken(null);
+  setRefreshClaimedAt(null);
 
   for (const listener of signOutListeners) {
     listener();

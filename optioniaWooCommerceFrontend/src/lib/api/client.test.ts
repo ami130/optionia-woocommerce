@@ -7,6 +7,7 @@ import {
   getAccessToken,
   getRefreshToken,
   setRefreshClaimedAt,
+  setRefreshToken,
   setSession,
 } from '../auth/token-store';
 
@@ -356,6 +357,161 @@ describe('refresh claim', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     window.localStorage.clear();
+  });
+
+  /**
+   * 🔴 **The mechanism, not the guard — and nothing asserted it (A10).** Every
+   * other test here proves the lock *blocks* or that the claim is *released*.
+   * Making `waitForRotation` never detect a rotation left **all 30 passing**:
+   * every blocked request would stall the full wait and fail, and the suite
+   * would report the fix working.
+   *
+   * This is what the fix actually promises: a blocked context waits, sees the
+   * token the other context stored, and retries with it.
+   */
+  it('waits for the other context, then retries with the rotated token', async () => {
+    setRefreshClaimedAt(Date.now());
+
+    /* The other context stores its result shortly after this one starts waiting. */
+    setTimeout(() => setSession({ accessToken: 'a-2', refreshToken: 'r-new' }), 40);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/refresh')) {
+        return ok({ accessToken: 'a-x', refreshToken: 'r-x' });
+      }
+
+      return getAccessToken() === 'a-2' ? ok({ id: 'u-1' }) : fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiRequest<{ id: string }>('/auth/me');
+
+    /* It never exchanged the token itself — that is the whole point. */
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/auth/refresh')),
+    ).toHaveLength(0);
+
+    /* And the request succeeded on the token the other context stored. */
+    expect(result.data.id).toBe('u-1');
+  });
+
+  /**
+   * 🔴 **The holder's refresh was REJECTED, so there is nothing to wait for
+   * (A11).** Removing this branch left all 30 tests passing. Without it a
+   * waiting context polls a cleared session for the full wait and then reports
+   * `unreachable` — a two-second stall in front of a sign-out that has already
+   * happened.
+   */
+  it('stops waiting when the other context cleared the session', async () => {
+    setRefreshClaimedAt(Date.now());
+
+    /*
+     * 🔴 **`setRefreshToken(null)`, NOT `clearSession()` — and the first
+     * version of this test used the latter and passed under the mutation.**
+     * `clearSession` now also clears the claim, so the waiting context stopped
+     * because the *lock* had gone, never reaching the branch under test. This
+     * is the real state: the holder's refresh was rejected and it cleared the
+     * token, but its claim is not released until its own `finally` runs.
+     */
+    setTimeout(() => setRefreshToken(null), 40);
+
+    /*
+     * Every request refuses, and the URL is recorded — the assertion below
+     * counts `/auth/me` calls, so the mock must take its input to see them.
+     */
+    const seen: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+
+      return fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const started = Date.now();
+
+    await apiRequest('/auth/me').catch(() => undefined);
+
+    /*
+     * ⚠️ **Asserted as "well under the wait", not as a precise duration.** The
+     * bound is what matters; a millisecond-exact assertion would be a flake on
+     * a loaded machine.
+     */
+    expect(Date.now() - started).toBeLessThan(1_000);
+
+    /*
+     * 🔴 **The outcome is what separates the two branches, not the timing —
+     * and two earlier drafts of this test missed that.** `null !== previous`
+     * is *true*, so deleting the null check does not make the loop wait: the
+     * very next comparison reports "rotated". Both exit on the same poll, so
+     * no duration can tell them apart.
+     *
+     * What differs is what the caller then does. Answering "rotated" makes
+     * `apiRequest` retry — a **second** `/auth/me` sent with a session that has
+     * just been cleared, against an API that has already refused it. Answering
+     * "not rotated" fails on the original error, which is the truth.
+     */
+    expect(seen.filter((url) => url.endsWith('/auth/me'))).toHaveLength(1);
+  });
+
+  /**
+   * 🔴 **The wait must be BOUNDED, and its absence hangs rather than fails
+   * (A12).** Raising it to ten minutes produced no failure — it exceeded a
+   * 90-second kill. An unbounded wait in front of a dead holder is the worst
+   * shape for a CI gate: not a red test, a stuck one.
+   */
+  it('gives up rather than waiting forever on a holder that never finishes', async () => {
+    setRefreshClaimedAt(Date.now());
+
+    const fetchMock = vi.fn(async () => fail(401, 'UNAUTHORIZED'));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const started = Date.now();
+
+    await apiRequest('/auth/me').catch(() => undefined);
+
+    const elapsed = Date.now() - started;
+
+    /* It waited — this is not the unblocked path — and it stopped. */
+    expect(elapsed).toBeGreaterThan(500);
+    expect(elapsed).toBeLessThan(4_000);
+  });
+
+  /**
+   * 🔴 **A sign-out must not strand a claim for the next session (A2).**
+   * Measured before the fix: signing out mid-refresh left the claim behind,
+   * and the next session's first refresh was **blocked outright** while its
+   * request stalled the full wait — `{ refreshes: 0, slow: true }`. The TTL
+   * bounded it to ten seconds rather than forever, which made it a degraded
+   * window and not a lockout, but a fresh sign-in must not inherit the
+   * previous session's coordination state at all.
+   */
+  it('does not let a signed-out session block the next one', async () => {
+    setRefreshClaimedAt(Date.now());
+    clearSession();
+    setSession({ accessToken: 'a-new', refreshToken: 'r-new' });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/refresh')) {
+        return ok({ accessToken: 'a-3', refreshToken: 'r-3' });
+      }
+
+      return getAccessToken() === 'a-3' ? ok({ id: 'u-1' }) : fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me');
+
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/auth/refresh')),
+    ).toHaveLength(1);
   });
 
   /**
