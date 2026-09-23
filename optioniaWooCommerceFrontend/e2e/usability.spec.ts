@@ -436,6 +436,7 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
     });
   });
 
+
   /**
    * **Persona 3 — the reader.** Opens a set someone else built to understand
    * it. Nothing is edited; the question is whether the screen explains itself.
@@ -655,4 +656,133 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
     });
   });
 
+
+  /**
+   * **Persona 6 — the merchant who makes a mistake.** Every persona so far has
+   * walked the happy path. A real tester mistypes, changes their mind, and
+   * deletes the wrong thing — and what a builder does *then* decides whether
+   * they trust it.
+   */
+  test('persona 6: undoing a mistake, and deleting on purpose', async ({ page }) => {
+    const merchant = await signInAsNewMerchant(page);
+
+    seedConnectedStore(merchant.email);
+    await createSet(page, 'Mistakes');
+
+    await addGroup(page, 'Finish');
+    await addOption(page, 'Choose a finish', 'Dropdown');
+    await addValue(page, 'Matte');
+
+    await test.step('undo is honest about what it cannot reverse', async () => {
+      /*
+       * 📌 **Disabled after a create, deliberately — and this pins the
+       * decision rather than the accident.** `history.ts` records why: every
+       * shape change clears the log, because an undo that recreated a group
+       * and silently lost its options, or left rules targeting it disabled,
+       * would be *worse than no undo* — the merchant would believe the delete
+       * had been reversed.
+       *
+       * ⚠️ **A disabled control still has to say why.** The title reads
+       * *"Nothing to undo"*, and when there *is* something it names the
+       * action. A merchant who hovers gets an answer either way.
+       */
+      const undo = page.getByRole('button', { name: /Undo/ });
+
+      await expect(undo).toBeDisabled();
+      await expect(undo).toHaveAttribute('title', 'Nothing to undo');
+    });
+
+    await test.step('editing a value in place IS undoable, and the button says so', async () => {
+      /*
+       * 🔴 **The other half of the same decision.** Field edits keep their
+       * inverse — the previous values the form already held — so a merchant
+       * who mistypes a label can take it back. If this were disabled too,
+       * undo would be decorative.
+       */
+      await page.getByRole('button', { name: /^Edit Matte$/ }).click();
+
+      const label = page.locator('[data-value-row] [id^="label-"]');
+
+      await label.fill('Matt');
+      await page.getByRole('heading', { name: 'Finish', exact: true }).click();
+
+      const undo = page.getByRole('button', { name: /Undo/ });
+
+      await expect(undo).toBeEnabled();
+      await expect(undo).not.toHaveAttribute('title', 'Nothing to undo');
+    });
+
+    await test.step('and undoing restores what was there', async () => {
+      await page.getByRole('button', { name: /Undo/ }).click();
+
+      await expect(page.getByText('Matte').first()).toBeVisible();
+    });
+
+    await test.step('deleting a group counts what it takes with it', async () => {
+      /*
+       * 🔴 **Delete is the one thing undo cannot reverse** (`history.ts`: the
+       * endpoints return `void`, and the cascade — the options, values, items
+       * and rules a group delete disables — never reaches the dashboard). So
+       * the confirmation has to carry the fact that a merchant would otherwise
+       * learn by losing the work: **how much goes with it**.
+       *
+       * ⚠️ **A count, not a warning.** *"Delete 'Finish' and its 1 entry?"*
+       * lets a merchant tell a stray empty group from one holding a morning's
+       * work, which a generic *"are you sure?"* cannot.
+       */
+      await page.getByRole('button', { name: /^Delete group$/ }).click();
+
+      await expect(page.getByText(/Delete "Finish" and its 1 entry\?/)).toBeVisible();
+      await expect(page.getByRole('button', { name: /Yes, delete/ })).toBeVisible();
+    });
+
+    await test.step('and she can change her mind', async () => {
+      /*
+       * ⚠️ **The escape matters more than the confirmation.** A merchant who
+       * clicked Delete to see what it said must be able to leave without
+       * losing anything.
+       */
+      const cancel = page.getByRole('button', { name: /^Cancel$|^No,|Keep/ }).first();
+
+      await cancel.click();
+
+      await expect(page.getByText(/Delete "Finish"/)).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: 'Finish', level: 2 })).toBeVisible();
+    });
+
+    await test.step('a label typed and then navigated away from is not lost', async () => {
+      /*
+       * 🔴 **Phase 20's own exit criterion — "No data loss on navigation" —
+       * and nothing walked it.** Autosave commits when focus leaves the row;
+       * a merchant who types and immediately clicks away to another page is
+       * the case where that promise is either kept or quietly broken.
+       *
+       * ⚠️ **Asserted after a round trip through the API**, not against the
+       * cache: the test navigates away and comes back, so a value held only
+       * in memory would be gone.
+       */
+      await page.getByRole('button', { name: /^Edit Matte$/ }).click();
+
+      const label = page.locator('[data-value-row] [id^="label-"]');
+
+      await label.fill('Satin');
+
+      /* Away mid-edit, exactly as a merchant checking another page would. */
+      await page.getByRole('link', { name: 'Products' }).click();
+      await page.waitForURL(/\/products/, { timeout: 30_000 });
+
+      await page.goBack();
+      await page.waitForURL(/\/option-sets\/[0-9a-f-]{36}/, { timeout: 30_000 });
+
+      await expect(page.getByText('Satin').first()).toBeVisible();
+    });
+
+    await test.step('deleting on purpose actually removes it', async () => {
+      await page.getByRole('button', { name: /^Delete group$/ }).click();
+      await page.getByRole('button', { name: /Yes, delete/ }).click();
+
+      await expect(page.getByRole('heading', { name: 'Finish', level: 2 })).toHaveCount(0);
+      await expect(page.getByText(/Nothing here yet/).first()).toBeVisible();
+    });
+  });
 });
