@@ -55,6 +55,7 @@ import {
   parseOptionValidation,
   readOptionValidation,
 } from '@/lib/option-sets/option-validation';
+import { publishGate } from '@/lib/option-sets/publish-gate';
 import { parsePortable } from '@/lib/option-sets/portable-import';
 import { toPortable } from '@/lib/option-sets/portable';
 import { parseTextRules, readTextRules } from '@/lib/option-sets/text-rules';
@@ -182,6 +183,16 @@ export default function OptionSetEditorPage() {
 
   const canEdit = roleCan(me?.role, 'option_sets:edit');
   const canPublish = roleCan(me?.role, 'option_sets:publish');
+
+  /**
+   * What the last publish attempt said, rendered below the header.
+   *
+   * ⚠️ **Held here rather than read from the mutation**, because the mutation
+   * lives inside the header's action and its result needs the page's width.
+   * `null` is "nothing attempted this session" — not "it succeeded", which is
+   * what an empty render would imply.
+   */
+  const [publishResult, setPublishResult] = useState<React.ReactNode>(null);
 
   const query = useQuery({ queryKey: ['option-set', setId], queryFn: () => loadSet(setId) });
 
@@ -335,7 +346,22 @@ export default function OptionSetEditorPage() {
 
   return (
     <div className="space-y-6">
-      <EditorHeader set={set} />
+      {/*
+        🔴 **Publishing is the one action that makes the work real**, so it
+        rides in the header rather than below the picker, several screens down.
+        Only a merchant who can publish gets it; everyone else sees the same
+        header without an action.
+      */}
+      <EditorHeader
+        set={set}
+        action={
+          canPublish ? (
+            <PublishAction set={set} onPublished={reloadAfterPublish} onResult={setPublishResult} />
+          ) : undefined
+        }
+      />
+
+      {publishResult}
 
       <UnpublishedNotice set={set} canPublish={canPublish} />
 
@@ -618,7 +644,26 @@ const NEW_GROUP_FIELD_ID = 'new-group-label';
  * it; the earlier guard read source because this markup was inline, not because
  * rendering was unavailable.
  */
-export function EditorHeader({ set }: { set: AuthoringSet }) {
+export function EditorHeader({
+  set,
+  action,
+}: {
+  set: AuthoringSet;
+  /**
+   * 🔴 **Publishing belongs where the merchant can always reach it.** The
+   * button sat below the groups, the rules, the preview and the product
+   * picker — on a real set, several screens down. Meanwhile the unpublished
+   * notice at the top said *"Publish again to send them to your store"* and
+   * offered no way to do it: the instruction and the action were thousands of
+   * pixels apart, which is the whole defect.
+   *
+   * ⚠️ **A slot, not a `PublishPanel` import.** The header renders for
+   * everyone; only `option_sets:publish` gets an action, and a viewer must see
+   * the same header without one. Passing the node keeps that decision at the
+   * call site, where the capability is already known.
+   */
+  action?: React.ReactNode;
+}) {
   return (
     <div className="space-y-1">
       <Link href="/option-sets" className="text-muted-foreground text-sm hover:underline">
@@ -644,6 +689,13 @@ export function EditorHeader({ set }: { set: AuthoringSet }) {
         ) : (
           <Badge variant="secondary">Draft</Badge>
         )}
+
+        {/*
+          📌 **`ms-auto` rather than a second flex container**, so the action
+          wraps onto its own line on a narrow screen instead of squeezing the
+          name it sits beside.
+        */}
+        {action === undefined ? null : <div className="ms-auto">{action}</div>}
       </div>
 
       {/*
@@ -3952,42 +4004,127 @@ function AddValue({
  * names the thing rather than being one line in a list. Warnings do not block and
  * are shown again after success, because a merchant should know what shipped.
  */
-function PublishPanel({ set, onPublished }: { set: AuthoringSet; onPublished: () => void }) {
-  const check = useQuery({
-    queryKey: ['option-set', set.id, 'publish-check'],
-    queryFn: () => publishCheck(set.id),
-  });
-
-  /**
-   * The **authoritative** lock token, refetched after every patched edit.
-   *
-   * 🔴 **`set.rowVersion` goes stale the moment an edit is patched rather than
-   * refetched.** The backend advances the parent set's version on every child
-   * edit, and the edit response carries only the entity — so the tree in cache
-   * keeps the version it loaded with. Sending that stale number answered **409
-   * "This option set was changed by someone else."** after a merchant edited a
-   * value and pressed Publish, naming a conflict they had caused themselves.
-   *
-   * ⚠️ **Refetched rather than incremented.** Adding one would usually be right
-   * and is the wrong fix: under a concurrent edit a guessed version can
-   * coincidentally match the row, the write succeeds, and another merchant's
-   * work is lost with no error — the failure the lock exists to prevent.
-   *
-   * 📌 Falls back to the tree's copy until it resolves, which is correct on
-   * first load: nothing has been patched yet, so the two agree.
-   */
+/**
+ * The authoritative lock token for this set, shared by everything that writes.
+ *
+ * 🔴 **One hook, because two callers must not disagree about the version.**
+ * The header's publish button and this panel's rollback both send `rowVersion`,
+ * and a second `useQuery` with the same key would be fine while a third with a
+ * *different* one would silently reintroduce the 409 described below. Extracting
+ * it makes the sharing structural rather than a convention.
+ *
+ * 🔴 **`set.rowVersion` goes stale the moment an edit is patched rather than
+ * refetched.** The backend advances the parent set's version on every child
+ * edit, and the edit response carries only the entity — so the tree in cache
+ * keeps the version it loaded with. Sending that stale number answered **409
+ * "This option set was changed by someone else."** after a merchant edited a
+ * value and pressed Publish, naming a conflict they had caused themselves.
+ *
+ * ⚠️ **Refetched rather than incremented.** Adding one would usually be right
+ * and is the wrong fix: under a concurrent edit a guessed version can
+ * coincidentally match the row, the write succeeds, and another merchant's
+ * work is lost with no error — the failure the lock exists to prevent.
+ *
+ * 📌 Falls back to the tree's copy until it resolves, which is correct on
+ * first load: nothing has been patched yet, so the two agree.
+ */
+function useRowVersion(set: AuthoringSet): number {
   const version = useQuery({
     queryKey: optionSetKeys.version(set.id),
     queryFn: () => loadSetVersion(set.id),
     initialData: set.rowVersion,
   });
 
-  const rowVersion = version.data;
+  return version.data;
+}
+
+/**
+ * The pre-publish findings, and what they permit.
+ *
+ * 📌 **The decision itself is `publishGate`, a pure function with its own
+ * tests.** Inline, it was unreachable: removing the blocker check from the
+ * button left the whole suite green while a set with unresolved blockers
+ * published to a live storefront. What stays here is the network question,
+ * which is the only part a pure module cannot own.
+ */
+function usePublishCheck(set: AuthoringSet) {
+  const check = useQuery({
+    queryKey: ['option-set', set.id, 'publish-check'],
+    queryFn: () => publishCheck(set.id),
+  });
+
+  return { isLoading: check.isLoading, ...publishGate(check.data) };
+}
+
+/**
+ * Publish, from the header, where a merchant can always reach it.
+ *
+ * 🔴 **The blocker count is on the button, not only in a panel below.** A
+ * disabled control that does not say why is a dead end — and the findings it
+ * refers to are far enough down the page that "why is this greyed out?" was a
+ * real question. The count turns the disabled state into a pointer.
+ *
+ * ⚠️ **Findings still render in full in `PublishPanel`.** This is a summary and
+ * a trigger; it deliberately does not try to reproduce `FindingList` in a
+ * header, where a long list would push the whole editor down.
+ */
+function PublishAction({
+  set,
+  onPublished,
+  onResult,
+}: {
+  set: AuthoringSet;
+  onPublished: () => void;
+
+  /**
+   * 🔴 **The outcome must not render inside the header.** Publishing answers
+   * with a version and a propagation delay, and a failure answers with a
+   * conflict — both are sentences, and a sentence in a title row either
+   * truncates or pushes the name off its line. The action reports upward and
+   * the page renders it full width, directly below.
+   */
+  onResult: (node: React.ReactNode) => void;
+}) {
+  const { blocked, summary, isLoading } = usePublishCheck(set);
+  const rowVersion = useRowVersion(set);
 
   const publish = useMutation({
     mutationFn: () => publishSet(set.id, rowVersion),
-    onSuccess: onPublished,
+    onSuccess: (result) => {
+      onResult(
+        <Alert>
+          <AlertDescription>
+            Published version {result.version}. Your storefront reaches configuration v
+            {result.configVersion} within a few minutes.
+          </AlertDescription>
+        </Alert>,
+      );
+      onPublished();
+    },
+    onError: (error) => onResult(<ConflictAwareError error={error} />),
   });
+
+  return (
+    <div className="flex items-center gap-2">
+      {summary === null ? null : (
+        <span className="text-muted-foreground text-xs">{summary}</span>
+      )}
+
+      <Button
+        size="sm"
+        disabled={blocked || publish.isPending || isLoading}
+        onClick={() => publish.mutate()}
+      >
+        {publish.isPending ? 'Publishing…' : 'Publish'}
+      </Button>
+    </div>
+  );
+}
+
+function PublishPanel({ set, onPublished }: { set: AuthoringSet; onPublished: () => void }) {
+  const { blockers, warnings } = usePublishCheck(set);
+
+  const rowVersion = useRowVersion(set);
 
   /**
    * The set's published history, and the way back to any of it (M20.9).
@@ -4012,13 +4149,17 @@ function PublishPanel({ set, onPublished }: { set: AuthoringSet; onPublished: ()
     onSuccess: onPublished,
   });
 
-  const blockers = (check.data ?? []).filter((f) => f.severity === 'blocker');
-  const warnings = (check.data ?? []).filter((f) => f.severity === 'warning');
-
   return (
     <Card>
       <CardContent className="space-y-4 pt-6">
-        <h2 className="font-medium">Publish</h2>
+        {/*
+          🔴 **The button moved to the header; the findings did not.** A
+          merchant needs the action always reachable and the detail where there
+          is room to read it — a blocker list in a header would push the editor
+          down the page. The header's button names the *count* and disables
+          itself; this is where it says what they are.
+        */}
+        <h2 className="font-medium">Publishing</h2>
 
         {blockers.length > 0 ? (
           <Alert variant="destructive">
@@ -4037,26 +4178,6 @@ function PublishPanel({ set, onPublished }: { set: AuthoringSet; onPublished: ()
             </AlertDescription>
           </Alert>
         ) : null}
-
-        {publish.data === undefined ? null : (
-          <Alert>
-            <AlertDescription>
-              Published version {publish.data.version}. Your storefront reaches configuration{' '}
-              v{publish.data.configVersion} within a few minutes.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {publish.error === null || publish.error === undefined ? null : (
-          <ConflictAwareError error={publish.error} />
-        )}
-
-        <Button
-          disabled={blockers.length > 0 || publish.isPending || check.isLoading}
-          onClick={() => publish.mutate()}
-        >
-          {publish.isPending ? 'Publishing…' : 'Publish to storefront'}
-        </Button>
 
         {/*
           * The history, and the way back (M20.9).

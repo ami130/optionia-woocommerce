@@ -236,8 +236,16 @@ describe('option-set editor', () => {
 
     const called = (source.match(/\b(create|update|delete|reorder|publish)[A-Z][A-Za-z]*\s*\(/g) ?? [])
       .map((match) => match.replace(/\s*\($/, ''))
-      /* A local helper, tested where it lives — see the note on WRITES. */
-      .filter((name) => name !== 'reorderPayloads');
+      /*
+       * Local helpers, tested where they live — see the note on WRITES.
+       *
+       * 📌 **`publishGate` is a pure decision, not a request.** It matches the
+       * `publish[A-Z]` shape this regex looks for and performs no network call
+       * at all; listing it in `WRITES` would assert a `mutationFn` that cannot
+       * exist. Its own tests kill the mutations that matter, and the wiring is
+       * asserted by `publishing consults its gate` below.
+       */
+      .filter((name) => name !== 'reorderPayloads' && name !== 'publishGate');
 
     expect([...new Set(called)].sort()).toEqual([...WRITES].sort());
   });
@@ -429,5 +437,50 @@ describe('the docked preview fits its column', () => {
 
     expect(source).toContain('Open full width');
     expect(dialog).toMatch(/<SetPreviewSection set=\{set\} \/>/);
+  });
+});
+
+/**
+ * The publish button is wired to the gate that decides whether it may fire.
+ *
+ * 🔴 **`publishGate` being correct is not the same as the button using it.**
+ * Its own tests kill a mutation that makes blockers stop blocking — but a
+ * button that never consults the gate publishes a broken set to a live
+ * storefront past a suite that is entirely green, because every assertion is
+ * about a function nobody called. Measured before this existed: dropping
+ * `blocked` from the `disabled` expression failed only the write-inventory
+ * check, and only incidentally — because it left `isLoading` unused, not
+ * because anything noticed the gate was gone.
+ *
+ * ⚠️ **Source-reading, with the limits `editor-contracts` already states.**
+ * The action needs React Query and a session, so a render test costs a mount
+ * this file does not have. This proves the wiring, never that a merchant can
+ * reach the button — the boundary recorded at the top of this file.
+ */
+describe('publishing consults its gate', () => {
+  const source = editorCode();
+
+  /** The gate is the source of the decision, not a second inline filter. */
+  it('derives the decision from publishGate', () => {
+    expect(source).toMatch(/publishGate\(/);
+  });
+
+  /**
+   * 🔴 The button's `disabled` must include `blocked`. Anything that publishes
+   * while the gate says blocked is the defect this guard exists for.
+   */
+  it('disables the publish button while the gate blocks', () => {
+    expect(source).toMatch(/disabled=\{blocked \|\|/);
+  });
+
+  /**
+   * 📌 **And the findings must still render somewhere.** A count beside a
+   * disabled button tells a merchant how many things are wrong and not what
+   * they are; `FindingList` is what answers that, and moving the button must
+   * not have taken the explanation with it.
+   */
+  it('still lists the findings in full', () => {
+    expect(source).toMatch(/<FindingList findings=\{blockers\}/);
+    expect(source).toMatch(/<FindingList findings=\{warnings\}/);
   });
 });

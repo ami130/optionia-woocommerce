@@ -83,7 +83,7 @@ export function UnpublishedChangesNotice({
  * message — the same rule reported against two options — and an index key makes
  * React reuse the wrong node when the list reorders between checks.
  */
-export function FindingList({ findings }: { findings: PublishFinding[] }) {
+export function FindingList({ findings }: { findings: readonly PublishFinding[] }) {
   return (
     <ul className="list-disc space-y-1 pl-4">
       {findings.map((finding) => (

@@ -94,4 +94,35 @@ describe('EditorHeader', () => {
     expect(getByText('Hoodie options')).toBeTruthy();
     expect(getByText('Draft')).toBeTruthy();
   });
+
+  /**
+   * 🔴 **Publishing is the one action that makes the work real, and it was
+   * several screens down.** It rendered below the groups, the rules, the
+   * preview and the product picker — while the unpublished notice at the top
+   * said *"Publish again to send them to your store"* and offered no way to do
+   * it. The instruction and the action were pixels apart by thousands.
+   *
+   * ⚠️ **Asserted as a slot, not as a publish button.** The real action needs
+   * React Query; what the header owes is that whatever it is given *renders*.
+   * Measured: dropping the slot to `{null}` left all **1752** tests green.
+   */
+  it('renders the action it is given', () => {
+    const { getByText } = render(
+      <EditorHeader set={set([group])} action={<button type="button">Publish</button>} />,
+    );
+
+    expect(getByText('Publish')).toBeTruthy();
+  });
+
+  /**
+   * 📌 **A viewer sees the same header without one.** The capability decision
+   * stays at the call site, so the header must cope with no action at all
+   * rather than reserving space or rendering an empty container.
+   */
+  it('renders without an action, for someone who cannot publish', () => {
+    const { getByText, queryByText } = render(<EditorHeader set={set([group])} />);
+
+    expect(getByText('Hoodie options')).toBeTruthy();
+    expect(queryByText('Publish')).toBeNull();
+  });
 });

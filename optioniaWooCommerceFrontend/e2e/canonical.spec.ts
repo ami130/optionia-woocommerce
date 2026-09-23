@@ -696,7 +696,19 @@ test.describe('Gate 1 — the canonical flow', () => {
     });
 
     await test.step('the merchant publishes', async () => {
-      const publish = page.getByRole('button', { name: /publish to storefront/i });
+      /*
+       * 🔴 **The button is in the header now, and the label is shorter.** It
+       * read *"Publish to storefront"* and sat below the groups, the rules, the
+       * preview and the product picker — several screens down on a real set,
+       * while the unpublished notice at the top told the merchant to publish
+       * and offered no way to. Beside the set's own name the destination is
+       * implied, so the label is just *"Publish"*.
+       *
+       * ⚠️ **`exact` matters here.** The panel below still owns the findings
+       * and the history under a *"Publishing"* heading, and a loose match would
+       * also find the button's own *"Publishing…"* pending state.
+       */
+      const publish = page.getByRole('button', { name: 'Publish', exact: true });
 
       await expect(publish).toBeVisible();
       await expect(publish).toBeEnabled();
