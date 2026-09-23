@@ -29204,6 +29204,68 @@ rich_text_html      —       —          yes
 Every number must be **measurable in code** and metered in `usage_records`. A limit that
 cannot be measured cannot be sold.
 
+#### 🔍 Phase 22 deep audit, 2026-09-23 — five gaps, two of them structural
+
+**Read against the code, not against the plan's own summary.** Four findings are real
+gaps; two apparent ones were checked and dismissed, and saying which is part of the
+result.
+
+🔴 **G1 — `subscriptions.planId` is a foreign key to a MUTABLE row.** The entity
+declares `@ManyToOne(() => Plan, { onDelete: 'RESTRICT' })`. Editing a plan's price
+therefore re-prices **every existing subscriber on it**, including merchants who signed
+up under different terms. This is [M22.1a](#m221a--plans-are-data-editable-by-platform-staff)'s
+defect proven in the schema rather than argued: the dynamic-pricing decision makes plan
+rows editable, and nothing currently stops an edit reaching people who already bought.
+
+🔴 **G2 — `UsageMetric` is a union of ONE.** `usage.service.ts` declares
+`export type UsageMetric = 'file_storage_mb'` and exposes a single `recordStorage()`.
+M22.1's table sells **nine** metrics — option sets, products assigned, option types,
+storage, conditional rules, analytics, stores, team seats, rich text. ⚠️ **Eight of
+nine are unmeasurable today**, and M22.1's own rule is the judgement: *"a limit that
+cannot be measured cannot be sold."* Phase 24's M24.1 owns metering, so this is a
+**sequencing** gap rather than a missing intention — but M22.1 cannot honestly ship a
+price list whose limits Phase 24 has not yet made real.
+
+⚠️ **G3 — M22.5 promises invoice history; there is no `invoices` table.** The billing
+schema is `plans`, `subscriptions`, `usage_records` and `webhook_deliveries` — no
+invoice storage anywhere. Either invoices are read live from the provider (a decision,
+with a rate-limit and availability cost) or they are mirrored locally (a table nobody
+has specified). 📌 **Not a defect yet, but an unstated choice inside a milestone that
+reads as settled.**
+
+⚠️ **G4 — M22.4's lifecycle and `SubscriptionStatus` do not agree.** The plan writes
+*"Trial → active → past_due → grace → cancelled → reactivated"*; the enum ships
+`trialing, active, past_due, grace, cancelled, **expired**`. `expired` appears nowhere
+in Phase 22, and *"reactivated"* is a transition rather than a state. A lifecycle whose
+prose and enum disagree is how an unhandled state reaches production.
+
+📌 **G5 — nothing bumps `configVersion` on a plan change**, confirmed by search across
+`plans/`, `subscriptions/` and `tenants/`. This is Gate 2's open criterion *"Plan change
+alone invalidates cached config"* and carry-forward rule 4, both already recorded as
+owned by Phase 23 — noted here because **M22.1a makes it worse**: when a platform staff
+member can change a plan's limits at will, a cached config that does not notice is no
+longer an edge case but a routine one.
+
+✅ **Two things checked and found SOUND**, recorded so they are not re-audited:
+
+- **Webhook idempotency is correctly specified.** `webhook_deliveries` is keyed on
+  `storeId` and cannot deduplicate a Stripe event — but Phase 23's M23.2 names a
+  separate `billing_events` table with a UNIQUE `provider_event_id`, which is the right
+  design. The existing table was never intended for billing.
+- **Free-plan provisioning already works and is well-reasoned.**
+  `tenant-provisioning.service.ts` assigns the `free` plan at registration and records
+  why the trial is expressed through `status`/`trialEndsAt` rather than plan membership:
+  *"a tenant whose trial lapses should keep working at free limits, not lose its plan
+  row."*
+
+📌 **Sequencing conclusion.** Phase 22 declares `Depends on: Gate 2`, but the sharper
+dependency is **Phase 24**: M22.1 sells nine limits, M24.1 makes them measurable, and
+M24.2 enforces them. Shipping billing first means selling limits that cannot be checked.
+⚠️ **G1 is the one that must be fixed inside Phase 22 itself** — every other gap can
+follow, but a price change reaching an existing subscriber is a billing error the
+merchant finds on a card statement.
+
+
 ### M22.1a — Plans are DATA, editable by platform staff
 
 🔴 **Decided by the owner, 2026-09-23: *"pricing will be fully dynamic … everything
