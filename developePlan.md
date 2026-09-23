@@ -492,6 +492,9 @@ one place this plan's ordering works against you.
 | ~~B3~~ | ~~**D6 — styling ownership** undecided (theme templates / dashboard / both)~~ ✅ **DECIDED 2026-09-21 (ADR-112)**: both, with a **bounded** four-token layer — accent colour, border radius/width, spacing, swatch size. `optionia-app`'s six style groups are explicitly out of scope, and M21c.3 (presets) is deferred to [Phase 24](#phase-24--plan-limits--enforcement) | [Phase 21c](#phase-21c--option-styling--presentation-control) | ~~You~~ — done |
 | B4 | **D7 — Design Lab in or out** | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) | **You** — [M1.10](#m110--decide-d7-design-lab-scope-and-position) |
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
+| B6 | **Tax handling under ADR-114** — ParseLab is merchant of record, so EU VAT and US sales tax are **yours**, not your merchants'. D1's own table says it: *"You handle EU VAT and US sales tax yourself."* 📌 **Recommended: Stripe Tax** (~0.5% per transaction) — it is Stripe's own product, fits ADR-114 without revisiting it, and costs far less than VAT registration plus quarterly filings. Alternatives: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee but reopens D1; handling it in-house is cheapest per transaction and means registrations, filings and nexus monitoring. ⚠️ **Blocks M22.3**, because it decides what is stored per customer and what an invoice must carry | [Phase 22](#phase-22--billing-integration) | **You** |
+| B7 | **The lapse policy (M24.3)** — what a storefront does when a subscription lapses. 🔴 **Blocks the M22.1a schema**, not merely the UI: it decides what subscription state the plugin must know, and therefore what the config document carries. Does the last published config keep serving, or does the storefront go dark? The first is kinder and risks unpaid use; the second is enforceable and risks breaking a live shop over a failed card | [M24.3](#phase-24--production-readiness) | **You** |
+| B8 | **Do limit changes reach existing subscribers?** A **price** rise must never touch someone who already subscribed (M22.1a builds immutable price versions for exactly that). A **limit** rise is arguably different — giving people more is not a billing surprise — but a limit *cut* is. 📌 Recorded as open rather than guessed at; it is a product call | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | **You** |
 
 **Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
 21c, and Stage 4B); B1 was withdrawn. Work continues now.
@@ -29200,6 +29203,65 @@ rich_text_html      —       —          yes
 
 Every number must be **measurable in code** and metered in `usage_records`. A limit that
 cannot be measured cannot be sold.
+
+### M22.1a — Plans are DATA, editable by platform staff
+
+🔴 **Decided by the owner, 2026-09-23: *"pricing will be fully dynamic … everything
+can customise by admin"*.** The table in M22.1 above is the **seed**, not the schema —
+a starting row set, not a constant. Changing a price, adding a currency or running a
+promotion must not need a deploy.
+
+📌 **Already half-built, which is why this is a milestone and not a rewrite.**
+`plans` is a table, not a constant file: `code`, `name`, `priceMonthlyMinor`,
+`priceYearlyMinor`, `currency`, `limits` (JSON), `isActive`, `sortOrder`. What is
+missing is the surface that edits it, the versioning that makes editing safe, and the
+enforcement that makes a limit mean something.
+
+#### Which admin, and why it matters
+
+⚠️ **Platform staff, not tenant admins.** The system already has two separate realms:
+`TenantRole` (owner/admin/editor/viewer/billing) and a `platform_staff` table with its
+own roles and an `impersonation_sessions` audit trail. **Only platform staff may touch
+plan pricing** — a tenant admin editing what they pay is not a feature, it is a
+vulnerability. Tenant admins keep what they already have: their own *option* pricing
+(per-character rates, tier brackets, percentage and flat).
+
+#### 🔴 The defect this milestone exists to prevent
+
+**Mutable plan rows silently re-price existing subscribers.** If a subscription points
+at a plan by id and someone edits that plan's price, everyone on it is re-priced —
+including merchants who signed up under different terms. That is a billing error the
+merchant discovers on their card statement, and it is the single most expensive thing
+to get wrong here.
+
+✅ **Immutable price versions.** Editing a price **creates a new version**; existing
+subscriptions stay pinned to the version they bought; new signups take the current one.
+This is how Stripe models prices, for exactly this reason, and matching it keeps the
+provider mapping honest (M22.3).
+
+⚠️ **Limits are a different case and must be decided, not assumed.** A price rise must
+never reach an existing subscriber; a *limit* rise arguably should (giving people more
+is not a billing surprise). 🔴 **Not decided here** — it is a product call, recorded as
+open rather than guessed at.
+
+#### What this milestone owes
+
+- **A plan admin surface** for platform staff: create, edit, activate, deactivate,
+  reorder. Deactivating must hide a plan from signup **without** cancelling anyone on it.
+- **Price versioning**, per the defect above, with existing subscriptions pinned.
+- **Enforcement that reads the rows.** `limits` is JSON today and **nothing reads it**.
+  A dynamic plan that gates nothing is a price list, not a plan — and M22.1's own rule
+  already says it: *"a limit that cannot be measured cannot be sold."*
+- **An audit trail**: who changed which price, when, from what to what. Needed the first
+  time a merchant disputes a charge, and `impersonation_sessions` sets the precedent for
+  how this project audits staff action.
+- **Currency as data**, since the column exists and multi-currency is the first thing a
+  dynamic pricing admin is asked for.
+
+**Exit:** platform staff change a price through the UI; an existing subscriber's next
+invoice is **unchanged**; a new signup is charged the new figure; every change is
+attributable to a named staff user.
+
 
 ### M22.2 — `BillingProvider` abstraction
 
