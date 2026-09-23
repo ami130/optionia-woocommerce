@@ -6,6 +6,7 @@ import {
   clearSession,
   getAccessToken,
   getRefreshToken,
+  setRefreshClaimedAt,
   setSession,
 } from '../auth/token-store';
 
@@ -330,5 +331,166 @@ describe('api client', () => {
     await api.get('/stores');
 
     expect(String(fetchMock.mock.calls[0][0])).toBe(`${BASE}/stores`);
+  });
+});
+
+/**
+ * One context must not exchange a token another is already exchanging (F64).
+ *
+ * 🔴 **Measured in production logs before it was fixed**: `refresh token reuse
+ * detected … revoked family`, twice in 95 refreshes, each signing a merchant
+ * out of a working dashboard. `refreshInFlight` guards one JS context; a full
+ * page navigation empties it while the token in `localStorage` survives, so two
+ * contexts each present the same token and the API revokes the family.
+ *
+ * ⚠️ **The claim is what crosses the boundary**, so these tests write it
+ * directly — that is exactly what another context would have left behind.
+ */
+describe('refresh claim', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearSession();
+    setSession({ accessToken: 'a-1', refreshToken: 'r-old' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  /**
+   * 🔴 **The defect.** Another context claimed moments ago and is mid-exchange.
+   * This one must NOT send its own `/auth/refresh`.
+   */
+  it('does not exchange while another context holds a fresh claim', async () => {
+    setRefreshClaimedAt(Date.now());
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      /* The other context finishes: its new token lands in storage. */
+      if (url.endsWith('/auth/me')) {
+        setSession({ accessToken: 'a-2', refreshToken: 'r-new' });
+
+        return fail(401, 'UNAUTHORIZED');
+      }
+
+      return ok({ id: 'u-1' });
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me').catch(() => undefined);
+
+    const refreshCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).endsWith('/auth/refresh'),
+    );
+
+    expect(refreshCalls).toHaveLength(0);
+  });
+
+  /**
+   * 🔴 **The worse failure the TTL exists to prevent.** A context that died
+   * mid-refresh leaves its claim behind; without expiry every later context
+   * waits forever and the merchant can never sign in again.
+   */
+  it('exchanges anyway once a stale claim has expired', async () => {
+    setRefreshClaimedAt(Date.now() - 60_000);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/refresh')) {
+        return ok({ accessToken: 'a-2', refreshToken: 'r-new' });
+      }
+
+      return getAccessToken() === 'a-2' ? ok({ id: 'u-1' }) : fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me');
+
+    const refreshCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).endsWith('/auth/refresh'),
+    );
+
+    expect(refreshCalls).toHaveLength(1);
+    expect(getRefreshToken()).toBe('r-new');
+  });
+
+  /**
+   * 🔴 **The claim must be VISIBLE to another context while in flight.**
+   * Everything else here writes the claim itself, so none of it noticed when a
+   * mutation removed the `setRefreshClaimedAt(Date.now())` that publishes it —
+   * the lock check still ran, read `null`, and let every context through. The
+   * fix would have been inert and the suite green.
+   *
+   * ⚠️ **Observed mid-exchange**, because that is the only moment it exists:
+   * the `finally` clears it as soon as the request settles.
+   */
+  it('publishes its claim while the exchange is in flight', async () => {
+    let claimDuringExchange: string | null = null;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/refresh')) {
+        claimDuringExchange = window.localStorage.getItem('optionia.refresh.claimed');
+
+        return ok({ accessToken: 'a-2', refreshToken: 'r-new' });
+      }
+
+      return getAccessToken() === 'a-2' ? ok({ id: 'u-1' }) : fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me');
+
+    expect(claimDuringExchange).not.toBeNull();
+    expect(Number(claimDuringExchange)).toBeGreaterThan(0);
+  });
+
+  /**
+   * 📌 **The claim is released, not left to time out.** A held claim that
+   * outlives its exchange makes every other context wait for the full TTL on
+   * every refresh — a working session that feels broken.
+   */
+  it('releases its claim once the exchange finishes', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/refresh')) {
+        return ok({ accessToken: 'a-2', refreshToken: 'r-new' });
+      }
+
+      return getAccessToken() === 'a-2' ? ok({ id: 'u-1' }) : fail(401, 'UNAUTHORIZED');
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me');
+
+    expect(window.localStorage.getItem('optionia.refresh.claimed')).toBeNull();
+  });
+
+  /**
+   * ⚠️ **And released when the exchange FAILS**, which is the path a naive
+   * fix misses: four `return`s sit between the claim and the end of that
+   * function, and a rejected refresh takes one of them.
+   */
+  it('releases its claim when the exchange is rejected', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/auth/refresh')
+        ? fail(401, 'UNAUTHORIZED')
+        : fail(401, 'UNAUTHORIZED'),
+    );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await apiRequest('/auth/me').catch(() => undefined);
+
+    expect(window.localStorage.getItem('optionia.refresh.claimed')).toBeNull();
   });
 });

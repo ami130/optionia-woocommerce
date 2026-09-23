@@ -1,9 +1,12 @@
 import {
   clearSession,
   getAccessToken,
+  getRefreshClaimedAt,
   getRefreshToken,
+  setRefreshClaimedAt,
   setSession,
 } from '../auth/token-store';
+import { refreshIsLocked } from '../auth/refresh-lock';
 import { ApiError, NetworkError } from './error';
 import type { ApiEnvelope, ApiErrorResponse, ApiMeta } from './types';
 
@@ -92,6 +95,22 @@ export interface ApiResult<T> {
  * requests.
  */
 let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+/**
+ * How long a blocked context waits for another to finish rotating.
+ *
+ * 📌 **Sized against the exchange, not against the lock.** A refresh is one
+ * round trip to the API — hundreds of milliseconds on a bad connection. Two
+ * seconds covers that with room to spare while keeping a *failed* wait short
+ * enough that the caller's own request has not already given up.
+ *
+ * ⚠️ **Well under `REFRESH_LOCK_TTL_MS`**, so a context that waits out a dead
+ * holder returns, reports `unreachable`, and lets the next attempt find the
+ * claim stale and refresh itself — rather than two contexts deciding to
+ * proceed at the same moment.
+ */
+const REFRESH_WAIT_MS = 2_000;
+const REFRESH_POLL_MS = 25;
 
 /**
  * Why a refresh did not produce a usable token.
@@ -186,6 +205,45 @@ async function refreshOnce(): Promise<RefreshOutcome> {
   return refreshInFlight;
 }
 
+/**
+ * Wait for whichever context holds the claim to store a new refresh token.
+ *
+ * 🔴 **Polls `localStorage` rather than listening for `storage` events.** That
+ * event does not fire in the context that wrote the value, and it does not fire
+ * at all for a write made before this context finished loading — which is
+ * exactly the overlapping-navigation case F64 is about. Polling sees the result
+ * whenever it lands.
+ *
+ * ⚠️ **Bounded, and a timeout is not a rejection.** If the holder dies the wait
+ * ends and the caller reports `unreachable`, so the session survives and the
+ * next attempt — past the claim's TTL — refreshes normally. Waiting forever
+ * would turn a lost tab into a permanent sign-out.
+ */
+async function waitForRotation(previous: string): Promise<boolean> {
+  const deadline = Date.now() + REFRESH_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, REFRESH_POLL_MS));
+
+    const current = getRefreshToken();
+
+    /*
+     * The holder cleared the session: its refresh was rejected. Reporting
+     * "not rotated" lets the caller fail on its own terms rather than
+     * presenting a token that is already gone.
+     */
+    if (current === null) {
+      return false;
+    }
+
+    if (current !== previous) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function performRefresh(): Promise<RefreshOutcome> {
   const refreshToken = getRefreshToken();
 
@@ -194,6 +252,48 @@ async function performRefresh(): Promise<RefreshOutcome> {
     return 'unreachable';
   }
 
+  /*
+   * 🔴 **Another context may already be exchanging this token (F64).**
+   * `refreshInFlight` above guards one JS context; a full page navigation
+   * empties it while the token in `localStorage` survives, so two contexts
+   * each start their own exchange, the second presents a token the first has
+   * rotated, and the API revokes the **whole family** as reuse. Measured twice
+   * in 95 refreshes, each time signing a merchant out of a working dashboard.
+   *
+   * ⚠️ **Waiting, not failing.** A blocked context that gave up would trade a
+   * revoked session for a broken request — the caller would see a 401 it could
+   * do nothing about. It waits for the other context to store the new token
+   * and then uses it, which is what the merchant expects to have happened.
+   */
+  if (refreshIsLocked(getRefreshClaimedAt(), Date.now())) {
+    const rotated = await waitForRotation(refreshToken);
+
+    /*
+     * 📌 **`unreachable`, not `rejected`, when the wait times out.** The other
+     * context may still be in flight; this one has learned nothing about
+     * whether the session is valid, and `rejected` would sign the merchant out
+     * on no evidence.
+     */
+    return rotated ? 'refreshed' : 'unreachable';
+  }
+
+  setRefreshClaimedAt(Date.now());
+
+  /*
+   * 🔴 **Released in `finally`, not at each `return`.** There are four exits
+   * below and a later edit adds a fifth; a claim left behind blocks every
+   * other context until its TTL expires, and the TTL exists as a backstop
+   * rather than as the normal path. Structural release is the difference
+   * between a bug and a slow session.
+   */
+  try {
+    return await exchangeRefreshToken(refreshToken);
+  } finally {
+    setRefreshClaimedAt(null);
+  }
+}
+
+async function exchangeRefreshToken(refreshToken: string): Promise<RefreshOutcome> {
   let response: Response;
 
   try {
