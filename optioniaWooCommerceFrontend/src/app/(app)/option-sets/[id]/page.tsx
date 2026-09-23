@@ -32,6 +32,13 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { roleCan } from '@/lib/auth/capabilities';
@@ -391,34 +398,42 @@ export default function OptionSetEditorPage() {
         scrolling to check, which is the loop this pane exists to remove.
 
         ⚠️ **One column under `lg`, deliberately.** A 24rem preview beside a
-        cramped editor is worse than a preview underneath it; the storefront
-        itself ships no `@media` queries (ADR-108) and this frame already
-        offers phone, tablet and desktop widths, so the small-screen answer is
-        to stack rather than to shrink.
+        cramped editor is worse than a preview underneath it, so the
+        small-screen answer is to stack rather than to shrink.
+
+        🔴 **And the column costs two of the three widths, which is why the
+        docked frame exists (F55).** The first version of this layout cited
+        ADR-108's phone/tablet/desktop presets as *justification* for the
+        column. That inverts the reasoning: the storefront ships no `@media`
+        queries precisely because resizing the frame **is** the feature, so a
+        fixed 24rem column is the thing that breaks it — tablet overflows by
+        22rem, desktop clamps while its button still says *Desktop*. The
+        presets were the cost, never the excuse. The column therefore docks to
+        phone and the dialog below restores the other two.
       */}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
         <div className="min-w-0 space-y-6">
-      <GroupList
-        setId={setId}
-        groups={set.groups}
-        canEdit={canEdit}
-        onChanged={reload}
-        onReordered={reorderChanged}
-        patch={patch}
-      />
+          <GroupList
+            setId={setId}
+            groups={set.groups}
+            canEdit={canEdit}
+            onChanged={reload}
+            onReordered={reorderChanged}
+            patch={patch}
+          />
 
-      {canEdit ? <AddGroup setId={setId} onAdded={reload} /> : null}
+          {canEdit ? <AddGroup setId={setId} onAdded={reload} /> : null}
 
-      {/*
-       * Rules sit below the groups because they act **on** them: a merchant
-       * cannot write "hide Engraving Text" before Engraving Text exists, and the
-       * target picker is built from what is above it.
-       *
-       * ⚠️ Shown to a viewer as well, read-only. A rule decides what a customer
-       * sees, so someone diagnosing a storefront needs to read them without
-       * being able to change them.
-       */}
-      <RulesPanel set={set} canEdit={canEdit} />
+          {/*
+           * Rules sit below the groups because they act **on** them: a merchant
+           * cannot write "hide Engraving Text" before Engraving Text exists, and the
+           * target picker is built from what is above it.
+           *
+           * ⚠️ Shown to a viewer as well, read-only. A rule decides what a customer
+           * sees, so someone diagnosing a storefront needs to read them without
+           * being able to change them.
+           */}
+          <RulesPanel set={set} canEdit={canEdit} />
         </div>
 
         {/*
@@ -427,8 +442,34 @@ export default function OptionSetEditorPage() {
           preview taller than the viewport scrollable within itself rather
           than pushing the page.
         */}
-        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
-          <SetPreviewSection set={set} />
+        <aside className="space-y-2 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+          <SetPreviewSection set={set} docked />
+
+          {/*
+            🔴 **The docked picker promises this, so it has to exist.**
+            Replacing a Desktop button that silently rendered at phone width
+            with a sentence that pointed nowhere would have been the same
+            defect wearing different words.
+
+            📌 **A dialog rather than a route**, because the merchant is
+            checking their work mid-edit: a navigation would lose scroll
+            position and the answers they have typed into the preview.
+          */}
+          <Dialog>
+            <DialogTrigger
+              className="text-muted-foreground hover:text-foreground w-full rounded-md border border-dashed py-2 text-xs transition-colors"
+            >
+              Open full width
+            </DialogTrigger>
+            <DialogContent className="max-w-5xl">
+              <DialogHeader>
+                <DialogTitle>Preview — {set.name}</DialogTitle>
+              </DialogHeader>
+              <div className="max-h-[75vh] overflow-y-auto">
+                <SetPreviewSection set={set} />
+              </div>
+            </DialogContent>
+          </Dialog>
         </aside>
       </div>
 
@@ -681,13 +722,13 @@ function UnpublishedNotice({ set, canPublish }: { set: AuthoringSet; canPublish:
  * to the stated sample price, which is what a set with no assignment shows
  * anyway — so a merchant still gets an answer rather than a spinner.
  */
-function SetPreviewSection({ set }: { set: AuthoringSet }) {
+function SetPreviewSection({ set, docked = false }: { set: AuthoringSet; docked?: boolean }) {
   const products = useQuery({
     queryKey: ['products', 'preview', set.storeId],
     queryFn: () => listProducts({ storeId: set.storeId, limit: 50 }),
   });
 
-  return <SetPreview set={set} products={products.data?.items ?? []} />;
+  return <SetPreview set={set} products={products.data?.items ?? []} docked={docked} />;
 }
 
 function AddGroup({ setId, onAdded }: { setId: string; onAdded: () => void }) {

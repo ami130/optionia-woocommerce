@@ -93,6 +93,22 @@ five runs the handshake answers `429`, the plugin redirects to
 `?optionia_connection=failed`, and it looks exactly like a broken handshake. The
 test names the cause when it sees that; restarting the API resets the counter.
 
+**`POST /auth/refresh` allows 60 per hour, and its failure names the wrong
+thing.** A run signs in and refreshes repeatedly, so a few runs exhaust the
+bucket — and from then on every navigation lands on **Sign in** while the suite
+reports whatever assertion that screen fails first: a missing empty state, an
+absent site name, a set that will not open. It reads as a rendering defect.
+Measured directly: `curl -X POST .../v1/auth/refresh` answering `429` to an
+unauthenticated probe means the bucket, not the page. Set
+`THROTTLE_REFRESH_LIMIT` in the backend's `.env` (it is documented in
+`.env.example`, and is test-only — 60/hour is a brute-force control on the one
+route that mints access tokens).
+
+⚠️ **The API must be restarted, not just rebuilt.** `nest start --watch`
+recompiles on a source change and keeps the environment it booted with, so a
+`.env` edit does not reach a running watcher — the variable looks set and
+changes nothing.
+
 **A connected site shows no Connect button**, so `reset.ts` disconnects the plugin
 before each run. It deliberately leaves the backend's store row alone — a merchant
 who reinstalls a plugin is in precisely that state, and the handshake must cope.

@@ -341,3 +341,93 @@ describe('the add-group field id is shared, not repeated', () => {
   });
 });
 
+
+/**
+ * The preview column and the frame inside it agree about width (F55).
+ *
+ * 🔴 **This is the guard that would have caught F55 before the audit did.** I
+ * put a frame offering phone (23.4rem), tablet (46rem) and desktop (100%)
+ * into a fixed **24rem** column. Tablet overflowed by 22rem; desktop clamped
+ * to the column while its button still said *Desktop*. Every test passed —
+ * because every test asserted which buttons rendered, and none asserted that
+ * the rendered width fit the space it rendered into.
+ *
+ * ⚠️ **Resizing is the feature, not decoration.** The storefront ships zero
+ * `@media` queries (ADR-108): the preview is a frame the merchant resizes
+ * around markup that is intrinsically responsive. So the answer was never to
+ * drop the wider widths — it was to dock the column to the one width that
+ * fits and give the other two a full-width dialog. Both halves of that are
+ * asserted here; neither is safe alone.
+ *
+ * 📌 **Arithmetic, not a snapshot.** The column width and the preset widths
+ * are parsed from source and compared, so changing either one to a value that
+ * no longer fits fails here rather than in a merchant's browser. A snapshot
+ * would have re-blessed F55 the moment I updated it.
+ *
+ * What this cannot see, stated plainly: it reads Tailwind classes as text and
+ * cannot know what a browser computes. Padding, borders and scrollbars are
+ * outside its range. It catches the order-of-magnitude mistake — a 46rem frame
+ * in a 24rem column — and nothing subtler.
+ */
+describe('the docked preview fits its column', () => {
+  const source = readFileSync(
+    join(process.cwd(), 'src/app/(app)/option-sets/[id]/page.tsx'),
+    'utf8',
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, ' ');
+
+  const previewSource = readFileSync(
+    join(process.cwd(), 'src/components/option-sets/set-preview.tsx'),
+    'utf8',
+  );
+
+  /** The `24rem` out of `lg:grid-cols-[minmax(0,1fr)_24rem]`. */
+  const columnRem = (() => {
+    const match = source.match(/lg:grid-cols-\[minmax\(0,1fr\)_([\d.]+)rem\]/);
+
+    expect(match, 'the editor no longer declares a fixed preview column').not.toBeNull();
+
+    return Number(match![1]);
+  })();
+
+  /** Every preset the frame can render at, in rem; `100%` is not a rem value. */
+  const presets = Object.fromEntries(
+    [...previewSource.matchAll(/^ {2}(\w+): '([\d.]+)rem',$/gm)].map(([, name, rem]) => [
+      name,
+      Number(rem),
+    ]),
+  );
+
+  it('parsed both sides, so a silent regex miss cannot pass this file', () => {
+    expect(columnRem).toBeGreaterThan(0);
+    expect(presets.phone).toBe(23.4);
+    expect(presets.tablet).toBe(46);
+  });
+
+  /** The width a docked frame actually starts and stays at. */
+  it('docks the column to a preset that fits it', () => {
+    expect(source).toMatch(/<SetPreviewSection set=\{set\} docked \/>/);
+    expect(presets.phone).toBeLessThanOrEqual(columnRem);
+  });
+
+  /**
+   * 🔴 The inverse, so this file states *why* the dock is needed. If someone
+   * widens the column to 46rem+, this fails and the dock should be revisited —
+   * a guard that only ever agrees with today's numbers teaches nothing.
+   */
+  it('records that the wider presets are the ones that do not fit', () => {
+    expect(presets.tablet).toBeGreaterThan(columnRem);
+  });
+
+  /**
+   * The escape hatch the docked picker's sentence promises. An undocked
+   * `SetPreviewSection` inside the dialog is what restores tablet and desktop.
+   */
+  it('keeps the wider presets reachable through the full-width dialog', () => {
+    const dialog = source.slice(source.indexOf('<DialogContent'));
+
+    expect(source).toContain('Open full width');
+    expect(dialog).toMatch(/<SetPreviewSection set=\{set\} \/>/);
+  });
+});

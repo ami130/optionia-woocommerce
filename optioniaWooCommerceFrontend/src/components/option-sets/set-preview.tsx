@@ -71,9 +71,24 @@ import { OptionPreview } from './option-preview';
 export function SetPreview({
   set,
   products = [],
+  docked = false,
 }: {
   set: AuthoringSet;
   products?: readonly Product[];
+  /**
+   * 🔴 **The frame is only a frame if it can be resized** (ADR-108).
+   *
+   * Phone is 23.4rem, tablet 46rem and desktop 100%. Beside the editor there
+   * is room for the first and not the others — tablet overflows by 22rem, and
+   * desktop clamps to the column while its button still says Desktop, which
+   * is a control lying about what it did.
+   *
+   * ⚠️ **So a docked preview offers phone alone, and says why.** The merchant
+   * keeps the wider widths by opening the preview full-width, where they mean
+   * something. Hiding the buttons without explanation would read as a missing
+   * feature rather than a deliberate constraint.
+   */
+  docked?: boolean;
 }) {
   const tree = useMemo(() => previewTree(set), [set]);
 
@@ -91,7 +106,7 @@ export function SetPreview({
    * three preset widths change the *container* and the choice grid reacts the
    * way it reacts in a real theme, because it is built the same way.
    */
-  const [width, setWidth] = useState<PreviewWidth>('desktop');
+  const [width, setWidth] = useState<PreviewWidth>(docked ? 'phone' : 'desktop');
 
   /*
    * The product a merchant is pricing against. `null` until they choose — which
@@ -162,7 +177,7 @@ export function SetPreview({
       <PreviewHeading />
 
       <div className="flex flex-wrap items-center gap-3">
-        <WidthPicker value={width} onChange={setWidth} />
+        <WidthPicker value={width} onChange={setWidth} docked={docked} />
 
         {/*
           * Choosing a product is optional, and the stated sample is the default
@@ -319,13 +334,26 @@ const WIDTH_LABELS: Readonly<Record<PreviewWidth, string>> = {
 function WidthPicker({
   value,
   onChange,
+  docked = false,
 }: {
   value: PreviewWidth;
   onChange: (next: PreviewWidth) => void;
+  docked?: boolean;
 }) {
+  /*
+   * ⚠️ **Docked shows the one width that fits, not all three greyed out.**
+   * A disabled control invites the question "why?"; a single control with a
+   * sentence beside it answers it before it is asked. The sentence matters
+   * more than the buttons — without it this reads as a feature that went
+   * missing rather than one that moved.
+   */
+  const available = docked
+    ? (['phone'] as PreviewWidth[])
+    : (Object.keys(PREVIEW_WIDTHS) as PreviewWidth[]);
+
   return (
-    <div role="group" aria-label="Preview width" className="flex gap-1">
-      {(Object.keys(PREVIEW_WIDTHS) as PreviewWidth[]).map((candidate) => (
+    <div role="group" aria-label="Preview width" className="flex items-center gap-1">
+      {available.map((candidate) => (
         <button
           key={candidate}
           type="button"
@@ -338,6 +366,11 @@ function WidthPicker({
           {WIDTH_LABELS[candidate]}
         </button>
       ))}
+      {docked ? (
+        <span className="text-muted-foreground ml-1 text-xs">
+          Open full width for tablet and desktop
+        </span>
+      ) : null}
     </div>
   );
 }

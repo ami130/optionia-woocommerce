@@ -444,3 +444,65 @@ describe('SetPreview', () => {
     expect(markup).toContain('could not be priced (per_unit)');
   });
 });
+
+/**
+ * 🔴 **The frame is only a frame if it can be resized** (ADR-108).
+ *
+ * The preview was moved into a 24rem sidebar beside the editor, where phone
+ * (23.4rem) fits and the other two do not: tablet (46rem) overflows by 22rem,
+ * and desktop (100%) clamps to the column **while its button still reads
+ * Desktop** — a control lying about what it did.
+ *
+ * ⚠️ **1744 tests stayed green through that**, because none of them knew where
+ * the preview was rendered or how wide its container was. These assert the
+ * constraint rather than the layout: a docked preview offers only widths that
+ * fit, and says where the others went.
+ */
+describe('SetPreview docked', () => {
+  const docked = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <SetPreview set={set(over) as AuthoringSet} products={[] as never} docked />,
+    );
+
+  it('offers phone alone, because it is the only width that fits beside the editor', () => {
+    const markup = docked();
+
+    expect(markup).toContain('Phone');
+    expect(markup).not.toContain('Tablet');
+    expect(markup).not.toContain('Desktop');
+  });
+
+  /**
+   * ⚠️ **Hiding the wider widths without saying so reads as a missing
+   * feature.** The sentence is the half that matters — and it promises a
+   * full-width view, which the editor must therefore provide.
+   */
+  it('says where the wider widths went', () => {
+    expect(docked()).toContain('Open full width');
+  });
+
+  /**
+   * 🔴 **It must also *start* at a width that fits.** A mutation leaving the
+   * initial state at `desktop` **survived** the two tests above: the picker
+   * correctly offered Phone alone, while the frame rendered at 100% and
+   * clamped to the column — the exact silent misrender F55 was about, with a
+   * picker that now agreed with it.
+   */
+  it('starts at phone, not at a width the column would clamp', () => {
+    const markup = docked();
+    const phone = markup.indexOf('aria-pressed="true"');
+
+    expect(phone).toBeGreaterThan(-1);
+    expect(markup).toContain('max-width:23.4rem');
+  });
+
+  /** Undocked is unchanged: all three widths, because all three fit. */
+  it('keeps every width when it is not docked', () => {
+    const markup = html(set());
+
+    expect(markup).toContain('Phone');
+    expect(markup).toContain('Tablet');
+    expect(markup).toContain('Desktop');
+    expect(markup).not.toContain('Open full width');
+  });
+});
