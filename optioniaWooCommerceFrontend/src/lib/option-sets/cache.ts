@@ -61,17 +61,30 @@ export const optionSetKeys = {
 };
 
 /**
- * Refresh what an **edit** changed: the tree, and nothing else.
+ * Refresh what an **edit** changed: the tree, and the two answers an edit moves.
  *
  * ⚠️ **`exact: true` is the whole point.** Without it the key is a prefix and
- * takes its three siblings with it. Editing a label cannot change the published
- * history, and the publish-check is re-run when the publish panel is opened —
- * neither needs refetching because a merchant renamed an option.
+ * takes its siblings with it. Editing a label cannot change the published
+ * history, which does not need refetching because a merchant renamed an option.
  *
- * 🔴 **`unpublished` is the deliberate exception**, and it is invalidated here
- * on purpose: an edit is *precisely* what makes a published set differ from its
- * draft, so the "still serving version N" notice would otherwise be stale in
- * the one direction that matters.
+ * 🔴 **`unpublished` is invalidated on purpose**: an edit is *precisely* what
+ * makes a published set differ from its draft, so the "still serving version N"
+ * notice would otherwise be stale in the one direction that matters.
+ *
+ * 🔴 **And `publish-check`, since the button moved into the header (F58).**
+ * This comment used to say the check *"is re-run when the publish panel is
+ * opened"* — true while publishing lived in a panel below the product picker.
+ * It now runs on mount in the header, so nothing is ever opened, and the answer
+ * survived every edit that changed it. **Measured by walking the flow**: a
+ * merchant adds their first option, sees it on screen, and the header still
+ * reads *"1 thing to fix"* over a blocker saying the set *"has no enabled
+ * options or content"* — told they have not done the thing they can see they
+ * did.
+ *
+ * 📌 **Cheap where it used to be expensive.** The objection to a broad
+ * invalidation was five requests per edit, three of them whole documents; the
+ * publish-check is a single small response, and it is the one sibling whose
+ * answer an edit genuinely changes.
  */
 export function invalidateAfterEdit(client: QueryClient, setId: string): void {
   void client.invalidateQueries({ queryKey: optionSetKeys.tree(setId), exact: true });
@@ -79,6 +92,8 @@ export function invalidateAfterEdit(client: QueryClient, setId: string): void {
   void client.invalidateQueries({
     queryKey: ['option-set', setId, 'unpublished'],
   });
+
+  void client.invalidateQueries({ queryKey: optionSetKeys.publishCheck(setId) });
 }
 
 /**
@@ -215,6 +230,16 @@ export function patchTree(
   void client.invalidateQueries({
     queryKey: ['option-set', setId, 'unpublished'],
   });
+
+  /*
+   * 🔴 **And the publish-check, for the same reason (F73).** An in-place edit
+   * changes what may be published: `isEnabled` is patched through here, so
+   * disabling the only option in a set left the header still offering to
+   * publish something the API would refuse. The mirror of the stale blocker —
+   * one direction told a merchant their work was missing, this one invites
+   * them to ship nothing.
+   */
+  void client.invalidateQueries({ queryKey: optionSetKeys.publishCheck(setId) });
 
   /*
    * 🔴 **Refetched, never guessed.** Every child edit advances the parent set's

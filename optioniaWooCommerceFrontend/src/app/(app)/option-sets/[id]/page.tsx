@@ -56,6 +56,7 @@ import {
   readOptionValidation,
 } from '@/lib/option-sets/option-validation';
 import { publishGate, publishResultIsCurrent } from '@/lib/option-sets/publish-gate';
+import { typeLabel } from '@/lib/schemas/option-sets';
 import { parsePortable } from '@/lib/option-sets/portable-import';
 import { toPortable } from '@/lib/option-sets/portable';
 import { parseTextRules, readTextRules } from '@/lib/option-sets/text-rules';
@@ -2160,8 +2161,14 @@ function OptionBlock({
             {option.label}{' '}
             <span className="text-muted-foreground text-xs">({option.key})</span>
           </p>
+          {/*
+            🔴 **The merchant's word for the type, not the wire's.** This read
+            `{option.presentation}` — so an option showed `text_field` under its
+            label while the picker directly above called the same thing *"Text
+            field"*. One option, described two ways, on one screen.
+          */}
           <p className="text-muted-foreground text-xs">
-            {option.presentation}
+            {typeLabel(option.presentation)}
             {option.isRequired ? ' · required' : ''}
           </p>
         </div>

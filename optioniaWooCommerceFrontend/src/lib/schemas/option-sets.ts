@@ -184,6 +184,29 @@ export const AUTHORABLE_TYPES = [
   },
 ] as const;
 
+/**
+ * What to call an option's type where a merchant reads it.
+ *
+ * 🔴 **The editor printed the wire value.** Under every option's label sat
+ * `text_field`, `color_swatch`, `number_field` — the `presentation` string
+ * exactly as it travels to the storefront. The picker two inches away had
+ * already said *"Text field"*, so the same option was named twice, once in
+ * merchant language and once in the database's.
+ *
+ * 📌 **Derived from `AUTHORABLE_TYPES`, never a second list.** A map written by
+ * hand is a map that disagrees with the picker the first time a type is added
+ * or renamed, and the disagreement shows up as one option described two ways on
+ * one screen — which is the defect this closes.
+ *
+ * ⚠️ **Falls back to the raw value rather than to an empty string.** A type
+ * this list does not know is still something a merchant needs to see; showing
+ * nothing would hide an option's nature entirely, which is worse than showing
+ * it awkwardly.
+ */
+export function typeLabel(presentation: string): string {
+  return AUTHORABLE_TYPES.find((type) => type.value === presentation)?.label ?? presentation;
+}
+
 /*
  * ✏️ **The swatches joined this list once the value editor could set a colour or
  * an image.** They were registered in the API and deliberately absent here until

@@ -63,15 +63,29 @@ describe('invalidateAfterEdit', () => {
     expect(invalidated(client)).not.toContain('option-set/s1/versions/3');
   });
 
-  /** Nor can it change the pre-publish findings, which re-run when opened. */
-  it('leaves the publish check alone', async () => {
+  /**
+   * 🔴 **It MUST refresh, and this test asserted the opposite (F73).**
+   *
+   * The original read *"leaves the publish check alone"*, because the findings
+   * *"re-run when opened"* — true while publishing lived in a panel below the
+   * product picker. Since the button moved into the header (F58) the check runs
+   * on mount and nothing is ever opened, so the answer survived every edit that
+   * changed it.
+   *
+   * ⚠️ **The test held the same expired assumption as the source it guarded**,
+   * so it protected the defect rather than catching it: a merchant added their
+   * first option, saw it on screen, and the header still read *"1 thing to
+   * fix"* over a blocker saying the set had *"no enabled options or content"*.
+   * Measured by walking the flow as a new merchant.
+   */
+  it('refreshes the publish check, which an edit can change', async () => {
     const client = new QueryClient();
 
     seed(client, 's1');
     invalidateAfterEdit(client, 's1');
     await Promise.resolve();
 
-    expect(invalidated(client)).not.toContain('option-set/s1/publish-check');
+    expect(invalidated(client)).toContain('option-set/s1/publish-check');
   });
 
   /**
@@ -100,15 +114,28 @@ describe('invalidateAfterEdit', () => {
     expect(invalidated(client).filter((key) => key.includes('other'))).toEqual([]);
   });
 
-  /** The count is the headline: two, where it used to be four. */
-  it('invalidates two queries, not four', async () => {
+  /**
+   * The count is the headline: **three**, where it used to be four, and where a
+   * naive prefix invalidation would take everything.
+   *
+   * ✏️ **It was two until F73.** The publish-check was deliberately excluded on
+   * the grounds that it *"re-runs when the publish panel is opened"* — which
+   * stopped being true when the button moved into the header. Three is the
+   * honest number: the tree, the draft-versus-live diff, and the findings that
+   * decide whether the header may offer to publish at all.
+   *
+   * 📌 **The guard is still worth keeping.** Its job is to fail when someone
+   * drops `exact: true` and the prefix quietly takes the published history with
+   * it — a regression that costs a whole document fetch per keystroke.
+   */
+  it('invalidates three queries, not the whole prefix', async () => {
     const client = new QueryClient();
 
     seed(client, 's1');
     invalidateAfterEdit(client, 's1');
     await Promise.resolve();
 
-    expect(invalidated(client)).toHaveLength(2);
+    expect(invalidated(client)).toHaveLength(3);
   });
 });
 
@@ -265,6 +292,32 @@ describe('patchTree', () => {
     );
 
     expect(client.getQueryState(optionSetKeys.tree('s1'))?.isInvalidated).toBe(false);
+  });
+
+  /**
+   * 🔴 **An in-place edit can change what may be published (F73).**
+   * `isEnabled` is patched through here, so disabling the only option in a set
+   * left the header still offering to publish something the API would refuse —
+   * inviting a merchant to ship nothing. The mirror of the stale blocker: one
+   * direction says the work is missing, this one says it is ready.
+   */
+  it('refreshes the publish check, which an in-place edit can change', async () => {
+    const client = new QueryClient();
+
+    /*
+     * ⚠️ **Seeded before patched.** `invalidateQueries` marks queries that
+     * exist; a key never fetched cannot be invalidated, so a test that only
+     * seeds the tree reports an empty list and passes whatever the code does.
+     */
+    seed(client, 's1');
+    client.setQueryData(optionSetKeys.tree('s1'), tree());
+
+    patchTree(client, 's1', (set) =>
+      replaceValueInTree(set, { id: 'v1', label: 'Patched' } as never),
+    );
+    await Promise.resolve();
+
+    expect(invalidated(client)).toContain('option-set/s1/publish-check');
   });
 
   /**

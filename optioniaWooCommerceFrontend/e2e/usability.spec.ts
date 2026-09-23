@@ -168,6 +168,18 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
       await expect(preview.getByText('Engraving text')).toBeVisible();
     });
 
+    await test.step('the option is described in the merchant\'s words', async () => {
+      /*
+       * 🔴 **It printed the wire value.** Under the option's label sat
+       * `text_field` — the string that travels to the storefront — while the
+       * type picker two inches above called the same thing *"Text field"*. One
+       * option, named twice, once in merchant language and once in the
+       * database's.
+       */
+      await expect(page.getByText('Text field').first()).toBeVisible();
+      await expect(page.getByText('text_field')).toHaveCount(0);
+    });
+
     await test.step('publishing is reachable without scrolling for it', async () => {
       /*
        * 🔴 **The action that makes the work real.** It used to sit below the
@@ -175,6 +187,67 @@ test.describe('Gate 2 — can a merchant build what they came to build?', () => 
        * down — while the notice at the top told merchants to publish.
        */
       await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
+    });
+
+    await test.step('a blocked publish says what to fix, not merely that it cannot', async () => {
+      /*
+       * 🔴 **A disabled button with no reason is a dead end**, and this is where
+       * a tester without documentation stops. The count beside it is the whole
+       * difference between "why is this grey?" and a next action.
+       */
+      const publish = page.getByRole('button', { name: 'Publish', exact: true });
+
+      if (await publish.isDisabled()) {
+        await expect(page.getByText(/thing(s)? to fix/).first()).toBeVisible();
+      }
+    });
+
+    await test.step('the blocker list agrees with what is on screen', async () => {
+      /*
+       * 🔴 **It said the set was empty while the option was visible above it.**
+       * *"has no enabled options or content, so there is nothing to publish"* —
+       * about a set whose option the merchant had just added and could see. The
+       * check is right; the answer was **stale**. `invalidateAfterEdit` skips
+       * `publish-check` on purpose, and its comment explains why: *"the
+       * publish-check is re-run when the publish panel is opened"*. Since the
+       * publish button moved into the header (F58) nothing is ever *opened*,
+       * so the check keeps the answer it got when the set was empty.
+       *
+       * ⚠️ **This is the message that decides whether a tester finishes.** A
+       * merchant who has done the work and is told they have not will look for
+       * what they did wrong, and there is nothing to find.
+       */
+      await expect(
+        page.getByText(/has no enabled options or content/),
+      ).toHaveCount(0);
+    });
+
+    await test.step('disabling the only option brings the blocker back', async () => {
+      /*
+       * 🔴 **The mirror of the stale blocker, and it was the other half of the
+       * same bug.** In-place edits go through `patchTree`, which patches the
+       * cached tree and — before this — left `publish-check` alone. So a
+       * merchant could disable their only option and the header would still
+       * offer to publish a set with nothing in it.
+       *
+       * ⚠️ **This is the direction that ships a broken set**, not merely an
+       * annoying one: the publish would be refused server-side, so the merchant
+       * is invited to do something the API will reject.
+       */
+      await page.getByRole('button', { name: /^Disable Engraving text$/ }).click();
+
+      await expect(page.getByText(/has no enabled options or content/).first()).toBeVisible();
+    });
+
+    await test.step('the merchant can reach the reason and act on it', async () => {
+      /*
+       * ⚠️ **The findings live in the panel below, not in the header.** A
+       * merchant told "1 thing to fix" must be able to find *what* — so the
+       * list has to exist on the same screen, not behind a navigation.
+       */
+      await expect(
+        page.getByText(/fix these first|worth knowing|publishing/i).first(),
+      ).toBeVisible();
     });
   });
 
