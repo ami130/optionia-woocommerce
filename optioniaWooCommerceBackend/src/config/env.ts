@@ -163,24 +163,6 @@ export interface AppConfig {
    * email never becomes a customer, and silent success is the worst possible
    * failure here. `loadConfig` enforces that.
    */
-  /**
-   * Billing credentials.
-   *
-   * 📌 **The API version is deliberately NOT here.** It is a literal in
-   * `BillingModule` (`STRIPE_API_VERSION`), because a version an operator can
-   * change from `.env` is not pinned — it is a billing change with no diff and
-   * no review, which is the thing F94/E3 objected to in the first place.
-   *
-   * ⚠️ **The keys are optional, because billing is not yet wired to a live
-   * account.** A missing key means "no provider configured", which is the
-   * correct state for development and for every test in this repository.
-   */
-  readonly billing: {
-    readonly provider: string;
-    readonly secretKey: string | null;
-    readonly webhookSecret: string | null;
-  };
-
   readonly mail: {
     readonly transport: MailTransport;
     readonly from: string;
@@ -192,6 +174,30 @@ export interface AppConfig {
       /** STARTTLS on 587, implicit TLS on 465. */
       readonly secure: boolean;
     } | null;
+  };
+
+  /**
+   * Billing credentials.
+   *
+   * 📌 **The API version is deliberately NOT here.** It is a literal in
+   * `BillingModule` (`STRIPE_API_VERSION`), because a version an operator can
+   * change from `.env` is not pinned — it is a billing change with no diff and
+   * no review, which is the thing F94/E3 objected to in the first place.
+   *
+   * ⚠️ **The keys are optional, because billing is not yet wired to a live
+   * account.** A missing key means "no provider configured", which is the
+   * correct state for development and for every test in this repository.
+   *
+   * 📌 **There is deliberately no provider selector either.** One provider is
+   * implemented and ADR-114 chose it; a knob that selects among one thing is a
+   * declaration pretending to be a mechanism. I shipped exactly that — a
+   * `BILLING_PROVIDER` variable nothing read, whose name also collided with the
+   * DI token of the same name — and removed it (G1). A second provider arrives
+   * with a reader, or not at all.
+   */
+  readonly billing: {
+    readonly secretKey: string | null;
+    readonly webhookSecret: string | null;
   };
 
   /**
@@ -338,7 +344,6 @@ export function loadConfig(): AppConfig {
     pluginDistDir: optional('PLUGIN_DIST_DIR', '../optioniaWooCommercePlugin/dist'),
 
     billing: {
-      provider: optional('BILLING_PROVIDER', 'stripe'),
       secretKey: nullableSecret('STRIPE_SECRET_KEY'),
       webhookSecret: nullableSecret('STRIPE_WEBHOOK_SECRET'),
     },

@@ -12,7 +12,7 @@ import { Logger, Module } from '@nestjs/common';
 import Stripe = require('stripe');
 
 import { loadConfig } from '../config/env';
-import { BILLING_PROVIDER, type BillingProvider } from './billing-provider';
+import { BILLING_PROVIDER, type BillingProviderOrNull } from './billing-provider';
 import { StripeProvider } from './stripe.provider';
 
 /**
@@ -67,19 +67,25 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
   providers: [
     {
       provide: BILLING_PROVIDER,
-      useFactory: (): BillingProvider | null => {
+      useFactory: (): BillingProviderOrNull => {
         const config = loadConfig();
 
         /*
          * ⚠️ **An unconfigured provider is `null`, not a throw.** Billing is not
          * yet wired to a live account, and every test in this repository boots
          * the app without Stripe keys — refusing to start would make "no
-         * billing" unrunnable rather than merely unavailable. Callers must
-         * handle `null`; the token's type says so.
+         * billing" unrunnable rather than merely unavailable.
          *
-         * 🔴 Production is the exception and is guarded at the call sites, not
-         * here: a deployment missing the keys should fail when a merchant tries
-         * to pay, with a logged reason, rather than take the whole API down.
+         * 🔴 **Callers reach it through `requireBillingProvider`, not by
+         * injecting the token directly.** I first wrote here that *"the token's
+         * type says so"* — it does not and cannot: an injection token is a bare
+         * symbol, so `@Inject(BILLING_PROVIDER) p: BillingProvider` compiles and
+         * then holds `null` at runtime (G2). The accessor is a real signature,
+         * so the compiler enforces what the comment used to only assert.
+         *
+         * 📌 Production is guarded there rather than here: a deployment missing
+         * its keys fails when a merchant tries to pay, with a named reason,
+         * instead of taking every other route down with it.
          */
         if (config.billing.secretKey === null || config.billing.webhookSecret === null) {
           new Logger('BillingModule').warn(

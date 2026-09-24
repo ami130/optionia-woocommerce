@@ -3,7 +3,11 @@ import { Test } from '@nestjs/testing';
 /* 🔴 See BillingModule: a default import of `stripe` is `undefined` at runtime. */
 import Stripe = require('stripe');
 
-import { BILLING_PROVIDER, type BillingProvider } from './billing-provider';
+import {
+  BILLING_PROVIDER,
+  type BillingProviderOrNull,
+  requireBillingProvider,
+} from './billing-provider';
 import {
   BillingModule,
   createStripeClient,
@@ -40,7 +44,7 @@ describe('BillingModule', () => {
 
   async function providerWith(
     env: Record<string, string | undefined>,
-  ): Promise<{ provider: BillingProvider | null; close: () => Promise<void> }> {
+  ): Promise<{ provider: BillingProviderOrNull; close: () => Promise<void> }> {
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, VALID_ENV);
 
@@ -52,7 +56,7 @@ describe('BillingModule', () => {
     const moduleRef = await Test.createTestingModule({ imports: [BillingModule] }).compile();
 
     return {
-      provider: moduleRef.get<BillingProvider | null>(BILLING_PROVIDER),
+      provider: moduleRef.get<BillingProviderOrNull>(BILLING_PROVIDER),
       close: () => moduleRef.close(),
     };
   }
@@ -186,5 +190,38 @@ describe('BillingModule', () => {
     expect(provider).toBeNull();
 
     await close();
+  });
+
+  /**
+   * G2: the null contract, held by a signature rather than by a comment.
+   *
+   * 🔴 **A bare injection token cannot carry a type**, so nothing stops a
+   * consumer writing `@Inject(BILLING_PROVIDER) p: BillingProvider` and holding
+   * `null` at runtime. `requireBillingProvider` is the enforceable form: it is a
+   * real function signature, and this is where G3's "guarded at the call sites"
+   * becomes code instead of a promise about code.
+   */
+  describe('requireBillingProvider', () => {
+    it('returns the provider when one is configured', async () => {
+      const { provider, close } = await providerWith({
+        STRIPE_SECRET_KEY: 'sk_test_fake',
+        STRIPE_WEBHOOK_SECRET: 'whsec_fake',
+      });
+
+      expect(requireBillingProvider(provider).name).toBe('stripe');
+
+      await close();
+    });
+
+    /**
+     * ⚠️ **The message names the missing keys.** An operator reading a 500 in a
+     * log needs to know which variable to set; *"cannot read properties of
+     * null"* three frames deeper tells them nothing.
+     */
+    it('throws a reason an operator can act on when none is', () => {
+      expect(() => requireBillingProvider(null)).toThrow(
+        'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
+      );
+    });
   });
 });

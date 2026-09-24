@@ -140,5 +140,43 @@ export interface BillingProvider {
   verifyWebhook(input: { rawBody: Buffer; signature: string }): Promise<VerifiedWebhook | null>;
 }
 
-/** The injection token, so a module binds one implementation without importing it. */
+/**
+ * The injection token, so a module binds one implementation without importing it.
+ *
+ * 🔴 **This token resolves to `BillingProvider | null`, and a bare symbol cannot
+ * say so.** `BillingModule` returns `null` when no credentials are configured —
+ * the state every test in this repository runs in — but an injection token
+ * carries no type, so `@Inject(BILLING_PROVIDER) private p: BillingProvider`
+ * compiles happily and then holds `null` at runtime. That is a crash inside a
+ * checkout handler.
+ *
+ * ⚠️ **I asserted the opposite in prose** (*"callers must handle `null`; the
+ * token's type says so"*, G2) — the fourth time this phase that a guarantee
+ * lived in a comment instead of a mechanism. Consumers must resolve through
+ * {@link requireBillingProvider}, which is a real signature the compiler checks.
+ */
 export const BILLING_PROVIDER = Symbol('BILLING_PROVIDER');
+
+/** What the token actually resolves to. Inject this type, never `BillingProvider`. */
+export type BillingProviderOrNull = BillingProvider | null;
+
+/**
+ * Unwrap the token, or fail with a reason a human can act on.
+ *
+ * 📌 **This is where G3's "guarded at the call sites" stops being a promise.**
+ * `BillingModule` deliberately resolves to `null` rather than refusing to boot,
+ * so that a deployment missing its keys serves every non-billing route instead
+ * of taking the whole API down. The cost of that choice is that each billing
+ * entry point must state what it needs — this function is how, in one line, and
+ * the thrown error names the missing configuration rather than surfacing as
+ * *"cannot read properties of null"* three frames deeper.
+ */
+export function requireBillingProvider(provider: BillingProviderOrNull): BillingProvider {
+  if (provider === null) {
+    throw new Error(
+      'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
+    );
+  }
+
+  return provider;
+}

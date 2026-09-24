@@ -57,3 +57,12 @@ Thumbs.db
 # WooCommerce commit: the two sub-repos above were already excluded, this was not,
 # so it was the one unignored neighbour a broad add could reach.
 /optionia-app/
+
+# Scratch space for rescued artefacts during an audit.
+#
+# 📌 Currently holds the three `.github/workflows/ci.yml` files that each service
+# carried before the repositories were merged on 2026-09-22. They are redundant —
+# the root `backend.yml`, `dashboard.yml` and `plugin.yml` are supersets, verified
+# job by job — and kept only until the stale nested `.git` directories they came
+# from are dealt with (G7).
+/.archive/

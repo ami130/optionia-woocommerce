@@ -1,4 +1,5 @@
 import { InvoiceStatus } from '../common/database/enums';
+import type { Invoice } from './entities/invoice.entity';
 
 /**
  * A provider invoice, translated into this system's vocabulary (M22.C1).
@@ -18,18 +19,46 @@ import { InvoiceStatus } from '../common/database/enums';
  * 📌 Nothing Stripe-shaped appears in the output, per the interface's rule that
  * *"the moment `stripe.Subscription` appears in a service signature, the
  * abstraction has already failed."*
+ *
+ * @module
  */
-export interface MappedInvoice {
-  providerInvoiceId: string;
-  status: InvoiceStatus;
-  currency: string;
-  subtotalMinor: number;
-  taxMinor: number;
-  totalMinor: number;
-  taxCountry: string | null;
-  issuedAt: Date | null;
-  paidAt: Date | null;
-  hostedUrl: string | null;
+
+/**
+ * The columns this mapper fills on `invoices`.
+ *
+ * 🔴 **Tied to the entity by `Pick`, not by matching names carefully.** G4 found
+ * the two drifting freely: a column renamed on `Invoice`, or one added and
+ * forgotten here, produced no error at all — the e2e test spread this object
+ * into `repo.create()` and TypeORM silently ignored anything unrecognised. Now a
+ * rename **stops the build**, which is the same bargain
+ * `invoice.mapper.contract.spec.ts` strikes with Stripe's own types.
+ *
+ * ⚠️ `tenantId`, `subscriptionId` and `provider` are deliberately absent: they
+ * are the caller's to resolve, and a mapper that invented them would be
+ * guessing which tenant a webhook belongs to.
+ */
+export type MappedInvoiceColumns = Pick<
+  Invoice,
+  | 'providerInvoiceId'
+  | 'status'
+  | 'currency'
+  | 'subtotalMinor'
+  | 'taxMinor'
+  | 'totalMinor'
+  | 'taxCountry'
+  | 'issuedAt'
+  | 'paidAt'
+  | 'hostedUrl'
+>;
+
+/**
+ * The columns, plus the two provider ids a caller needs to find the tenant.
+ *
+ * 📌 **The ids are NOT columns on `invoices`**, and the split is structural so
+ * that stays true: a caller destructures them off before saving, and the
+ * compiler — not a convention — decides what may reach the row.
+ */
+export interface MappedInvoice extends MappedInvoiceColumns {
   /** Stripe's customer id, so a caller can find the tenant. Never a tenant id. */
   providerCustomerId: string | null;
   /** Stripe's subscription id, for the same reason. */
