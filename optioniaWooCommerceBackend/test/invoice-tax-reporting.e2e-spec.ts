@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { InvoiceStatus } from '../src/common/database/enums';
+import { mapInvoice } from '../src/billing/invoice.mapper';
 import { Invoice } from '../src/billing/entities/invoice.entity';
 import { Tenant } from '../src/tenants/entities/tenant.entity';
 import { Plan } from '../src/plans/entities/plan.entity';
@@ -81,6 +82,84 @@ describe('Invoice tax reporting (e2e)', () => {
       ...over,
     });
   }
+
+  /**
+   * The mapper's output, stored (M22.C1).
+   *
+   * 🔴 **This is the half of C1's stated proof the unit tests cannot give.**
+   * `invoice.mapper.spec.ts` asserts what the mapper returns; only MySQL can say
+   * whether that shape survives `ck_invoices_totals`, the `char(2)` tax country
+   * and the `char(3)` currency. A mapper whose rows the schema rejects is a
+   * mapper that works in tests and fails on the first live webhook.
+   *
+   * ⚠️ Every field written here comes from `mapInvoice`, not from a fixture, so
+   * a future change to either the mapper or the columns breaks this test rather
+   * than only one side of the pair.
+   */
+  it('stores a row built by the mapper, through the real constraints', async () => {
+    const tenant = await tenantIn('DE');
+
+    seq += 1;
+    const result = mapInvoice({
+      id: `in_${run}_${seq}_mapped`,
+      status: 'paid',
+      currency: 'eur',
+      subtotal: 2900,
+      total_taxes: [{ amount: 609 }],
+      total: 3509,
+      created: 1_755_216_000,
+      status_transitions: { paid_at: 1_755_216_060 },
+      hosted_invoice_url: 'https://invoice.stripe.com/i/mapped',
+      customer: 'cus_mapped',
+      customer_address: { country: 'de' },
+      parent: { subscription_details: { subscription: 'sub_mapped' } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const repo = dataSource.getRepository(Invoice);
+    const { providerCustomerId, providerSubscriptionId, ...columns } = result.invoice;
+
+    /* 📌 Those two are the caller's business — they resolve the tenant, and are
+     * deliberately not columns on this table. Destructured so a future column
+     * addition surfaces here rather than being silently dropped. */
+    expect(providerCustomerId).toBe('cus_mapped');
+    expect(providerSubscriptionId).toBe('sub_mapped');
+
+    await repo.save(repo.create({ tenantId: tenant.id, provider: 'stripe', ...columns }));
+
+    const stored = await repo.findOneOrFail({
+      where: { providerInvoiceId: `in_${run}_${seq}_mapped` },
+    });
+
+    expect(stored.subtotalMinor + stored.taxMinor).toBe(stored.totalMinor);
+    expect(stored.currency).toBe('EUR');
+    expect(stored.taxCountry).toBe('DE');
+    expect(stored.status).toBe(InvoiceStatus.PAID);
+    expect(stored.hostedUrl).toBe('https://invoice.stripe.com/i/mapped');
+  });
+
+  /**
+   * 🔴 **The mapper refuses what the CHECK would reject**, so a bad payload
+   * fails at the boundary with a reason rather than as a database error on
+   * insert — which is the difference between a logged finding and a 500.
+   */
+  it('never produces a row the totals constraint would refuse', async () => {
+    const result = mapInvoice({
+      id: 'in_inconsistent',
+      status: 'paid',
+      currency: 'eur',
+      subtotal: 2900,
+      total_taxes: [{ amount: 609 }],
+      total: 9999,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'totals disagree: 2900 + 609 ≠ 9999',
+    });
+  });
 
   /**
    * 🔴 **The reporting query, which is the whole reason this table exists.**
