@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 
 /* 🔴 See BillingModule: a default import of `stripe` is `undefined` at runtime. */
 import Stripe = require('stripe');
@@ -8,6 +9,7 @@ import {
   type BillingProviderOrNull,
   requireBillingProvider,
 } from './billing-provider';
+import { BillingEvent } from './entities/billing-event.entity';
 import {
   BillingModule,
   createStripeClient,
@@ -53,7 +55,17 @@ describe('BillingModule', () => {
       else process.env[key] = value;
     });
 
-    const moduleRef = await Test.createTestingModule({ imports: [BillingModule] }).compile();
+    /*
+     * ⚠️ **The repository is stubbed, not connected.** `BillingModule` now
+     * carries the webhook controller, which needs a `BillingEvent` repository —
+     * and this suite is about the provider factory, which has no database in it.
+     * The real repository is exercised by `billing-webhook.e2e-spec.ts`, against
+     * MySQL, where the unique index it depends on actually exists.
+     */
+    const moduleRef = await Test.createTestingModule({ imports: [BillingModule] })
+      .overrideProvider(getRepositoryToken(BillingEvent))
+      .useValue({ create: (r: unknown) => r, save: async (r: unknown) => r })
+      .compile();
 
     return {
       provider: moduleRef.get<BillingProviderOrNull>(BILLING_PROVIDER),

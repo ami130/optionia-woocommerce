@@ -49,6 +49,27 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     // Buffer startup logs so nothing is written before the logger is configured.
     bufferLogs: true,
+
+    /**
+     * Keep the exact bytes of every request body (M22.C2).
+     *
+     * 🔴 **A Stripe signature is computed over the bytes Stripe sent**, not over
+     * the object they parse into. `JSON.parse` followed by `JSON.stringify` is
+     * not byte-identical — key order, unicode escaping and number formatting all
+     * drift — so a webhook verified against a re-serialised body fails for
+     * reasons that read like a misconfigured secret and are not.
+     *
+     * 📌 **This costs one `verify` hook, not a second parser.** Nest turns the
+     * flag into `verify: (req, _res, buf) => { req.rawBody = buf }` and threads
+     * it through `useBodyParser` below automatically — `useBodyParser` reads
+     * `appOptions.rawBody` itself, which is why the calls further down need no
+     * change. Verified in `@nestjs/core/nest-application.js`.
+     *
+     * ⚠️ It applies to every route, because the parser chain is global. The
+     * extra cost is one retained Buffer per request, bounded by the same
+     * `BODY_LIMIT` as the parsed body.
+     */
+    rawBody: true,
   });
 
   // Replace Nest's default logger, so framework messages and application

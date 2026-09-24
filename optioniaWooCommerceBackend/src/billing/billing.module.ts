@@ -1,4 +1,5 @@
 import { Logger, Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 /*
  * 🔴 `import Stripe = require('stripe')`, NOT a default import.
@@ -13,6 +14,9 @@ import Stripe = require('stripe');
 
 import { loadConfig } from '../config/env';
 import { BILLING_PROVIDER, type BillingProviderOrNull } from './billing-provider';
+import { BillingWebhookController } from './billing-webhook.controller';
+import { BillingWebhookService } from './billing-webhook.service';
+import { BillingEvent } from './entities/billing-event.entity';
 import { StripeProvider } from './stripe.provider';
 
 /**
@@ -64,7 +68,10 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
  * injectable classes.
  */
 @Module({
+  imports: [TypeOrmModule.forFeature([BillingEvent])],
+  controllers: [BillingWebhookController],
   providers: [
+    BillingWebhookService,
     {
       provide: BILLING_PROVIDER,
       useFactory: (): BillingProviderOrNull => {
@@ -102,6 +109,6 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
       },
     },
   ],
-  exports: [BILLING_PROVIDER],
+  exports: [BILLING_PROVIDER, BillingWebhookService],
 })
 export class BillingModule {}

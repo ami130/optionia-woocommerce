@@ -83,7 +83,21 @@ export async function bootstrapTestApp(
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule, ...extraImports],
   } as never).compile();
-  const app = moduleRef.createNestApplication<NestExpressApplication>();
+  /**
+   * `rawBody: true`, exactly as `main.ts` sets it (M22.C2).
+   *
+   * 🔴 **Without this the webhook suite would be unable to fail.** Nest turns
+   * the flag into a `verify` hook that keeps the bytes a body was parsed from,
+   * and `useBodyParser` below reads it off the application options — so a
+   * harness that omits it leaves `req.rawBody` undefined, and every signature
+   * check here would exercise an error path production never takes.
+   *
+   * ⚠️ This is the third entry in this file's list of *"the harness diverged
+   * from `main.ts` and made a real difference untestable"* — after compression
+   * and the body limit. Added with the feature rather than after a confusing
+   * failure, which is the only difference.
+   */
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ rawBody: true });
   const context = new RequestContextMiddleware();
 
   app.use(context.use.bind(context));

@@ -132,6 +132,57 @@ else
   printf '        A hand-listed shape drifts silently: TypeORM drops keys it does not recognise.\n'
 fi
 
+# --- 6. The raw body is preserved, in production AND in the harness ----------
+#
+# 🔴 **A Stripe signature is over the bytes Stripe sent.** Without
+# `rawBody: true` the global JSON parser consumes them, `req.rawBody` is
+# undefined, and every webhook fails verification for a reason that reads like a
+# wrong secret.
+#
+# ⚠️ **Both files, because the harness has diverged from `main.ts` twice before**
+# — on compression and on the body limit, each time making a real difference
+# untestable until a confusing failure exposed it. A harness missing this flag
+# would let the webhook suite pass against an app that keeps no raw body at all.
+# 📌 **Comment lines excluded — for the third time in this one gate.** Both files
+# explain `rawBody: true` at length in a docblock, so the bare string matches the
+# explanation and the check passes with the flag deleted. A mutation removing it
+# from the harness proved exactly that.
+for file in "$SRC/main.ts" "optioniaWooCommerceBackend/test/harness.ts"; do
+  if grep -n "rawBody: true" "$file" | grep -vq '^[0-9]*:\s*\*'; then
+    pass "$(basename "$file") preserves the raw request body"
+  else
+    fail "$(basename "$file") does not set rawBody: true"
+    printf '        Stripe signatures are computed over exact bytes; a parsed body cannot verify.\n'
+  fi
+done
+
+# --- 7. The webhook route stays public and unthrottled -----------------------
+#
+# ⚠️ Authentication is global with `@Public()` opt-out, so losing the decorator
+# makes this route answer 401 to Stripe — an outage that looks like a Stripe
+# problem. And a throttled webhook is worse than it sounds: every rejected event
+# is retried, so the backlog that tripped the limit grows.
+WEBHOOK="$BILLING/billing-webhook.controller.ts"
+
+if grep -q "^@Public()" "$WEBHOOK" && grep -q "^@SkipThrottle()" "$WEBHOOK"; then
+  pass "the webhook route is public and exempt from the throttler"
+else
+  fail "the webhook controller lost @Public() or @SkipThrottle()"
+  printf '        Stripe sends no bearer token, and retries everything it cannot deliver.\n'
+fi
+
+# --- 8. Idempotency is the database's job, not a read-then-write -------------
+#
+# 🔴 Stripe delivers the same event concurrently. A `SELECT` before the `INSERT`
+# races: both see no row, both insert. `uq_billing_events_provider_event` is what
+# actually decides, and the loser must read the violation as "already handled".
+if grep -q "ER_DUP_ENTRY" "$BILLING/billing-webhook.service.ts"; then
+  pass "redelivery is settled by the unique index"
+else
+  fail "the webhook service no longer treats a duplicate key as 'already handled'"
+  printf '        A check-then-write cannot survive concurrent redelivery.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
