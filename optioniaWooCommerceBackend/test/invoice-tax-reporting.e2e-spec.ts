@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { InvoiceStatus } from '../src/common/database/enums';
 import { Invoice } from '../src/billing/entities/invoice.entity';
 import { Tenant } from '../src/tenants/entities/tenant.entity';
 import { Plan } from '../src/plans/entities/plan.entity';
@@ -69,7 +70,7 @@ describe('Invoice tax reporting (e2e)', () => {
       tenantId,
       provider: 'stripe',
       providerInvoiceId: `in_${run}_${seq}`,
-      status: 'paid',
+      status: InvoiceStatus.PAID,
       currency: 'EUR',
       subtotalMinor: 2900,
       taxMinor: 609,
@@ -95,8 +96,21 @@ describe('Invoice tax reporting (e2e)', () => {
       invoice(de.id),
       invoice(fr.id, { taxCountry: 'FR', taxMinor: 580, totalMinor: 3480 }),
 
-      /* Outside the period, and must not be counted. */
-      invoice(de.id, { issuedAt: new Date('2026-07-01T00:00:00.000Z'), taxMinor: 9999 }),
+      /*
+       * Outside the period, and must not be counted.
+       *
+       * ✏️ **This row is where the new CHECK caught my own fixture.** It set
+       * `taxMinor: 9999` and left `totalMinor` at the default 3509 — violating
+       * the very invariant F92/D2 was about, in the test written to prove the
+       * table works. The constraint refused it on its first run, which is the
+       * clearest possible argument for enforcing arithmetic in the schema
+       * rather than in a docblock.
+       */
+      invoice(de.id, {
+        issuedAt: new Date('2026-07-01T00:00:00.000Z'),
+        taxMinor: 9999,
+        totalMinor: 12899,
+      }),
     ]);
 
     const rows: Array<{ taxCountry: string; tax: string }> = await dataSource.query(
@@ -129,6 +143,51 @@ describe('Invoice tax reporting (e2e)', () => {
     redelivered.providerInvoiceId = first.providerInvoiceId;
 
     await expect(dataSource.getRepository(Invoice).save(redelivered)).rejects.toThrow();
+  });
+
+  /**
+   * 🔴 **The invariant I wrote and did not enforce (F92/D2).**
+   *
+   * `subtotalMinor + taxMinor = totalMinor` lived in a docblock, and the tests
+   * above never compared the three columns — their fixture happens to be
+   * consistent, so an adapter writing a wrong total would have passed all of
+   * them and surfaced months later as a **tax return that does not reconcile
+   * against the bank**.
+   *
+   * ⚠️ **Asserted against MySQL rather than trusted from the DDL.** `CHECK` is
+   * enforced from 8.0.16 and silently *parsed and ignored* before it — so a
+   * migration that adds one proves nothing on its own. This is what proves it.
+   */
+  it('refuses an invoice whose total does not equal subtotal plus tax', async () => {
+    const tenant = await tenantIn('BE');
+
+    await expect(
+      dataSource.getRepository(Invoice).save(
+        invoice(tenant.id, { taxCountry: 'BE', subtotalMinor: 2900, taxMinor: 609, totalMinor: 9999 }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  /**
+   * 📌 **A credit note satisfies the same equality.** The columns are signed,
+   * and the check is an equality rather than a positivity test — requiring
+   * non-negative amounts would have made refunds unstorable, which is the
+   * over-constraint this deliberately avoids.
+   */
+  it('accepts a credit note, where every amount is negative', async () => {
+    const tenant = await tenantIn('AT');
+
+    const saved = await dataSource.getRepository(Invoice).save(
+      invoice(tenant.id, {
+        taxCountry: 'AT',
+        status: InvoiceStatus.PAID,
+        subtotalMinor: -2900,
+        taxMinor: -609,
+        totalMinor: -3509,
+      }),
+    );
+
+    expect(saved.totalMinor).toBe(-3509);
   });
 
   /**

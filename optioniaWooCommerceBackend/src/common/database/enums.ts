@@ -479,6 +479,30 @@ export const SubscriptionStatus = {
 export type SubscriptionStatus =
   (typeof SubscriptionStatus)[keyof typeof SubscriptionStatus];
 
+/**
+ * What state an invoice is in, as the provider reports it.
+ *
+ * 🔴 **This was `varchar(20)` free text while `SubscriptionStatus` next to it
+ * was typed (F92/D4), and the five valid values were listed in a docblock —
+ * an enum written as prose.** The tax report filters `status = 'paid'`, so an
+ * adapter writing `Paid` or `succeeded` would **silently drop rows from a tax
+ * total**: no error, no failing test, a quarter under-reported.
+ *
+ * 📌 **These are Stripe's own words**, deliberately. An invoice status is the
+ * provider's fact, not ours, and inventing a parallel vocabulary would mean a
+ * mapping table that has to be right in two directions forever. A provider
+ * whose states do not fit is an adapter that must translate — which is the
+ * adapter's job, and where the translation belongs.
+ */
+export const InvoiceStatus = {
+  DRAFT: 'draft',
+  OPEN: 'open',
+  PAID: 'paid',
+  VOID: 'void',
+  UNCOLLECTIBLE: 'uncollectible',
+} as const;
+export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+
 /* -------------------------------------------------------------------------
  * Operational
  * ---------------------------------------------------------------------- */

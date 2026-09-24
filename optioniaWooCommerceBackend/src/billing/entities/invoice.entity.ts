@@ -1,6 +1,7 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
 
 import { BaseEntity } from '../../common/database/base.entity';
+import { InvoiceStatus } from '../../common/database/enums';
 import { moneyTransformer } from '../../common/money/money.transformer';
 import { Subscription } from '../../subscriptions/entities/subscription.entity';
 import { Tenant } from '../../tenants/entities/tenant.entity';
@@ -59,9 +60,15 @@ export class Invoice extends BaseEntity {
   @Column({ type: 'varchar', length: 128 })
   providerInvoiceId: string;
 
-  /** The provider's word — `draft`, `open`, `paid`, `void`, `uncollectible`. */
+  /**
+   * The provider's word, typed (F92/D4).
+   *
+   * 🔴 **Free text here was a silent tax-reporting hole.** The period report
+   * filters `status = 'paid'`; an adapter writing `Paid` or `succeeded` would
+   * drop those rows from the total with no error and no failing test.
+   */
   @Column({ type: 'varchar', length: 20 })
-  status: string;
+  status: InvoiceStatus;
 
   @Column({ type: 'char', length: 3 })
   currency: string;
