@@ -401,6 +401,7 @@ they fire only when a person runs `bash bin/check.sh` here. See F5 above.
 | ~~F82~~ | ~~**Three wrong test-side conclusions on the way, all corrected by looking rather than inferring.**~~ ✅ **RECORDED 2026-09-23**, because each is a trap this suite will meet again. (1) A probe called `innerText()` the instant the URL changed and got **an empty string** — which read as a blank editor and was really the fetch in flight; the fix is to wait for the thing, not to add a timeout. (2) The same probe reported **Publish disabled** on a fresh template; it is disabled *while the publish-check loads*, exactly as designed, and reads `false` once settled. (3) Operator names asserted with `toBeVisible()` failed on **correct markup**: they are `<option>`s inside a closed `<select>`, which Playwright reports as `hidden`. 🔴 **And one locator mistake that the product caught for me**: selecting by option text picked the *target* select when it meant the *comparison value*, leaving the rule incomplete — the form said so plainly (*"Give something to compare against"*) and the button stayed correctly disabled. Every control has an accessible name (*"To this"*, *"Which answer"*, *"Comparison"*, *"Value"*) and the tests now use them | **real** | done |
 | ~~F83~~ | ~~**The recovery paths — undo, delete and navigation — had never been walked.**~~ ✅ **DONE 2026-09-23** — persona 6, *the merchant who makes a mistake*. Every earlier persona took the happy path; this one mistypes, changes their mind and deletes. **No product defects found**, and three behaviours are now pinned as decisions rather than left as accidents. 📌 **Undo is disabled after a create, deliberately**, and the title says *"Nothing to undo"* rather than greying out silently. `history.ts` records why: every shape change clears the log, because an undo that recreated a group and silently lost its options — the cascade never reaches the dashboard — would be **worse than no undo**, since the merchant would believe the delete reversed. A field edit *is* undoable and restores the previous value; without that half, undo would be decorative. 📌 **Delete counts what it takes**: *"Delete 'Finish' and its 1 entry?"* — a count, not a generic *"are you sure?"*, which is what lets a merchant tell a stray empty group from a morning's work. Cancelling leaves everything intact. ✅ **And Phase 20's own exit criterion *"No data loss on navigation"* is finally walked**: a label typed mid-edit, then navigated away from and returned to, survives — asserted after a **round trip through the API**, so a value held only in cache would fail. 🔴 **Proven load-bearing by mutation**: removing the `document.hasFocus()` guard that separates *clicked away* from *switched window* breaks the test | **real** | done |
 | ~~F84~~ | ~~**Phase 22 step 1 — the billing-identity migration, and four things the audit got wrong.**~~ ✅ **DONE 2026-09-24.** One additive migration closes G1, G7, G9 and G10: `plan_prices` (immutable price versions), `subscriptions.planPriceId` + `providerCustomerId`, and nullable `country`, `vatNumber`, `billingCurrency` on `tenants`. Verified **up, down, and up again** against real MySQL with the schema confirmed residue-free after the revert. 🔴 **G6 was half wrong, and a migration written from the audit alone would have shipped a hole.** The audit said *"the plan is stored twice, and nothing reads either"*. Reading the **writers** instead: `tenants.planId` is written by provisioning and the seed, and **no subscription row is ever created anywhere** — so it is not a duplicate, it is the *only* plan reference that exists. Dropping it would leave a new tenant with no plan. The column stays until provisioning creates a subscription. 🔴 **G8 named the wrong column** — it is `isPublic`, not `isActive` — and reading its docblock made the finding **sharper**: *"whether the plan appears on the public pricing page"* is a display flag, not an availability one, so a plan cannot be withdrawn from signup while its subscribers keep running. 📌 **R4 confirmed by implementation**: nothing about this step needed new infrastructure. ⚠️ **Three test-side lessons, each measured**: an 8-character `uuidv7` slice **collided** on `plans.code` (uuidv7 is time-ordered, so rows in one millisecond share a prefix) and the full uuid then **overran** `varchar(32)` — a per-run counter is unique by construction; and the suite failed with *"Table `optionia_woo_test.plan_prices` doesn't exist"* because only the **dev** database had been migrated, which is F53's lesson arriving again. ✅ **Pinning proven, not asserted**: editing a plan to 4900 leaves a pinned price at 2900, `RESTRICT` refuses a plan delete, and retirement keeps exactly one current row. 🔴 **The `RESTRICT` mutation had to be applied to the DATABASE, not the entity** — weakening the decorator alone left all three tests green, because TypeORM's `onDelete` is not what MySQL enforces once a migration has run. 🔴 **And the first full e2e run failed 19 tests across three suites, all caused by this work.** (1) `schema.e2e-spec.ts` refused `plan_prices` as a table reaching no tenant — **the guard was right**: it demands every new table either reach a tenant or be *declared* global with a reason, and prices belong to the catalogue exactly as `plans` does. (2) `seeds.e2e-spec.ts` saw **26 plans where it expects 3**, and `option-sets-http` failed with it — because the pinning test seeded plans into the **shared** test database and never removed them. ⚠️ **A test that pollutes a shared database does not fail itself**; it fails something unrelated, and the person reading that failure has no reason to suspect the new file. Cleanup added, prior rows purged, and **1041/1041 across 38 suites** verified afterwards | **real** | done |
+| F85 | **Step 1's audit — four findings against my own work, one of them the test's name.** 🔴 **A6, the sharpest: `plan-price-pinning.e2e-spec.ts` never creates a SUBSCRIPTION.** `grep -c Subscription` returns **0**. It proves `plan_prices` rows behave — an edit does not move a stored amount, `RESTRICT` refuses a delete, retirement leaves one current row — and it proves **nothing about a pin**, which is the defect the table exists to prevent. The name claims more than the file does. 🔴 **A3 — there are now TWO money sources**, and my own migration docblock argues against exactly that: `plans.priceMonthlyMinor`/`priceYearlyMinor`/`currency` **and** `plan_prices.amountMinor`/`currency`. Which a signup reads is undecided — and *"two money representations are how rounding disagreements start"* was written about `decimal` in the same file where the real duplication was being introduced one table over. ⚠️ **A4/A5 — every column added in step 1 is inert.** Nothing reads or writes `planPriceId`, `providerCustomerId`, `country`, `vatNumber` or `billingCurrency`; `plan_prices` is **empty in every environment**, because `plans.seed.ts` creates no price rows. Expected for a schema-first step, and it means *"absent code has nothing to mutate"* now sits entirely in step 2 — the risk did not disappear, it moved. ✅ **A1/A2 sound**: the migration's index matches the entity's exactly, and `PlanPrice` is discovered by the `**/*.entity{.ts,.js}` glob in `data-source.ts`, so the tests passed for the right reason rather than by luck | **real** | 🔴 **open** — closed by step 2 |
 | F75 | **F64's refresh lock narrows the race and does not close it, and the improvement is NOT statistically distinguishable.** 🔴 **Mine, and a correction to F64's own record.** A reuse event recurred: **1 in 92 refreshes**, same signature — two refreshes one millisecond apart after a burst of `/auth/me` 401s. Against the pre-fix **2 in 95**, that is 1.09% versus 2.11% — and at the old rate there is a **42% chance** of seeing one or fewer in 92, so these numbers cannot show the lock helped. ⚠️ **It is the residual window the fix's own docblock predicted**: *"`localStorage` has no compare-and-swap, so a true lock cannot be built on it — two contexts can read 'free' in the same tick and both write 'held'. This narrows the race rather than closing it, and says so."* 📌 **Two false readings corrected while diagnosing**: `requestId: no-request-context` looked like a second client bypassing the dashboard — it is a **server-side logging artifact** for a line emitted outside request scope; and the 63ms gap between the two `/auth/me` calls looked wider than the claim window, which it is not. **Next step**: fix the *source* rather than the symptom — two independent `/auth/me` queries firing 63ms apart is the burst that makes any lock necessary, and deduplicating them removes the race instead of narrowing it. ⚠️ **Recorded rather than chased**, because a fix I cannot measure is a fix I cannot verify: the event rate is ~1%, so demonstrating an improvement needs a harness that forces the burst, not more canonical runs | **real** | 🔴 **open** |
 
 F1 and F2 are hygiene, not design, but they compound: an uncommitted dashboard with
@@ -29379,6 +29380,66 @@ they are reached, and the `SubscriptionGuard` from R1 carrying the lapse policy.
 the owner (3 testers, one printed packing slip). Steps 1–3 are additive and do not touch
 the option editor, so starting is defensible — but **step 4 is where a tester finding
 would force rework**, and that is a risk taken knowingly rather than discovered later.
+
+
+##### 📋 Step 2 execution plan — M22.1a, written against step 1's audit (F85)
+
+**Step 1 left five inert columns and an empty table.** Nothing reads
+`planPriceId`, `providerCustomerId`, `country`, `vatNumber` or `billingCurrency`,
+and `plan_prices` holds no rows in any environment. ⚠️ **The "absent code has
+nothing to mutate" risk did not go away — it moved here**, which is why this plan
+names what must be *proven*, not only what must be built.
+
+**2a — Seed prices, so the table is not empty.** `plans.seed.ts` creates three
+plans and **zero** price rows (F85/A4). Every plan gains a current `PlanPrice` per
+interval it offers. 🔴 **This also decides A3**: `plan_prices` becomes the single
+source a signup reads, and `plans.priceMonthlyMinor`/`priceYearlyMinor` become
+**display only** — or are dropped. Two money columns for one price is the
+duplication my own migration docblock argued against, and leaving both without
+saying which wins is how they diverge.
+**Proof**: seeding twice is idempotent; every public plan has exactly one current
+price per currency and interval.
+
+**2b — Provisioning creates a subscription.** Today **no subscription row is ever
+created anywhere** (F84/G6), so `tenants.planId` is the only plan reference that
+exists. A new tenant gets a free subscription pinned to the free plan's current
+price. 🔴 **Only then can `tenants.planId` be retired**, and it is retired in a
+later step, not this one — a column read by nothing is safer than a column
+readers disagree about.
+**Proof**: registering a merchant creates exactly one subscription; the e2e
+registration flow still passes unchanged.
+
+**2c — The pin, proven end to end.** 🔴 **F85/A6 is the gap this closes**:
+`plan-price-pinning.e2e-spec.ts` never creates a subscription, so it proves the
+price table behaves and nothing about a pin. The test gains a real subscription,
+a price edit, and an assertion that **what the subscriber would be charged has
+not moved**.
+**Proof**: the mutation that deletes `planPriceId` from the read path fails the
+test — applied to the **database**, not the decorator, per F84's lesson that
+TypeORM's `onDelete` is not what MySQL enforces.
+
+**2d — Retirement that works.** `isPublic` is a *display* flag and is read by
+nothing (G8, corrected). A plan withdrawn from signup must stay working for its
+existing subscribers.
+**Proof**: a retired plan is absent from the signup list and present on every
+subscription that already had it.
+
+**2e — The admin surface, platform staff only.** Create, edit, retire, reorder —
+gated by `platform_staff`, never `TenantRole`. ⚠️ **A tenant admin editing what
+they pay is a vulnerability, not a feature**, and the two realms already exist
+separately in the schema.
+**Proof**: a tenant `owner` is refused; a platform staff member is allowed; the
+refusal is asserted, not assumed.
+
+**2f — The audit trail.** Who changed which price, when, from what to what —
+following `impersonation_sessions`, which is how this project already records
+staff action against a tenant.
+**Proof**: an edit writes exactly one row naming the staff user.
+
+📌 **Order matters and is not arbitrary**: 2a before 2b (a subscription needs a
+price to pin), 2b before 2c (a pin needs a subscription), 2c before 2e (the
+guarantee before the surface that exercises it). ⚠️ **B7 is still unanswered**
+and is only needed at step 4's `SubscriptionGuard` — it does not block 2a–2f.
 
 
 ### M22.1a — Plans are DATA, editable by platform staff
