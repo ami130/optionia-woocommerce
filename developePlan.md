@@ -29444,6 +29444,66 @@ guarantee before the surface that exercises it). ⚠️ **B7 is still unanswered
 and is only needed at step 4's `SubscriptionGuard` — it does not block 2a–2f.
 
 
+##### 🔍 Step 2 audit — 2e was planned into a circular dependency, 2026-09-24
+
+**2a–2c shipped. Auditing 2d–2f before building them found that one of the three
+cannot honestly be built in this phase, and another is already owned elsewhere.**
+
+🔴 **B1 — 2e (the staff-only admin surface) has no guard, and Phase 22 cannot
+build one.** `activation.controller.ts` already faced this exact question and
+recorded the answer: *"There is no guard that could protect it today.
+`CapabilityGuard` resolves a role from a `tenant_members` row and refuses any
+request without a `tenantId`, so it cannot express 'platform staff only';
+`STAFF_CAPABILITIES` and the `platform_staff` table are both defined and neither
+is read by any guard."* ⚠️ **Phase 26 owns that realm and `Depends on: Phases
+22–25`** — so building the guard here inverts the dependency the plan already
+declares, and exposing plan editing on a tenant-guarded route would let any
+merchant change what every merchant pays.
+
+🔴 **B2 — and M26.5 already owns it by name**: *"plan and feature-flag
+management."* Building 2e in Phase 22 would ship a **second** plan admin that
+Phase 26 then has to reconcile or delete. 📌 **This is the `hasUnpublishedChanges`
+mistake in a new place**: building the thing before the milestone that owns it,
+and finding out afterwards.
+
+⚠️ **B3 — `src/plans/` holds ONLY entities.** No service, no controller, no
+module; nothing outside provisioning and the seed reads a plan, and the dashboard
+fetches none. So 2d (*"retirement that works"*) has **no consumer to gate**:
+`isPublic` is read by nothing because there is no signup list for it to be absent
+from. Gating a list that does not exist is a guard with nothing behind it —
+exactly the *"absent code has nothing to mutate"* defect this project keeps
+finding.
+
+✅ **B4 — 2f needs no new table.** `audit_logs.tenantId` is **nullable**, with
+`onDelete: 'SET NULL'`, so a platform-level row — a staff action belonging to no
+tenant — is already expressible. When plan editing exists, its audit trail is a
+write, not a schema change.
+
+##### 📌 Revised plan — what actually remains, and where it belongs
+
+**2d and 2e move to Phase 26 (M26.5), which already owns them.** They are not
+dropped; they are placed where the guard that protects them is built. ⚠️ **Phase
+22 must not ship a plan admin without a staff realm**, and that is the whole
+finding.
+
+**What Phase 22 still owes, in order:**
+
+1. **2f-lite — audit the price supersession that already happens.** Seeding
+   retires and replaces price rows today with no record of who or why. The
+   table supports it; this is a write.
+2. **Retire `plans.priceMonthlyMinor`/`priceYearlyMinor` as billing inputs.**
+   2a declared `plan_prices` the source of truth and left both columns in place
+   — correctly, as one step should not do two jobs. The follow-through is a
+   guard proving no billing path reads them, then the columns go.
+3. **M22.2 — the `BillingProvider` interface**, which needs no staff realm.
+4. **M22.3 — Stripe behind it**, blocked on **B6** (tax) and **B9** (when
+   billing identity is collected).
+5. **M22.4/M23 — lifecycle from verified webhooks**, blocked on **B7** (lapse).
+
+📌 **Three of the five remaining items are blocked on owner decisions, not on
+engineering.** That is worth stating plainly rather than building around.
+
+
 ### M22.1a — Plans are DATA, editable by platform staff
 
 🔴 **Decided by the owner, 2026-09-23: *"pricing will be fully dynamic … everything
