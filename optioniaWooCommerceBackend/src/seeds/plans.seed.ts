@@ -1,5 +1,6 @@
 import type { DataSource } from 'typeorm';
 
+import { AuditLog } from '../audit/entities/audit-log.entity';
 import { Plan } from '../plans/entities/plan.entity';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { report } from './seed-context';
@@ -191,7 +192,7 @@ async function seedPricesFor(dataSource: DataSource, plan: Plan): Promise<void> 
       await prices.update(current.id, { isCurrent: false, retiredAt: new Date() });
     }
 
-    await prices.save(
+    const replacement = await prices.save(
       prices.create({
         planId: plan.id,
         currency: plan.currency,
@@ -200,5 +201,55 @@ async function seedPricesFor(dataSource: DataSource, plan: Plan): Promise<void> 
         isCurrent: true,
       }),
     );
+
+    await recordPriceChange(dataSource, plan, current, replacement);
   }
+}
+
+/**
+ * Leave a trail when a price is superseded.
+ *
+ * 🔴 **A price change happened here with no record of it at all.** Seeding
+ * retires a row and writes a replacement — the same operation a staff price
+ * edit will perform (M26.5) — and until now nothing said which price replaced
+ * which, or when. The first time a merchant disputes a charge, *"what were they
+ * pinned to and when did that change?"* has to be answerable from the database
+ * rather than from a changelog nobody wrote.
+ *
+ * ⚠️ **`tenantId` and `userId` are null, and that is the honest record**, not a
+ * gap: a seed belongs to no tenant and no person. `audit_logs` already models
+ * both as nullable with `onDelete: SET NULL`, so a platform-level row needs no
+ * schema change. When M26.5 gives staff a real surface, the same rows gain a
+ * `userId` from the request context.
+ *
+ * 📌 **Both amounts, not merely the new one.** *"The price changed"* is not
+ * actionable; *"2900 → 4900"* is, and it is what the diff column exists for.
+ */
+async function recordPriceChange(
+  dataSource: DataSource,
+  plan: Plan,
+  previous: PlanPrice | null,
+  replacement: PlanPrice,
+): Promise<void> {
+  const logs = dataSource.getRepository(AuditLog);
+
+  await logs.save(
+    logs.create({
+      tenantId: null,
+      userId: null,
+      action: previous ? 'plan_price.superseded' : 'plan_price.created',
+      resourceType: 'plan_price',
+      resourceId: replacement.id,
+      changes: {
+        plan: plan.code,
+        currency: replacement.currency,
+        interval: replacement.interval,
+        amountMinor: previous
+          ? { from: previous.amountMinor, to: replacement.amountMinor }
+          : { to: replacement.amountMinor },
+        /* Named so a reader knows no person did this. */
+        source: 'seed',
+      },
+    }),
+  );
 }

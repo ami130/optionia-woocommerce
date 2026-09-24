@@ -99,6 +99,64 @@ describe('seeds (integration)', () => {
       expect(first).toBe(3);
     });
 
+    /**
+     * 🔴 **A price change with no record of it is the defect this closes.**
+     * Seeding retires a price row and writes a replacement — the same operation
+     * a staff price edit will perform (M26.5) — and nothing said which price
+     * replaced which. The first merchant to dispute a charge makes *"what were
+     * they pinned to, and when did that change?"* a question the database has
+     * to answer.
+     *
+     * ⚠️ **Asserted on the DIFF, not merely on the row's existence.** An entry
+     * saying *"the price changed"* is not actionable; `2900 → 4900` is, and a
+     * test that only counted rows would pass on the useless version.
+     */
+    it('records a superseded price with both amounts', async () => {
+      await seedPlans(dataSource);
+
+      /*
+       * ⚠️ **The price is changed on the PRICE row, not the plan row.**
+       * `seedPlans` rewrites the plan from its own `PLANS` constant before
+       * reading it, so a first draft that did `UPDATE plans SET
+       * priceMonthlyMinor = 3900` had its change reverted in the same call and
+       * asserted against a supersession that never happened. Retiring the
+       * current price is what makes the next seed write a replacement — which
+       * is also the shape of a real staff edit.
+       */
+      await dataSource.query(
+        `UPDATE plan_prices pp JOIN plans p ON p.id = pp.planId
+            SET pp.amountMinor = 3900
+          WHERE p.code = 'pro' AND pp.interval = 'month' AND pp.isCurrent = 1`,
+      );
+
+      await seedPlans(dataSource);
+
+      const entries: Array<{ action: string; changes: string | object }> =
+        await dataSource.query(
+          `SELECT action, changes FROM audit_logs
+            WHERE action = 'plan_price.superseded' AND resourceType = 'plan_price'
+            ORDER BY id DESC LIMIT 1`,
+        );
+
+      expect(entries).toHaveLength(1);
+
+      const changes =
+        typeof entries[0].changes === 'string'
+          ? (JSON.parse(entries[0].changes) as Record<string, unknown>)
+          : (entries[0].changes as Record<string, unknown>);
+
+      expect(changes.plan).toBe('pro');
+      expect(changes.amountMinor).toEqual({ from: 3900, to: 2900 });
+
+      /* A seed belongs to no person, and the row says so rather than guessing. */
+      expect(changes.source).toBe('seed');
+
+      /*
+       * The seed has already restored 2900 as the current price; the 3900 row
+       * is retired and stays, which is the point of supersession.
+       */
+    });
+
     it('creates the three plans with measurable limits', async () => {
       await seedPlans(dataSource);
 
