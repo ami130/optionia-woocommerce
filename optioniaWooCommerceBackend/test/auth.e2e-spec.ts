@@ -88,6 +88,13 @@ describe('AuthService (integration)', () => {
     // no namespace match finds — see `deleteTenantsFor`.
     await deleteTenantsFor(dataSource, NS);
     await dataSource.query(
+      `DELETE FROM subscriptions WHERE tenantId IN (
+         SELECT id FROM (SELECT t.id FROM tenants t
+           WHERE t.slug LIKE '${NS}-%' OR t.name LIKE '${NS}-%') AS doomed)`,
+    );
+
+    /* Subscriptions first: `subscriptions.tenantId` is RESTRICT (F86). */
+    await dataSource.query(
       `DELETE t FROM tenants t WHERE t.slug LIKE '${NS}-%' OR t.name LIKE '${NS}-%'`,
     );
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);

@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DataSource } from 'typeorm';
 
+import { deleteTenantsBySlug } from './cleanup-tenants';
 import { bootstrapTestApp } from './harness';
 
 
@@ -72,7 +73,7 @@ describe('option sets (e2e)', () => {
       `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
     );
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
+    await deleteTenantsBySlug(dataSource, NS);
   }
 
   /** Register, verify, log in — returns an access token. */

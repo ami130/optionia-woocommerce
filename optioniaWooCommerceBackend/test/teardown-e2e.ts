@@ -50,6 +50,26 @@ export default async function teardown(): Promise<void> {
   await dataSource.initialize();
 
   try {
+    /*
+     * 🔴 **Subscriptions first, because `subscriptions.tenantId` is RESTRICT.**
+     * Provisioning creates one for every tenant (F86, step 2b), so this sweep —
+     * which removes tenants no member, set or store refers to — began failing
+     * the moment it met one. ⚠️ **Scoped to exactly the tenants this statement
+     * would delete**, never a bare `DELETE FROM subscriptions`: a sweep that
+     * took a broader swing at a shared database would be a worse problem than
+     * the one it solves, which is the lesson `cleanup.ts` already records.
+     */
+    const orphans = `SELECT t.id FROM tenants t
+         LEFT JOIN tenant_members tm ON tm.tenantId = t.id
+         LEFT JOIN option_sets os ON os.tenantId = t.id
+         LEFT JOIN stores s ON s.tenantId = t.id
+        WHERE tm.id IS NULL AND os.id IS NULL AND s.id IS NULL
+          AND t.slug <> 'demo-merchant'`;
+
+    await dataSource.query(
+      `DELETE FROM subscriptions WHERE tenantId IN (SELECT id FROM (${orphans}) AS o)`,
+    );
+
     await dataSource.query(
       `DELETE t FROM tenants t
          LEFT JOIN tenant_members tm ON tm.tenantId = t.id

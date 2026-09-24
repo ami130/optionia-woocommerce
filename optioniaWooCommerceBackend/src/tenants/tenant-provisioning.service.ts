@@ -4,6 +4,9 @@ import { EntityManager } from 'typeorm';
 
 import { TenantRole, TenantStatus } from '../common/database/enums';
 import { Plan } from '../plans/entities/plan.entity';
+import { PlanPrice } from '../plans/entities/plan-price.entity';
+import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { SubscriptionStatus } from '../common/database/enums';
 import { Tenant } from './entities/tenant.entity';
 import { TenantMember } from './entities/tenant-member.entity';
 
@@ -44,6 +47,49 @@ export class TenantProvisioningService {
         status: TenantStatus.ACTIVE,
         planId: plan.id,
         trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 86_400_000),
+      }),
+    );
+
+    /**
+     * The subscription, in the same transaction and for the same reason the
+     * member is.
+     *
+     * 🔴 **Nothing created one before this.** `grep` for `create(Subscription`
+     * across the backend returned nothing, so `subscriptions` was an empty table
+     * and `tenants.planId` was the only plan reference that existed — which is
+     * why step 1 could not drop that column (F84/G6).
+     *
+     * ⚠️ **Pinned to a price, not only to a plan.** The pin is the whole point:
+     * `planId` says which plan's *limits* apply, and `planPriceId` says what this
+     * merchant is *charged*, immutably. A subscription with a plan and no price
+     * would re-price itself the first time staff edited the plan — the defect
+     * `plan_prices` exists to prevent.
+     *
+     * 📌 **`provider: 'none'`.** A free subscription was never created at a
+     * billing provider, and inventing a provider name for it would make the
+     * `(provider, providerSubscriptionId)` index meaningless. It becomes a real
+     * provider when the merchant first pays.
+     */
+    const freePrice = await manager.findOne(PlanPrice, {
+      where: { planId: plan.id, currency: plan.currency, interval: 'month', isCurrent: true },
+    });
+
+    await manager.save(
+      manager.create(Subscription, {
+        tenantId: tenant.id,
+        planId: plan.id,
+
+        /*
+         * ⚠️ **Null is tolerated rather than enforced.** A database seeded
+         * before prices existed has no row to pin to, and refusing to create the
+         * tenant would turn a seeding gap into a failed registration. The plan
+         * still governs limits; only the charge is unpinned, and a free plan
+         * charges nothing.
+         */
+        planPriceId: freePrice?.id ?? null,
+        provider: 'none',
+        status: SubscriptionStatus.TRIALING,
+        trialEndsAt: tenant.trialEndsAt,
       }),
     );
 

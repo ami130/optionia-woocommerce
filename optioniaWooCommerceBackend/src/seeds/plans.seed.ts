@@ -1,6 +1,7 @@
 import type { DataSource } from 'typeorm';
 
 import { Plan } from '../plans/entities/plan.entity';
+import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { report } from './seed-context';
 
 /**
@@ -127,13 +128,77 @@ export async function seedPlans(dataSource: DataSource): Promise<void> {
     if (existing) {
       Object.assign(existing, seed, { currency: 'USD' });
       await repository.save(existing);
+      await seedPricesFor(dataSource, existing);
       updated += 1;
       continue;
     }
 
-    await repository.save(repository.create({ ...seed, currency: 'USD' }));
+    const plan = await repository.save(repository.create({ ...seed, currency: 'USD' }));
+
+    await seedPricesFor(dataSource, plan);
     created += 1;
   }
 
   report('plans', created, updated);
+}
+
+/**
+ * Give a plan the price rows a subscription can pin to.
+ *
+ * ## Which column is the source of truth
+ *
+ * 🔴 **`plan_prices` is, and `plans.priceMonthlyMinor` is now the seed input
+ * that populates it.** Step 1 created two money representations for one price
+ * and left the question open — which is the duplication its own migration
+ * docblock argued against. This is the answer: a **signup reads `plan_prices`**,
+ * because that is the row a subscription pins to and the row an old invoice was
+ * charged against. The columns on `plans` stay as the seed's declaration of
+ * intent and as what a pricing page may display; they are **not** what anyone
+ * is billed from.
+ *
+ * ⚠️ **Not dropped, deliberately.** They are the only prices that exist today,
+ * a live seed writes them, and removing a column in the same step that first
+ * populates its replacement means one migration doing two jobs. They go when
+ * every reader is on `plan_prices` and the guard proves it.
+ *
+ * ## Idempotent by supersession, not by update
+ *
+ * 🔴 **A re-run must never rewrite an existing price row.** That is exactly the
+ * defect `plan_prices` exists to prevent (F84): a subscription pinned to a row
+ * whose amount changes underneath it has been silently re-priced. So a re-run
+ * with an unchanged amount does nothing, and a re-run with a **changed** amount
+ * retires the current row and writes a new one — which is what a real price
+ * change does, in development as in production.
+ */
+async function seedPricesFor(dataSource: DataSource, plan: Plan): Promise<void> {
+  const prices = dataSource.getRepository(PlanPrice);
+
+  const intervals: ReadonlyArray<{ interval: string; amountMinor: number }> = [
+    { interval: 'month', amountMinor: plan.priceMonthlyMinor },
+    { interval: 'year', amountMinor: plan.priceYearlyMinor },
+  ];
+
+  for (const { interval, amountMinor } of intervals) {
+    const current = await prices.findOne({
+      where: { planId: plan.id, currency: plan.currency, interval, isCurrent: true },
+    });
+
+    if (current?.amountMinor === amountMinor) {
+      continue;
+    }
+
+    if (current) {
+      await prices.update(current.id, { isCurrent: false, retiredAt: new Date() });
+    }
+
+    await prices.save(
+      prices.create({
+        planId: plan.id,
+        currency: plan.currency,
+        interval,
+        amountMinor,
+        isCurrent: true,
+      }),
+    );
+  }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { deleteTenantsBySlug } from './cleanup-tenants';
 import { bootstrapTestApp, idOf, tokenFrom } from './harness';
 
 
@@ -64,7 +65,7 @@ describe('option authoring (e2e)', () => {
       `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId WHERE u.email LIKE '${NS}-%'`,
     );
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${NS}-%'`);
+    await deleteTenantsBySlug(dataSource, NS);
   }
 
   async function tenant(which: string): Promise<string> {

@@ -11,7 +11,7 @@ import { AppModule } from '../src/app.module';
 import { RequestContextMiddleware } from '../src/common/context/request-context.middleware';
 import { BODY_LIMIT } from '../src/common/http/body-limit';
 import { flattenValidationErrors } from '../src/common/validation/flatten-validation-errors';
-import { deleteTenantsFor } from './cleanup-tenants';
+import { deleteTenantsBySlug, deleteTenantsFor } from './cleanup-tenants';
 
 /**
  * The shared e2e harness.
@@ -297,7 +297,7 @@ export async function createHarness(namespace: string): Promise<Harness> {
 
     await dataSource.query(`DELETE FROM email_deliveries WHERE recipient LIKE '${namespace}-%'`);
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${namespace}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE '${namespace}-%'`);
+    await deleteTenantsBySlug(dataSource, namespace);
   }
 
   return {
