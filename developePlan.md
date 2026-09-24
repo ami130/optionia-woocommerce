@@ -498,10 +498,10 @@ one place this plan's ordering works against you.
 | ~~B3~~ | ~~**D6 — styling ownership** undecided (theme templates / dashboard / both)~~ ✅ **DECIDED 2026-09-21 (ADR-112)**: both, with a **bounded** four-token layer — accent colour, border radius/width, spacing, swatch size. `optionia-app`'s six style groups are explicitly out of scope, and M21c.3 (presets) is deferred to [Phase 24](#phase-24--plan-limits--enforcement) | [Phase 21c](#phase-21c--option-styling--presentation-control) | ~~You~~ — done |
 | B4 | **D7 — Design Lab in or out** | [Part VI-B](#part-vi-b--stage-4b-the-visual-differentiator) | **You** — [M1.10](#m110--decide-d7-design-lab-scope-and-position) |
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
-| B6 | **Tax handling under ADR-114** — ParseLab is merchant of record, so EU VAT and US sales tax are **yours**, not your merchants'. D1's own table says it: *"You handle EU VAT and US sales tax yourself."* 📌 **Recommended: Stripe Tax** (~0.5% per transaction) — it is Stripe's own product, fits ADR-114 without revisiting it, and costs far less than VAT registration plus quarterly filings. Alternatives: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee but reopens D1; handling it in-house is cheapest per transaction and means registrations, filings and nexus monitoring. ⚠️ **Blocks M22.3**, because it decides what is stored per customer and what an invoice must carry | [Phase 22](#phase-22--billing-integration) | **You** |
-| B7 | **The lapse policy (M24.3)** — what a storefront does when a subscription lapses. 🔴 **Blocks the M22.1a schema**, not merely the UI: it decides what subscription state the plugin must know, and therefore what the config document carries. Does the last published config keep serving, or does the storefront go dark? The first is kinder and risks unpaid use; the second is enforceable and risks breaking a live shop over a failed card | [M24.3](#phase-24--production-readiness) | **You** |
-| B8 | **Do limit changes reach existing subscribers?** A **price** rise must never touch someone who already subscribed (M22.1a builds immutable price versions for exactly that). A **limit** rise is arguably different — giving people more is not a billing surprise — but a limit *cut* is. 📌 Recorded as open rather than guessed at; it is a product call. 🔴 **The third pass found the obvious answer creates a permanent fork**: *"raises immediately, cuts only for new subscribers"* leaves every existing subscriber on terms no current plan describes, with no expiry — and after two years of adjustments *"what is this tenant entitled to?"* has no single answer. **Recommended instead: a cut applies at the next renewal**, so the merchant keeps what they bought for the term they bought it and the fork closes on its own | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | **You** |
-| B9 | **What billing identity is collected, and when** — 🔴 **surfaced by the Phase 22 audit (G10)**: `tenants` carries `name`, `slug`, `planId`, `trialEndsAt` and **no country, address or VAT number**, so B6's recommended Stripe Tax has nothing to compute against and an EU B2B invoice cannot apply the reverse charge. The decision is *when* to ask: at registration (friction on signup, but every tenant is billable from day one) or at first paid checkout (clean signup, but the free tier then holds tenants with no tax location — which matters the moment one upgrades). ⚠️ **Blocks the M22.3 schema**, and pairs with B6 | [Phase 22](#phase-22--billing-integration) | **You** |
+| ~~B6~~ | ~~**Tax handling under ADR-114**~~ ✅ **DECIDED 2026-09-24 (ADR-115): Stripe Tax, prices displayed tax-EXCLUSIVE.** 📌 **Exclusive because the buyers are businesses** who reclaim VAT — a tax-inclusive figure makes a merchant do arithmetic to compare against competitors quoting exclusive, and every serious B2B SaaS quotes exclusive. 🔴 **Display is not the obligation.** ADR-114 makes ParseLab merchant of record, and selling digital services to EU consumers creates a VAT liability **from the first sale, with no threshold** — so the duty exists however the price is shown. Stripe Tax (~0.5%) calculates, collects and files it, and applies the EU B2B reverse charge automatically when a valid VAT number is present. ⚠️ **The rejected alternative, recorded so it is not re-proposed as new**: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee — and reopens ADR-114, which is why it was not chosen rather than not considered | [Phase 22](#phase-22--billing-integration) | ✅ decided |
+| ~~B7~~ | ~~**The lapse policy (M24.3)**~~ ✅ **DECIDED 2026-09-24 (ADR-116): 14-day grace, then read-only authoring — the storefront NEVER goes dark.** Grace: everything works, with a dashboard banner and dunning mail. After 14 days the storefront keeps serving its last published configuration while authoring goes read-only — view and export, not edit or publish. 🔴 **A payment failure must not damage the merchant's business.** Most failures are expired cards, not refusals to pay; a merchant who loses a day of sales to a failed renewal will churn **and** dispute the charge. Read-only applies pressure exactly where it converts — they cannot ship changes, which is what a growing merchant needs. 📌 **It is also the smaller build**: the plugin is deliberately built to survive the cloud being unreachable, so *going dark means ADDING a kill path* to something designed not to have one. ⚠️ **Enforced by one guard, not 56 edits**: authentication is already global with routes opting out, so a `SubscriptionGuard` follows the same shape and a new endpoint is refused by default rather than silently unguarded | [M24.3](#phase-24--production-readiness) | ✅ decided |
+| ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24 (ADR-117): prices grandfathered indefinitely; limit RAISES apply at once, limit CUTS at the next renewal.** 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
+| ~~B9~~ | ~~**What billing identity is collected, and when**~~ ✅ **DECIDED 2026-09-24 (ADR-118): at first paid checkout, never at registration.** Stripe Checkout collects and validates the address and tax id; `tenants.country`, `vatNumber` and `billingCurrency` are populated from the completed session. 📌 **Every field on a signup form costs conversion**, and M22.6 requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency **before** they pay — a tax form on signup works directly against that. ⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax location, which is correct because it is not billable; the columns are nullable for exactly this reason (F84) | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 
 **Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
 21c, and Stage 4B); B1 was withdrawn. Work continues now.
@@ -946,6 +946,92 @@ percentage is cheap against that, especially for a small team.
 **Action:** confirm the operating company's jurisdiction and Stripe eligibility. Whatever
 is chosen, [M22.2](#m222--billingprovider-abstraction) puts it behind a `BillingProvider`
 interface so the decision stays reversible.
+
+##### ADR-115 — B6 is decided: Stripe Tax, prices tax-exclusive
+
+**Decided 2026-09-24**, unblocking [M22.3](#m223--provider-implementation).
+
+**Stripe Tax, with prices displayed exclusive of tax.**
+
+📌 **Exclusive because the buyers are businesses.** A merchant reclaims VAT, so a
+tax-inclusive figure makes them do arithmetic to compare against competitors quoting
+exclusive — and every serious B2B SaaS quotes exclusive.
+
+🔴 **Display is not the obligation, and conflating the two is the trap.** ADR-114 makes
+ParseLab merchant of record, and selling digital services to EU consumers creates a VAT
+liability **from the first sale, with no threshold to sit under**. The duty exists however
+the price is shown. Stripe Tax (~0.5% per transaction) calculates, collects and files it,
+and applies the EU B2B reverse charge automatically when a valid VAT number is present —
+far cheaper than registrations and quarterly filings across member states.
+
+⚠️ **The rejected alternative, recorded so it is not re-proposed as new**: a
+merchant-of-record service (Paddle, Lemon Squeezy) becomes the seller and removes the
+liability entirely, at a higher fee. It was not chosen because it **reopens ADR-114** —
+not because it was not considered.
+
+📌 **This makes [G10](#-phase-22-audit--the-complete-finding-list-2026-09-23) load-bearing
+rather than tidy**: Stripe Tax has nothing to compute against without a customer country,
+and `tenants` had none. Tax-exclusive pricing does not remove that requirement; it is the
+reason for it.
+
+##### ADR-116 — B7 is decided: grace, then read-only, never dark
+
+**Decided 2026-09-24**, unblocking the [M22.4](#m224--subscription-lifecycle-in-the-app)
+schema and [M24.3](#phase-24--production-readiness).
+
+**Fourteen days of grace — everything works, with a dashboard banner and dunning mail —
+then read-only authoring. The storefront keeps serving its last published configuration
+and never goes dark.**
+
+🔴 **A payment failure must not damage the merchant's business.** Most failures are
+expired cards rather than refusals to pay, and a merchant who loses a day of sales to a
+failed renewal will churn **and** dispute the charge. Read-only applies pressure exactly
+where it converts: they cannot ship changes, which is what a growing merchant needs.
+
+📌 **It is also the smaller build.** The plugin is deliberately built to survive the cloud
+being unreachable — ADR-067, the store pushes and the projection is cached — so *going
+dark means adding a kill path to something designed not to have one*.
+
+⚠️ **One guard, not 56 edits.** Authentication is already global with routes opting out
+via `@Public()`, and the module records why: *"applying the guard per controller makes
+forgetting it a silent hole rather than a 401."* A `SubscriptionGuard` follows the same
+shape, so a new write endpoint is refused by default rather than silently unguarded.
+
+##### ADR-117 — B8 is decided: grandfather prices, raise limits now, cut at renewal
+
+**Decided 2026-09-24**, completing
+[M22.1a](#m221a--plans-are-data-editable-by-platform-staff).
+
+**An existing subscriber keeps the price they bought, indefinitely. A limit *increase*
+applies at once; a limit *decrease* applies at the next renewal.**
+
+🔴 **A retroactive price rise is the fastest way to lose a cohort and attract
+chargebacks**, which is why grandfathering is near-universal. `plan_prices` already
+enforces it **structurally** rather than by policy: a subscription is pinned to the row it
+bought, so an edit cannot reach it even by mistake.
+
+⚠️ **The rejected answer was my own first one.** *"Cuts never reach existing
+subscribers"* sounds kinder and creates a **permanent fork**: every cut leaves tenants on
+terms no current plan describes, with no expiry, until *"what is this tenant entitled
+to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they
+paid for during the term they paid for, and the fork closes itself.
+
+##### ADR-118 — B9 is decided: billing identity at first paid checkout
+
+**Decided 2026-09-24**, unblocking the [M22.3](#m223--provider-implementation) schema.
+
+**Nothing billable is collected at registration. Stripe Checkout collects and validates
+the address and tax id at first purchase, and `tenants.country`, `vatNumber` and
+`billingCurrency` are populated from the completed session.**
+
+📌 **Every field on a signup form costs conversion**, and [M22.6](#m226--free-tier-design)
+requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency
+**before** they pay. A tax form on signup works directly against that.
+
+⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax
+location. That is correct, because it is not billable — and it is why those columns are
+nullable (F84), rather than defaulted to a country nobody chose.
+
 
 ### D2 — Free tier shape
 
