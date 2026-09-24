@@ -9,6 +9,7 @@ import {
   type VerifiedWebhook,
 } from './billing-provider';
 import { BillingEvent } from './entities/billing-event.entity';
+import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
 /**
  * What a webhook request did, so the controller can answer correctly.
@@ -51,6 +52,7 @@ export class BillingWebhookService {
     private readonly provider: BillingProviderOrNull,
     @InjectRepository(BillingEvent)
     private readonly events: Repository<BillingEvent>,
+    private readonly lifecycle: SubscriptionLifecycleService,
   ) {}
 
   /**
@@ -123,13 +125,30 @@ export class BillingWebhookService {
     }
 
     /*
-     * ⚠️ **Nothing acts on the event yet — C4 does that**, and saying so here
-     * matters: the row is recorded and `processedAt` is set, so a reader could
-     * reasonably assume a subscription was updated. It was not. C4 replaces this
-     * with real lifecycle handling, and until then `billing_events` is an
-     * audit trail rather than a driver of state.
+     * 🔴 **`processedAt` is set only after the work succeeds.** A row claimed
+     * and then left unprocessed is a visible, queryable "started and did not
+     * finish"; setting the timestamp first would make a crash indistinguishable
+     * from a success, in the one table an operator consults to find out.
+     *
+     * ⚠️ **A handler failure is recorded and rethrown**, so Stripe's retry can
+     * do its job. The `error` column exists for exactly this and had no writer
+     * until now.
      */
-    await this.events.update({ id: event.id }, { processedAt: new Date() });
+    try {
+      const result = await this.lifecycle.apply(verified.type, verified.payload);
+
+      await this.events.update({ id: event.id }, { processedAt: new Date() });
+
+      this.logger.log(
+        result.changed
+          ? `${verified.type}: ${result.detail}`
+          : `${verified.type}: no change (${result.reason})`,
+      );
+    } catch (error) {
+      await this.events.update({ id: event.id }, { error: (error as Error).message });
+
+      throw error;
+    }
 
     return { status: 'processed', eventId: verified.eventId };
   }

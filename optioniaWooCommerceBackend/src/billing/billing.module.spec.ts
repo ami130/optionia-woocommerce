@@ -9,7 +9,9 @@ import {
   type BillingProviderOrNull,
   requireBillingProvider,
 } from './billing-provider';
+import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { BillingEvent } from './entities/billing-event.entity';
+import { Invoice } from './entities/invoice.entity';
 import {
   BillingModule,
   createStripeClient,
@@ -62,9 +64,20 @@ describe('BillingModule', () => {
      * The real repository is exercised by `billing-webhook.e2e-spec.ts`, against
      * MySQL, where the unique index it depends on actually exists.
      */
+    const stub = {
+      create: (r: unknown) => r,
+      save: async (r: unknown) => r,
+      findOne: async () => null,
+      update: async () => ({ affected: 1 }),
+    };
+
     const moduleRef = await Test.createTestingModule({ imports: [BillingModule] })
       .overrideProvider(getRepositoryToken(BillingEvent))
-      .useValue({ create: (r: unknown) => r, save: async (r: unknown) => r })
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(Invoice))
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(Subscription))
+      .useValue(stub)
       .compile();
 
     return {

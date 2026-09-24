@@ -3,6 +3,7 @@ import { Repository } from 'typeorm';
 import type { BillingProvider, VerifiedWebhook } from './billing-provider';
 import { BillingWebhookService } from './billing-webhook.service';
 import { BillingEvent } from './entities/billing-event.entity';
+import type { SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
 /**
  * The webhook pipeline: verify, record once, answer correctly (M22.C2 + C3).
@@ -24,10 +25,13 @@ describe('BillingWebhookService', () => {
       verify?: BillingProvider['verifyWebhook'];
       save?: jest.Mock;
       update?: jest.Mock;
+      apply?: jest.Mock;
     } = {},
   ) {
     const save = overrides.save ?? jest.fn(async (e: BillingEvent) => e);
     const update = overrides.update ?? jest.fn(async () => ({ affected: 1 }));
+    const apply =
+      overrides.apply ?? jest.fn(async () => ({ changed: true, detail: 'did a thing' }));
 
     const provider = {
       name: 'stripe',
@@ -40,11 +44,14 @@ describe('BillingWebhookService', () => {
       update,
     } as unknown as Repository<BillingEvent>;
 
+    const lifecycle = { apply } as unknown as SubscriptionLifecycleService;
+
     return {
-      service: new BillingWebhookService(provider, events),
+      service: new BillingWebhookService(provider, events, lifecycle),
       provider,
       save,
       update,
+      apply,
     };
   }
 
@@ -78,7 +85,8 @@ describe('BillingWebhookService', () => {
      */
     it('fails with a reason an operator can act on when no provider is configured', async () => {
       const events = {} as unknown as Repository<BillingEvent>;
-      const service = new BillingWebhookService(null, events);
+      const lifecycle = {} as unknown as SubscriptionLifecycleService;
+      const service = new BillingWebhookService(null, events, lifecycle);
 
       await expect(service.handle(input)).rejects.toThrow(
         'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
@@ -203,6 +211,68 @@ describe('BillingWebhookService', () => {
       await expect(build({ save }).service.handle(input)).rejects.toThrow(
         'something else entirely',
       );
+    });
+  });
+
+  /**
+   * C4's wiring: the event reaches the lifecycle, and a handler failure is both
+   * recorded and rethrown.
+   */
+  describe('dispatch', () => {
+    it('hands the verified type and payload to the lifecycle', async () => {
+      const { service, apply } = build();
+
+      await service.handle(input);
+
+      expect(apply).toHaveBeenCalledWith('invoice.paid', { id: 'in_123', object: 'invoice' });
+    });
+
+    /**
+     * 🔴 **`processedAt` is set only after the handler succeeds.** Marking it
+     * first would make a crash indistinguishable from a success in the one table
+     * an operator consults to find out which it was.
+     */
+    it('does not mark an event processed when the handler throws', async () => {
+      const apply = jest.fn(async () => {
+        throw new Error('lifecycle exploded');
+      });
+      const { service, update } = build({ apply });
+
+      await expect(service.handle(input)).rejects.toThrow('lifecycle exploded');
+
+      expect(update).not.toHaveBeenCalledWith(
+        { id: 'row_1' },
+        expect.objectContaining({ processedAt: expect.anything() }),
+      );
+    });
+
+    /**
+     * ⚠️ **The failure is recorded and rethrown**, so the row says what went
+     * wrong and Stripe's retry still gets its 5xx. `billing_events.error` had no
+     * writer until now.
+     */
+    it('records the reason on the row and rethrows', async () => {
+      const apply = jest.fn(async () => {
+        throw new Error('lifecycle exploded');
+      });
+      const { service, update } = build({ apply });
+
+      await expect(service.handle(input)).rejects.toThrow('lifecycle exploded');
+
+      expect(update).toHaveBeenCalledWith({ id: 'row_1' }, { error: 'lifecycle exploded' });
+    });
+
+    /** 📌 An event with no handler is still recorded and still answers 200. */
+    it('marks an unhandled event processed rather than failing', async () => {
+      const apply = jest.fn(async () => ({ changed: false, reason: 'no handler for x' }));
+      const { service, update } = build({ apply });
+
+      await expect(service.handle(input)).resolves.toEqual({
+        status: 'processed',
+        eventId: 'evt_123',
+      });
+
+      expect(update).toHaveBeenCalledWith({ id: 'row_1' }, { processedAt: expect.any(Date) });
     });
   });
 });

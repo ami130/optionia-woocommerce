@@ -183,6 +183,42 @@ else
   printf '        A check-then-write cannot survive concurrent redelivery.\n'
 fi
 
+# --- 9. Subscription state comes from webhooks, never from a redirect --------
+#
+# 🔴 **A merchant who closes the tab after paying must still end up subscribed,
+# and one who forges a return URL must not.** The browser is a hint; the webhook
+# is the fact. The lifecycle service must therefore be reachable from the webhook
+# path and from nothing that a browser can reach.
+LIFECYCLE="$BILLING/subscription-lifecycle.service.ts"
+
+CALLERS=$(grep -rn "lifecycle.apply(\|SubscriptionLifecycleService" "$SRC" --include="*.ts" \
+  | grep -v "\.spec\.ts:" \
+  | grep -v ':[0-9]*:\s*\*' \
+  | cut -d: -f1 | sort -u \
+  | grep -v "^$LIFECYCLE$" \
+  | grep -v "^$BILLING/billing-webhook.service.ts$" \
+  | grep -v "^$BILLING/billing.module.ts$" || true)
+
+if [ -z "$CALLERS" ]; then
+  pass "subscription state is driven by webhooks alone"
+else
+  fail "these reach the subscription lifecycle outside the webhook path:"
+  printf '        %s\n' $CALLERS
+  printf '        A redirect can be forged; a signed webhook cannot.\n'
+fi
+
+# --- 10. The grace period is ADR-116's fourteen days ------------------------
+#
+# ⚠️ ADR-116 is a commitment to merchants, not a tunable: fourteen days of grace,
+# then read-only authoring, and the storefront never goes dark. A silent change
+# here shortens the runway of every merchant whose card expires.
+if grep -q "^export const GRACE_DAYS = 14;" "$LIFECYCLE"; then
+  pass "the grace period is ADR-116's fourteen days"
+else
+  fail "GRACE_DAYS no longer matches ADR-116"
+  printf '        Changing it is a policy decision; amend the ADR in the same commit.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

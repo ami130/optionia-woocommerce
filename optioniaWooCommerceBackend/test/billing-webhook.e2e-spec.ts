@@ -7,6 +7,11 @@ import { v7 as uuidv7 } from 'uuid';
 /* 🔴 See BillingModule: a default import of `stripe` is `undefined` at runtime. */
 import Stripe = require('stripe');
 
+import { SubscriptionStatus } from '../src/common/database/enums';
+import { Invoice } from '../src/billing/entities/invoice.entity';
+import { Plan } from '../src/plans/entities/plan.entity';
+import { Subscription } from '../src/subscriptions/entities/subscription.entity';
+import { Tenant } from '../src/tenants/entities/tenant.entity';
 import { bootstrapTestApp } from './harness';
 
 /**
@@ -52,6 +57,15 @@ describe('Billing webhook (e2e)', () => {
   afterAll(async () => {
     /* Every run's rows, not just this one's: a failing run never reaches here. */
     await dataSource.query(`DELETE FROM billing_events WHERE providerEventId LIKE 'evt_e2e_%'`);
+
+    /* Invoices are RESTRICT on tenant, so they go before subscriptions and tenants. */
+    await dataSource.query(
+      `DELETE i FROM invoices i JOIN tenants t ON t.id = i.tenantId WHERE t.slug LIKE 'whook-%'`,
+    );
+    await dataSource.query(
+      `DELETE FROM subscriptions WHERE tenantId IN (SELECT id FROM tenants WHERE slug LIKE 'whook-%')`,
+    );
+    await dataSource.query(`DELETE FROM tenants WHERE slug LIKE 'whook-%'`);
 
     delete process.env.STRIPE_SECRET_KEY;
     delete process.env.STRIPE_WEBHOOK_SECRET;
@@ -226,5 +240,179 @@ describe('Billing webhook (e2e)', () => {
     const { body, signature } = signedEvent();
 
     expect((await post(body, signature)).status).toBe(200);
+  });
+
+  /**
+   * C4, and the half of C3's proof that could not be written until it existed.
+   *
+   * 🔴 **The plan's own words were *"one invoice row and one subscription
+   * transition"*** — asserted here by `COUNT(*)`, not by absence of error.
+   */
+  describe('subscription lifecycle', () => {
+    async function tenantWithSubscription(providerSubscriptionId: string) {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({
+        where: { code: 'free' },
+      });
+
+      seq += 1;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `Webhook ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      const subscription = await dataSource.getRepository(Subscription).save(
+        dataSource.getRepository(Subscription).create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerSubscriptionId,
+          providerCustomerId: `cus_${run}_${seq}`,
+          status: SubscriptionStatus.TRIALING,
+        }),
+      );
+
+      return { tenant, subscription };
+    }
+
+    function invoicePayload(subscriptionId: string, invoiceId: string) {
+      return {
+        id: invoiceId,
+        object: 'invoice',
+        status: 'paid',
+        currency: 'eur',
+        subtotal: 2900,
+        total_taxes: [{ amount: 609 }],
+        total: 3509,
+        created: 1_755_216_000,
+        status_transitions: { paid_at: 1_755_216_060 },
+        customer_address: { country: 'de' },
+        parent: { subscription_details: { subscription: subscriptionId } },
+      };
+    }
+
+    it('activates a subscription from invoice.paid and stores the invoice', async () => {
+      const providerSubscriptionId = `sub_${run}_${seq + 1}`;
+      const { tenant, subscription } = await tenantWithSubscription(providerSubscriptionId);
+      const invoiceId = `in_e2e_${run}_${seq}`;
+
+      const { body, signature } = signedEvent({
+        type: 'invoice.paid',
+        data: { object: invoicePayload(providerSubscriptionId, invoiceId) },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const updated = await dataSource
+        .getRepository(Subscription)
+        .findOneByOrFail({ id: subscription.id });
+
+      expect(updated.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(updated.graceEndsAt).toBeNull();
+
+      const stored = await dataSource
+        .getRepository(Invoice)
+        .findOneByOrFail({ providerInvoiceId: invoiceId });
+
+      expect(stored.tenantId).toBe(tenant.id);
+      expect(stored.subscriptionId).toBe(subscription.id);
+      expect(stored.subtotalMinor + stored.taxMinor).toBe(stored.totalMinor);
+      expect(stored.taxCountry).toBe('DE');
+    });
+
+    /**
+     * 🔴 **C3's stated proof, now provable — and my first version did not prove
+     * it.** Posting the identical event twice is rejected by
+     * `uq_billing_events_provider_event` before the invoice code runs at all, so
+     * it re-tested the webhook's idempotency and left the invoice upsert
+     * untouched: a mutation turning that upsert into a plain insert **survived**.
+     *
+     * ⚠️ **Two DIFFERENT events about the SAME invoice is the real case** —
+     * Stripe sends `invoice.paid` and then corrections or related events
+     * carrying the same invoice — and only `uq_invoices_provider_invoice` plus
+     * the upsert stop that becoming two rows and a doubled quarter of tax.
+     */
+    it('keeps one invoice row when two events carry the same invoice', async () => {
+      const providerSubscriptionId = `sub_${run}_${seq + 1}`;
+      await tenantWithSubscription(providerSubscriptionId);
+      const invoiceId = `in_e2e_${run}_${seq}_dup`;
+
+      const first = signedEvent({
+        type: 'invoice.paid',
+        data: { object: invoicePayload(providerSubscriptionId, invoiceId) },
+      });
+      expect((await post(first.body, first.signature)).status).toBe(200);
+
+      /* A distinct event id, so the webhook layer lets it through to the handler. */
+      const second = signedEvent({
+        type: 'invoice.paid',
+        data: { object: invoicePayload(providerSubscriptionId, invoiceId) },
+      });
+      expect(second.eventId).not.toBe(first.eventId);
+      expect((await post(second.body, second.signature)).status).toBe(200);
+
+      const [{ count }] = await dataSource.query(
+        `SELECT COUNT(*) AS count FROM invoices WHERE providerInvoiceId = ?`,
+        [invoiceId],
+      );
+
+      expect(Number(count)).toBe(1);
+    });
+
+    /**
+     * ⚠️ **ADR-116: a failed payment starts a 14-day clock, it does not
+     * suspend.** The storefront never goes dark.
+     */
+    it('starts the grace clock on invoice.payment_failed', async () => {
+      const providerSubscriptionId = `sub_${run}_${seq + 1}`;
+      const { subscription } = await tenantWithSubscription(providerSubscriptionId);
+
+      const { body, signature } = signedEvent({
+        type: 'invoice.payment_failed',
+        data: {
+          object: {
+            id: `in_e2e_${run}_${seq}_failed`,
+            object: 'invoice',
+            status: 'open',
+            parent: { subscription_details: { subscription: providerSubscriptionId } },
+          },
+        },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const updated = await dataSource
+        .getRepository(Subscription)
+        .findOneByOrFail({ id: subscription.id });
+
+      expect(updated.status).toBe(SubscriptionStatus.PAST_DUE);
+      expect(updated.graceEndsAt).not.toBeNull();
+
+      const days = (updated.graceEndsAt!.getTime() - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(13.9);
+      expect(days).toBeLessThan(14.1);
+    });
+
+    /** 📌 An event no handler claims is still recorded, and still answers 200. */
+    it('records an unhandled event type without failing', async () => {
+      const { body, signature, eventId } = signedEvent({
+        type: 'customer.discount.created',
+        data: { object: { id: 'di_1' } },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const [row] = await dataSource.query(
+        `SELECT processedAt, error FROM billing_events WHERE providerEventId = ?`,
+        [eventId],
+      );
+
+      expect(row.processedAt).not.toBeNull();
+      expect(row.error).toBeNull();
+    });
   });
 });

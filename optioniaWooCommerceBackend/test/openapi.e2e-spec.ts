@@ -339,9 +339,26 @@ function publicRoutes(app: INestApplication): Set<string> {
     const isPublic =
       // Method-level `@Public()`, which the handler carries directly.
       Reflect.getMetadata(IS_PUBLIC, handler) === true ||
-      // Class-level, matched on the controller's own base path.
+      /*
+       * Class-level, matched on the controller's own base path.
+       *
+       * 🔴 **`/v1/${prefix}` without a trailing slash is the third form, and it
+       * was missing.** A controller whose only handler is a bare `@Post()` —
+       * `@Controller('billing/webhook')` + `@Post()` — produces exactly
+       * `/v1/billing/webhook`, which matched neither branch: not `/${prefix}`
+       * (that shape is for routes outside the global prefix, like `/health`),
+       * and not `/v1/${prefix}/` (that needs a sub-path). So a genuinely public
+       * route was reported as an unguarded one.
+       *
+       * ⚠️ **The helper was right to fail loudly rather than skip**, which is
+       * why this was found at all — the alternative design it replaced, a
+       * hardcoded list of exempt paths, would have gone on passing.
+       */
       publicPrefixes.some(
-        (prefix) => path === `/${prefix}` || path.startsWith(`/v1/${prefix}/`),
+        (prefix) =>
+          path === `/${prefix}` ||
+          path === `/v1/${prefix}` ||
+          path.startsWith(`/v1/${prefix}/`),
       );
 
     if (isPublic) {
