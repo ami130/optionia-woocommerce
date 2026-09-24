@@ -39,4 +39,37 @@ export class Tenant extends BaseEntity {
 
   @Column({ type: 'datetime', precision: 3, nullable: true })
   trialEndsAt: Date | null;
+
+  /**
+   * Where this tenant is, for tax (B9, G10).
+   *
+   * 🔴 **A tax engine cannot compute VAT without one**, and this entity had no
+   * country, address or VAT number at all — so the recommended Stripe Tax had
+   * nothing to key on.
+   *
+   * ⚠️ **Nullable because a free tenant has no billing identity and is not asked
+   * for one.** B9 collects it at first paid checkout rather than at signup,
+   * which keeps a tax form off the registration form that M22.6's *"genuinely
+   * useful"* free tier depends on. A `NOT NULL` default would invent a tax
+   * location for every existing tenant, which is worse than having none.
+   *
+   * ISO 3166-1 alpha-2: the length is the validation, and a longer column would
+   * invite country *names*, which no tax engine accepts.
+   */
+  @Column({ type: 'char', length: 2, nullable: true })
+  country: string | null;
+
+  /** EU B2B applies the reverse charge on a valid id, so it is stored, not derived. */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  vatNumber: string | null;
+
+  /**
+   * What this tenant is billed in (G9).
+   *
+   * 📌 **On the tenant, not the subscription**: a subscription is denominated
+   * once, and a currency that changed under a merchant mid-term would make two
+   * invoices in one year incomparable.
+   */
+  @Column({ type: 'char', length: 3, nullable: true })
+  billingCurrency: string | null;
 }

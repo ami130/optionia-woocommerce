@@ -513,6 +513,12 @@ describe('schema (integration)', () => {
       'tenants', // is the tenant
       'platform_staff', // the other realm — deliberately separate (M6.5)
       'plans', // global product catalogue
+
+      // Prices belong to the catalogue, not to a tenant: every tenant is offered
+      // the same rows, and a subscription *points at* one rather than owning it.
+      // Scoping them would mean a price per tenant, which is the pricing model
+      // this table exists to avoid (M22.1a).
+      'plan_prices',
       'users', // one person, several tenants
       'billing_events', // arrives before the tenant is resolved
       'migrations', // TypeORM's own
