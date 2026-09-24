@@ -46,8 +46,27 @@ process.env.THROTTLE_SUSTAINED_LIMIT ??= '100000';
  * them.** `POST /auth/refresh` allows 60 an hour in the controller; a suite
  * that signs in and navigates repeatedly exhausts it, and every later
  * navigation lands on the sign-in screen instead of the page under test.
+ *
+ * 🔴 **This list covered ONE of seven, and the other six bit exactly as
+ * predicted.** A full run produced **15** rejections across `login` (10/hour),
+ * `register` (5/hour), `resend-verification` (3/hour) and
+ * `request-password-reset` (3/hour) — and the failures surfaced as
+ * `Expected: 200, Received: 404` in suites with nothing to do with auth,
+ * moving between runs because whichever suite ran after the budget was spent
+ * was the one that failed. Two consecutive runs blamed three different files.
+ *
+ * 📌 **Raising a ceiling is not disabling a guard.** The limiter still runs and
+ * still keys per identity; the production numbers are untouched, because a test
+ * environment raises them explicitly and a deployment that sets nothing keeps
+ * the strict behaviour — the contract `authThrottleLimit` already records.
  */
 process.env.THROTTLE_REFRESH_LIMIT ??= '100000';
+process.env.THROTTLE_LOGIN_LIMIT ??= '100000';
+process.env.THROTTLE_REGISTER_LIMIT ??= '100000';
+process.env.THROTTLE_VERIFY_EMAIL_LIMIT ??= '100000';
+process.env.THROTTLE_RESEND_VERIFICATION_LIMIT ??= '100000';
+process.env.THROTTLE_PASSWORD_RESET_REQUEST_LIMIT ??= '100000';
+process.env.THROTTLE_LOGOUT_LIMIT ??= '100000';
 
 
 /**

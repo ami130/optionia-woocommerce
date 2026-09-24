@@ -1,3 +1,22 @@
+/*
+ * 🔴 **Pinned at MODULE LOAD, before anything imports the controller.**
+ *
+ * `setup-e2e.ts` raises every auth cap to 100000 so ordinary suites are not
+ * throttled by their own volume (F57, and six more routes found the same way).
+ * This file asserts the opposite — that the limiter *fires* — so it must put
+ * the real numbers back.
+ *
+ * ⚠️ **Assigning these inside `beforeAll` does nothing, and that was measured
+ * rather than assumed.** `@Throttle` metadata is evaluated when the decorator
+ * runs, which is at import time; a first attempt set them in `beforeAll` and
+ * every assertion still saw zero 429s. It is the same shape of defect this
+ * suite's own docblock records: an override that silently matches nothing.
+ */
+process.env.THROTTLE_LOGIN_LIMIT = '10';
+process.env.THROTTLE_REGISTER_LIMIT = '5';
+process.env.THROTTLE_RESEND_VERIFICATION_LIMIT = '3';
+process.env.THROTTLE_PASSWORD_RESET_REQUEST_LIMIT = '3';
+
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';

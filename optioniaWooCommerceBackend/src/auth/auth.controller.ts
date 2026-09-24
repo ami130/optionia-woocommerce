@@ -118,7 +118,7 @@ export class AuthController {
    */
   @Post('register')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_REGISTER_LIMIT', 5), ttl: 3_600_000 } })
   async register(@Body() dto: RegisterDto): Promise<{ message: string }> {
     await this.auth.register(dto.email, dto.password, dto.name, dto.tenantName ?? '');
 
@@ -138,7 +138,7 @@ export class AuthController {
    */
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_VERIFY_EMAIL_LIMIT', 10), ttl: 3_600_000 } })
   async verifyEmail(@Body() dto: VerifyEmailDto): Promise<{ verified: boolean }> {
     const verified = await this.auth.verifyEmail(dto.token);
 
@@ -162,7 +162,7 @@ export class AuthController {
    */
   @Post('resend-verification')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_RESEND_VERIFICATION_LIMIT', 3), ttl: 3_600_000 } })
   async resendVerification(@Body() dto: ResendVerificationDto): Promise<{ message: string }> {
     await this.auth.resendVerification(dto.email);
 
@@ -186,7 +186,7 @@ export class AuthController {
    */
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 10, ttl: 900_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_LOGIN_LIMIT', 10), ttl: 900_000 } })
   async login(
     @Body() dto: LoginDto,
     @Ip() ip: string,
@@ -359,7 +359,7 @@ export class AuthController {
    */
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_LOGOUT_LIMIT', 60), ttl: 3_600_000 } })
   async logout(@Body() dto: RefreshDto): Promise<void> {
     const userId = await this.sessions.revoke(dto.refreshToken ?? '');
 
@@ -392,7 +392,7 @@ export class AuthController {
    */
   @Post('request-password-reset')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
+  @Throttle({ default: { limit: authThrottleLimit('THROTTLE_PASSWORD_RESET_REQUEST_LIMIT', 3), ttl: 3_600_000 } })
   async requestPasswordReset(
     @Body() dto: RequestPasswordResetDto,
     @Ip() ip: string,
