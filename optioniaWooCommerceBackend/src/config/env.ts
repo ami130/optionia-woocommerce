@@ -51,6 +51,20 @@ function optional(key: string, fallback: string): string {
   return value === undefined || value.trim() === '' ? fallback : value.trim();
 }
 
+/**
+ * A secret that may legitimately be absent.
+ *
+ * ⚠️ **Absent and empty are the same answer here**, matching `required()`'s own
+ * rule that *"there are no defaults by design"*: a `.env` carrying
+ * `STRIPE_SECRET_KEY=` is a half-filled file, and treating it as configured
+ * would fail at the first API call rather than at boot.
+ */
+function nullableSecret(key: string): string | null {
+  const value = process.env[key];
+
+  return value === undefined || value.trim() === '' ? null : value.trim();
+}
+
 /** Read a required integer within an inclusive range. */
 function requiredInt(key: string, min: number, max: number): number {
   const raw = required(key);
@@ -149,6 +163,24 @@ export interface AppConfig {
    * email never becomes a customer, and silent success is the worst possible
    * failure here. `loadConfig` enforces that.
    */
+  /**
+   * Billing credentials.
+   *
+   * 📌 **The API version is deliberately NOT here.** It is a literal in
+   * `BillingModule` (`STRIPE_API_VERSION`), because a version an operator can
+   * change from `.env` is not pinned — it is a billing change with no diff and
+   * no review, which is the thing F94/E3 objected to in the first place.
+   *
+   * ⚠️ **The keys are optional, because billing is not yet wired to a live
+   * account.** A missing key means "no provider configured", which is the
+   * correct state for development and for every test in this repository.
+   */
+  readonly billing: {
+    readonly provider: string;
+    readonly secretKey: string | null;
+    readonly webhookSecret: string | null;
+  };
+
   readonly mail: {
     readonly transport: MailTransport;
     readonly from: string;
@@ -304,6 +336,12 @@ export function loadConfig(): AppConfig {
      * — and pulling in `node:path` to build a default would give it one.
      */
     pluginDistDir: optional('PLUGIN_DIST_DIR', '../optioniaWooCommercePlugin/dist'),
+
+    billing: {
+      provider: optional('BILLING_PROVIDER', 'stripe'),
+      secretKey: nullableSecret('STRIPE_SECRET_KEY'),
+      webhookSecret: nullableSecret('STRIPE_WEBHOOK_SECRET'),
+    },
 
     mail: loadMailConfig(isProduction),
 
