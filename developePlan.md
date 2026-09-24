@@ -494,7 +494,7 @@ one place this plan's ordering works against you.
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
 | B6 | **Tax handling under ADR-114** — ParseLab is merchant of record, so EU VAT and US sales tax are **yours**, not your merchants'. D1's own table says it: *"You handle EU VAT and US sales tax yourself."* 📌 **Recommended: Stripe Tax** (~0.5% per transaction) — it is Stripe's own product, fits ADR-114 without revisiting it, and costs far less than VAT registration plus quarterly filings. Alternatives: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee but reopens D1; handling it in-house is cheapest per transaction and means registrations, filings and nexus monitoring. ⚠️ **Blocks M22.3**, because it decides what is stored per customer and what an invoice must carry | [Phase 22](#phase-22--billing-integration) | **You** |
 | B7 | **The lapse policy (M24.3)** — what a storefront does when a subscription lapses. 🔴 **Blocks the M22.1a schema**, not merely the UI: it decides what subscription state the plugin must know, and therefore what the config document carries. Does the last published config keep serving, or does the storefront go dark? The first is kinder and risks unpaid use; the second is enforceable and risks breaking a live shop over a failed card | [M24.3](#phase-24--production-readiness) | **You** |
-| B8 | **Do limit changes reach existing subscribers?** A **price** rise must never touch someone who already subscribed (M22.1a builds immutable price versions for exactly that). A **limit** rise is arguably different — giving people more is not a billing surprise — but a limit *cut* is. 📌 Recorded as open rather than guessed at; it is a product call | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | **You** |
+| B8 | **Do limit changes reach existing subscribers?** A **price** rise must never touch someone who already subscribed (M22.1a builds immutable price versions for exactly that). A **limit** rise is arguably different — giving people more is not a billing surprise — but a limit *cut* is. 📌 Recorded as open rather than guessed at; it is a product call. 🔴 **The third pass found the obvious answer creates a permanent fork**: *"raises immediately, cuts only for new subscribers"* leaves every existing subscriber on terms no current plan describes, with no expiry — and after two years of adjustments *"what is this tenant entitled to?"* has no single answer. **Recommended instead: a cut applies at the next renewal**, so the merchant keeps what they bought for the term they bought it and the fork closes on its own | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | **You** |
 | B9 | **What billing identity is collected, and when** — 🔴 **surfaced by the Phase 22 audit (G10)**: `tenants` carries `name`, `slug`, `planId`, `trialEndsAt` and **no country, address or VAT number**, so B6's recommended Stripe Tax has nothing to compute against and an EU B2B invoice cannot apply the reverse charge. The decision is *when* to ask: at registration (friction on signup, but every tenant is billable from day one) or at first paid checkout (clean signup, but the free tier then holds tenants with no tax location — which matters the moment one upgrades). ⚠️ **Blocks the M22.3 schema**, and pairs with B6 | [Phase 22](#phase-22--billing-integration) | **You** |
 
 **Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
@@ -29290,19 +29290,72 @@ change limits at will.
 - **Downgrade-over-limit policy is already decided** in M24.4: *"block new creation,
   keep existing working, prompt for"* — so Phase 22 does not need to invent it.
 
-##### 📌 The execution order this audit implies
+##### 🔍 Third pass — the recommendations audited against the code, 2026-09-24
 
-1. **Answer B7 (lapse policy)** — it decides what subscription state the plugin must
-   know, and therefore the shape of the tables below it.
-2. **Settle G6, G7, G9, G10 as one schema change** — plan ownership, provider customer,
-   currency, and tax location are all the same migration, and doing them separately
-   means migrating billing tables three times.
-3. **Build M22.1a on price versions (G1)**, with `isActive` actually read (G8).
-4. **Phase 24's metering (G2) before Phase 22 sells the limits** — M22.1 sells nine
-   metrics, M24.1 makes them measurable, M24.2 enforces them. ⚠️ **Phase 22 declares
-   `Depends on: Gate 2`, but the sharper dependency is Phase 24.**
-5. **Then M22.2–M22.6**, with G3 (invoices) and G4 (lifecycle) resolved as they are
-   reached.
+**The first two passes audited the plan. This one audits the *answers*** — four
+recommendations were offered for B6–B9, and an unchecked recommendation is just an
+opinion. Three survived, one estimate was wrong in our favour, and one new risk appeared.
+
+✅ **R1 — "read-only authoring, never dark" is CHEAP, not expensive.** The concern was 56
+write endpoints. But authentication is already a **global** guard that routes opt out of
+with `@Public()`, and the module records why: *"applying the guard per controller makes
+forgetting it a silent hole rather than a 401."* A `SubscriptionGuard` follows the same
+shape — **one guard, not 56 edits**, and a new endpoint is refused by default rather than
+silently unguarded.
+
+✅ **R2 — the plugin needs no lapse logic at all.** It has no concept of a lapsed state
+and the config document carries nothing about the plan, which was the worry. It is the
+opposite: going *dark* would mean **adding** a kill path to a plugin deliberately built
+to survive the cloud being unreachable. Read-only is both the kinder policy and the
+smaller build. ⚠️ M24.5 does want plan state in the document — for **notices**, with
+*"enforcement decisions remain server-side"*, which is exactly compatible.
+
+✅ **R3 — collecting billing identity at checkout costs nothing at signup.** Registration
+takes email, password and tenant name; nothing billable. So B9's recommended answer needs
+**no change to the registration flow** — only nullable columns populated at first paid
+checkout.
+
+📌 **R4 — the metering estimate (G2) was too pessimistic.** *"Eight of nine metrics
+unmeasurable"* is true of the *service* and misleading about the *work*: every one maps
+to a table that already exists — `option_sets`, `stores`, `tenant_members`,
+`option_set_assignments`, `option_rules` — so most are `SELECT COUNT(*)`, not new
+infrastructure. `file_storage_mb` was the genuinely hard one **and it is already built**,
+because storage sums across stores rather than being written. Metering is therefore a
+small step, not a phase.
+
+🔴 **R5 — the NEW risk, and it is in the recommendation itself.** *"Raises apply
+immediately, cuts only to new subscribers"* (B8) sounds clean and creates a **permanent
+fork**: every limit cut leaves existing subscribers on terms no current plan describes,
+and there is no expiry. After two years of adjustments the support question *"what is
+this tenant actually entitled to?"* has no single answer. ⚠️ **Mitigation, and it must be
+decided with B8**: a limit cut applies at the next **renewal** rather than never — the
+merchant keeps what they bought for the term they bought it, and the fork closes on its
+own.
+
+##### 📌 Execution plan — four steps, in dependency order
+
+**Step 1 — ONE migration, five gaps** (G1, G6, G7, G9, G10). Plan ownership moves to the
+subscription; `providerCustomerId`; `billingCurrency`; nullable `country` and
+`vatNumber`; and `plan_prices` for versioning. 🔴 **One migration, not five** — billing
+tables must not be migrated repeatedly, and every migration here already ships a `down()`
+that CI runs, so a mistake is recoverable.
+
+**Step 2 — M22.1a, the plan admin.** Price versions (G1), `isActive` actually read (G8),
+an audit trail of who changed what. Exit: staff change a price; an existing subscriber's
+next invoice is unchanged; a new signup pays the new figure.
+
+**Step 3 — metering (G2), pulled forward from M24.1.** Cheap, per R4. Nine metrics
+measurable **before** M22.1 sells them, honouring its own rule: *"a limit that cannot be
+measured cannot be sold."*
+
+**Step 4 — M22.2 → M22.6**, with G3 (invoices) and G4 (lifecycle vs enum) resolved as
+they are reached, and the `SubscriptionGuard` from R1 carrying the lapse policy.
+
+⚠️ **The standing caveat, restated rather than buried.** Phase 22 declares
+`Depends on: Gate 2` and **four Gate 2 criteria are open**, two of them closable only by
+the owner (3 testers, one printed packing slip). Steps 1–3 are additive and do not touch
+the option editor, so starting is defensible — but **step 4 is where a tester finding
+would force rework**, and that is a risk taken knowingly rather than discovered later.
 
 
 ### M22.1a — Plans are DATA, editable by platform staff
