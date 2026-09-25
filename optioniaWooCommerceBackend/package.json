@@ -1,7 +1,7 @@
 {
   "name": "optionia-woocommerce-backend",
   "version": "0.1.0",
-  "description": "Optionia for WooCommerce — SaaS API. Authoring, tenancy, billing.",
+  "description": "Optionia for WooCommerce \u2014 SaaS API. Authoring, tenancy, billing.",
   "license": "UNLICENSED",
   "private": true,
   "engines": {
@@ -39,7 +39,8 @@
     "check:openapi": "bash bin/check-openapi.sh",
     "check:isolation": "bash bin/check-isolation.sh",
     "check:store-state": "bash bin/check-store-state.sh",
-    "check:invalidation": "bash bin/check-config-invalidation.sh"
+    "check:invalidation": "bash bin/check-config-invalidation.sh",
+    "billing:link-prices": "ts-node -r tsconfig-paths/register src/seeds/link-provider-prices.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

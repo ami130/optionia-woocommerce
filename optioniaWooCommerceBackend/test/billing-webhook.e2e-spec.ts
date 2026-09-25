@@ -30,6 +30,15 @@ import { bootstrapTestApp } from './harness';
  * `generateTestHeaderString` and verified by `constructEvent` inside the
  * adapter. Nothing about verification is mocked — only the account is absent.
  */
+/** Put a variable back exactly as it was, absent included. */
+function restore(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 describe('Billing webhook (e2e)', () => {
   const SECRET = 'whsec_test_e2e_secret';
 
@@ -38,12 +47,28 @@ describe('Billing webhook (e2e)', () => {
 
   const run = uuidv7().slice(-8);
 
+  /*
+   * 🔴 **Captured so teardown RESTORES rather than deletes (K4).** An earlier
+   * version deleted both keys in `afterAll`, which with real keys now in `.env`
+   * would leave any later suite constructing a billing provider seeing none.
+   * Harmless today — no later suite does — but it is the same aggressor pattern
+   * already fixed once in `checkout.service.spec.ts`, and a suite that destroys
+   * shared global state is an aggressor even when its own assertions are right.
+   */
+  const savedKeys = {
+    secret: process.env.STRIPE_SECRET_KEY,
+    webhook: process.env.STRIPE_WEBHOOK_SECRET,
+  };
+
   beforeAll(async () => {
     /*
      * ⚠️ **Set before the app is built**, because `BillingModule`'s factory
      * reads configuration once at construction. Assigning these later would
      * leave the provider null and every test below exercising G3's guard rather
      * than the webhook.
+     *
+     * 📌 A fake secret on purpose: nothing here calls the provider's API, and a
+     * real key in a test run is a real account one bug away from being touched.
      */
     process.env.STRIPE_SECRET_KEY = 'sk_test_e2e_fake';
     process.env.STRIPE_WEBHOOK_SECRET = SECRET;
@@ -67,8 +92,8 @@ describe('Billing webhook (e2e)', () => {
     );
     await dataSource.query(`DELETE FROM tenants WHERE slug LIKE 'whook-%'`);
 
-    delete process.env.STRIPE_SECRET_KEY;
-    delete process.env.STRIPE_WEBHOOK_SECRET;
+    restore('STRIPE_SECRET_KEY', savedKeys.secret);
+    restore('STRIPE_WEBHOOK_SECRET', savedKeys.webhook);
 
     await app.close();
   });

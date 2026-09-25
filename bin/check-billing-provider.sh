@@ -287,6 +287,45 @@ else
   printf '        An upgrade would charge the new price and keep the old limits.\n'
 fi
 
+# --- 16. The provider links are reproducible, not hand-typed ---------------
+#
+# 🔴 **K1: `plan_prices.providerPriceId` was populated by manual SQL** during
+# sandbox verification, so the mapping existed in one database and nowhere in
+# this repository. A fresh database — CI, a new machine, live mode — would have
+# `NULL` in every row, which is exactly the state that makes checkout refuse to
+# sell, and the first person to find out would be a merchant trying to pay.
+#
+# ⚠️ The script must also VERIFY, not just link (K2): nothing compared our
+# `amountMinor` against the provider's `unit_amount`, so a dashboard edit would
+# leave the pricing page showing one figure while the merchant is charged
+# another, silently.
+if grep -q "billing:link-prices" "optioniaWooCommerceBackend/package.json" \
+  && grep -q "export async function reconcileProviderPrices" "$BILLING/provider-prices.ts"; then
+  pass "provider price links are reproducible from a command"
+else
+  fail "nothing rebuilds plan_prices.providerPriceId (K1)"
+  printf '        A fresh database cannot sell anything, and no script says why.\n'
+fi
+
+if grep -q "function disagreement(" "$BILLING/provider-prices.ts"; then
+  pass "a provider price that disagrees with ours is refused, not linked"
+else
+  fail "nothing compares our amount against the provider's (K2)"
+  printf '        A dashboard price edit would charge a figure our UI never showed.\n'
+fi
+
+# --- 17. Live mode cannot create products by accident ----------------------
+#
+# 📌 **A duplicate product in live is a support problem, not a rollback.** The
+# default must be link-only when the key is live; creating requires typing
+# `--create`, and live mode is detected from the KEY rather than `NODE_ENV` —
+# a live key in a `.env` marked development is exactly the accident this guards.
+if grep -q "sk_live_" "$SRC/seeds/link-provider-prices.ts"; then
+  pass "live mode is detected from the key, not from NODE_ENV"
+else
+  fail "the price linker no longer distinguishes live keys"
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
