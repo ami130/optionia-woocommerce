@@ -11,7 +11,10 @@ import {
   type BillingProviderOrNull,
   requireBillingProvider,
 } from './billing-provider';
+import { EmailDelivery } from '../mail/entities/email-delivery.entity';
+import { EmailSuppression } from '../mail/entities/email-suppression.entity';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
+import { TenantMember } from '../tenants/entities/tenant-member.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { BillingEvent } from './entities/billing-event.entity';
@@ -72,6 +75,7 @@ describe('BillingModule', () => {
       create: (r: unknown) => r,
       save: async (r: unknown) => r,
       findOne: async () => null,
+      find: async () => [],
       update: async () => ({ affected: 1 }),
     };
 
@@ -113,6 +117,17 @@ describe('BillingModule', () => {
       .overrideProvider(getRepositoryToken(Tenant))
       .useValue(stub)
       .overrideProvider(getRepositoryToken(PlanPrice))
+      .useValue(stub)
+      /*
+       * ⚠️ **`TenantMember` and mail's own repositories**, because `BillingModule`
+       * now imports `MailModule` for ADR-116's dunning mail. This suite is about
+       * the provider factory and has no database in it.
+       */
+      .overrideProvider(getRepositoryToken(TenantMember))
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(EmailDelivery))
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(EmailSuppression))
       .useValue(stub)
       .compile();
 

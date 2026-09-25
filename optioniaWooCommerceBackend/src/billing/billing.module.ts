@@ -14,9 +14,13 @@ import Stripe = require('stripe');
 
 import { loadConfig } from '../config/env';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
+import { MailModule } from '../mail/mail.module';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { TenantMember } from '../tenants/entities/tenant-member.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { BILLING_PROVIDER, type BillingProviderOrNull } from './billing-provider';
+import { BillingContactsService } from './billing-contacts.service';
+import { BillingNotifierService } from './billing-notifier.service';
 import { BillingWebhookController } from './billing-webhook.controller';
 import { BillingWebhookService } from './billing-webhook.service';
 import { BillingEvent } from './entities/billing-event.entity';
@@ -74,12 +78,24 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BillingEvent, Invoice, Subscription, Tenant, PlanPrice]),
+    TypeOrmModule.forFeature([
+      BillingEvent,
+      Invoice,
+      Subscription,
+      Tenant,
+      PlanPrice,
+      TenantMember,
+    ]),
+
+    /* 📌 For ADR-116's dunning mail, which had no way to reach a person (F115). */
+    MailModule,
   ],
   controllers: [BillingWebhookController],
   providers: [
     BillingWebhookService,
     SubscriptionLifecycleService,
+    BillingContactsService,
+    BillingNotifierService,
     {
       provide: BILLING_PROVIDER,
       useFactory: (): BillingProviderOrNull => {

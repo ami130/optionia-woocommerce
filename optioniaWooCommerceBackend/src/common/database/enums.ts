@@ -425,6 +425,20 @@ export const TRANSACTIONAL_TEMPLATES: readonly string[] = [
   'verify-email',
   'password-reset',
   'password-changed',
+
+  /*
+   * 🔴 **A failed payment is transactional** by this list's own rule: after
+   * ADR-116's grace period authoring goes read-only, so the merchant needs this
+   * to keep using their account. It also means an `UNSUBSCRIBE` suppression
+   * does not silence it — someone who opted out of product tips must still hear
+   * that their card was declined.
+   *
+   * 📌 **`billing-trial-ending` is deliberately NOT here.** Nothing breaks when
+   * a trial ends; the merchant simply stops being on one. It is the *"onboarding,
+   * tips and announcements are LIFECYCLE however urgent they feel"* case, and an
+   * unsubscribed merchant should not receive it.
+   */
+  'billing-payment-failed',
 ];
 
 /**

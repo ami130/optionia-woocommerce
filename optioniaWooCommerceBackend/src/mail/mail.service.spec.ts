@@ -252,9 +252,21 @@ describe('MailService', () => {
     /**
      * 📌 The list must name every template the code actually sends as
      * transactional, or a real auth mail throws at send time.
+     *
+     * 🔴 **Pinned so that adding one is a deliberate act**, which is exactly
+     * what this test did when `billing-payment-failed` arrived: it failed, and
+     * the addition had to be argued for rather than absorbed. After ADR-116's
+     * grace period authoring goes read-only, so a merchant needs that message
+     * to keep using their account — and an `UNSUBSCRIBE` suppression must not
+     * silence a declined card.
+     *
+     * ⚠️ **`billing-trial-ending` is absent on purpose.** Nothing breaks when a
+     * trial ends; that one is LIFECYCLE, and an unsubscribed merchant should
+     * not receive it.
      */
     it('covers every transactional mail this API sends', () => {
       expect([...TRANSACTIONAL_TEMPLATES].sort()).toEqual([
+        'billing-payment-failed',
         'password-changed',
         'password-reset',
         'verify-email',

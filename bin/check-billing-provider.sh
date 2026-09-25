@@ -503,6 +503,33 @@ else
   printf '        100 cents and 100 pence are not 200 of anything.\n'
 fi
 
+# --- 28. ADR-116's dunning mail, sent once per lapse ----------------------
+#
+# 🔴 **ADR-116 promised it and there was none**: *"Grace: everything works, with
+# a dashboard banner and dunning mail."* A merchant whose card failed got a
+# fourteen-day clock and no notification, so the first they learned was
+# authoring going read-only.
+#
+# ⚠️ **Once per LAPSE, not per failure.** Stripe's dunning fires
+# `invoice.payment_failed` several times, and `MailService` has suppression but
+# no dedupe — `graceEndsAt === null` is true exactly once per lapse, which is
+# what makes four identical warnings impossible.
+if grep -q "firstFailureOfThisLapse" "$LIFECYCLE" \
+  && grep -q "notifier.paymentFailed" "$LIFECYCLE"; then
+  pass "a failed payment mails the merchant once per lapse"
+else
+  fail "dunning mail is missing, or no longer deduped per lapse (ADR-116)"
+  printf '        Four identical \"your payment failed\" emails read as a broken system.\n'
+fi
+
+# 🔴 Transactional, so an UNSUBSCRIBE suppression cannot silence a declined card.
+if grep -q "'billing-payment-failed'" "$SRC/common/database/enums.ts"; then
+  pass "dunning mail is transactional, so unsubscribing cannot silence it"
+else
+  fail "billing-payment-failed is not in TRANSACTIONAL_TEMPLATES"
+  printf '        An unsubscribed merchant would never hear their card was declined.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

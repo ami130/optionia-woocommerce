@@ -6,6 +6,7 @@ import { SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { BillingNotifierService } from './billing-notifier.service';
 import { Invoice } from './entities/invoice.entity';
 import { mapInvoice, type MappedInvoiceColumns } from './invoice.mapper';
 
@@ -55,6 +56,7 @@ export class SubscriptionLifecycleService {
     @InjectRepository(PlanPrice)
     private readonly prices: Repository<PlanPrice>,
     private readonly dataSource: DataSource,
+    private readonly notifier: BillingNotifierService,
   ) {}
 
   /**
@@ -314,13 +316,40 @@ export class SubscriptionLifecycleService {
 
     subscription.status = SubscriptionStatus.PAST_DUE;
 
-    if (subscription.graceEndsAt === null) {
+    /*
+     * 🔴 **`graceEndsAt === null` is the dedupe signal, and it already existed.**
+     * Stripe's dunning fires `invoice.payment_failed` several times per lapse,
+     * and the mail service has suppression but **no dedupe** — so wiring mail
+     * here naïvely sends a merchant four identical "your payment failed"
+     * messages. This flag is true exactly once per lapse, which is exactly when
+     * the merchant has not yet been told, so no new column is needed to know it.
+     *
+     * ⚠️ **Recovery clears it** (F99), so a *later* lapse mails again — which is
+     * right: a second failure a month after recovering is news.
+     */
+    const firstFailureOfThisLapse = subscription.graceEndsAt === null;
+
+    if (firstFailureOfThisLapse) {
       const endsAt = new Date();
       endsAt.setUTCDate(endsAt.getUTCDate() + GRACE_DAYS);
       subscription.graceEndsAt = endsAt;
     }
 
     await this.subscriptions.save(subscription);
+
+    if (firstFailureOfThisLapse) {
+      /*
+       * 📌 **Mail failure must not fail the webhook.** Returning non-2xx would
+       * have Stripe redeliver an event whose *billing* effect already committed
+       * — and F111 means that retry would now re-run the handler, moving the
+       * grace deadline. The notice is best-effort; the deadline is the record.
+       */
+      await this.notifier.paymentFailed(subscription).catch((error: unknown) => {
+        this.logger.warn(
+          `Recorded the lapse but could not send dunning mail: ${(error as Error).message}`,
+        );
+      });
+    }
 
     return {
       changed: true,

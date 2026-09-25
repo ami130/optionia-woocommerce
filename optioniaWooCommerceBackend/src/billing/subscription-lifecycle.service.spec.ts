@@ -4,6 +4,7 @@ import { SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import type { BillingNotifierService } from './billing-notifier.service';
 import { Invoice } from './entities/invoice.entity';
 import { GRACE_DAYS, SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
@@ -21,6 +22,7 @@ describe('SubscriptionLifecycleService', () => {
     seed: Partial<Subscription> & {
       tenantSeed?: Partial<Tenant>;
       price?: PlanPrice | null;
+      notifier?: Partial<BillingNotifierService>;
     } = {},
   ) {
     const subscription = {
@@ -79,6 +81,19 @@ describe('SubscriptionLifecycleService', () => {
       transaction: async (work: (m: unknown) => Promise<unknown>) => work(manager),
     } as unknown as DataSource;
 
+    /*
+     * ⚠️ **A spy, not a real notifier.** What matters here is *whether* mail is
+     * triggered and how often — the message itself is `billing.templates`' and
+     * the sending is `MailService`'s, both tested where they live.
+     */
+    const paymentFailedMail = (seed.notifier?.paymentFailed ??
+      jest.fn(async () => undefined)) as jest.Mock;
+    const notifier = {
+      paymentFailed: paymentFailedMail,
+      trialEnding: jest.fn(async () => undefined),
+      ...(seed.notifier ?? {}),
+    } as unknown as BillingNotifierService;
+
     const tenant = {
       id: 'tenant_1',
       country: null,
@@ -97,7 +112,13 @@ describe('SubscriptionLifecycleService', () => {
     } as unknown as Repository<PlanPrice>;
 
     return {
-      service: new SubscriptionLifecycleService(subscriptions, tenants, prices, dataSource),
+      service: new SubscriptionLifecycleService(
+        subscriptions,
+        tenants,
+        prices,
+        dataSource,
+        notifier,
+      ),
       tenant,
       tenants,
       prices,
@@ -106,6 +127,7 @@ describe('SubscriptionLifecycleService', () => {
       invoices,
       storedInvoices,
       savedSubscriptions,
+      paymentFailedMail,
     };
   }
 
@@ -493,6 +515,76 @@ describe('SubscriptionLifecycleService', () => {
       await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
 
       expect(subscription.graceEndsAt).toEqual(original);
+    });
+
+    /**
+     * 🔴 **One lapse, one email (ADR-116).** Stripe's dunning fires
+     * `invoice.payment_failed` several times, and `MailService` has suppression
+     * but **no dedupe** — so wiring mail here naïvely sends four identical
+     * "your payment failed" messages, which reads as a broken system.
+     */
+    it('mails the merchant on the first failure of a lapse', async () => {
+      const { service, paymentFailedMail } = build({ providerSubscriptionId: 'sub_1' });
+
+      await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
+
+      expect(paymentFailedMail).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not mail again while the same lapse continues', async () => {
+      const { service, paymentFailedMail } = build({
+        providerSubscriptionId: 'sub_1',
+        status: SubscriptionStatus.PAST_DUE,
+        graceEndsAt: new Date('2026-10-09T00:00:00.000Z'),
+      });
+
+      await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
+      await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
+
+      expect(paymentFailedMail).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠️ **A later lapse is news and mails again.** `graceEndsAt` is cleared on
+     * recovery (F99), so a failure a month after paying is a fresh lapse — the
+     * dedupe must not silence it for ever.
+     */
+    it('mails again for a new lapse after recovery', async () => {
+      const { service, subscription, paymentFailedMail } = build({
+        providerSubscriptionId: 'sub_1',
+      });
+
+      await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
+
+      /* Recovery clears the clock. */
+      subscription.graceEndsAt = null;
+
+      await service.apply('invoice.payment_failed', paidInvoice({ status: 'open' }));
+
+      expect(paymentFailedMail).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * 🔴 **Mail failure must not fail the webhook.** A non-2xx would have the
+     * provider redeliver an event whose *billing* effect already committed —
+     * and F111 means that retry re-runs the handler, moving the deadline. The
+     * notice is best-effort; the deadline is the record.
+     */
+    it('records the lapse even when the mail cannot be sent', async () => {
+      const paymentFailedMail = jest.fn(async () => {
+        throw new Error('smtp unreachable');
+      });
+      const { service, subscription } = build({
+        providerSubscriptionId: 'sub_1',
+        notifier: { paymentFailed: paymentFailedMail },
+      });
+
+      await expect(
+        service.apply('invoice.payment_failed', paidInvoice({ status: 'open' })),
+      ).resolves.toMatchObject({ changed: true });
+
+      expect(subscription.status).toBe(SubscriptionStatus.PAST_DUE);
+      expect(subscription.graceEndsAt).not.toBeNull();
     });
 
     /** 📌 Nothing is stored in `invoices`: an unpaid invoice is not a tax record. */
