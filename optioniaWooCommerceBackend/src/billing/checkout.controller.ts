@@ -13,6 +13,7 @@ import {
   type InvoiceSummary,
   type SubscriptionSummary,
 } from './billing-account.service';
+import { PlansAdminService, type PlanAdminView } from '../plans/plans-admin.service';
 import { CheckoutService } from './checkout.service';
 import {
   CancelSubscriptionDto,
@@ -40,6 +41,7 @@ export class CheckoutController {
   constructor(
     private readonly checkout: CheckoutService,
     private readonly account: BillingAccountService,
+    private readonly plansAdmin: PlansAdminService,
   ) {}
 
   /**
@@ -61,6 +63,25 @@ export class CheckoutController {
   @ApiErrors(201, 400, 401, 403, 404, 429)
   async start(@Body() body: StartCheckoutDto): Promise<{ url: string; reference: string }> {
     return this.checkout.start({ planPriceId: body.planPriceId });
+  }
+
+  /**
+   * The plans a merchant may buy (M22.5).
+   *
+   * 🔴 **`BILLING_VIEW`, and it must exist for checkout to be usable at all.**
+   * `POST /billing/checkout` takes a `planPriceId`; until this route the only
+   * list of prices was staff-only, so the dashboard had a pay button and no way
+   * to fill it in.
+   *
+   * 📌 **Hidden plans and unsellable prices are excluded**, so every row here is
+   * one checkout will actually accept — a plan comparison that offers something
+   * the next screen refuses is worse than one that omits it.
+   */
+  @Get('plans')
+  @RequireCapability(Capability.BILLING_VIEW)
+  @ApiErrors(200, 401, 403, 429)
+  async plans(): Promise<PlanAdminView[]> {
+    return this.plansAdmin.listPublic();
   }
 
   /**

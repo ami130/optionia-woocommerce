@@ -54,6 +54,41 @@ export class PlansAdminService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * The plans a merchant may actually buy (M22.5).
+   *
+   * 🔴 **Without this a merchant cannot start a checkout at all.** That route
+   * takes a `planPriceId` — the immutable row they buy — and until now the only
+   * list of prices was `admin/plans`, which is staff-only. The billing screen
+   * had a button and nothing to put in it.
+   *
+   * ⚠️ **`isPublic` and a provider link are both required.** A hidden plan is
+   * withdrawn from signup (though anyone already on it keeps it), and a price
+   * with no `providerPriceId` cannot be sold — checkout refuses it, so offering
+   * it would be a button that always fails.
+   *
+   * 📌 **Free prices are offered too.** A merchant downgrading to free needs to
+   * see it; the checkout route is what refuses to charge zero, not this list.
+   */
+  async listPublic(): Promise<PlanAdminView[]> {
+    const plans = await this.dataSource.getRepository(Plan).find({
+      where: { isPublic: true },
+      order: { sortOrder: 'ASC' },
+    });
+
+    const prices = await this.dataSource.getRepository(PlanPrice).find({
+      where: { isCurrent: true },
+    });
+
+    const sellable = prices.filter(
+      (price) => price.amountMinor === 0 || price.providerPriceId !== null,
+    );
+
+    return plans
+      .map((plan) => this.view(plan, sellable))
+      .filter((plan) => plan.prices.length > 0);
+  }
+
   /** Every plan, including ones hidden from signup, with current prices. */
   async list(): Promise<PlanAdminView[]> {
     const plans = await this.dataSource.getRepository(Plan).find({

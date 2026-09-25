@@ -28,7 +28,9 @@ export type UiCapability =
   | 'option_sets:edit'
   | 'option_sets:delete'
   | 'option_sets:publish'
-  | 'option_sets:rollback';
+  | 'option_sets:rollback'
+  | 'billing:view'
+  | 'billing:manage';
 
 /**
  * Role → capabilities, for the subset above.
@@ -38,6 +40,8 @@ export type UiCapability =
  */
 const ROLE_CAPABILITIES: Readonly<Record<string, readonly UiCapability[]>> = {
   owner: [
+    'billing:view',
+    'billing:manage',
     'stores:connect',
     'products:view',
     'products:assign',
@@ -74,7 +78,17 @@ const ROLE_CAPABILITIES: Readonly<Record<string, readonly UiCapability[]>> = {
   editor: ['option_sets:edit', 'products:view', 'products:assign'],
   /** A viewer sees the catalogue and must not be offered **Assign**. */
   viewer: ['products:view'],
-  billing: [],
+  /**
+   * 🔴 **`admin` does NOT hold billing, and that surprised me.** Read from the
+   * API's own table rather than inferred from the pattern: only `owner` and
+   * `billing` may see or manage what a tenant pays. An admin runs the product;
+   * money is a separate trust.
+   *
+   * ⚠️ **This list was empty** until the billing screens existed — which meant a
+   * `billing`-role member, the one person hired to do exactly this, would have
+   * been shown no buttons at all.
+   */
+  billing: ['billing:view', 'billing:manage'],
 };
 
 /**

@@ -27,7 +27,11 @@ done
 echo "Checking capability parity..."
 
 # `MIRRORED` is the contract: each entry is an API constant and its UI string.
-MIRRORED="STORES_CONNECT:stores:connect PRODUCTS_VIEW:products:view PRODUCTS_ASSIGN:products:assign OPTION_SETS_EDIT:option_sets:edit OPTION_SETS_DELETE:option_sets:delete OPTION_SETS_PUBLISH:option_sets:publish OPTION_SETS_ROLLBACK:option_sets:rollback"
+# ⚠️ **A hardcoded list, so a capability mirrored in the UI and missing here is
+# ungated.** `billing:view` and `billing:manage` were added to the UI for the
+# Phase 22 screens and this line did not change — the gate went on reporting 35
+# pairs and proving nothing about either of them.
+MIRRORED="STORES_CONNECT:stores:connect PRODUCTS_VIEW:products:view PRODUCTS_ASSIGN:products:assign OPTION_SETS_EDIT:option_sets:edit OPTION_SETS_DELETE:option_sets:delete OPTION_SETS_PUBLISH:option_sets:publish OPTION_SETS_ROLLBACK:option_sets:rollback BILLING_VIEW:billing:view BILLING_MANAGE:billing:manage"
 ROLES="owner admin editor viewer billing"
 CHECKED=0
 

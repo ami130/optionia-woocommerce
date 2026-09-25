@@ -50,6 +50,11 @@ describe('Plan administration (e2e)', () => {
       { interval: 'year', amountMinor: 29_000 },
     ];
 
+    /* ⚠️ The fake provider links this suite writes must not outlive it. */
+    await dataSource.query(
+      `UPDATE plan_prices SET providerPriceId = NULL WHERE providerPriceId LIKE 'price_test_%'`,
+    );
+
     /* Drop every price this suite created that nothing depends on. */
     await dataSource.query(
       `DELETE pp FROM plan_prices pp
@@ -582,6 +587,96 @@ describe('Plan administration (e2e)', () => {
       const response = await client(h.app, token).get(`/admin/billing/tax-report${query}`);
 
       expect(response.status).toBe(400);
+    }, 60_000);
+  });
+
+  /**
+   * The merchant-facing plan list (M22.5).
+   *
+   * 🔴 **Without this a merchant cannot start a checkout at all.** That route
+   * takes a `planPriceId`, and the only list of prices was staff-only — the
+   * billing screen had a pay button and nothing to put in it.
+   */
+  describe('the purchasable plan list', () => {
+    it('is readable by a merchant, unlike the admin list', async () => {
+      const token = await h.tenant('buyer');
+      const api = client(h.app, token);
+
+      /* The staff list is refused… */
+      expect((await api.get('/admin/plans')).status).toBe(403);
+
+      /* …and the merchant list is not. */
+      const response = await api.get('/billing/plans');
+      expect(response.status).toBe(200);
+      expect(Array.isArray(response.body.data)).toBe(true);
+    }, 60_000);
+
+    /**
+     * ⚠️ **Every row must be one checkout will accept.** A picker that offers
+     * something the next screen refuses is worse than one that omits it.
+     */
+    /**
+     * ⚠️ **A paid plan needs a provider link to appear at all**, which the test
+     * database does not have — `billing:link-prices` runs against a real Stripe
+     * account and CI holds no key. A first version of this test assumed `pro`
+     * would be listed and it was not, which is the filter working: the only
+     * plans the seed makes sellable are the free ones.
+     */
+    async function linkPrice(code: string, interval: string): Promise<void> {
+      await dataSource.query(
+        `UPDATE plan_prices pp JOIN plans p ON p.id = pp.planId
+            SET pp.providerPriceId = CONCAT('price_test_', pp.id)
+          WHERE p.code = ? AND pp.interval = ? AND pp.isCurrent = 1`,
+        [code, interval],
+      );
+    }
+
+    it('omits a plan hidden from signup', async () => {
+      const staff = await makeStaff('hide-for-buyers', StaffRole.BILLING_OPS);
+      const buyer = await h.tenant('buyer-sees-hidden');
+
+      await linkPrice('pro', 'month');
+      await linkPrice('business', 'month');
+
+      await client(h.app, staff).patch('/admin/plans/business/visibility', {
+        isPublic: false,
+      });
+
+      const response = await client(h.app, buyer).get('/billing/plans');
+      const codes = response.body.data.map((p: { code: string }) => p.code);
+
+      expect(codes).not.toContain('business');
+      expect(codes).toContain('pro');
+
+      /* Put it back, so the suite leaves the seed as it found it. */
+      await client(h.app, staff).patch('/admin/plans/business/visibility', {
+        isPublic: true,
+      });
+    }, 60_000);
+
+    /**
+     * 🔴 **A price with no provider link cannot be sold**, and checkout refuses
+     * it — so offering it would be a button that always fails. A superseding
+     * price starts unlinked (F108), which is exactly when this matters.
+     */
+    it('omits a paid price that is not linked to the provider', async () => {
+      const staff = await makeStaff('unlinked-price', StaffRole.BILLING_OPS);
+      const buyer = await h.tenant('buyer-sees-unlinked');
+
+      await linkPrice('pro', 'month');
+
+      /* A new currency, deliberately left unlinked — as F108 leaves every new price. */
+      await client(h.app, staff).post('/admin/plans/pro/price', {
+        currency: 'GBP',
+        interval: 'month',
+        amountMinor: 2400,
+      });
+
+      const response = await client(h.app, buyer).get('/billing/plans');
+      const pro = response.body.data.find((p: { code: string }) => p.code === 'pro');
+      const currencies = pro.prices.map((p: { currency: string }) => p.currency);
+
+      expect(currencies).not.toContain('GBP');
     }, 60_000);
   });
 });

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '../auth/auth.module';
+import { PlansModule } from '../plans/plans.module';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -31,6 +32,9 @@ import { CheckoutService } from './checkout.service';
     TypeOrmModule.forFeature([PlanPrice, Subscription, Tenant, Invoice]),
     AuthModule,
     BillingModule,
+
+    /* 📌 For the merchant-facing plan list; the admin routes stay in PlansModule. */
+    PlansModule,
   ],
   controllers: [CheckoutController],
   providers: [CheckoutService, BillingAccountService],

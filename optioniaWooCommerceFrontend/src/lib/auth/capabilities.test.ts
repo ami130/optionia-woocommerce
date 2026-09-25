@@ -82,4 +82,33 @@ describe('roleCan', () => {
       expect(roleCan(role, capability)).toBe(false);
     }
   });
+
+  /**
+   * 🔴 **`admin` does NOT hold billing, and I would have guessed wrong.** Read
+   * from the API's own table: only `owner` and `billing` may see or change what
+   * a tenant pays. An admin runs the product; money is a separate trust.
+   *
+   * ⚠️ **The `billing` role's list was empty** until the Phase 22 screens
+   * existed — so the one person hired to do exactly this job would have been
+   * shown no buttons at all.
+   */
+  it.each([
+    ['owner', true],
+    ['admin', false],
+    ['editor', false],
+    ['viewer', false],
+    ['billing', true],
+  ])('%s may view billing: %s', (role, expected) => {
+    expect(roleCan(role, 'billing:view')).toBe(expected);
+  });
+
+  it.each([
+    ['owner', true],
+    ['admin', false],
+    ['editor', false],
+    ['viewer', false],
+    ['billing', true],
+  ])('%s may manage billing: %s', (role, expected) => {
+    expect(roleCan(role, 'billing:manage')).toBe(expected);
+  });
 });
