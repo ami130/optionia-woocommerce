@@ -54,8 +54,9 @@ describe('Plan administration (e2e)', () => {
          JOIN plans p ON p.id = pp.planId
          LEFT JOIN subscriptions s ON s.planPriceId = pp.id
         WHERE p.code = 'pro' AND s.id IS NULL
-          AND NOT ((pp.interval = 'month' AND pp.amountMinor = 2900)
-                OR (pp.interval = 'year' AND pp.amountMinor = 29000))`,
+          AND NOT (pp.currency = 'USD'
+                   AND ((pp.interval = 'month' AND pp.amountMinor = 2900)
+                     OR (pp.interval = 'year' AND pp.amountMinor = 29000)))`,
     );
 
     /* Make exactly one row per interval current again, at the seeded amount. */
@@ -287,6 +288,42 @@ describe('Plan administration (e2e)', () => {
       });
     }, 60_000);
 
+    /**
+     * 🔴 **`plan_price.created`, not `superseded`.** A currency a plan has never
+     * had has nothing to retire, and the audit row must say so — a reader
+     * looking for "what was this before" needs to know the answer is "nothing"
+     * rather than find a `from` that was invented.
+     *
+     * 📌 This is also M22.1a's *"currency as data"*, in the only sense the API
+     * supports today: staff can introduce a currency by pricing it.
+     */
+    it('records a first price for a new currency as created, not superseded', async () => {
+      const token = await makeStaff('new-currency', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, token).post('/admin/plans/pro/price', {
+        currency: 'EUR',
+        interval: 'month',
+        amountMinor: 2700,
+      });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.superseded).toBeNull();
+
+      const [log] = await dataSource.getRepository(AuditLog).find({
+        where: { action: 'plan_price.created' },
+        order: { createdAt: 'DESC' },
+        take: 1,
+      });
+
+      expect(log?.userId).not.toBeNull();
+      expect(log?.changes).toMatchObject({
+        plan: 'pro',
+        currency: 'EUR',
+        amountMinor: { to: 2700 },
+        superseded: null,
+      });
+    }, 60_000);
+
     it('refuses a price identical to the current one', async () => {
       const token = await makeStaff('noop', StaffRole.BILLING_OPS);
 
@@ -361,6 +398,19 @@ describe('Plan administration (e2e)', () => {
       const after = await subscriptions.findOneByOrFail({ id: subscription.id });
       expect(after.planId).toBe(plan.id);
       expect(after.status).toBe(subscription.status);
+
+      /* 📌 And the change is attributable, like every other staff action. */
+      const [log] = await dataSource.getRepository(AuditLog).find({
+        where: { action: 'plan.visibility_changed' },
+        order: { createdAt: 'DESC' },
+        take: 1,
+      });
+
+      expect(log?.userId).not.toBeNull();
+      expect(log?.changes).toMatchObject({
+        code: 'business',
+        isPublic: { from: true, to: false },
+      });
 
       /* Put it back, so the suite leaves the seed as it found it. */
       await client(h.app, staffToken).patch('/admin/plans/business/visibility', {

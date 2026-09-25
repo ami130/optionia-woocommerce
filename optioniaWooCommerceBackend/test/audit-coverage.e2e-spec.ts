@@ -326,6 +326,18 @@ describe('audit coverage (e2e)', () => {
          * what an exported set looks like.
          */
         [AuditAction.OPTION_SET_IMPORTED]: 'option-sets-http.e2e-spec',
+        /*
+         * Plan pricing is the platform realm, not a tenant's (M22.1a). Driving
+         * these from here would mean granting a harness tenant `platform_staff`
+         * — which is precisely the boundary that suite exists to prove nobody
+         * crosses, so building a second way in would undermine it.
+         *
+         * `plans-admin.e2e-spec` asserts all three, each with its actor and its
+         * before/after figures.
+         */
+        [AuditAction.PLAN_PRICE_SUPERSEDED]: 'plans-admin.e2e-spec',
+        [AuditAction.PLAN_PRICE_CREATED]: 'plans-admin.e2e-spec',
+        [AuditAction.PLAN_VISIBILITY_CHANGED]: 'plans-admin.e2e-spec',
         // Needs a rule targeting the value; the cascade suite creates one.
         [AuditAction.OPTION_VALUE_DELETE_REFUSED]: 'cascade.e2e-spec',
         // Team lifecycle: a second user, an invitation and its acceptance.
