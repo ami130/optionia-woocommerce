@@ -7,6 +7,8 @@ import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { Plan } from './entities/plan.entity';
 import { PlanPrice } from './entities/plan-price.entity';
+import { TaxReportController } from '../billing/tax-report.controller';
+import { TaxReportService } from '../billing/tax-report.service';
 import { PlansAdminController } from './plans-admin.controller';
 import { PlansAdminService } from './plans-admin.service';
 
@@ -24,8 +26,14 @@ import { PlansAdminService } from './plans-admin.service';
     AuthModule,
     AuditModule,
   ],
-  controllers: [PlansAdminController],
-  providers: [PlansAdminService, StaffGuard],
-  exports: [PlansAdminService],
+  /*
+   * 📌 **The tax report lives here, not in `CheckoutModule`.** Both are billing,
+   * but this module is the *staff* realm — `StaffGuard` and the platform roles —
+   * and the report is ParseLab's own tax position, not a merchant's history.
+   * Grouping by realm rather than by subject keeps the guard chain obvious.
+   */
+  controllers: [PlansAdminController, TaxReportController],
+  providers: [PlansAdminService, TaxReportService, StaffGuard],
+  exports: [PlansAdminService, TaxReportService],
 })
 export class PlansModule {}

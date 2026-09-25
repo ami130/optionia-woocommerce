@@ -34,6 +34,22 @@ export interface SubscriptionSummary {
    * needs regardless.
    */
   readonly graceEndsAt: string | null;
+
+  /**
+   * A checkout has completed and the provider has not yet confirmed the terms.
+   *
+   * 🔴 **Without this the merchant who just paid sees the plan they left.**
+   * `checkout.session.completed` deliberately does not set `ACTIVE` — that is
+   * `customer.subscription.updated`'s to say, moments later — so the success
+   * page they land on reads stale state and looks like the payment failed.
+   *
+   * ⚠️ **Derived, not stored.** A column would be a third thing to keep in step
+   * with the two events that already disagree about timing; the pair
+   * "linked to a provider subscription, no billing period yet" is only ever
+   * true in exactly this window, because `currentPeriodEnd` is written by
+   * `customer.subscription.updated` and by nothing else.
+   */
+  readonly settling: boolean;
 }
 
 /** One invoice, as a merchant needs to see it. */
@@ -112,6 +128,16 @@ export class BillingAccountService {
       cancelAt: subscription.cancelAt?.toISOString() ?? null,
       trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
       graceEndsAt: subscription.graceEndsAt?.toISOString() ?? null,
+
+      /*
+       * 📌 **`provider !== 'none'` matters**, because a free tenant is
+       * `provider: 'none'` with no period either — and it is settled, not
+       * settling. Only a tenant the provider knows about can be mid-confirmation.
+       */
+      settling:
+        subscription.provider !== 'none' &&
+        subscription.providerSubscriptionId !== null &&
+        subscription.currentPeriodEnd === null,
     };
   }
 

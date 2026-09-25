@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import { PlatformStaff } from '../src/admin/entities/platform-staff.entity';
 import { AuditLog } from '../src/audit/entities/audit-log.entity';
 import { StaffRole } from '../src/common/database/enums';
+import { Invoice } from '../src/billing/entities/invoice.entity';
+import { InvoiceStatus } from '../src/common/database/enums';
 import { PlanPrice } from '../src/plans/entities/plan-price.entity';
 import { Plan } from '../src/plans/entities/plan.entity';
 import { Subscription } from '../src/subscriptions/entities/subscription.entity';
@@ -91,6 +93,9 @@ describe('Plan administration (e2e)', () => {
         );
       }
     }
+    await dataSource.query(
+      `DELETE i FROM invoices i JOIN tenants t ON t.id = i.tenantId WHERE t.slug LIKE 'planadm-%'`,
+    );
     await dataSource.query(
       `DELETE FROM audit_logs WHERE action LIKE 'plan%' AND userId IS NOT NULL`,
     );
@@ -416,6 +421,167 @@ describe('Plan administration (e2e)', () => {
       await client(h.app, staffToken).patch('/admin/plans/business/visibility', {
         isPublic: true,
       });
+    }, 60_000);
+  });
+
+  /**
+   * The compliance question ADR-115 commits ParseLab to answering (M22.E6).
+   *
+   * 🔴 **`invoices` was written by the webhook and asked by nobody but a test.**
+   * Stripe Tax calculates and collects; *filing is ours*, and filing needs this
+   * answer. A compliance table with no way to query it is a table whose
+   * correctness nobody checks.
+   */
+  describe('the tax report', () => {
+    /** An invoice for a tenant this suite owns, so teardown can find it. */
+    async function invoiceFor(
+      which: string,
+      over: Partial<Invoice> = {},
+    ): Promise<void> {
+      const [row] = await dataSource.query(
+        `SELECT tm.tenantId AS id FROM tenant_members tm
+           JOIN users u ON u.id = tm.userId WHERE u.email = ?`,
+        [`planadm-${which}@example.com`],
+      );
+
+      const repo = dataSource.getRepository(Invoice);
+
+      await repo.save(
+        repo.create({
+          tenantId: row.id,
+          provider: 'stripe',
+          providerInvoiceId: `in_tax_${Math.random().toString(36).slice(2, 12)}`,
+          status: InvoiceStatus.PAID,
+          currency: 'USD',
+          subtotalMinor: 2900,
+          taxMinor: 600,
+          totalMinor: 3500,
+          taxCountry: 'DE',
+          issuedAt: new Date('2026-08-15T00:00:00.000Z'),
+          paidAt: new Date('2026-08-15T00:00:00.000Z'),
+          ...over,
+        }),
+      );
+    }
+
+    it('sums tax by country and currency over the period', async () => {
+      const token = await makeStaff('tax-reader', StaffRole.BILLING_OPS);
+
+      await invoiceFor('tax-reader');
+      await invoiceFor('tax-reader');
+      await invoiceFor('tax-reader', {
+        taxCountry: 'FR',
+        taxMinor: 580,
+        subtotalMinor: 2900,
+        totalMinor: 3480,
+      });
+
+      const response = await client(h.app, token).get(
+        '/admin/billing/tax-report?from=2026-08-01&to=2026-09-01',
+      );
+
+      expect(response.status).toBe(200);
+
+      const byCountry = Object.fromEntries(
+        response.body.data.rows.map((r: { taxCountry: string; taxMinor: number }) => [
+          r.taxCountry,
+          r.taxMinor,
+        ]),
+      );
+
+      expect(byCountry.DE).toBe(1200);
+      expect(byCountry.FR).toBe(580);
+    }, 60_000);
+
+    /**
+     * 🔴 **The period bounds are half-open, and this proves it.** A closed upper
+     * bound double-counts every invoice issued exactly on the boundary — in
+     * both quarters, so two returns disagree with the bank.
+     */
+    it('excludes an invoice issued exactly at the upper bound', async () => {
+      const token = await makeStaff('tax-bounds', StaffRole.BILLING_OPS);
+
+      /*
+       * ⚠️ **`subtotal + tax = total` or the row is refused** — `ck_invoices_totals`
+       * (F92/D2). A first version of this fixture overrode `taxMinor` alone and
+       * the database rejected it, which is the constraint doing precisely the
+       * job it was added for: catching an inconsistent total in the test that
+       * was meant to prove the table works.
+       */
+      await invoiceFor('tax-bounds', {
+        taxCountry: 'ES',
+        subtotalMinor: 2900,
+        taxMinor: 999,
+        totalMinor: 3899,
+        issuedAt: new Date('2026-09-01T00:00:00.000Z'),
+      });
+
+      const response = await client(h.app, token).get(
+        '/admin/billing/tax-report?from=2026-08-01&to=2026-09-01',
+      );
+
+      const countries = response.body.data.rows.map(
+        (r: { taxCountry: string }) => r.taxCountry,
+      );
+
+      expect(countries).not.toContain('ES');
+    }, 60_000);
+
+    /** ⚠️ Unpaid tax is not collected tax; including it overstates a return. */
+    it('counts only paid invoices', async () => {
+      const token = await makeStaff('tax-unpaid', StaffRole.BILLING_OPS);
+
+      await invoiceFor('tax-unpaid', {
+        taxCountry: 'IT',
+        subtotalMinor: 2900,
+        taxMinor: 777,
+        totalMinor: 3677,
+        status: InvoiceStatus.OPEN,
+        paidAt: null,
+      });
+
+      const response = await client(h.app, token).get(
+        '/admin/billing/tax-report?from=2026-08-01&to=2026-09-01',
+      );
+
+      const countries = response.body.data.rows.map(
+        (r: { taxCountry: string }) => r.taxCountry,
+      );
+
+      expect(countries).not.toContain('IT');
+    }, 60_000);
+
+    /** 📌 An accountant reads the figures and must never change a price. */
+    it('is readable by READ_ONLY staff', async () => {
+      const token = await makeStaff('tax-ro', StaffRole.READ_ONLY);
+
+      const response = await client(h.app, token).get(
+        '/admin/billing/tax-report?from=2026-08-01&to=2026-09-01',
+      );
+
+      expect(response.status).toBe(200);
+    }, 60_000);
+
+    it('refuses a tenant owner who is not platform staff', async () => {
+      const token = await h.tenant('tax-outsider');
+
+      const response = await client(h.app, token).get(
+        '/admin/billing/tax-report?from=2026-08-01&to=2026-09-01',
+      );
+
+      expect(response.status).toBe(403);
+    }, 60_000);
+
+    it.each([
+      ['a missing period', ''],
+      ['an inverted period', '?from=2026-09-01&to=2026-08-01'],
+      ['a malformed date', '?from=last-tuesday&to=2026-09-01'],
+    ])('refuses %s', async (label, query) => {
+      const token = await makeStaff(`tax-bad-${label.replace(/\s/g, '')}`, StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, token).get(`/admin/billing/tax-report${query}`);
+
+      expect(response.status).toBe(400);
     }, 60_000);
   });
 });

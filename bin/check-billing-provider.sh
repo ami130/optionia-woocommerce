@@ -475,6 +475,34 @@ else
   printf '        A crash between the two writes leaves a paid merchant locked out.\n'
 fi
 
+# --- 26. The window between paying and the provider confirming ------------
+#
+# 🔴 **Q1: the merchant who just paid was shown the plan they left.**
+# `checkout.session.completed` deliberately does not set ACTIVE — that is
+# `customer.subscription.updated`'s to say, moments later — so the success page
+# lands in between and reads stale state.
+if grep -q "settling:" "$BILLING/billing-account.service.ts"; then
+  pass "the summary reports a checkout still settling"
+else
+  fail "nothing tells the dashboard a payment is still confirming (Q1)"
+  printf '        The success page would show the plan the merchant just left.\n'
+fi
+
+# --- 27. The tax question ADR-115 commits us to answering -----------------
+#
+# 🔴 **Q3: `invoices` was written by the webhook and asked by nobody but a
+# test.** Stripe Tax calculates and collects; *filing is ours*, and filing needs
+# this answer.
+#
+# ⚠️ Grouped by currency as well as country: summing minor units across
+# currencies produces a number that looks like money and is not.
+if grep -q "GROUP BY taxCountry, currency" "$BILLING/tax-report.service.ts"; then
+  pass "staff can answer what tax was collected, by country and currency"
+else
+  fail "the tax report is missing or no longer groups by currency (ADR-115)"
+  printf '        100 cents and 100 pence are not 200 of anything.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

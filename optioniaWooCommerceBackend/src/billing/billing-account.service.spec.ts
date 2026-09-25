@@ -138,6 +138,7 @@ describe('BillingAccountService', () => {
         cancelAt: null,
         trialEndsAt: null,
         graceEndsAt: null,
+        settling: false,
       });
     });
 
@@ -497,6 +498,87 @@ describe('BillingAccountService', () => {
       await expect(service.portalSession()).rejects.toThrow(
         'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
       );
+    });
+  });
+
+  /**
+   * Q1 — the window between paying and the provider confirming.
+   *
+   * 🔴 **Without this the merchant who just paid sees the plan they left.**
+   * `checkout.session.completed` links the provider ids and deliberately does
+   * not set `ACTIVE`; `customer.subscription.updated` carries the real state
+   * moments later. The success page lands in between.
+   */
+  describe('the settling window', () => {
+    it('reports settling once checkout has linked a provider subscription', async () => {
+      const { service } = build({
+        subscription: {
+          provider: 'stripe',
+          providerSubscriptionId: 'sub_stripe_1',
+          currentPeriodEnd: null,
+          status: SubscriptionStatus.TRIALING,
+        },
+      });
+
+      await expect(service.summary()).resolves.toMatchObject({ settling: true });
+    });
+
+    /** ⚠️ Once the provider has confirmed the terms, it is settled. */
+    it('stops reporting settling when a billing period arrives', async () => {
+      const { service } = build({
+        subscription: { currentPeriodEnd: new Date('2026-10-25T00:00:00.000Z') },
+      });
+
+      await expect(service.summary()).resolves.toMatchObject({ settling: false });
+    });
+
+    /**
+     * 🔴 **A free tenant is settled, not settling.** It has no period either,
+     * so `provider !== 'none'` is what keeps the two cases apart — without it
+     * every free merchant would see "confirming your payment" for ever.
+     */
+    it('never reports settling for a tenant that has not paid', async () => {
+      const { service } = build({
+        subscription: {
+          provider: 'none',
+          providerSubscriptionId: null,
+          currentPeriodEnd: null,
+        },
+      });
+
+      await expect(service.summary()).resolves.toMatchObject({ settling: false });
+    });
+
+    /**
+     * 🔴 **The `provider` check tested on its own, because the test above did
+     * not reach it.** That one nulls the subscription id as well, so the second
+     * condition short-circuits and a mutation removing `provider !== 'none'`
+     * **survived**. Holding the id non-null isolates the clause — and this is
+     * the shape a stale or hand-edited row takes, which is exactly when a free
+     * merchant would otherwise be told "confirming your payment" for ever.
+     */
+    it('never reports settling for provider "none", even with a stale id', async () => {
+      const { service } = build({
+        subscription: {
+          provider: 'none',
+          providerSubscriptionId: 'sub_left_over',
+          currentPeriodEnd: null,
+        },
+      });
+
+      await expect(service.summary()).resolves.toMatchObject({ settling: false });
+    });
+
+    /** ⚠️ And a cancelled subscription keeps its period, so it is settled too. */
+    it('does not report settling for a cancelled subscription', async () => {
+      const { service } = build({
+        subscription: {
+          status: SubscriptionStatus.CANCELLED,
+          currentPeriodEnd: new Date('2026-10-25T00:00:00.000Z'),
+        },
+      });
+
+      await expect(service.summary()).resolves.toMatchObject({ settling: false });
     });
   });
 });
