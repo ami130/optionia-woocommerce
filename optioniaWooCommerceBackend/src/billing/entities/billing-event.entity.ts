@@ -37,4 +37,25 @@ export class BillingEvent extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   error: string | null;
+
+  /**
+   * How many times processing has been ATTEMPTED (M23.4).
+   *
+   * ⚠️ **Zero at insert, not one.** The row is written before it is processed
+   * (N1's ordering), so nothing has been tried yet. Starting at 1 would make
+   * the first failure look like the second and bring the give-up limit forward.
+   */
+  @Column({ type: 'int', default: 0 })
+  attempts: number;
+
+  /**
+   * When we stopped retrying (M23.4).
+   *
+   * 🔴 **A dead row is never retried again.** With `processedAt` null it would
+   * otherwise stay in the retryable set for ever, and a handler that fails
+   * deterministically — an unmapped status, a malformed payload — would be
+   * re-run every cycle until someone noticed. Phase 26 renders these.
+   */
+  @Column({ type: 'datetime', precision: 3, nullable: true })
+  deadAt: Date | null;
 }

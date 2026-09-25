@@ -197,7 +197,13 @@ CALLERS=$(grep -rn "lifecycle.apply(\|SubscriptionLifecycleService" "$SRC" --inc
   | cut -d: -f1 | sort -u \
   | grep -v "^$LIFECYCLE$" \
   | grep -v "^$BILLING/billing-webhook.service.ts$" \
-  | grep -v "^$BILLING/billing.module.ts$" || true)
+  | grep -v "^$BILLING/billing.module.ts$" \
+  `# 📌 M23.4's worker replays a STORED event whose signature was already` \
+  `# verified on the way in. It is unreachable from a browser, which is what` \
+  `# this check protects: "reachable from the webhook path and from nothing` \
+  `# that a browser can reach". It adds no new source of truth — the row it` \
+  `# replays was written by the webhook path itself.` \
+  | grep -v "^$BILLING/billing-event-retry.service.ts$" || true)
 
 if [ -z "$CALLERS" ]; then
   pass "subscription state is driven by webhooks alone"
@@ -694,6 +700,51 @@ if grep -q "catch (error)" "$INVALIDATOR" 2>/dev/null; then
 else
   fail "the invalidator no longer tolerates a store it cannot bump"
   printf '        bump() throws to roll back a publish; a webhook must not die of it.\n'
+fi
+
+# --- 33. M23.4: retry, and the point at which it gives up ------------------
+#
+# 🔴 **Stripe's retries and ours must not fight.** Stripe redelivers a non-2xx
+# for days on its own schedule; the worker exists for the case Stripe will NOT
+# retry — a row we answered 200 to and then failed to finish. N1 exists because
+# our own idempotency check once *consumed* Stripe's retries.
+RETRY="$BILLING/billing-event-retry.service.ts"
+
+if [ -f "$RETRY" ] && grep -q "deadAt" "$RETRY"; then
+  pass "failed billing events are retried and eventually dead-lettered (M23.4)"
+else
+  fail "the billing retry worker is missing, or no longer dead-letters"
+  printf '        A deterministic failure would be re-run every cycle for ever.\n'
+fi
+
+# 🔴 The three conditions that define "retryable"; each is load-bearing.
+MISSING_GUARDS=""
+
+for guard in "processedAt: IsNull()" "deadAt: IsNull()" "createdAt: LessThan"; do
+  grep -q "$guard" "$RETRY" 2>/dev/null || MISSING_GUARDS="$MISSING_GUARDS '$guard'"
+done
+
+if [ -z "$MISSING_GUARDS" ]; then
+  pass "the retry query excludes finished, dead and in-flight events"
+else
+  fail "the retry query no longer guards on:$MISSING_GUARDS"
+  printf '        Dropping any one re-runs dead rows or races a live request.\n'
+fi
+
+# ⚠️ In-process, so every instance that enables it walks the same rows.
+if grep -q "BILLING_RETRY_ENABLED" "$BILLING/billing-event-retry.scheduler.ts" 2>/dev/null; then
+  pass "the retry scheduler is off unless a deployment enables it"
+else
+  fail "the retry scheduler no longer checks BILLING_RETRY_ENABLED"
+  printf '        Every instance and every test suite would retry the same rows.\n'
+fi
+
+# 🔴 v12 is pure ESM; this project is CommonJS and Jest cannot parse it.
+if grep -qE '"@nestjs/schedule": "\^?6\.' optioniaWooCommerceBackend/package.json; then
+  pass "@nestjs/schedule stays on the CommonJS 6.x line"
+else
+  fail "@nestjs/schedule is no longer pinned to 6.x"
+  printf '        v12 is ESM-only: every suite loading the scheduler fails to run.\n'
 fi
 
 echo

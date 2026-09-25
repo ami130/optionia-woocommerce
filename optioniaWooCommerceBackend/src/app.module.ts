@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { buildDataSourceOptions } from './config/data-source';
@@ -37,6 +38,16 @@ import { HealthModule } from './health/health.module';
     // First, so anything logged during later module initialisation is already
     // structured.
     LoggingModule,
+
+    /*
+     * M23.4's retry pass needs a timer, and `@Cron` is inert without this.
+     *
+     * The jobs themselves are guarded: `BillingEventRetryScheduler` returns
+     * immediately unless `BILLING_RETRY_ENABLED` is 'true', so registering the
+     * module here starts no billing work by default — including in the test
+     * suites, which boot the whole application per file.
+     */
+    ScheduleModule.forRoot(),
 
     TypeOrmModule.forRootAsync({
       // Configuration is validated once, at boot, by loadConfig(). The same

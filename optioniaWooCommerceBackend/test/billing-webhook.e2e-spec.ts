@@ -12,6 +12,7 @@ import { Invoice } from '../src/billing/entities/invoice.entity';
 import { Plan } from '../src/plans/entities/plan.entity';
 import { Subscription } from '../src/subscriptions/entities/subscription.entity';
 import { Tenant } from '../src/tenants/entities/tenant.entity';
+import { BillingEventRetryService } from '../src/billing/billing-event-retry.service';
 import { bootstrapTestApp } from './harness';
 
 /**
@@ -869,6 +870,124 @@ describe('Billing webhook (e2e)', () => {
         updated.currentPeriodEnd === null;
 
       expect(settling).toBe(false);
+    });
+  });
+  /**
+   * M23.4 — the retry worker, against the real table.
+   *
+   * 🔴 **This is the work STRIPE WILL NOT retry.** Stripe redelivers a non-2xx
+   * for days; what nothing covered is a row we answered `200` to and then
+   * failed to finish, or a delivery whose process died mid-handler. Both leave
+   * `processedAt` null — the state N1's ordering exists to make visible.
+   *
+   * 📌 **Only the database can prove the query.** `processedAt IS NULL AND
+   * deadAt IS NULL AND createdAt < ?` is three conditions over real columns and
+   * a real index; a mocked repository returns whatever it was told to.
+   */
+  describe('the retry worker (M23.4)', () => {
+    async function seedUnprocessed(over: {
+      type?: string;
+      payload?: string;
+      attempts?: number;
+      deadAt?: string | null;
+      ageMs?: number;
+    }): Promise<string> {
+      seq += 1;
+
+      const eventId = `evt_e2e_${run}_retry_${seq}`;
+      const ageMs = over.ageMs ?? 120_000;
+
+      await dataSource.query(
+        `INSERT INTO billing_events
+           (id, provider, providerEventId, type, payload, processedAt, error, attempts, deadAt, createdAt, updatedAt)
+         VALUES (UUID(), 'stripe', ?, ?, ?, NULL, 'first failure', ?, ?,
+                 DATE_SUB(NOW(3), INTERVAL ? MICROSECOND), NOW(3))`,
+        [
+          eventId,
+          over.type ?? 'customer.subscription.updated',
+          over.payload ?? '{}',
+          over.attempts ?? 0,
+          over.deadAt ?? null,
+          ageMs * 1000,
+        ],
+      );
+
+      return eventId;
+    }
+
+    async function rowOf(eventId: string) {
+      const [row] = (await dataSource.query(
+        `SELECT processedAt, deadAt, attempts, error FROM billing_events WHERE providerEventId = ?`,
+        [eventId],
+      )) as { processedAt: Date | null; deadAt: Date | null; attempts: number; error: string | null }[];
+
+      return row;
+    }
+
+    /**
+     * 🔴 **An unrecognised event type is a NO-OP, not a failure** — which makes
+     * it the honest way to prove the happy path here: the worker picks the row
+     * up, the handler declines it, and the row settles.
+     */
+    it('settles an unprocessed row it can handle', async () => {
+      const eventId = await seedUnprocessed({ type: 'customer.discount.created' });
+
+      const worker = app.get(BillingEventRetryService, { strict: false });
+      const outcome = await worker.retryPending();
+
+      expect(outcome.retried).toBeGreaterThan(0);
+
+      const row = await rowOf(eventId);
+
+      expect(row.processedAt).not.toBeNull();
+      expect(row.error).toBeNull();
+      expect(Number(row.attempts)).toBe(1);
+    });
+
+    /**
+     * 🔴 **A dead row is never retried again.** With `processedAt` null it
+     * would otherwise stay in the retryable set for ever, and a handler that
+     * fails deterministically would be re-run every cycle until a person
+     * noticed.
+     */
+    it('never picks up a row that was already dead-lettered', async () => {
+      const eventId = await seedUnprocessed({
+        type: 'customer.discount.created',
+        deadAt: '2026-09-01 00:00:00.000',
+        attempts: 5,
+      });
+
+      const worker = app.get(BillingEventRetryService, { strict: false });
+
+      await worker.retryPending();
+
+      const row = await rowOf(eventId);
+
+      /* Untouched: still unprocessed, still dead, attempts unchanged. */
+      expect(row.processedAt).toBeNull();
+      expect(row.deadAt).not.toBeNull();
+      expect(Number(row.attempts)).toBe(5);
+    });
+
+    /**
+     * ⚠️ **A row whose request may still be running is left alone.** The row is
+     * written before the work, so a webhook in flight has `processedAt` null —
+     * retrying it would run the same event concurrently with itself.
+     */
+    it('leaves a freshly written row for its own request to finish', async () => {
+      const eventId = await seedUnprocessed({
+        type: 'customer.discount.created',
+        ageMs: 1_000,
+      });
+
+      const worker = app.get(BillingEventRetryService, { strict: false });
+
+      await worker.retryPending();
+
+      const row = await rowOf(eventId);
+
+      expect(row.processedAt).toBeNull();
+      expect(Number(row.attempts)).toBe(0);
     });
   });
 });

@@ -429,6 +429,7 @@ they fire only when a person runs `bash bin/check.sh` here. See F5 above.
 | ~~F113~~ | ~~**M22.5 — the billing screens, and a merchant had no way to learn what a plan costs.**~~ ✅ **DONE 2026-09-25.** 🔴 **The backend was complete and unreachable.** Every route was built, tested against real Stripe, and rendered by nothing — so a merchant could not pay, could not see an invoice, and could not cancel. *A working billing system nobody can open is not a billing system.* `/subscription` now shows the plan, its **pinned** price, the renewal or grace deadline, a plan picker, invoice history with the provider's own PDFs, a portal button and cancellation with reason capture. 🔴 **A gap I would have shipped: `POST /billing/checkout` takes a `planPriceId` and nothing let a merchant obtain one.** The only price list was `admin/plans`, staff-only — the screen had a pay button and nothing to put in it. `GET /v1/billing/plans` excludes hidden plans and **unlinked prices**, so every row is one checkout will accept; a picker offering what the next screen refuses is worse than one that omits it. 🔴 **`admin` does NOT hold billing, and I would have guessed wrong** — read from the API's table: only `owner` and `billing` may see or change what a tenant pays. ⚠️ **The UI's `billing` role list was EMPTY**, so the one person hired for exactly this job would have been shown no buttons; and the parity gate's `MIRRORED` list is **hardcoded**, so both new capabilities were ungated until I added them — it now checks 45 pairs and catches a UI that grants what the API does not. 📌 **The settling notice is what F112 built**: the page polls while a checkout confirms, so nobody stares at the plan they just left. ✏️ **My own e2e test assumed `pro` would be purchasable and it was not** — the test database has no provider links, because linking needs a real Stripe key. The filter was right and the test was wrong. | **real** | done |
 | ~~F114~~ | ~~**I was about to build Phase 26's screen inside Phase 22, and checking the plan stopped me.**~~ ✅ **RECORDED 2026-09-25.** M22.1a's exit says staff change a price *"through the UI"*, so the obvious next step was that screen. 🔴 **M26.5 is literally *"plan and feature-flag management"***, and Phase 26 **depends on 22–25** — so building it here is building a later phase out of order, against a milestone that already owns it. ⚠️ **It also needs a prerequisite that does not exist**: `/auth/me` does not report platform staff, so the dashboard cannot tell who may see the `(admin)` group at all. That group is already present with a guard whose own comment says *"nothing is behind this yet… it exists so the group is closed from the day it exists rather than opened by default and secured later"* — closed on purpose, pending Phase 26. 📌 **The temptation was real and the check was cheap**: one `grep` of the plan distinguished *"Phase 22 is missing a screen"* from *"Phase 26 has not happened yet"*, and those call for opposite actions. The API half is built, proven against MySQL, and gated; the screen waits for the phase that owns it and the staff auth it needs. | **real** | done |
 | ~~F116~~ | ~~**ADR-116's dunning mail, promised and never built — and the dedupe signal was already in the schema.**~~ ✅ **DONE 2026-09-25.** 🔴 **The promise was explicit**: *"Grace: everything works, with a dashboard banner and dunning mail."* The banner shipped (F113); the mail did not, so a merchant whose card failed got a **fourteen-day clock and no notification** — the first they learned was authoring going read-only. 🔴 **`MailService` has suppression but NO dedupe**, and Stripe's dunning fires `invoice.payment_failed` several times per lapse — so wiring mail naïvely sends four identical warnings, which reads as a broken system. ✅ **`graceEndsAt === null` already answered it**: true exactly once per lapse, cleared on recovery (F99), so a later lapse mails again because that is news. No new column. 📌 **Transactional, argued for rather than assumed.** The registry's own rule is *"transactional when the merchant needs it to use their account"* — after grace, authoring goes read-only, so they do; and an `UNSUBSCRIBE` suppression must not silence a declined card. ⚠️ **`billing-trial-ending` is LIFECYCLE** and deliberately absent from that list: nothing breaks when a trial ends. ✏️ **A test I did not know about caught the change** — `TRANSACTIONAL_TEMPLATES` is **pinned** by an assertion precisely so adding one is a deliberate act, and it failed until the addition was justified in writing. 🔴 **Mail failure never fails the webhook**: a non-2xx would have Stripe redeliver an event whose billing effect already committed, and F111 means that retry re-runs the handler and **moves the grace deadline**. The notice is best-effort; the deadline is the record. 📌 **The date is spelled out in UTC** — `10/09/2026` means two different days either side of the Atlantic — and every link goes to the dashboard, never a payment form, because a billing email that trains merchants to reach a payment page from their inbox is training them to be defrauded. 7 mutations killed, 2 gate checks added. | **real** | done |
+| ~~F123~~ | ~~**M23.4 — retry and dead-lettering, and Phase 23's last milestone.**~~ ✅ **DONE 2026-09-25.** 🔴 **Both open decisions were the USER'S and both were asked rather than assumed**: in-process `@nestjs/schedule` over BullMQ, and a dead-letter **record now** with the Phase 26 screen deferred. 📌 **The two fit together better than either looked alone.** `@nestjs/schedule`'s weakness is that in-flight work dies with the process — but the queue here is a **table**. `billing_events` already wrote the row before processing and settled it only on success (N1), so a crash leaves a visible retryable row. The table is the durability; the scheduler only walks it. That is why the cheaper option is defensible here and would not be for an in-memory queue. 🔴 **Two columns, not a second table.** A `dead_letter_events` table would duplicate `payload`/`type`/`providerEventId`, split one event's history across two places, and sit outside the `UNIQUE provider_event_id` that makes redelivery a no-op (M23.2). `attempts` + `deadAt` express the same states with no duplication. Migration verified **up → down → up with zero residue**, applied to both databases. 🔴 **Stripe's retries and ours must not fight.** Stripe redelivers a non-2xx for days; the worker targets only what Stripe will **not** retry — a row we answered 200 to and then failed to finish. N1 exists because our own idempotency check once *consumed* Stripe's retries. 🔴 **`@nestjs/schedule@12` is pure ESM and broke EVERY suite that loaded it** — *"unexpected token: export * from './enums/index.js'"* — the same CommonJS constraint that forces `import Stripe = require('stripe')`. Pinned to **6.1.3**, the newest CommonJS release (versions jump 6.1.3 → 12.0.0), which declares `@nestjs/core: ^10 || ^11`. A gate check now pins the major. ⚠️ **The scheduler is OFF by default** (`BILLING_RETRY_ENABLED`): it runs in-process, so every instance that enables it walks the same rows, and `@nestjs/schedule` starts timers at module load — without the guard every e2e suite would retry billing events against the shared test database. 🔴 **An existing gate caught my new file** as an unsanctioned lifecycle caller. The allowlist entry is narrow and was **verified to still catch a rogue caller** by adding one — a weakened check that no longer catches anything is worse than no check. ✅ **15 mutations killed** — 9 unit, 2 e2e, 4 gate. ⚠️ **Two first attempts proved nothing** (unused-symbol compile errors) and were rewritten to compile cleanly. Gate 19: 45 → 49 checks. 📌 **Phase 26 renders it**: the dead-letter view is `WHERE deadAt IS NOT NULL` over a table that will already be populated. | **real** | done |
 | ~~F121~~ | ~~**No billing path bumps `configVersion`, so a plan change does not invalidate cached storefront config.**~~ ✅ **DONE 2026-09-25.** 🔴 **Found while building M23.5, by checking whether the reconciler's repair path should bump.** It should not do so alone, because **nothing plan-related bumps at all** — not the webhook lifecycle (`subscription-lifecycle.service.ts` contains no `bump`), not the manage routes, not reconciliation. Every caller of `configVersion.bump()` today is in `src/option-sets/`. ⚠️ **The plan already predicted this at M9.4b** — *"Plan change alone invalidates cached config within the M9.4 window — 🔴 explicitly not covered; owned by Phase 23"* — and Phase 23 has now built every subscription-state path without closing it. 🔴 **The consequence is a merchant who downgrades keeps serving higher-tier options** from cached config until some unrelated edit triggers a bump, which is an enforcement hole rather than a display bug. 📌 **Deliberately NOT folded into M23.5.** Reconciliation repairing a plan is one of at least three paths that must bump (webhook plan change, portal change, reconciliation), and fixing one inside a milestone about drift would leave the other two silently broken while looking closed — the exact shape of the built-but-uncalled defect this phase keeps producing. ⚠️ **Genuinely cross-cutting**: it needs the per-store bump semantics (`bump(manager, storeId)`) applied to a tenant-level event, and a tenant may own several stores (`UNIQUE(tenantId, storeUrl)`).
 
 #### F121 — execution plan (written 2026-09-25, before any code)
@@ -29974,6 +29975,59 @@ M23.3 handlers for created/updated/cancelled/payment_succeeded/payment_failed/
 trial_will_end/invoice_paid;
 M23.4 async processing with retry, and dead-lettering to the admin ops view
 ([Phase 26](#phase-26--super-admin));
+
+#### M23.4 — execution plan (written 2026-09-25, before any code)
+
+**Both open decisions were the user's, and both are now made:** in-process
+`@nestjs/schedule` rather than BullMQ, and a **dead-letter record now** with the
+Phase 26 screen deferred.
+
+📌 **The two fit together better than either looked alone.** `@nestjs/schedule`'s
+real weakness is that in-flight work dies with the process — but the queue here is
+a **table**, not memory. `billing_events` already writes the row *before*
+processing and sets `processedAt` only on success, so a crash leaves a visible
+unprocessed row. The table is the durability; the scheduler is only the thing that
+walks it. That is why the cheaper option is defensible here and would not be if the
+queue lived in RAM.
+
+🔴 **Most of the foundation already exists and was built for this**, which is the
+strongest argument for not adding Redis: `billing_events` carries `payload`,
+`processedAt` and `error`; the claim/process/settle ordering is already correct
+(N1); and `billing-webhook.service.ts` already contains the comment *"which is
+exactly the query M23.4 will add"*.
+
+**What is actually missing:**
+| Gap | Today | M23.4 |
+|---|---|---|
+| Retry of OUR failures | only Stripe retries, on its schedule | a worker re-runs unprocessed rows |
+| Attempt count | nothing counts | `attempts` column |
+| Give-up rule | retried forever | dead after N attempts |
+| Dead-letter state | `error` set, row indistinguishable from retryable | `deadAt`, queryable |
+
+⚠️ **Schema: extend `billing_events`, do NOT add a second table.** A separate
+`dead_letter_events` table would duplicate `payload`/`type`/`providerEventId` and
+split one event's history across two places — and the `UNIQUE provider_event_id`
+that makes redelivery a no-op (M23.2) lives on this table. Two `NULL`-able columns
+(`attempts`, `deadAt`) express the same states with no duplication.
+
+🔴 **Stripe's retries and ours must not fight.** Stripe already redelivers a
+non-2xx for days. If the worker also retries, one failed payment could be attempted
+twice per cycle — and N1 exists because our own idempotency check once *consumed*
+Stripe's retries. The worker therefore handles **rows Stripe will not retry**: ones
+we answered 200 to and then failed to finish, and ones whose delivery crashed
+mid-processing.
+
+**Proof obligations** (each must kill a mutation):
+1. an unprocessed row is retried by the worker, and succeeds
+2. a row that succeeds on retry clears `error` and sets `processedAt`
+3. `attempts` increments on each failure and does not on success
+4. a row is dead-lettered after the limit, not before
+5. a dead row is **never** retried again
+6. a processed row is never picked up
+7. the worker holds no state across restarts that the table does not
+
+📌 **Phase 26 renders it; nothing here waits on that.** The dead-letter view is a
+`WHERE deadAt IS NOT NULL` over a table that will already be populated.
 M23.5 replay/reconciliation tooling — a scheduled diff of provider state vs. local state
 so a missed webhook cannot silently strand a paying merchant on the wrong plan.
 
@@ -32031,7 +32085,7 @@ STAGE 3 — WIDEN THE PRODUCT
 
 STAGE 4 — BECOME A BUSINESS
 [ ] Phase 22 — Billing Integration
-[ ] Phase 23 — Billing Webhooks
+[x] Phase 23 — Billing Webhooks
 [ ] Phase 24 — Plan Limits & Enforcement
 [ ] Phase 25 — Analytics
 [ ] Phase 26 — Super Admin

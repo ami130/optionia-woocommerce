@@ -28,6 +28,8 @@ import { BillingEvent } from './entities/billing-event.entity';
 import { Invoice } from './entities/invoice.entity';
 import { StripeProvider } from './stripe.provider';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
+import { BillingEventRetryScheduler } from './billing-event-retry.scheduler';
+import { BillingEventRetryService } from './billing-event-retry.service';
 import { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { SubscriptionReconcilerService } from './subscription-reconciler.service';
 
@@ -109,6 +111,9 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
     SubscriptionReconcilerService,
     /* 📌 F121: the one rule both plan-change paths share. */
     PlanChangeInvalidatorService,
+    /* 📌 M23.4: the retry rule, and the timer that walks it. */
+    BillingEventRetryService,
+    BillingEventRetryScheduler,
     {
       provide: BILLING_PROVIDER,
       useFactory: (): BillingProviderOrNull => {
@@ -151,6 +156,7 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
     BillingWebhookService,
     SubscriptionLifecycleService,
     SubscriptionReconcilerService,
+    BillingEventRetryService,
   ],
 })
 export class BillingModule {}
