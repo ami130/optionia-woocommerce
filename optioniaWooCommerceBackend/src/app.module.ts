@@ -8,6 +8,7 @@ import { loadConfig } from './config/env';
 import { ActivationModule } from './activation/activation.module';
 import { PluginDownloadModule } from './plugin-download/plugin-download.module';
 import { BillingModule } from './billing/billing.module';
+import { CheckoutModule } from './billing/checkout.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthThrottlerGuard } from './auth/auth-throttler.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -76,6 +77,7 @@ import { HealthModule } from './health/health.module';
 
     AuthModule,
     BillingModule,
+    CheckoutModule,
     MailModule,
     StoresModule,
     OptionSetsModule,

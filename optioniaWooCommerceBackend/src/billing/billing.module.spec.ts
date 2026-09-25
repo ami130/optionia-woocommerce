@@ -9,7 +9,9 @@ import {
   type BillingProviderOrNull,
   requireBillingProvider,
 } from './billing-provider';
+import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import { BillingEvent } from './entities/billing-event.entity';
 import { Invoice } from './entities/invoice.entity';
 import {
@@ -77,6 +79,10 @@ describe('BillingModule', () => {
       .overrideProvider(getRepositoryToken(Invoice))
       .useValue(stub)
       .overrideProvider(getRepositoryToken(Subscription))
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(Tenant))
+      .useValue(stub)
+      .overrideProvider(getRepositoryToken(PlanPrice))
       .useValue(stub)
       .compile();
 

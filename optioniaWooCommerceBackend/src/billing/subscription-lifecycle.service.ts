@@ -3,7 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { SubscriptionStatus } from '../common/database/enums';
+import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import { Invoice } from './entities/invoice.entity';
 import { mapInvoice, type MappedInvoiceColumns } from './invoice.mapper';
 
@@ -50,6 +52,10 @@ export class SubscriptionLifecycleService {
     private readonly subscriptions: Repository<Subscription>,
     @InjectRepository(Invoice)
     private readonly invoices: Repository<Invoice>,
+    @InjectRepository(Tenant)
+    private readonly tenants: Repository<Tenant>,
+    @InjectRepository(PlanPrice)
+    private readonly prices: Repository<PlanPrice>,
   ) {}
 
   /**
@@ -106,6 +112,20 @@ export class SubscriptionLifecycleService {
     subscription.providerSubscriptionId = this.asId(session.subscription);
 
     /*
+     * 🔴 **ADR-118, which said this and was not built (H2).** Its exact words:
+     * *"`tenants.country`, `vatNumber` and `billingCurrency` are populated from
+     * the completed session."* The adapter already collects all three —
+     * `billing_address_collection: 'required'` and `tax_id_collection` — and
+     * this handler was throwing them away, so a paying tenant's billing identity
+     * stayed null for ever.
+     *
+     * 📌 **Collected here and nowhere else**, deliberately: every field on a
+     * signup form costs conversion, and M22.6 needs merchants to trust the free
+     * tier *before* they are asked for a tax id.
+     */
+    await this.recordBillingIdentity(tenantId, session);
+
+    /*
      * ⚠️ **Not set to ACTIVE here.** A completed checkout means Stripe took the
      * payment method, not that the first invoice is paid —
      * `customer.subscription.updated` carries the real state and arrives
@@ -133,9 +153,22 @@ export class SubscriptionLifecycleService {
       return { changed: false, reason: 'subscription event carried no id' };
     }
 
-    const subscription = await this.subscriptions.findOne({
-      where: { providerSubscriptionId },
-    });
+    /*
+     * 🔴 **The customer id is a fallback because Stripe does not guarantee
+     * order (H4).** `providerSubscriptionId` is written by
+     * `checkout.session.completed`; if this event overtakes it — measured, not
+     * assumed: a probe delivered it first and the subscription stayed
+     * `trialing` while the request answered **200**, which Stripe never
+     * redelivers — the merchant had paid and the system did not know.
+     *
+     * ⚠️ Matching on the customer then adopts the subscription id, so the
+     * checkout event that follows finds a row already linked rather than
+     * overwriting a newer state.
+     */
+    const subscription = await this.findSubscription(
+      providerSubscriptionId,
+      this.asId(remote.customer),
+    );
 
     if (subscription === null) {
       return {
@@ -143,6 +176,9 @@ export class SubscriptionLifecycleService {
         reason: `no subscription matches ${providerSubscriptionId}`,
       };
     }
+
+    subscription.providerSubscriptionId = providerSubscriptionId;
+    subscription.provider = 'stripe';
 
     const status = this.readStatus(remote.status);
 
@@ -153,6 +189,18 @@ export class SubscriptionLifecycleService {
     subscription.status = status;
     subscription.currentPeriodEnd = this.asDate(remote.current_period_end);
     subscription.cancelAt = this.asDate(remote.cancel_at);
+
+    /*
+     * 🔴 **The plan moves with the price (H3).** This handler wrote status and
+     * dates and left `planId` alone, so a merchant who upgraded in Stripe was
+     * charged the new price and kept the **old plan's limits** — permanently.
+     * Measured with a probe: after an upgrade event, `planId` was unchanged and
+     * `planPriceId` was still null.
+     *
+     * ⚠️ **ADR-117 depends on this.** "Limit raises apply at once" cannot
+     * happen if nothing propagates which plan was bought.
+     */
+    await this.adoptPlanFromPrice(subscription, remote);
 
     /*
      * 🔴 **Recovering clears the grace clock.** Leaving a stale `graceEndsAt` on
@@ -300,6 +348,116 @@ export class SubscriptionLifecycleService {
         ...columns,
       }),
     );
+  }
+
+  /**
+   * Populate the tenant's billing identity from a completed session (ADR-118).
+   *
+   * ⚠️ **Only ever fills a blank, never overwrites.** A merchant who moves house
+   * updates their details at the provider, and a stale local copy is a reporting
+   * question rather than a reason to silently rewrite a VAT number that an
+   * invoice was already issued against. The columns are set once, at the first
+   * paid checkout, which is what the ADR describes.
+   */
+  private async recordBillingIdentity(
+    tenantId: string,
+    session: Record<string, unknown>,
+  ): Promise<void> {
+    const tenant = await this.tenants.findOne({ where: { id: tenantId } });
+
+    if (tenant === null) {
+      return;
+    }
+
+    const details = this.asRecord(session.customer_details);
+    const address = this.asRecord(details.address);
+
+    const country = this.asCode(address.country, 2);
+    const currency = this.asCode(session.currency, 3);
+    const vatNumber = this.readTaxId(details.tax_ids);
+
+    if (tenant.country === null && country !== null) {
+      tenant.country = country;
+    }
+
+    if (tenant.billingCurrency === null && currency !== null) {
+      tenant.billingCurrency = currency;
+    }
+
+    if (tenant.vatNumber === null && vatNumber !== null) {
+      tenant.vatNumber = vatNumber;
+    }
+
+    await this.tenants.save(tenant);
+  }
+
+  /**
+   * ⚠️ **The column is `varchar(32)`**, so a longer id is dropped rather than
+   * truncated into a different — and invalid — VAT number.
+   */
+  private readTaxId(value: unknown): string | null {
+    if (!Array.isArray(value)) {
+      return null;
+    }
+
+    for (const entry of value) {
+      const id = this.asRecord(entry).value;
+
+      if (typeof id === 'string' && id.trim() !== '' && id.length <= 32) {
+        return id.trim().toUpperCase();
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Move the local plan to whatever price the provider now bills (H3).
+   *
+   * 🔴 **`plan_prices.providerPriceId` is the join**, which is why that column
+   * exists: it is the only thing tying Stripe's price to the plan whose limits
+   * this system enforces. A price we do not recognise leaves the plan untouched
+   * and says so — guessing would grant or revoke entitlements on a hunch.
+   */
+  private async adoptPlanFromPrice(
+    subscription: Subscription,
+    remote: Record<string, unknown>,
+  ): Promise<void> {
+    const providerPriceId = this.readPriceId(remote);
+
+    if (providerPriceId === null) {
+      return;
+    }
+
+    const price = await this.prices.findOne({ where: { providerPriceId } });
+
+    if (price === null) {
+      this.logger.warn(
+        `Subscription ${subscription.providerSubscriptionId ?? '?'} bills an unknown price ` +
+          `${providerPriceId}; the plan was left unchanged.`,
+      );
+
+      return;
+    }
+
+    subscription.planId = price.planId;
+    subscription.planPriceId = price.id;
+  }
+
+  /** Stripe carries the price on the subscription's first line item. */
+  private readPriceId(remote: Record<string, unknown>): string | null {
+    const items = this.asRecord(remote.items).data;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return null;
+    }
+
+    return this.asId(this.asRecord(items[0]).price);
+  }
+
+  /** A fixed-length code, or nothing — these columns are `char(2)` and `char(3)`. */
+  private asCode(value: unknown, length: number): string | null {
+    return typeof value === 'string' && value.length === length ? value.toUpperCase() : null;
   }
 
   /** Stripe's subscription id moved to `parent` — see the invoice mapper. */

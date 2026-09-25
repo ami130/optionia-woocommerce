@@ -415,4 +415,65 @@ describe('Billing webhook (e2e)', () => {
       expect(row.error).toBeNull();
     });
   });
+
+  /**
+   * H4 — the ordering defect, proven fixed against the real database.
+   *
+   * 🔴 **This was measured before it was fixed.** A probe delivered
+   * `customer.subscription.updated` before the checkout event: the request
+   * answered **200** and the subscription stayed `trialing`. Stripe never
+   * redelivers a 200, so a merchant who had paid was left unpaid, silently.
+   */
+  describe('out-of-order delivery (H4)', () => {
+    it('activates a subscription whose id has not been linked yet', async () => {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const providerCustomerId = `cus_${run}_${seq}`;
+      const providerSubscriptionId = `sub_${run}_${seq}_reorder`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `Reorder ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      /* Checkout has NOT run: the customer is known, the subscription id is not. */
+      const subscription = await dataSource.getRepository(Subscription).save(
+        dataSource.getRepository(Subscription).create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerCustomerId,
+          providerSubscriptionId: null,
+          status: SubscriptionStatus.TRIALING,
+        }),
+      );
+
+      const { body, signature } = signedEvent({
+        type: 'customer.subscription.updated',
+        data: {
+          object: {
+            id: providerSubscriptionId,
+            status: 'active',
+            customer: providerCustomerId,
+          },
+        },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const updated = await dataSource
+        .getRepository(Subscription)
+        .findOneByOrFail({ id: subscription.id });
+
+      expect(updated.status).toBe(SubscriptionStatus.ACTIVE);
+
+      /* ⚠️ And it adopted the id, so the checkout event that follows finds it linked. */
+      expect(updated.providerSubscriptionId).toBe(providerSubscriptionId);
+    });
+  });
 });

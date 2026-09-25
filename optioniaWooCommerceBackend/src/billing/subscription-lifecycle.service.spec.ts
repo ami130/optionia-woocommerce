@@ -1,7 +1,9 @@
 import { Repository } from 'typeorm';
 
 import { SubscriptionStatus } from '../common/database/enums';
+import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import { Invoice } from './entities/invoice.entity';
 import { GRACE_DAYS, SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
@@ -15,7 +17,12 @@ import { GRACE_DAYS, SubscriptionLifecycleService } from './subscription-lifecyc
  * than around the code's branches.
  */
 describe('SubscriptionLifecycleService', () => {
-  function build(seed: Partial<Subscription> = {}) {
+  function build(
+    seed: Partial<Subscription> & {
+      tenantSeed?: Partial<Tenant>;
+      price?: PlanPrice | null;
+    } = {},
+  ) {
     const subscription = {
       id: 'sub_row_1',
       tenantId: 'tenant_1',
@@ -44,8 +51,28 @@ describe('SubscriptionLifecycleService', () => {
       }),
     } as unknown as Repository<Invoice>;
 
+    const tenant = {
+      id: 'tenant_1',
+      country: null,
+      vatNumber: null,
+      billingCurrency: null,
+      ...(seed.tenantSeed ?? {}),
+    } as unknown as Tenant;
+
+    const tenants = {
+      findOne: jest.fn(async () => tenant),
+      save: jest.fn(async (t: Tenant) => t),
+    } as unknown as Repository<Tenant>;
+
+    const prices = {
+      findOne: jest.fn(async () => seed.price ?? null),
+    } as unknown as Repository<PlanPrice>;
+
     return {
-      service: new SubscriptionLifecycleService(subscriptions, invoices),
+      service: new SubscriptionLifecycleService(subscriptions, invoices, tenants, prices),
+      tenant,
+      tenants,
+      prices,
       subscription,
       subscriptions,
       invoices,
@@ -398,6 +425,222 @@ describe('SubscriptionLifecycleService', () => {
       });
 
       expect(storedInvoices).toHaveLength(0);
+    });
+  });
+
+  /**
+   * H2 — ADR-118, which was decided and not built.
+   *
+   * 🔴 The ADR's own words: *"`tenants.country`, `vatNumber` and
+   * `billingCurrency` are populated from the completed session."* The adapter
+   * collected all three and the handler discarded them.
+   */
+  describe('billing identity (ADR-118)', () => {
+    const session = {
+      client_reference_id: 'tenant_1',
+      customer: 'cus_1',
+      subscription: 'sub_1',
+      currency: 'eur',
+      customer_details: {
+        address: { country: 'de' },
+        tax_ids: [{ type: 'eu_vat', value: 'DE123456789' }],
+      },
+    };
+
+    it('populates country, currency and VAT number from the session', async () => {
+      const { service, tenant } = build();
+
+      await service.apply('checkout.session.completed', session);
+
+      expect(tenant.country).toBe('DE');
+      expect(tenant.billingCurrency).toBe('EUR');
+      expect(tenant.vatNumber).toBe('DE123456789');
+    });
+
+    /**
+     * ⚠️ **Only ever fills a blank.** A merchant who moves house updates their
+     * details at the provider; silently rewriting a VAT number an invoice was
+     * already issued against is a reporting problem, not a correction.
+     */
+    it('never overwrites an identity already recorded', async () => {
+      const { service, tenant } = build({
+        tenantSeed: { country: 'FR', billingCurrency: 'EUR', vatNumber: 'FR987654321' },
+      });
+
+      await service.apply('checkout.session.completed', session);
+
+      expect(tenant.country).toBe('FR');
+      expect(tenant.vatNumber).toBe('FR987654321');
+    });
+
+    /** 🔴 `char(2)` and `char(3)`: a wrong-length code is dropped, not truncated. */
+    it('drops a country that is not two letters', async () => {
+      const { service, tenant } = build();
+
+      await service.apply('checkout.session.completed', {
+        ...session,
+        customer_details: { address: { country: 'Germany' }, tax_ids: [] },
+      });
+
+      expect(tenant.country).toBeNull();
+    });
+
+    /** ⚠️ `varchar(32)`: a longer id would truncate into a different VAT number. */
+    it('drops a tax id too long for its column', async () => {
+      const { service, tenant } = build();
+
+      await service.apply('checkout.session.completed', {
+        ...session,
+        customer_details: {
+          address: { country: 'de' },
+          tax_ids: [{ type: 'eu_vat', value: 'X'.repeat(40) }],
+        },
+      });
+
+      expect(tenant.vatNumber).toBeNull();
+    });
+
+    it('tolerates a session with no customer details at all', async () => {
+      const { service, tenant } = build();
+
+      await service.apply('checkout.session.completed', {
+        client_reference_id: 'tenant_1',
+        customer: 'cus_1',
+        subscription: 'sub_1',
+      });
+
+      expect(tenant.country).toBeNull();
+      expect(tenant.billingCurrency).toBeNull();
+    });
+  });
+
+  /**
+   * H3 — a plan change that never changed the plan.
+   *
+   * 🔴 **Measured, not inferred**: a probe sent an upgrade event and `planId`
+   * was unchanged while `planPriceId` stayed null. A merchant who upgraded was
+   * charged the new price and kept the old plan's limits, permanently.
+   */
+  describe('plan propagation (H3)', () => {
+    const upgrade = {
+      id: 'sub_1',
+      status: 'active',
+      items: { data: [{ price: { id: 'price_pro_monthly' } }] },
+    };
+
+    it('moves planId and planPriceId to the price now billed', async () => {
+      const { service, subscription } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_free',
+        price: { id: 'price_row_pro', planId: 'plan_pro' } as PlanPrice,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(subscription.planId).toBe('plan_pro');
+      expect(subscription.planPriceId).toBe('price_row_pro');
+    });
+
+    it('joins on providerPriceId, which is what that column is for', async () => {
+      const { service, prices } = build({
+        providerSubscriptionId: 'sub_1',
+        price: { id: 'price_row_pro', planId: 'plan_pro' } as PlanPrice,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(prices.findOne).toHaveBeenCalledWith({
+        where: { providerPriceId: 'price_pro_monthly' },
+      });
+    });
+
+    /**
+     * 🔴 **An unrecognised price leaves the plan alone.** Guessing would grant
+     * or revoke entitlements on a hunch; the warning is the signal to add the
+     * mapping.
+     */
+    it('leaves the plan untouched when the price is unknown', async () => {
+      const { service, subscription } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_free',
+        planPriceId: 'price_row_free',
+        price: null,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(subscription.planId).toBe('plan_free');
+
+      /*
+       * 🔴 **`planPriceId` too, and asserting only `planId` was not enough.** A
+       * mutation that kept the plan but nulled the price **survived** this test
+       * — and an unpinned price is the exact defect `plan_prices` exists to
+       * prevent: the merchant would be re-priced by the next plan edit.
+       */
+      expect(subscription.planPriceId).toBe('price_row_free');
+    });
+
+    it('tolerates an event carrying no line items', async () => {
+      const { service, subscription } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_free',
+      });
+
+      await service.apply('customer.subscription.updated', { id: 'sub_1', status: 'active' });
+
+      expect(subscription.planId).toBe('plan_free');
+      expect(subscription.status).toBe(SubscriptionStatus.ACTIVE);
+    });
+  });
+
+  /**
+   * H4 — event ordering, which Stripe does not guarantee.
+   *
+   * 🔴 **Measured**: delivering `subscription.updated` before the checkout event
+   * left the subscription `trialing` and answered **200** — which Stripe never
+   * redelivers. A merchant had paid and the system did not know.
+   */
+  describe('out-of-order delivery (H4)', () => {
+    it('finds the subscription by customer when the id is not linked yet', async () => {
+      const { service, subscription, subscriptions } = build({
+        providerSubscriptionId: null,
+        providerCustomerId: 'cus_1',
+      });
+
+      (subscriptions.findOne as jest.Mock).mockImplementation(
+        async (options: { where: Record<string, unknown> }) =>
+          'providerCustomerId' in options.where ? subscription : null,
+      );
+
+      await service.apply('customer.subscription.updated', {
+        id: 'sub_1',
+        status: 'active',
+        customer: 'cus_1',
+      });
+
+      expect(subscription.status).toBe(SubscriptionStatus.ACTIVE);
+    });
+
+    /** ⚠️ And it adopts the id, so the checkout event that follows finds it linked. */
+    it('adopts the subscription id it was found by proxy for', async () => {
+      const { service, subscription, subscriptions } = build({
+        providerSubscriptionId: null,
+        providerCustomerId: 'cus_1',
+      });
+
+      (subscriptions.findOne as jest.Mock).mockImplementation(
+        async (options: { where: Record<string, unknown> }) =>
+          'providerCustomerId' in options.where ? subscription : null,
+      );
+
+      await service.apply('customer.subscription.updated', {
+        id: 'sub_1',
+        status: 'active',
+        customer: 'cus_1',
+      });
+
+      expect(subscription.providerSubscriptionId).toBe('sub_1');
+      expect(subscription.provider).toBe('stripe');
     });
   });
 });

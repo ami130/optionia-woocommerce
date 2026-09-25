@@ -219,6 +219,74 @@ else
   printf '        Changing it is a policy decision; amend the ADR in the same commit.\n'
 fi
 
+# --- 11. The checkout entrance exists and is reachable ----------------------
+#
+# 🔴 **H1: `createCheckout` was built, tested and called by nothing.** Every
+# lifecycle handler downstream was waiting on `checkout.session.completed`, which
+# can only fire for a session something creates — so the whole phase had no
+# entrance. The gap was in the plan, not the code, which is exactly the kind a
+# test suite cannot notice: each part worked, and none of them were connected to
+# a user.
+if grep -rq "createCheckout(" "$BILLING/checkout.service.ts" 2>/dev/null \
+  && grep -q "@Post('checkout')" "$BILLING/checkout.controller.ts" 2>/dev/null; then
+  pass "a merchant can start a checkout"
+else
+  fail "nothing reaches createCheckout — the billing flow has no entrance"
+  printf '        checkout.session.completed cannot fire for a session nobody creates.\n'
+fi
+
+# --- 12. A checkout is guarded, and costs money to start --------------------
+#
+# ⚠️ Starting a payment commits the tenant to money; seeing what a plan costs
+# does not. `BILLING_MANAGE` is the capability drawn for that distinction, and
+# the throttle is because each call creates a session at the provider.
+if grep -q "RequireCapability(Capability.BILLING_MANAGE)" "$BILLING/checkout.controller.ts" \
+  && grep -q "@Throttle" "$BILLING/checkout.controller.ts"; then
+  pass "checkout requires BILLING_MANAGE and is rate limited"
+else
+  fail "the checkout route lost its capability guard or its throttle"
+fi
+
+# --- 13. The currency a tenant is billed in is checked (F94/E4) -------------
+#
+# 🔴 Nothing checked that a tenant's `billingCurrency` agreed with the price it
+# was sent to, so a tenant recorded as billing in EUR could be charged in USD —
+# and every later total would mix two currencies in a column that stores no
+# currency per amount.
+# ⚠️ Matched on the CALL, not the definition: a rename touching both would leave
+# a dead method and a passing grep, which is how the first version of this check
+# survived its own mutation.
+if grep -q "this.assertCurrencyAgrees(" "$BILLING/checkout.service.ts"; then
+  pass "checkout refuses a price in the wrong currency"
+else
+  fail "nothing checks the tenant's billing currency against the price (F94/E4)"
+fi
+
+# --- 14. ADR-118's billing identity is actually populated -------------------
+#
+# ⚠️ ADR-118 says verbatim that `tenants.country`, `vatNumber` and
+# `billingCurrency` are populated from the completed session. The adapter
+# collects all three; the handler discarded them (H2), so a paying tenant's
+# billing identity stayed null for ever.
+if grep -q "await this.recordBillingIdentity(" "$LIFECYCLE"; then
+  pass "a completed checkout records the tenant's billing identity (ADR-118)"
+else
+  fail "nothing populates tenants.country / vatNumber / billingCurrency"
+  printf '        ADR-118 decided this; an unimplemented ADR is a decision nobody kept.\n'
+fi
+
+# --- 15. A plan change moves the plan (H3) ----------------------------------
+#
+# 🔴 The lifecycle wrote status and dates and left `planId` alone, so a merchant
+# who upgraded was charged the new price and kept the **old plan's limits**,
+# permanently. ADR-117's "limit raises apply at once" cannot work without this.
+if grep -q "await this.adoptPlanFromPrice(" "$LIFECYCLE"; then
+  pass "a subscription change moves planId and planPriceId"
+else
+  fail "the lifecycle no longer propagates the plan (H3)"
+  printf '        An upgrade would charge the new price and keep the old limits.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
