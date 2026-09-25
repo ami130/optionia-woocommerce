@@ -370,6 +370,45 @@ else
   pass "the manage routes write no subscription state at all"
 fi
 
+# --- 20. A price edit supersedes; it never mutates ------------------------
+#
+# 🔴 **M22.1a's whole reason for existing.** If editing a plan's price changed
+# the row a subscription points at, every merchant on that plan would be
+# re-priced — including ones who signed up under different terms. The plan calls
+# it *"the single most expensive thing to get wrong here"*, and the merchant
+# discovers it on their card statement.
+ADMIN="$SRC/plans/plans-admin.service.ts"
+
+if grep -q "isCurrent: false" "$ADMIN" && grep -q "retiredAt: new Date()" "$ADMIN"; then
+  pass "a price edit retires the old row and inserts a new one"
+else
+  fail "the plan admin service no longer supersedes prices (M22.1a)"
+  printf '        Mutating a price row re-prices every existing subscriber on it.\n'
+fi
+
+# ⚠️ And the replacement must NOT inherit the provider id: that would sell the
+# OLD amount while the dashboard showed the new one.
+if grep -q "providerPriceId: null," "$ADMIN"; then
+  pass "a superseding price starts unlinked from the provider"
+else
+  fail "a new price may inherit the old provider price id"
+  printf '        The merchant would be charged the old amount at the new label.\n'
+fi
+
+# --- 21. Pricing belongs to platform staff, never a tenant ----------------
+#
+# 🔴 *"A tenant admin editing what they pay is not a feature, it is a
+# vulnerability."* The admin routes take `StaffGuard` and deliberately NOT
+# `TenantGuard` — and the guard fails closed on a route that declares no role,
+# for the reason `CapabilityGuard` records from a probe that found a `viewer`
+# publishing with a 200.
+if grep -q "UseGuards(JwtAuthGuard, StaffGuard)" "$SRC/plans/plans-admin.controller.ts" \
+  && grep -q "declares no required role" "$SRC/admin/staff.guard.ts"; then
+  pass "plan pricing is behind the staff realm, and the guard fails closed"
+else
+  fail "the plan admin routes lost the staff guard, or it no longer fails closed"
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

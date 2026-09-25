@@ -213,6 +213,36 @@ export const AuditAction = {
    * event that records a change to a credential rather than to a connection.
    */
   STORE_CREDENTIAL_ROTATED: 'store.credential_rotated',
+
+  /* ---------------------------------------------------------------------
+   * Plans and pricing (M22.1a) — platform staff, never a tenant
+   * ------------------------------------------------------------------ */
+
+  /**
+   * A price was superseded by a new version.
+   *
+   * 🔴 **The first row anyone reads when a merchant disputes a charge.** It
+   * carries both figures, which is why `changes.amountMinor` is `{from, to}`
+   * rather than the new number alone — *"who changed which price, when, from
+   * what to what"* is unanswerable from the new value.
+   *
+   * ⚠️ **Written by the seed with a null user and by staff with a real one.**
+   * The seed has no actor; a staff change that lost its actor would be
+   * indistinguishable from a seeding run, which is the one thing this row must
+   * never be ambiguous about.
+   */
+  PLAN_PRICE_SUPERSEDED: 'plan_price.superseded',
+
+  /** The first price for a plan, currency and interval — nothing to supersede. */
+  PLAN_PRICE_CREATED: 'plan_price.created',
+
+  /**
+   * A plan was shown at, or hidden from, signup.
+   *
+   * 📌 **Hiding is not cancelling** (M22.1a). Nobody on the plan is affected;
+   * only what a new signup may choose changes.
+   */
+  PLAN_VISIBILITY_CHANGED: 'plan.visibility_changed',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
