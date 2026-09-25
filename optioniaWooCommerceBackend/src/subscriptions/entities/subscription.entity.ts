@@ -99,4 +99,18 @@ export class Subscription extends BaseEntity {
 
   @Column({ type: 'datetime', precision: 3, nullable: true })
   trialEndsAt: Date | null;
+
+  /**
+   * Why the merchant cancelled, in their own words (M22.5).
+   *
+   * 🔴 **Ours, not the provider's.** A reason in Stripe's metadata is readable
+   * only by whoever opens their dashboard; churn analysis needs it queryable
+   * beside the plan, the tenure and the usage that preceded it.
+   *
+   * ⚠️ **Nullable because a merchant may leave without saying why.** A required
+   * field on the way out produces junk from people who want the dialog gone,
+   * which is worse than no data because it looks like data.
+   */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  cancellationReason: string | null;
 }

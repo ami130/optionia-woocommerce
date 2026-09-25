@@ -326,6 +326,50 @@ else
   fail "the price linker no longer distinguishes live keys"
 fi
 
+# --- 18. All four merchant verbs exist -------------------------------------
+#
+# 🔴 **Phase 22's exit criterion is four verbs** — *"a merchant subscribes,
+# upgrades, downgrades, and cancels"* — and for a long while only the first had
+# a route. `cancelSubscription` and `updatePlan` were built, tested, and called
+# by nothing: H1's defect repeated, because I fixed the single instance for
+# `createCheckout` without asking whether its siblings had it too.
+ACCOUNT="$BILLING/checkout.controller.ts"
+MISSING=""
+
+for route in "@Post('checkout')" "@Get('subscription')" "@Get('invoices')" \
+  "@Post('plan')" "@Delete('subscription')"; do
+  grep -q "$route" "$ACCOUNT" || MISSING="$MISSING $route"
+done
+
+if [ -z "$MISSING" ]; then
+  pass "a merchant can subscribe, see, upgrade, downgrade and cancel"
+else
+  fail "billing routes are missing:$MISSING"
+  printf '        Phase 22 exits on four verbs; a built provider method with no route is not one.\n'
+fi
+
+# --- 19. The manage routes never write subscription state ------------------
+#
+# 🔴 **M22.4: `subscriptions` is updated ONLY from verified webhooks.** A cancel
+# records intent at the provider and the webhook records the truth — writing the
+# status here would create a second source that disagrees the moment a call
+# succeeds and its webhook is delayed.
+#
+# ⚠️ `cancellationReason` is the one exception and is deliberately OURS: a reason
+# in the provider's metadata is readable only from their dashboard.
+if grep -n "subscriptions.update(" "$BILLING/billing-account.service.ts" \
+  | grep -qv ':[0-9]*:\s*\*'; then
+  if grep -A3 "subscriptions.update(" "$BILLING/billing-account.service.ts" \
+    | grep -qE "status:|graceEndsAt:|planId:"; then
+    fail "a merchant-facing route writes provider-owned subscription state"
+    printf '        M22.4: only a verified webhook may move status, plan or grace.\n'
+  else
+    pass "the manage routes write only cancellationReason, never provider state"
+  fi
+else
+  pass "the manage routes write no subscription state at all"
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

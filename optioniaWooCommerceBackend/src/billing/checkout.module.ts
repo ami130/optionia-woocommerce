@@ -5,7 +5,9 @@ import { AuthModule } from '../auth/auth.module';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { BillingAccountService } from './billing-account.service';
 import { BillingModule } from './billing.module';
+import { Invoice } from './entities/invoice.entity';
 import { CheckoutController } from './checkout.controller';
 import { CheckoutService } from './checkout.service';
 
@@ -26,12 +28,12 @@ import { CheckoutService } from './checkout.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PlanPrice, Subscription, Tenant]),
+    TypeOrmModule.forFeature([PlanPrice, Subscription, Tenant, Invoice]),
     AuthModule,
     BillingModule,
   ],
   controllers: [CheckoutController],
-  providers: [CheckoutService],
-  exports: [CheckoutService],
+  providers: [CheckoutService, BillingAccountService],
+  exports: [CheckoutService, BillingAccountService],
 })
 export class CheckoutModule {}
