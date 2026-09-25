@@ -625,4 +625,156 @@ describe('Billing webhook (e2e)', () => {
       expect(after.status).toBe(SubscriptionStatus.PAST_DUE);
     });
   });
+
+  /**
+   * ADR-116's dunning mail, end to end (M23.3).
+   *
+   * 🔴 **Every link was stubbed until now.** The lifecycle called a spy, the
+   * notifier took a fake `MailService`, the contacts service took a fake
+   * repository — so the query joining `tenant_members` to `users` with a
+   * `revokedAt IS NULL` filter had **never run against MySQL**. That is the
+   * shape of gap F103 found in the sandbox: every contract satisfied, and the
+   * real thing untried.
+   *
+   * ⚠️ **No mail leaves this machine.** `SMTP_HOST` is empty, so `LogTransport`
+   * handles it — and because that transport still returns a message id,
+   * `MailService` writes an `email_deliveries` row. The row is the proof.
+   */
+  describe('dunning mail (ADR-116)', () => {
+    afterEach(async () => {
+      await dataSource.query(
+        `DELETE FROM email_deliveries WHERE recipient LIKE '%@dunning.test'`,
+      );
+    });
+
+    async function tenantWithOwner(which: string): Promise<{ tenantId: string; email: string }> {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const email = `${which}-${run}@dunning.test`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `Dunning ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      /*
+       * ⚠️ **Verified, because the contacts service excludes unverified
+       * addresses** — mailing an unconfirmed address degrades deliverability
+       * for every merchant who *is* reachable.
+       */
+      const [user] = await dataSource.query(
+        `INSERT INTO users (id, email, passwordHash, name, emailVerifiedAt, createdAt, updatedAt)
+         VALUES (UUID(), ?, 'x', 'Dunning Owner', NOW(3), NOW(3), NOW(3)) RETURNING id`,
+        [email],
+      ).catch(async () => {
+        /* MySQL has no RETURNING; insert then read back. */
+        await dataSource.query(
+          `INSERT INTO users (id, email, passwordHash, name, emailVerifiedAt, createdAt, updatedAt)
+           VALUES (UUID(), ?, 'x', 'Dunning Owner', NOW(3), NOW(3), NOW(3))`,
+          [email],
+        );
+
+        return dataSource.query(`SELECT id FROM users WHERE email = ?`, [email]);
+      });
+
+      await dataSource.query(
+        `INSERT INTO tenant_members (id, tenantId, userId, role, createdAt, updatedAt)
+         VALUES (UUID(), ?, ?, 'owner', NOW(3), NOW(3))`,
+        [tenant.id, user.id],
+      );
+
+      return { tenantId: tenant.id, email };
+    }
+
+    it('mails the owner when a payment fails', async () => {
+      const { tenantId, email } = await tenantWithOwner('first-failure');
+      const providerSubscriptionId = `sub_${run}_${seq}_dun`;
+
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+      const subscriptions = dataSource.getRepository(Subscription);
+
+      await subscriptions.save(
+        subscriptions.create({
+          tenantId,
+          planId: plan.id,
+          provider: 'stripe',
+          providerSubscriptionId,
+          status: SubscriptionStatus.ACTIVE,
+        }),
+      );
+
+      const { body, signature } = signedEvent({
+        type: 'invoice.payment_failed',
+        data: {
+          object: {
+            id: `in_e2e_${run}_${seq}_failed`,
+            object: 'invoice',
+            status: 'open',
+            parent: { subscription_details: { subscription: providerSubscriptionId } },
+          },
+        },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const rows = await dataSource.query(
+        `SELECT template, status FROM email_deliveries WHERE recipient = ?`,
+        [email],
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].template).toBe('billing-payment-failed');
+    });
+
+    /**
+     * 🔴 **One lapse, one email.** Stripe's dunning fires several times per
+     * lapse and `MailService` has no dedupe — `graceEndsAt` is what makes four
+     * identical warnings impossible, and only the database can show that.
+     */
+    it('sends one email however many failures arrive in a lapse', async () => {
+      const { tenantId, email } = await tenantWithOwner('repeat-failure');
+      const providerSubscriptionId = `sub_${run}_${seq}_rep`;
+
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+      const subscriptions = dataSource.getRepository(Subscription);
+
+      await subscriptions.save(
+        subscriptions.create({
+          tenantId,
+          planId: plan.id,
+          provider: 'stripe',
+          providerSubscriptionId,
+          status: SubscriptionStatus.ACTIVE,
+        }),
+      );
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { body, signature } = signedEvent({
+          type: 'invoice.payment_failed',
+          data: {
+            object: {
+              id: `in_e2e_${run}_${seq}_rep${attempt}`,
+              object: 'invoice',
+              status: 'open',
+              parent: { subscription_details: { subscription: providerSubscriptionId } },
+            },
+          },
+        });
+
+        expect((await post(body, signature)).status).toBe(200);
+      }
+
+      const [{ count }] = await dataSource.query(
+        `SELECT COUNT(*) AS count FROM email_deliveries WHERE recipient = ?`,
+        [email],
+      );
+
+      expect(Number(count)).toBe(1);
+    });
+  });
 });

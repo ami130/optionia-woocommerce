@@ -180,9 +180,7 @@ describe('BillingNotifierService', () => {
     it('sends the trial notice as lifecycle mail', async () => {
       const { service, send } = build([owner]);
 
-      await service.trialEnding(
-        subscription({ trialEndsAt: new Date('2026-10-09T00:00:00.000Z') }),
-      );
+      await service.trialEnding('tenant_1', new Date('2026-10-09T00:00:00.000Z'));
 
       expect(send).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -192,10 +190,28 @@ describe('BillingNotifierService', () => {
       );
     });
 
-    it('sends nothing when there is no trial', async () => {
+    /**
+     * ⚠️ **The date is the caller's**, taken from the provider's `trial_end`
+     * rather than our `trialEndsAt` — the two can differ after a mid-trial
+     * upgrade carried the remainder across (F110), and the provider is
+     * authoritative about what it will actually charge.
+     */
+    it('writes the provider’s date, not a local one', async () => {
       const { service, send } = build([owner]);
 
-      await service.trialEnding(subscription({ trialEndsAt: null }));
+      await service.trialEnding('tenant_1', new Date('2026-11-03T00:00:00.000Z'));
+
+      const [[mail]] = send.mock.calls as unknown as [[{ text: string }]];
+
+      expect(mail.text).toContain('3 November 2026');
+    });
+
+    it('does not throw when nobody can be reached', async () => {
+      const { service, send } = build([]);
+
+      await expect(
+        service.trialEnding('tenant_1', new Date('2026-10-09T00:00:00.000Z')),
+      ).resolves.toBeUndefined();
 
       expect(send).not.toHaveBeenCalled();
     });

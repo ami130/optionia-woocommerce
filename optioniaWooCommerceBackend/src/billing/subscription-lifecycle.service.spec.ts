@@ -88,9 +88,12 @@ describe('SubscriptionLifecycleService', () => {
      */
     const paymentFailedMail = (seed.notifier?.paymentFailed ??
       jest.fn(async () => undefined)) as jest.Mock;
+    const trialEndingMail = (seed.notifier?.trialEnding ??
+      jest.fn(async () => undefined)) as jest.Mock;
+
     const notifier = {
       paymentFailed: paymentFailedMail,
-      trialEnding: jest.fn(async () => undefined),
+      trialEnding: trialEndingMail,
       ...(seed.notifier ?? {}),
     } as unknown as BillingNotifierService;
 
@@ -128,6 +131,7 @@ describe('SubscriptionLifecycleService', () => {
       storedInvoices,
       savedSubscriptions,
       paymentFailedMail,
+      trialEndingMail,
     };
   }
 
@@ -791,6 +795,87 @@ describe('SubscriptionLifecycleService', () => {
 
       expect(subscription.planId).toBe('plan_free');
       expect(subscription.status).toBe(SubscriptionStatus.ACTIVE);
+    });
+  });
+
+  /**
+   * M23.3's seventh handler.
+   *
+   * 🔴 **`trialEnding` was built, tested and called by nothing** — the fourth
+   * time in this phase a mechanism shipped without its trigger, after
+   * `createCheckout`, `cancelSubscription` and `updatePlan`.
+   */
+  describe('customer.subscription.trial_will_end', () => {
+    it('notifies the merchant with the provider’s trial end', async () => {
+      const { service, trialEndingMail } = build({ providerSubscriptionId: 'sub_1' });
+
+      const result = await service.apply('customer.subscription.trial_will_end', {
+        id: 'sub_1',
+        trial_end: 1_762_128_000,
+      });
+
+      expect(result.changed).toBe(true);
+      expect(trialEndingMail).toHaveBeenCalledWith('tenant_1', new Date(1_762_128_000_000));
+    });
+
+    /**
+     * 🔴 **The PROVIDER's date, not ours.** They can differ after a mid-trial
+     * upgrade carried the remainder across (F110), and telling a merchant a date
+     * the provider will not honour is worse than saying nothing.
+     */
+    it('ignores the local trialEndsAt', async () => {
+      const { service, trialEndingMail } = build({
+        providerSubscriptionId: 'sub_1',
+        trialEndsAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      await service.apply('customer.subscription.trial_will_end', {
+        id: 'sub_1',
+        trial_end: 1_762_128_000,
+      });
+
+      expect(trialEndingMail).toHaveBeenCalledWith('tenant_1', new Date(1_762_128_000_000));
+    });
+
+    /** 📌 M22.4: this is a notification trigger, never a state change. */
+    it('writes no subscription state', async () => {
+      const { service, subscriptions } = build({ providerSubscriptionId: 'sub_1' });
+
+      await service.apply('customer.subscription.trial_will_end', {
+        id: 'sub_1',
+        trial_end: 1_762_128_000,
+      });
+
+      expect(subscriptions.save).not.toHaveBeenCalled();
+    });
+
+    it('declines a notice carrying no trial_end', async () => {
+      const { service, trialEndingMail } = build({ providerSubscriptionId: 'sub_1' });
+
+      await expect(
+        service.apply('customer.subscription.trial_will_end', { id: 'sub_1' }),
+      ).resolves.toEqual({ changed: false, reason: 'trial notice carried no trial_end' });
+
+      expect(trialEndingMail).not.toHaveBeenCalled();
+    });
+
+    /** ⚠️ Best-effort: a flaky mailer must not have the provider redeliver. */
+    it('does not fail the webhook when the notice cannot be sent', async () => {
+      const { service } = build({
+        providerSubscriptionId: 'sub_1',
+        notifier: {
+          trialEnding: jest.fn(async () => {
+            throw new Error('smtp unreachable');
+          }),
+        },
+      });
+
+      await expect(
+        service.apply('customer.subscription.trial_will_end', {
+          id: 'sub_1',
+          trial_end: 1_762_128_000,
+        }),
+      ).resolves.toMatchObject({ changed: true });
     });
   });
 

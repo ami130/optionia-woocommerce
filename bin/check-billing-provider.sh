@@ -530,6 +530,28 @@ else
   printf '        An unsubscribed merchant would never hear their card was declined.\n'
 fi
 
+# --- 29. M23.3's seven handlers, all of them reachable --------------------
+#
+# 🔴 **Four times in this phase a mechanism shipped without its trigger** —
+# `createCheckout` (H1), `cancelSubscription` and `updatePlan` (F106), and
+# `trialEnding` (V1): built, tested, and called by nothing. This lists the event
+# names because a handler with no `case` is exactly that defect again.
+MISSING_EVENTS=""
+
+for event in "checkout.session.completed" "customer.subscription.created" \
+  "customer.subscription.updated" "customer.subscription.deleted" \
+  "customer.subscription.trial_will_end" "invoice.paid" \
+  "invoice.payment_succeeded" "invoice.payment_failed"; do
+  grep -q "case '$event'" "$LIFECYCLE" || MISSING_EVENTS="$MISSING_EVENTS $event"
+done
+
+if [ -z "$MISSING_EVENTS" ]; then
+  pass "every lifecycle event M23.3 names has a handler"
+else
+  fail "lifecycle events with no handler:$MISSING_EVENTS"
+  printf '        A notifier method with no case is a mechanism with no trigger.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

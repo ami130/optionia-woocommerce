@@ -54,22 +54,36 @@ export class BillingNotifierService {
       return;
     }
 
+    /*
+     * 📌 **Read once, not once per recipient.** `loadConfig()` re-validates the
+     * whole environment on every call — NODE_ENV, database, JWT, CORS — and the
+     * render below runs for each contact.
+     */
+    const url = `${loadConfig().appUrl}/subscription`;
+
     await this.notify(subscription.tenantId, (name) =>
-      paymentFailed(name, formatDeadline(deadline), `${loadConfig().appUrl}/subscription`),
+      paymentFailed(name, formatDeadline(deadline), url),
     );
   }
 
-  /** A trial ends in a few days and no payment method is on file. */
-  async trialEnding(subscription: Subscription): Promise<void> {
-    const endsAt = subscription.trialEndsAt;
-
-    if (endsAt === null) {
-      return;
-    }
+  /**
+   * A trial ends in a few days.
+   *
+   * ⚠️ **Takes the date, not the subscription's own `trialEndsAt`.** The caller
+   * has the *provider's* `trial_end`, which is authoritative about what will
+   * actually be charged and when — and can differ from ours after a mid-trial
+   * upgrade carried the remainder across (F110).
+   *
+   * 📌 Spreading the entity with a replaced date was the first attempt, and the
+   * compiler refused it: a `Subscription` carries a protected `assignId`, so a
+   * literal is not one. Passing the date is the honest shape anyway.
+   */
+  async trialEnding(tenantId: string, endsAt: Date): Promise<void> {
+    const url = `${loadConfig().appUrl}/subscription`;
 
     await this.notify(
-      subscription.tenantId,
-      (name) => trialEnding(name, formatDeadline(endsAt), `${loadConfig().appUrl}/subscription`),
+      tenantId,
+      (name) => trialEnding(name, formatDeadline(endsAt), url),
       MailKind.LIFECYCLE,
     );
   }

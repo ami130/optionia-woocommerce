@@ -102,6 +102,15 @@ export class SubscriptionLifecycleService {
       case 'invoice.payment_failed':
         return this.onPaymentFailed(payload);
 
+      /*
+       * 🔴 **M23.3's seventh handler.** `BillingNotifierService.trialEnding` was
+       * built, tested and called by nothing — the fourth time in this phase a
+       * mechanism shipped without its trigger (`createCheckout`, `cancelSubscription`,
+       * `updatePlan`, and now this). Stripe fires this three days out.
+       */
+      case 'customer.subscription.trial_will_end':
+        return this.onTrialWillEnd(payload);
+
       default:
         return { changed: false, reason: `no handler for ${type}` };
     }
@@ -355,6 +364,52 @@ export class SubscriptionLifecycleService {
       changed: true,
       detail: `payment failed; grace ends ${subscription.graceEndsAt?.toISOString() ?? 'unknown'}`,
     };
+  }
+
+  /**
+   * A trial ends in a few days (M23.3).
+   *
+   * 🔴 **The provider's `trial_end`, not our `trialEndsAt`.** The two can
+   * disagree — a merchant who checked out mid-trial had their remaining trial
+   * carried across (F110), and Stripe is authoritative about what it will
+   * actually charge and when. Telling them a date we hold locally and the
+   * provider does not honour is worse than saying nothing.
+   *
+   * 📌 **No local write.** M22.4 keeps `subscriptions` webhook-derived, and
+   * `customer.subscription.updated` already carries the terms — this event is a
+   * notification trigger, not a state change.
+   */
+  private async onTrialWillEnd(payload: unknown): Promise<LifecycleResult> {
+    const remote = this.asRecord(payload);
+
+    const subscription = await this.findSubscription(
+      this.asId(remote.id),
+      this.asId(remote.customer),
+    );
+
+    if (subscription === null) {
+      return { changed: false, reason: 'no subscription matches this trial notice' };
+    }
+
+    const trialEnd = this.asDate(remote.trial_end);
+
+    if (trialEnd === null) {
+      return { changed: false, reason: 'trial notice carried no trial_end' };
+    }
+
+    /*
+     * ⚠️ **Best-effort, exactly as dunning mail is.** A notification that fails
+     * must not fail the webhook: the provider would redeliver an event whose
+     * only effect is an email, and F111 means that retry re-runs the handler —
+     * so a flaky mailer would send the notice repeatedly.
+     */
+    await this.notifier
+      .trialEnding(subscription.tenantId, trialEnd)
+      .catch((error: unknown) => {
+        this.logger.warn(`Could not send a trial-ending notice: ${(error as Error).message}`);
+      });
+
+    return { changed: true, detail: `notified of a trial ending ${trialEnd.toISOString()}` };
   }
 
   /**
