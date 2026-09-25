@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import {
   BillingEventRetryService,
@@ -47,12 +47,49 @@ describe('BillingEventRetryService', () => {
       update,
     } as unknown as Repository<BillingEvent>;
 
+    /*
+     * 🔴 **F125's claim, faked at the query builder.** The real one takes
+     * `FOR UPDATE SKIP LOCKED` inside a transaction; what this spec asserts is
+     * everything *around* it — which rows are asked for, that `attempts` is
+     * stamped before the work, and what happens to each outcome. That the lock
+     * clause reaches MySQL is an e2e property and is proven there.
+     */
+    const claimed: string[] = [];
+
+    const builder: Record<string, jest.Mock> = {
+      where: jest.fn(() => builder),
+      andWhere: jest.fn(() => builder),
+      orderBy: jest.fn(() => builder),
+      limit: jest.fn(() => builder),
+      setLock: jest.fn(() => builder),
+      setOnLocked: jest.fn(() => builder),
+      getMany: jest.fn(async () => events),
+      update: jest.fn(() => builder),
+      set: jest.fn(() => builder),
+      whereInIds: jest.fn((ids: string[]) => {
+        claimed.push(...ids);
+
+        return builder;
+      }),
+      execute: jest.fn(async () => ({ affected: events.length })),
+    };
+
+    const manager = {
+      createQueryBuilder: jest.fn(() => builder),
+    };
+
+    const dataSource = {
+      transaction: async (work: (m: unknown) => Promise<unknown>) => work(manager),
+    } as unknown as DataSource;
+
     const lifecycle = {
       apply: apply ?? jest.fn(async () => ({ changed: true, detail: 'ok' })),
     } as unknown as SubscriptionLifecycleService;
 
     return {
-      service: new BillingEventRetryService(repo, lifecycle),
+      service: new BillingEventRetryService(repo, lifecycle, dataSource),
+      builder,
+      claimed,
       update,
       repo,
       apply: lifecycle.apply as jest.Mock,
@@ -158,18 +195,61 @@ describe('BillingEventRetryService', () => {
    * result.
    */
   it('asks only for rows that are unfinished, not dead, and old enough', async () => {
-    const { service, repo } = build([]);
+    const { service, builder } = build([]);
 
     await service.retryPending(NOW);
 
-    const [[query]] = (repo.find as jest.Mock).mock.calls as [
-      [{ where: Record<string, { type?: string; value?: unknown }> }],
-    ];
+    const clauses = [
+      ...(builder.where.mock.calls as unknown[][]).map((c) => String(c[0])),
+      ...(builder.andWhere.mock.calls as unknown[][]).map((c) => String(c[0])),
+    ].join(' | ');
 
-    expect(query.where.processedAt.type).toBe('isNull');
-    expect(query.where.deadAt.type).toBe('isNull');
-    expect(query.where.createdAt.type).toBe('lessThan');
-    expect(query.where.createdAt.value).toEqual(new Date(NOW.getTime() - RETRY_AFTER_MS));
+    expect(clauses).toContain('processedAt IS NULL');
+    expect(clauses).toContain('deadAt IS NULL');
+    expect(clauses).toContain('createdAt <');
+
+    const [[, params]] = builder.andWhere.mock.calls.filter((c: unknown[]) =>
+      String(c[0]).includes('createdAt'),
+    ) as unknown as [[string, { cutoff: Date }]];
+
+    expect(params.cutoff).toEqual(new Date(NOW.getTime() - RETRY_AFTER_MS));
+  });
+
+  /**
+   * 🔴 **F125: the rows are LOCKED, and the lock skips what another worker
+   * holds.** Two workers running the same pass would otherwise select the same
+   * rows and process each event twice. `SKIP LOCKED` makes the second see
+   * fewer rows rather than block behind the first.
+   */
+  it('claims its rows with a skip-locked write lock', async () => {
+    const { service, builder } = build([{ attempts: 0 }]);
+
+    await service.retryPending(NOW);
+
+    expect(builder.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(builder.setOnLocked).toHaveBeenCalledWith('skip_locked');
+  });
+
+  /**
+   * 🔴 **`attempts` is stamped BEFORE the work, inside the claim.** A process
+   * that dies mid-handler must still burn an attempt; incrementing on
+   * completion would let a crash-looping handler retry for ever without ever
+   * reaching the dead-letter limit.
+   */
+  it('stamps the attempt before running the handler', async () => {
+    const apply = jest.fn(async () => {
+      throw new Error('dies mid-handler');
+    });
+
+    const { service, claimed, builder } = build([{ attempts: 0 }], apply);
+
+    await service.retryPending(NOW);
+
+    expect(claimed).toEqual(['evt_row_0']);
+
+    const [[patch]] = builder.set.mock.calls as unknown as [[{ attempts: () => string }]];
+
+    expect(patch.attempts()).toBe('attempts + 1');
   });
 
   /**

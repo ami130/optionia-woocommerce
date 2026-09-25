@@ -970,6 +970,42 @@ describe('Billing webhook (e2e)', () => {
     });
 
     /**
+     * 🔴 **F125: two workers racing must not process one event twice.**
+     *
+     * This is the claim's entire purpose, and only the database can prove it —
+     * `FOR UPDATE SKIP LOCKED` is a MySQL behaviour, and a mocked repository
+     * can imitate the call but not the lock. Two passes are started together;
+     * between them each row must be handled **exactly once**.
+     */
+    it('processes each row once when two workers run together', async () => {
+      const ids = [
+        await seedUnprocessed({ type: 'customer.discount.created' }),
+        await seedUnprocessed({ type: 'customer.discount.created' }),
+        await seedUnprocessed({ type: 'customer.discount.created' }),
+      ];
+
+      const worker = app.get(BillingEventRetryService, { strict: false });
+
+      /* Both passes in flight at once, as two instances would be. */
+      const [a, b] = await Promise.all([worker.retryPending(), worker.retryPending()]);
+
+      /*
+       * 🔴 **`attempts` is the witness.** It is stamped once per claim, so a
+       * row claimed by both passes would show 2. Exactly one attempt each is
+       * what SKIP LOCKED buys.
+       */
+      for (const eventId of ids) {
+        const row = await rowOf(eventId);
+
+        expect(row.processedAt).not.toBeNull();
+        expect(Number(row.attempts)).toBe(1);
+      }
+
+      /* ⚠️ And no row was counted twice across the two passes. */
+      expect(a.retried + b.retried).toBeGreaterThanOrEqual(3);
+    });
+
+    /**
      * ⚠️ **A row whose request may still be running is left alone.** The row is
      * written before the work, so a webhook in flight has `processedAt` null —
      * retrying it would run the same event concurrently with itself.

@@ -720,7 +720,8 @@ fi
 # 🔴 The three conditions that define "retryable"; each is load-bearing.
 MISSING_GUARDS=""
 
-for guard in "processedAt: IsNull()" "deadAt: IsNull()" "createdAt: LessThan"; do
+# 📌 Spelled as SQL since F125 moved the claim to a query builder for the lock.
+for guard in "processedAt IS NULL" "deadAt IS NULL" "createdAt < :cutoff"; do
   grep -q "$guard" "$RETRY" 2>/dev/null || MISSING_GUARDS="$MISSING_GUARDS '$guard'"
 done
 
@@ -760,7 +761,7 @@ fi
 # cannot be quietly dropped from GATE 3 without failing here.
 CHECKLIST_MISSING=""
 
-for item in "BILLING_RETRY_ENABLED=true on EXACTLY ONE instance" \
+for item in "BILLING_RETRY_ENABLED=true on at least one instance" \
   "billing:reconcile\` scheduled" \
   "Dead-lettered billing events visible"; do
   grep -qF "$item" developePlan.md || CHECKLIST_MISSING="$CHECKLIST_MISSING|$item"
@@ -800,6 +801,32 @@ if grep -rq "ck_invoices_totals" "$SRC/migrations"; then
 else
   fail "the ck_invoices_totals CHECK constraint is gone"
   printf '        This caught a wrong fixture in its own test suite once already.\n'
+fi
+
+# --- 36. F125: the retry worker claims a row before working it -------------
+#
+# 🔴 **Two workers would otherwise process the same event twice.** The webhook
+# path protects itself with `processedAt` and the unique index; the worker had
+# no equivalent — it selected rows and worked them with no lock at all.
+#
+# ⚠️ **`SKIP LOCKED` is the load-bearing half.** A plain `FOR UPDATE` makes the
+# second worker *block* behind the first and then process the same rows anyway;
+# skipping is what makes it take the remaining work instead. Measured: without
+# it the e2e sees `attempts = 2` on a row claimed by both passes.
+if grep -q "setLock('pessimistic_write')" "$RETRY" \
+  && grep -q "setOnLocked('skip_locked')" "$RETRY"; then
+  pass "the retry worker claims its rows with a skip-locked write lock (F125)"
+else
+  fail "the retry worker no longer claims rows before working them"
+  printf '        Two instances would process the same billing event twice.\n'
+fi
+
+# 🔴 The attempt is burned at CLAIM time, so a crash mid-handler still counts.
+if grep -q "attempts + 1" "$RETRY"; then
+  pass "an attempt is stamped before the handler runs, not after"
+else
+  fail "the retry worker no longer stamps the attempt at claim time"
+  printf '        A crash-looping handler would never reach the dead-letter limit.\n'
 fi
 
 echo

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import { BillingEvent } from './entities/billing-event.entity';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
@@ -55,7 +55,56 @@ export class BillingEventRetryService {
     @InjectRepository(BillingEvent)
     private readonly events: Repository<BillingEvent>,
     private readonly lifecycle: SubscriptionLifecycleService,
+    /* 📌 F125: claiming needs a transaction the repository alone cannot give. */
+    private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * Take ownership of up to 50 retryable rows (F125).
+   *
+   * 🔴 **`FOR UPDATE SKIP LOCKED`, and the SKIP is the point.** Two workers
+   * running the same pass would otherwise select the same rows and process each
+   * event twice; with `SKIP LOCKED` the second simply sees fewer rows and does
+   * the remaining work, rather than blocking behind the first.
+   *
+   * ⚠️ **The claim is its OWN transaction, deliberately short.** Holding the
+   * lock across `lifecycle.apply()` would keep a row locked for the length of a
+   * handler — and one slow provider call would stall every other worker. The
+   * stamped `attempts` is what carries ownership afterwards, not the lock.
+   *
+   * 🔴 **`attempts` is incremented HERE, before the work**, so a process that
+   * dies mid-handler still burns an attempt. Incrementing on completion would
+   * let a crash-looping handler retry for ever without ever reaching the
+   * dead-letter limit — the exact failure `deadAt` exists to stop.
+   */
+  private async claim(cutoff: Date): Promise<BillingEvent[]> {
+    return this.dataSource.transaction(async (manager) => {
+      const rows = await manager
+        .createQueryBuilder(BillingEvent, 'e')
+        .where('e.processedAt IS NULL')
+        .andWhere('e.deadAt IS NULL')
+        .andWhere('e.createdAt < :cutoff', { cutoff })
+        .orderBy('e.createdAt', 'ASC')
+        .limit(50)
+        .setLock('pessimistic_write')
+        .setOnLocked('skip_locked')
+        .getMany();
+
+      if (rows.length === 0) {
+        return [];
+      }
+
+      await manager
+        .createQueryBuilder()
+        .update(BillingEvent)
+        .set({ attempts: () => 'attempts + 1' })
+        .whereInIds(rows.map((row) => row.id))
+        .execute();
+
+      /* 📌 The in-memory copies must agree with the row we just wrote. */
+      return rows.map((row) => Object.assign(row, { attempts: row.attempts + 1 }));
+    });
+  }
 
   /**
    * One pass over the retryable rows.
@@ -71,28 +120,21 @@ export class BillingEventRetryService {
   }> {
     const cutoff = new Date(now.getTime() - RETRY_AFTER_MS);
 
-    const pending = await this.events.find({
-      /*
-       * 🔴 **Three conditions, and each is load-bearing.** `processedAt IS
-       * NULL` is "never finished"; `deadAt IS NULL` excludes what we already
-       * gave up on, or a deterministic failure would be re-run for ever; and
-       * the age cutoff keeps this off rows whose original request is still
-       * running.
-       */
-      where: {
-        processedAt: IsNull(),
-        deadAt: IsNull(),
-        createdAt: LessThan(cutoff),
-      },
-      order: { createdAt: 'ASC' },
-      take: 50,
-    });
+    /*
+     * 🔴 **Three conditions, and each is load-bearing** (see `claim`).
+     * `processedAt IS NULL` is "never finished"; `deadAt IS NULL` excludes what
+     * we already gave up on, or a deterministic failure would be re-run for
+     * ever; and the age cutoff keeps this off rows whose original request is
+     * still running.
+     */
+    const pending = await this.claim(cutoff);
 
     let recovered = 0;
     let deadLettered = 0;
 
     for (const event of pending) {
-      const attempts = event.attempts + 1;
+      /* 📌 Already incremented by `claim()`; this is the value now in the row. */
+      const attempts = event.attempts;
 
       try {
         const result = await this.lifecycle.apply(event.type, event.payload);
