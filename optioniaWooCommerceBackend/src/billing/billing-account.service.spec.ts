@@ -51,10 +51,16 @@ describe('BillingAccountService', () => {
   ) {
     const updatePlan = jest.fn(async () => undefined);
     const cancelSubscription = jest.fn(async () => undefined);
+    const createPortalSession = jest.fn(async () => ({ url: 'https://portal.test/session' }));
 
     const provider =
       seed.provider === undefined
-        ? ({ name: 'stripe', updatePlan, cancelSubscription } as unknown as BillingProvider)
+        ? ({
+            name: 'stripe',
+            updatePlan,
+            cancelSubscription,
+            createPortalSession,
+          } as unknown as BillingProvider)
         : seed.provider;
 
     const subscription =
@@ -113,6 +119,7 @@ describe('BillingAccountService', () => {
       updates,
       updatePlan,
       cancelSubscription,
+      createPortalSession,
     };
   }
 
@@ -413,6 +420,81 @@ describe('BillingAccountService', () => {
       const { service } = build({ provider: null });
 
       await expect(call(service)).rejects.toThrow(
+        'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
+      );
+    });
+  });
+
+  /**
+   * E5 — the provider's billing portal (M22.3, M22.5).
+   *
+   * 🔴 **Payment methods are the provider's surface deliberately.** Collecting
+   * card details here would put this service in PCI scope for no benefit a
+   * merchant can see.
+   */
+  describe('the billing portal', () => {
+    /*
+     * ⚠️ **`loadConfig` validates the whole environment**, not just `APP_URL`,
+     * so a partial one fails on JWT_SECRET before the return URL is built —
+     * the same baseline `MailModule`'s and `CheckoutService`'s suites keep.
+     *
+     * 📌 **Overlaid, never wiped** (K4): a suite that empties `process.env`
+     * breaks siblings that captured their baseline at module load.
+     */
+    const saved = { ...process.env };
+
+    const VALID_ENV: Record<string, string> = {
+      NODE_ENV: 'test',
+      PORT: '4000',
+      DB_HOST: '127.0.0.1',
+      DB_PORT: '3306',
+      DB_NAME: 'optionia_woo_test',
+      DB_USER: 'testuser',
+      DB_PASSWORD: 'testpassword',
+      DB_SSL: 'false',
+      JWT_SECRET: 'x'.repeat(48),
+      CORS_ORIGINS: 'http://localhost:3000',
+      APP_URL: 'https://dash.example.test',
+    };
+
+    beforeEach(() => {
+      Object.assign(process.env, VALID_ENV);
+    });
+
+    afterEach(() => {
+      Object.assign(process.env, saved);
+    });
+
+    it('returns a portal URL for a tenant with a provider customer', async () => {
+      const { service, createPortalSession } = build({
+        subscription: { providerCustomerId: 'cus_1' },
+      });
+
+      await expect(service.portalSession()).resolves.toEqual({
+        url: 'https://portal.test/session',
+      });
+
+      expect(createPortalSession).toHaveBeenCalledWith({
+        providerCustomerId: 'cus_1',
+        returnUrl: 'https://dash.example.test/billing',
+      });
+    });
+
+    /** ⚠️ Nothing to show a merchant who has never paid — refused with a reason. */
+    it('refuses a tenant with no billing profile', async () => {
+      const { service, createPortalSession } = build({
+        subscription: { providerCustomerId: null },
+      });
+
+      await expect(service.portalSession()).rejects.toThrow('no billing profile yet');
+      expect(createPortalSession).not.toHaveBeenCalled();
+    });
+
+    /** 🔴 G3's guard, on the third write path. */
+    it('fails with a named reason when billing is unconfigured', async () => {
+      const { service } = build({ provider: null });
+
+      await expect(service.portalSession()).rejects.toThrow(
         'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
       );
     });

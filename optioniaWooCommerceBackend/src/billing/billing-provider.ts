@@ -98,7 +98,36 @@ export interface BillingProvider {
     providerCustomerId: string | null;
     successUrl: string;
     cancelUrl: string;
+
+    /**
+     * When the merchant's existing trial ends, if it has not (M22.3).
+     *
+     * 🔴 **The REMAINING trial, not a fresh one.** A merchant ten days into a
+     * fourteen-day trial who upgrades must keep their four days — charging them
+     * today takes something they were promised, and granting fourteen more
+     * gives away a fortnight to anyone who upgrades early.
+     *
+     * ⚠️ `null` when the trial has already ended, which is the ordinary case
+     * for an upgrade later in the life of an account.
+     */
+    trialEndsAt: Date | null;
   }): Promise<CheckoutSession>;
+
+  /**
+   * A session at the provider's own billing portal (M22.3, M22.5).
+   *
+   * 🔴 **Payment method management is the provider's surface, deliberately.**
+   * Collecting card details ourselves would put this service in PCI scope for
+   * no benefit a merchant can see — the portal also carries invoice history,
+   * tax ids and cancellation, all of which the provider must agree with anyway.
+   *
+   * 📌 Returns a URL only. The portal is stateful at the provider and nothing
+   * about it is ours to record.
+   */
+  createPortalSession(input: {
+    providerCustomerId: string;
+    returnUrl: string;
+  }): Promise<{ url: string }>;
 
   getSubscription(providerSubscriptionId: string): Promise<ProviderSubscription | null>;
 

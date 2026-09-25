@@ -66,7 +66,10 @@ export class StripeProvider implements BillingProvider {
     providerCustomerId: string | null;
     successUrl: string;
     cancelUrl: string;
+    trialEndsAt: Date | null;
   }): Promise<CheckoutSession> {
+    const trialEnd = trialEndTimestamp(input.trialEndsAt);
+
     const session = await this.stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{ price: input.planPriceId, quantity: 1 }],
@@ -98,6 +101,19 @@ export class StripeProvider implements BillingProvider {
        * explicit that state comes from the webhook, never the redirect, so the
        * event must carry enough to route itself.
        */
+      /*
+       * 🔴 **The REMAINING trial, carried across (M22.3).** A merchant ten days
+       * into a fourteen-day trial who upgrades keeps their four days: Stripe
+       * takes an absolute `trial_end`, so what they were promised survives the
+       * upgrade rather than being charged today or reset to a fresh fortnight.
+       *
+       * ⚠️ **Stripe requires `trial_end` to be at least 48 hours out**, so a
+       * trial ending sooner than that is dropped rather than sent — a rejected
+       * session would block the upgrade entirely, and the merchant loses at
+       * most a day they were about to lose anyway.
+       */
+      ...(trialEnd === null ? {} : { subscription_data: { trial_end: trialEnd } }),
+
       client_reference_id: input.tenantId,
       metadata: { tenantId: input.tenantId, planPriceId: input.planPriceId },
     });
@@ -115,6 +131,26 @@ export class StripeProvider implements BillingProvider {
    * has forgotten is a **finding**, and a method that threw would end the sweep
    * at the first one.
    */
+  /**
+   * A session at Stripe's billing portal (M22.3, M22.5).
+   *
+   * 📌 **Configuration lives at Stripe, not here.** What the portal offers —
+   * updating a card, viewing invoices, cancelling — is set on the account, so a
+   * change of policy is a dashboard edit rather than a deploy. Passing a
+   * `configuration` id here would move that decision into code for no gain.
+   */
+  async createPortalSession(input: {
+    providerCustomerId: string;
+    returnUrl: string;
+  }): Promise<{ url: string }> {
+    const session = await this.stripe.billingPortal.sessions.create({
+      customer: input.providerCustomerId,
+      return_url: input.returnUrl,
+    });
+
+    return { url: session.url };
+  }
+
   async getSubscription(providerSubscriptionId: string): Promise<ProviderSubscription | null> {
     let remote: Stripe.Subscription;
 
@@ -295,4 +331,29 @@ function mapSubscriptionStatus(status: Stripe.Subscription.Status): Subscription
        */
       throw new Error(`Unhandled Stripe subscription status: ${String(status)}`);
   }
+}
+
+/**
+ * Stripe's `trial_end`, or nothing.
+ *
+ * 🔴 **Stripe refuses a `trial_end` less than 48 hours away**, and a rejected
+ * session is an upgrade the merchant cannot complete. Dropping a trial that
+ * short costs them at most a day they were about to lose; sending it costs them
+ * the upgrade.
+ *
+ * ⚠️ Seconds, not milliseconds — the same units every other timestamp in this
+ * adapter uses, and the mistake F96 found four times in the invoice payload.
+ */
+function trialEndTimestamp(trialEndsAt: Date | null): number | null {
+  if (trialEndsAt === null) {
+    return null;
+  }
+
+  const MINIMUM_NOTICE_MS = 48 * 60 * 60 * 1000;
+
+  if (trialEndsAt.getTime() - Date.now() < MINIMUM_NOTICE_MS) {
+    return null;
+  }
+
+  return Math.floor(trialEndsAt.getTime() / 1000);
 }

@@ -409,6 +409,41 @@ else
   fail "the plan admin routes lost the staff guard, or it no longer fails closed"
 fi
 
+# --- 22. The merchant's remaining trial survives an upgrade ---------------
+#
+# 🔴 **Nothing passed a trial to the provider until M22.3.** A merchant ten days
+# into a fourteen-day trial who upgraded was **charged that day**, losing four
+# days they had been promised.
+#
+# ⚠️ An absolute `trial_end`, never `trial_period_days`: the second grants a
+# FRESH fortnight to anyone who upgrades early, which is the opposite mistake.
+if grep -q "trial_end: trialEnd" "$BILLING/stripe.provider.ts" \
+  && grep -q "trialEndsAt: tenant.trialEndsAt" "$BILLING/checkout.service.ts"; then
+  pass "a merchant's remaining trial is carried into checkout"
+else
+  fail "the trial no longer reaches the provider (M22.3)"
+  printf '        A merchant upgrading mid-trial would be charged immediately.\n'
+fi
+
+if grep -q "trial_period_days" "$BILLING/stripe.provider.ts"; then
+  fail "checkout sends trial_period_days, which grants a fresh trial"
+  printf '        Use an absolute trial_end so the REMAINING trial is honoured.\n'
+else
+  pass "the trial is an absolute end, not a fresh period"
+fi
+
+# --- 23. Payment methods stay the provider's surface ----------------------
+#
+# 🔴 **Collecting card details here would put this service in PCI scope** for no
+# benefit a merchant can see. The portal also carries invoice history, tax ids
+# and cancellation — all of which the provider must agree with anyway.
+if grep -q "billingPortal.sessions.create" "$BILLING/stripe.provider.ts" \
+  && grep -q "@Post('portal')" "$BILLING/checkout.controller.ts"; then
+  pass "payment methods are handled at the provider's portal"
+else
+  fail "the billing portal route is missing (M22.3/M22.5)"
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

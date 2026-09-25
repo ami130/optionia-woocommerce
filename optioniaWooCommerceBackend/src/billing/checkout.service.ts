@@ -99,6 +99,16 @@ export class CheckoutService {
        * scattering them across a new one per purchase.
        */
       providerCustomerId: subscription?.providerCustomerId ?? null,
+
+      /*
+       * 🔴 **The merchant's remaining trial travels with them (M22.3).** Until
+       * now nothing passed a trial to the provider, so a merchant ten days into
+       * their fourteen-day trial who upgraded was **charged that day** — losing
+       * four days they had been promised. The trial is the tenant's, which is
+       * why it is read here rather than from the subscription.
+       */
+      trialEndsAt: tenant.trialEndsAt,
+
       successUrl: `${config.appUrl}/billing?checkout=success`,
       cancelUrl: `${config.appUrl}/billing?checkout=cancelled`,
     });

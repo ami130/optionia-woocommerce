@@ -127,4 +127,22 @@ export class CheckoutController {
       reason: body.reason ?? null,
     });
   }
+
+  /**
+   * E5 — send the merchant to the provider's billing portal.
+   *
+   * 🔴 **`BILLING_MANAGE`.** The portal can change a payment method and cancel
+   * a subscription; it is not a read surface however much of it is readable.
+   *
+   * 📌 **A fresh session each time, by design.** Portal links are short-lived
+   * and single-use at the provider — caching one would hand a merchant a dead
+   * link, or worse, a live one to whoever saw it next.
+   */
+  @Post('portal')
+  @RequireCapability(Capability.BILLING_MANAGE)
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async portal(): Promise<{ url: string }> {
+    return this.account.portalSession();
+  }
 }

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { requireTenantId } from '../common/context/request-context';
+import { loadConfig } from '../config/env';
 import { InvoiceStatus, SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
@@ -259,6 +260,37 @@ export class BillingAccountService {
     }
 
     return { accepted: true };
+  }
+
+  /**
+   * E5 — a session at the provider's billing portal (M22.3, M22.5).
+   *
+   * 🔴 **Payment method management is the provider's surface, deliberately.**
+   * Collecting card details ourselves would put this service in PCI scope for
+   * no benefit a merchant can see. The portal also carries invoice history, tax
+   * ids and cancellation — all of which the provider must agree with anyway, so
+   * a second implementation would be a second thing to keep in sync.
+   *
+   * ⚠️ **A tenant that has never paid has no provider customer**, and there is
+   * nothing for a portal to show. Refused with a reason rather than sending
+   * them to an empty page.
+   */
+  async portalSession(): Promise<{ url: string }> {
+    const provider = requireBillingProvider(this.provider);
+    const subscription = await this.load({ withPrice: false });
+
+    if (subscription.providerCustomerId === null) {
+      throw new BadRequestException(
+        'This account has no billing profile yet. Start a checkout first.',
+      );
+    }
+
+    const config = loadConfig();
+
+    return provider.createPortalSession({
+      providerCustomerId: subscription.providerCustomerId,
+      returnUrl: `${config.appUrl}/billing`,
+    });
   }
 
   /**

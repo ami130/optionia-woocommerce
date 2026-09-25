@@ -89,6 +89,7 @@ describe('StripeProvider contract', () => {
     providerCustomerId: null,
     successUrl: 'https://app/ok',
     cancelUrl: 'https://app/no',
+    trialEndsAt: null,
   };
 
   /** 🔴 A checkout is for a PINNED price, never a plan (F88, and `plan_prices`). */
@@ -154,6 +155,78 @@ describe('StripeProvider contract', () => {
     expect(options.customer).toBe('cus_9');
     expect(options.customer_update).toEqual({ address: 'auto' });
     expect(options).not.toHaveProperty('customer_creation');
+  });
+
+  /**
+   * ⚠️ **`subscription_data` is write-only at the provider, verified.** Against
+   * the real Stripe account a session created *with* a trial answered
+   * `amount_total: 0` and `subscription_data: {}` on retrieval, while the same
+   * session *without* one answered `2900` and `subscription_data: null`. The
+   * trial applies; Stripe just does not echo the parameter back.
+   *
+   * 🔴 **So these tests assert what was SENT, and that is the right assertion
+   * here** — reading it back is not available, and `amount_total` is the
+   * provider's own arithmetic rather than this adapter's behaviour.
+   */
+  describe('the merchant’s remaining trial (M22.3)', () => {
+    /**
+     * 🔴 **Until now nothing passed a trial to the provider.** A merchant ten
+     * days into a fourteen-day trial who upgraded was **charged that day**,
+     * losing four days they had been promised.
+     *
+     * ⚠️ An absolute `trial_end`, never `trial_period_days` — the second would
+     * grant a *fresh* fortnight to anyone who upgrades early, which is the
+     * opposite mistake and costs us rather than them.
+     */
+    it('carries the remaining trial as an absolute timestamp', async () => {
+      const trialEndsAt = new Date(Date.now() + 4 * 86_400_000);
+
+      await provider.createCheckout({ ...checkoutInput, trialEndsAt });
+
+      const [options] = calls[0].args as [Record<string, unknown>];
+
+      expect(options.subscription_data).toEqual({
+        trial_end: Math.floor(trialEndsAt.getTime() / 1000),
+      });
+      expect(options.subscription_data).not.toHaveProperty('trial_period_days');
+    });
+
+    it('sends no trial when the merchant has none', async () => {
+      await provider.createCheckout({ ...checkoutInput, trialEndsAt: null });
+
+      const [options] = calls[0].args as [Record<string, unknown>];
+
+      expect(options).not.toHaveProperty('subscription_data');
+    });
+
+    /**
+     * ⚠️ **Stripe refuses a `trial_end` under 48 hours away.** A rejected
+     * session is an upgrade the merchant cannot complete at all, so a trial
+     * that short is dropped — costing them at most a day they were about to
+     * lose anyway.
+     */
+    it('drops a trial ending sooner than the provider accepts', async () => {
+      await provider.createCheckout({
+        ...checkoutInput,
+        trialEndsAt: new Date(Date.now() + 3600_000),
+      });
+
+      const [options] = calls[0].args as [Record<string, unknown>];
+
+      expect(options).not.toHaveProperty('subscription_data');
+    });
+
+    /** 📌 An already-expired trial is the same case, not a negative timestamp. */
+    it('drops a trial that has already ended', async () => {
+      await provider.createCheckout({
+        ...checkoutInput,
+        trialEndsAt: new Date(Date.now() - 86_400_000),
+      });
+
+      const [options] = calls[0].args as [Record<string, unknown>];
+
+      expect(options).not.toHaveProperty('subscription_data');
+    });
   });
 
   /**

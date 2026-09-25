@@ -74,7 +74,11 @@ describe('CheckoutService', () => {
 
     const provider =
       seed.provider === undefined
-        ? ({ name: 'stripe', createCheckout } as unknown as BillingProvider)
+        ? ({
+            name: 'stripe',
+            createCheckout,
+            createPortalSession: jest.fn(async () => ({ url: 'https://portal.test/s' })),
+          } as unknown as BillingProvider)
         : seed.provider;
 
     const price =
@@ -94,7 +98,7 @@ describe('CheckoutService', () => {
     const tenant =
       seed.tenant === null
         ? null
-        : ({ id: 'tenant_1', billingCurrency: null, ...seed.tenant } as Tenant);
+        : ({ id: 'tenant_1', billingCurrency: null, trialEndsAt: null, ...seed.tenant } as Tenant);
 
     const prices = { findOne: jest.fn(async () => price) } as unknown as Repository<PlanPrice>;
     const tenants = { findOne: jest.fn(async () => tenant) } as unknown as Repository<Tenant>;
@@ -249,6 +253,34 @@ describe('CheckoutService', () => {
 
       await expect(service.start({ planPriceId: 'price_row_1' })).rejects.toThrow(
         'No billing provider is configured (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET absent).',
+      );
+    });
+  });
+
+  /**
+   * M22.3 — the trial the merchant already has.
+   *
+   * 🔴 **The tenant's trial, not the subscription's.** A trial is granted at
+   * provisioning and belongs to the account; reading it from the subscription
+   * would miss it for a merchant who has never had a paid one.
+   */
+  describe('the remaining trial', () => {
+    it('passes the tenant’s trial end to the provider', async () => {
+      const trialEndsAt = new Date('2026-10-09T00:00:00.000Z');
+      const { service, createCheckout } = build({ tenant: { trialEndsAt } });
+
+      await service.start({ planPriceId: 'price_row_1' });
+
+      expect(createCheckout).toHaveBeenCalledWith(expect.objectContaining({ trialEndsAt }));
+    });
+
+    it('passes null when the tenant has no trial', async () => {
+      const { service, createCheckout } = build({ tenant: { trialEndsAt: null } });
+
+      await service.start({ planPriceId: 'price_row_1' });
+
+      expect(createCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({ trialEndsAt: null }),
       );
     });
   });

@@ -46,6 +46,13 @@ class FakeProvider implements BillingProvider {
     return { url: `https://fake/checkout/${input.planPriceId}`, reference: 'ref-1' };
   }
 
+  async createPortalSession(input: {
+    providerCustomerId: string;
+    returnUrl: string;
+  }): Promise<{ url: string }> {
+    return { url: `https://portal.test/${input.providerCustomerId}?return=${input.returnUrl}` };
+  }
+
   async getSubscription(providerSubscriptionId: string): Promise<ProviderSubscription | null> {
     if (providerSubscriptionId !== 'sub-known') {
       return null;
