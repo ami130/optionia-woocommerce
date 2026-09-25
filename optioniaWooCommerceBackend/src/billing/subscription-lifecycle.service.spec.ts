@@ -377,6 +377,86 @@ describe('SubscriptionLifecycleService', () => {
     });
   });
 
+  /**
+   * M23.3's two missing handlers.
+   *
+   * 🔴 **`created` closes a dependency on delivery order.** A subscription only
+   * became known through `updated`, which Stripe is not obliged to send first —
+   * so one whose `created` arrived alone sat unlinked until some later event
+   * happened to correct it.
+   */
+  describe('the handlers M23.3 named and nobody wrote', () => {
+    it('handles customer.subscription.created like an update', async () => {
+      const { service, subscription } = build({ providerSubscriptionId: 'sub_1' });
+
+      const result = await service.apply('customer.subscription.created', {
+        id: 'sub_1',
+        status: 'active',
+      });
+
+      expect(result.changed).toBe(true);
+      expect(subscription.status).toBe(SubscriptionStatus.ACTIVE);
+    });
+
+    /** ⚠️ Including the case it exists for: no `updated` has arrived yet. */
+    it('links a subscription from created alone, by customer', async () => {
+      const { service, subscription, subscriptions } = build({
+        providerSubscriptionId: null,
+        providerCustomerId: 'cus_1',
+      });
+
+      (subscriptions.findOne as jest.Mock).mockImplementation(
+        async (options: { where: Record<string, unknown> }) =>
+          'providerCustomerId' in options.where ? subscription : null,
+      );
+
+      await service.apply('customer.subscription.created', {
+        id: 'sub_1',
+        status: 'active',
+        customer: 'cus_1',
+      });
+
+      expect(subscription.providerSubscriptionId).toBe('sub_1');
+      expect(subscription.status).toBe(SubscriptionStatus.ACTIVE);
+    });
+
+    /**
+     * 📌 **Stripe sends both `invoice.paid` and `invoice.payment_succeeded`**
+     * for one invoice. Routing both to the same handler is safe because storing
+     * an invoice is an upsert — the second is a no-op, not a second row.
+     */
+    it('handles invoice.payment_succeeded like invoice.paid', async () => {
+      const { service, storedInvoices } = build({ providerSubscriptionId: 'sub_1' });
+
+      const result = await service.apply('invoice.payment_succeeded', paidInvoice());
+
+      expect(result.changed).toBe(true);
+      expect(storedInvoices).toHaveLength(1);
+    });
+
+    /**
+     * ⚠️ **This asserts the UPDATE path is taken, not the row count.** A first
+     * version counted distinct ids and failed 2 ≠ 1 — because the stub returns
+     * a row carrying an id the first save never had, which is an artefact of
+     * the stub rather than of the code.
+     *
+     * 📌 **`billing-webhook.e2e-spec` proves the row count against MySQL**,
+     * where `uq_invoices_provider_invoice` actually exists. That is the only
+     * place the claim "one invoice" can honestly be made.
+     */
+    it('updates the existing invoice rather than inserting a second', async () => {
+      const existing = { id: 'inv_row_1', providerInvoiceId: 'in_1' } as Invoice;
+      const { service, invoices, storedInvoices } = build({ providerSubscriptionId: 'sub_1' });
+
+      (invoices.findOne as jest.Mock).mockResolvedValueOnce(existing);
+
+      await service.apply('invoice.payment_succeeded', paidInvoice());
+
+      expect(storedInvoices).toHaveLength(1);
+      expect(storedInvoices[0]).toMatchObject({ id: 'inv_row_1', totalMinor: 3509 });
+    });
+  });
+
   describe('invoice.payment_failed', () => {
     /**
      * 🔴 **ADR-116: a failed payment starts a clock, it does not suspend.** Most

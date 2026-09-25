@@ -69,11 +69,32 @@ export class SubscriptionLifecycleService {
       case 'checkout.session.completed':
         return this.onCheckoutCompleted(payload);
 
+      /*
+       * 🔴 **`created` routes here because it carries the same object.**
+       * Verified against the library's types, not assumed:
+       * `CustomerSubscriptionCreatedEvent.data.object` and the `updated` one
+       * are the same `Stripe.Subscription`.
+       *
+       * ⚠️ **Handling it closes a dependency on delivery order.** Until now a
+       * subscription only became known through `updated`, which Stripe is not
+       * obliged to send first — so a merchant whose `created` arrived alone sat
+       * unlinked until some later event happened to correct it.
+       */
+      case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
         return this.onSubscriptionChanged(payload);
 
+      /*
+       * 📌 **`invoice.paid` and `invoice.payment_succeeded` are both sent**, for
+       * the same invoice, and mean the same thing to this system. Routing both
+       * to one handler is safe because storing an invoice is an upsert on
+       * `uq_invoices_provider_invoice` — the second is a no-op rather than a
+       * second row, which M23.3 names as a required handler and F99 already
+       * made idempotent.
+       */
       case 'invoice.paid':
+      case 'invoice.payment_succeeded':
         return this.onInvoicePaid(payload);
 
       case 'invoice.payment_failed':
