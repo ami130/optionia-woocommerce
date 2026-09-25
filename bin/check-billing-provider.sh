@@ -747,6 +747,32 @@ else
   printf '        v12 is ESM-only: every suite loading the scheduler fails to run.\n'
 fi
 
+# --- 34. The two dormant mechanisms are on the launch checklist ------------
+#
+# 🔴 **M23.4's worker and M23.5's reconciler are invoked by NOTHING.** Both are
+# built, tested and mutation-proven; neither has a cron entry, and
+# `BILLING_RETRY_ENABLED` is set nowhere. That is correct today — there is no
+# deployment to attach them to — and it is the **sixth and seventh** instance of
+# the defect this phase produced five times already: a mechanism with no caller.
+#
+# ⚠️ **A checklist line is prose, and prose does not fail a build.** This is the
+# nearest thing to enforcement available before a deployment exists: the items
+# cannot be quietly dropped from GATE 3 without failing here.
+CHECKLIST_MISSING=""
+
+for item in "BILLING_RETRY_ENABLED=true on EXACTLY ONE instance" \
+  "billing:reconcile\` scheduled" \
+  "Dead-lettered billing events visible"; do
+  grep -qF "$item" developePlan.md || CHECKLIST_MISSING="$CHECKLIST_MISSING|$item"
+done
+
+if [ -z "$CHECKLIST_MISSING" ]; then
+  pass "the dormant billing mechanisms are on the launch checklist"
+else
+  fail "GATE 3 no longer requires:$CHECKLIST_MISSING"
+  printf '        Built, tested, and invoked by nothing is how five of these shipped.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
+import { loadConfig } from '../config/env';
 import { BillingEventRetryService } from './billing-event-retry.service';
 
 /**
@@ -37,6 +38,10 @@ import { BillingEventRetryService } from './billing-event-retry.service';
  * ⚠️ **Default OFF, deliberately.** An in-process worker that every instance
  * runs means N instances retry the same rows concurrently; turning it on is a
  * decision about how the service is deployed, not a default to inherit.
+ *
+ * 📌 **`loadConfig()` is called per tick, not cached.** It re-validates the
+ * whole environment, which is a few microseconds every five minutes — and it
+ * means an operator who fixes a typo does not have to restart the process.
  */
 @Injectable()
 export class BillingEventRetryScheduler {
@@ -52,7 +57,14 @@ export class BillingEventRetryScheduler {
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async run(): Promise<void> {
-    if (process.env.BILLING_RETRY_ENABLED !== 'true') {
+    /*
+     * ⚠️ **Read through `loadConfig()`, not `process.env` directly.** The first
+     * version compared the raw string, so `BILLING_RETRY_ENABLE=true` — one
+     * missing letter — disabled the worker **silently**: the pass never ran and
+     * nothing said why. `bool()` throws on a value it cannot parse, and accepts
+     * the same `true/1/yes` spellings as every other flag in this system.
+     */
+    if (!loadConfig().billing.retryEnabled) {
       return;
     }
 
@@ -67,6 +79,12 @@ export class BillingEventRetryScheduler {
       }
     } catch (error) {
       /*
+       * ⚠️ **This wraps the PASS, deliberately not the guard above it.** A
+       * broken `BILLING_RETRY_ENABLED` is a configuration error, not a
+       * transient failure: `loadConfig()` throws, `main.ts` calls it at boot,
+       * and the application refuses to start. Catching it here would restore
+       * exactly the silence this guard was moved into config to remove.
+       *
        * 🔴 **A scheduled job that throws takes nothing else down, but it does
        * go unnoticed.** `@nestjs/schedule` logs an unhandled rejection and
        * carries on, so the failure of the thing that exists to catch failures

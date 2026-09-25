@@ -198,6 +198,20 @@ export interface AppConfig {
   readonly billing: {
     readonly secretKey: string | null;
     readonly webhookSecret: string | null;
+
+    /**
+     * Whether THIS instance runs M23.4's retry pass.
+     *
+     * 🔴 **In-process, so exactly one instance should set it.** Every instance
+     * with it on walks the same `billing_events` rows, which means one billing
+     * event handled twice, concurrently.
+     *
+     * ⚠️ **Validated here rather than read from `process.env` at the call
+     * site.** It was read raw at first, so `BILLING_RETRY_ENABLE=true` — one
+     * missing letter — disabled the worker **silently**: the pass simply never
+     * ran and nothing said why. `bool()` throws on anything it cannot parse.
+     */
+    readonly retryEnabled: boolean;
   };
 
   /**
@@ -346,6 +360,9 @@ export function loadConfig(): AppConfig {
     billing: {
       secretKey: nullableSecret('STRIPE_SECRET_KEY'),
       webhookSecret: nullableSecret('STRIPE_WEBHOOK_SECRET'),
+
+      /* 📌 Off by default: turning it on is a deployment decision (M23.4). */
+      retryEnabled: bool('BILLING_RETRY_ENABLED', false),
     },
 
     mail: loadMailConfig(isProduction),
