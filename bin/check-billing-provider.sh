@@ -604,6 +604,52 @@ else
   printf '        These moved once already; an untyped fixture would not notice again.\n'
 fi
 
+# --- 31. M23.5's reconciler, and its safety default -----------------------
+#
+# 🔴 **`getSubscription` was the FIFTH mechanism built and called by nothing** —
+# after `createCheckout` (H1), `cancelSubscription` and `updatePlan` (F106), and
+# `trialEnding` (V1/F117). M23.5 is what gives it a production caller, so a
+# reconciler that stops calling it is that defect returning.
+#
+# ⚠️ **The safety default is the invariant most worth pinning.** Reporting is
+# safe; repairing is not. A job that writes on every difference is one provider
+# outage — or one bug in the comparison itself — away from rewriting every
+# subscription in the database in a single pass. F91 set the principle: the
+# provider is authoritative, and a difference is a **finding**.
+RECONCILER="$BILLING/subscription-reconciler.service.ts"
+
+if [ -f "$RECONCILER" ] && grep -q "provider.getSubscription" "$RECONCILER"; then
+  pass "reconciliation gives getSubscription a production caller (M23.5)"
+else
+  fail "the reconciler is missing, or no longer calls getSubscription"
+  printf '        Five mechanisms have now shipped without a caller; this is the fix.\n'
+fi
+
+# 🔴 `?? true` is the whole safety argument: writing must be opt-in.
+if grep -q "options.dryRun ?? true" "$RECONCILER" 2>/dev/null; then
+  pass "reconciliation reports by default and repairs only when asked"
+else
+  fail "the reconciler no longer defaults to a dry run"
+  printf '        A provider outage would rewrite every subscription in one pass.\n'
+fi
+
+# ⚠️ A free tenant has no remote id; scanning it reports the whole table as drift.
+if grep -q "provider: Not('none')" "$RECONCILER" 2>/dev/null \
+  && grep -q "providerSubscriptionId: Not(IsNull())" "$RECONCILER" 2>/dev/null; then
+  pass "reconciliation asks the provider only about linked subscriptions"
+else
+  fail "the reconciler no longer excludes free tenants"
+  printf '        Every free merchant would be reported as drift, every run.\n'
+fi
+
+# 📌 The command is how a deployment runs it; M23.4 decides what triggers that.
+if grep -q '"billing:reconcile"' optioniaWooCommerceBackend/package.json; then
+  pass "reconciliation is runnable as a command"
+else
+  fail "npm run billing:reconcile is not registered"
+  printf '        Logic with no entry point is a mechanism with no trigger.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

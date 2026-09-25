@@ -40,7 +40,8 @@
     "check:isolation": "bash bin/check-isolation.sh",
     "check:store-state": "bash bin/check-store-state.sh",
     "check:invalidation": "bash bin/check-config-invalidation.sh",
-    "billing:link-prices": "ts-node -r tsconfig-paths/register src/seeds/link-provider-prices.ts"
+    "billing:link-prices": "ts-node -r tsconfig-paths/register src/seeds/link-provider-prices.ts",
+    "billing:reconcile": "ts-node -r tsconfig-paths/register src/seeds/reconcile-subscriptions.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

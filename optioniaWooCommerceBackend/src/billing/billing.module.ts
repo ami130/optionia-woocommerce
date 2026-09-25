@@ -27,6 +27,7 @@ import { BillingEvent } from './entities/billing-event.entity';
 import { Invoice } from './entities/invoice.entity';
 import { StripeProvider } from './stripe.provider';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
+import { SubscriptionReconcilerService } from './subscription-reconciler.service';
 
 /**
  * The pinned Stripe API version.
@@ -96,6 +97,8 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
     SubscriptionLifecycleService,
     BillingContactsService,
     BillingNotifierService,
+    /* 📌 M23.5's diff. Registered so it is injectable; the command runs it. */
+    SubscriptionReconcilerService,
     {
       provide: BILLING_PROVIDER,
       useFactory: (): BillingProviderOrNull => {
@@ -133,6 +136,11 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
       },
     },
   ],
-  exports: [BILLING_PROVIDER, BillingWebhookService, SubscriptionLifecycleService],
+  exports: [
+    BILLING_PROVIDER,
+    BillingWebhookService,
+    SubscriptionLifecycleService,
+    SubscriptionReconcilerService,
+  ],
 })
 export class BillingModule {}
