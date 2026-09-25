@@ -10,6 +10,7 @@ import {
   type BillingProvider,
   type BillingProviderOrNull,
 } from './billing-provider';
+import { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 
 /**
  * What differs between the provider and this database (M23.5).
@@ -94,6 +95,8 @@ export class SubscriptionReconcilerService {
     @Optional()
     @Inject(BILLING_PROVIDER)
     private readonly provider: BillingProviderOrNull,
+    /* 📌 F121: repairing a plan is a plan change, and must invalidate config. */
+    private readonly invalidator: PlanChangeInvalidatorService,
   ) {}
 
   async reconcile(
@@ -217,6 +220,9 @@ export class SubscriptionReconcilerService {
 
     let changed = false;
 
+    /* 🔴 F121: only a PLAN move invalidates config; a status change does not. */
+    let planMoved = false;
+
     if (subscription.status !== remote.status) {
       record('status', subscription.status, remote.status);
 
@@ -283,12 +289,23 @@ export class SubscriptionReconcilerService {
           subscription.planPriceId = price.id;
           subscription.planId = price.planId;
           changed = true;
+          planMoved = true;
         }
       }
     }
 
     if (changed) {
       await this.subscriptions.save(subscription);
+    }
+
+    /*
+     * 🔴 **F121: the reconciler is the SECOND path that moves a plan.** Fixing
+     * only the webhook would have left this one silently broken while the
+     * finding looked closed — the exact shape of the built-but-uncalled defect
+     * this phase kept producing.
+     */
+    if (planMoved) {
+      await this.invalidator.invalidate(subscription.tenantId);
     }
 
     return found;

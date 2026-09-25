@@ -4,6 +4,7 @@ import { SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import type { BillingProvider, ProviderSubscription } from './billing-provider';
+import type { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { SubscriptionReconcilerService } from './subscription-reconciler.service';
 
 /**
@@ -76,8 +77,14 @@ describe('SubscriptionReconcilerService', () => {
         ? null
         : ({ getSubscription } as unknown as BillingProvider);
 
+    /* 📌 F121: a plan repair must invalidate config; the spy proves it happens. */
+    const invalidate = jest.fn(async () => 1);
+
+    const invalidator = { invalidate } as unknown as PlanChangeInvalidatorService;
+
     return {
-      service: new SubscriptionReconcilerService(subscriptions, prices, provider),
+      service: new SubscriptionReconcilerService(subscriptions, prices, provider, invalidator),
+      invalidate,
       getSubscription,
       save,
       subscriptions,
@@ -192,6 +199,45 @@ describe('SubscriptionReconcilerService', () => {
 
     expect(rows[0].planPriceId).toBe('price_row_2');
     expect(rows[0].planId).toBe('plan_business');
+  });
+
+  /**
+   * 🔴 **F121: the reconciler is the SECOND path that moves a plan.** Fixing
+   * only the webhook would have left this one silently broken while the
+   * finding looked closed — the exact shape of the built-but-uncalled defect
+   * this phase kept producing.
+   */
+  it('invalidates cached config when a repair moves the plan', async () => {
+    const { service, invalidate } = build({
+      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+    });
+
+    await service.reconcile({ dryRun: false });
+
+    expect(invalidate).toHaveBeenCalledWith('tenant_1');
+  });
+
+  /**
+   * 🔴 **A dry run invalidates nothing.** Reporting drift must not push a
+   * configuration change to a storefront whose plan did not actually move.
+   */
+  it('does not invalidate on a dry run', async () => {
+    const { service, invalidate } = build({
+      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+    });
+
+    await service.reconcile();
+
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  /** ⚠️ A status-only repair moves no plan, so it invalidates nothing. */
+  it('does not invalidate when only the status was repaired', async () => {
+    const { service, invalidate } = build({ remote: { status: SubscriptionStatus.PAST_DUE } });
+
+    await service.reconcile({ dryRun: false });
+
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   /**

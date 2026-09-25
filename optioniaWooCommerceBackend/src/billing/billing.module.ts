@@ -14,6 +14,7 @@ import Stripe = require('stripe');
 
 import { loadConfig } from '../config/env';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
+import { ConfigVersionModule } from '../common/config-version.module';
 import { MailModule } from '../mail/mail.module';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { TenantMember } from '../tenants/entities/tenant-member.entity';
@@ -27,6 +28,7 @@ import { BillingEvent } from './entities/billing-event.entity';
 import { Invoice } from './entities/invoice.entity';
 import { StripeProvider } from './stripe.provider';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
+import { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { SubscriptionReconcilerService } from './subscription-reconciler.service';
 
 /**
@@ -90,6 +92,12 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
 
     /* 📌 For ADR-116's dunning mail, which had no way to reach a person (F115). */
     MailModule,
+
+    /*
+     * 📌 **F121, and the module's own docblock anticipated it**: "the remaining
+     * triggers M9.4b enumerates land in billing and store settings".
+     */
+    ConfigVersionModule,
   ],
   controllers: [BillingWebhookController],
   providers: [
@@ -99,6 +107,8 @@ export function createStripeClient(secretKey: string, apiVersion?: string): Stri
     BillingNotifierService,
     /* 📌 M23.5's diff. Registered so it is injectable; the command runs it. */
     SubscriptionReconcilerService,
+    /* 📌 F121: the one rule both plan-change paths share. */
+    PlanChangeInvalidatorService,
     {
       provide: BILLING_PROVIDER,
       useFactory: (): BillingProviderOrNull => {

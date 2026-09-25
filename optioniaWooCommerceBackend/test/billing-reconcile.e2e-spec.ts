@@ -2,8 +2,10 @@ import { DataSource } from 'typeorm';
 
 import { SubscriptionStatus } from '../src/common/database/enums';
 import { type BillingProvider } from '../src/billing/billing-provider';
+import { PlanChangeInvalidatorService } from '../src/billing/plan-change-invalidator.service';
 import { SubscriptionReconcilerService } from '../src/billing/subscription-reconciler.service';
 import { PlanPrice } from '../src/plans/entities/plan-price.entity';
+import { Store } from '../src/stores/entities/store.entity';
 import { Subscription } from '../src/subscriptions/entities/subscription.entity';
 import { createHarness, type Harness } from './harness';
 
@@ -35,6 +37,19 @@ describe('Subscription reconciliation (e2e)', () => {
   }, 120_000);
 
   afterAll(async () => {
+    /*
+     * ⚠️ **The price this suite CREATES is its own to remove.** `h.cleanup()`
+     * knows nothing about `plan_prices`, and a subscription pinned to a
+     * leftover row would block the tenant delete on a RESTRICT foreign key.
+     * Every run's rows, not just this one's: a failing run never reaches here.
+     */
+    await dataSource.query(
+      `UPDATE subscriptions SET planPriceId = NULL WHERE planPriceId IN
+         (SELECT id FROM plan_prices WHERE providerPriceId LIKE 'price_bump_%')`,
+    );
+
+    await dataSource.query(`DELETE FROM plan_prices WHERE providerPriceId LIKE 'price_bump_%'`);
+
     await h.cleanup();
     await h.close();
   });
@@ -72,6 +87,7 @@ describe('Subscription reconciliation (e2e)', () => {
           return null;
         },
       } as unknown as BillingProvider,
+      h.app.get(PlanChangeInvalidatorService, { strict: false }),
     );
 
     await service.reconcile();
@@ -130,6 +146,84 @@ describe('Subscription reconciliation (e2e)', () => {
 
     expect(after.status).toBe(SubscriptionStatus.ACTIVE);
     expect(after.currentPeriodEnd?.toISOString()).toBe('2026-12-01T00:00:00.000Z');
+  });
+
+  /**
+   * 🔴 **F121, proven in the `stores` table itself.** A unit test with a mocked
+   * `bump` proves the call was made; only this proves the column moved. No
+   * billing path bumped `configVersion` at all, so a merchant who upgraded kept
+   * a stale config for up to fifteen minutes.
+   */
+  it('advances configVersion on every store when a repair moves the plan', async () => {
+    const which = await tenantNamed(h, 'bump');
+    const tenantId = await h.tenantIdOf(which);
+
+    await h.store(which);
+
+    const stores = dataSource.getRepository(Store);
+    const before = await stores.find({ where: { tenantId } });
+
+    expect(before.length).toBeGreaterThan(0);
+
+    const subscriptions = dataSource.getRepository(Subscription);
+    const row = await subscriptions.findOneByOrFail({ tenantId });
+
+    row.provider = 'stripe';
+    row.providerSubscriptionId = `sub_bump_${tenantId.slice(-8)}`;
+    row.providerCustomerId = 'cus_bump';
+    row.status = SubscriptionStatus.ACTIVE;
+    row.currentPeriodEnd = new Date('2026-12-01T00:00:00.000Z');
+    await subscriptions.save(row);
+
+    /*
+     * A price the catalogue knows AND that the provider names.
+     *
+     * ⚠️ **`isCurrent` alone was not enough**, and the first version of this
+     * test failed because of it: the free plan's rows are current with a NULL
+     * `providerPriceId`, so the reconciler matched nothing and the plan never
+     * moved. `plan_prices.providerPriceId` is the join — a price without one
+     * cannot be the price a provider bills.
+     */
+    /*
+     * 🔴 **Created, not looked up.** The first two versions of this test read a
+     * seeded price and failed: the e2e database (`optionia_woo_test`, pinned by
+     * `setup-e2e`) has no provider-linked prices at all — I had probed the
+     * DEVELOPMENT database, where they exist. A fixture that depends on seed
+     * data it did not create is a test that passes for reasons it cannot state.
+     */
+    const prices = dataSource.getRepository(PlanPrice);
+
+    const price = await prices.save(
+      prices.create({
+        planId: row.planId,
+        currency: 'EUR',
+        interval: 'month',
+        amountMinor: 2900,
+        providerPriceId: `price_bump_${tenantId.slice(-8)}`,
+        isCurrent: true,
+      }),
+    );
+
+    row.planPriceId = null;
+    await subscriptions.save(row);
+
+    const service = buildWith(h, {
+      status: SubscriptionStatus.ACTIVE,
+      currentPeriodEnd: row.currentPeriodEnd,
+      providerSubscriptionId: row.providerSubscriptionId,
+      providerCustomerId: 'cus_bump',
+      providerPriceId: price.providerPriceId,
+    });
+
+    await service.reconcile({ dryRun: false });
+
+    const after = await stores.find({ where: { tenantId } });
+
+    for (const store of after) {
+      const was = before.find((s) => s.id === store.id);
+
+      expect(Number(store.configVersion)).toBeGreaterThan(Number(was?.configVersion ?? 0));
+    }
   });
 
   /**
@@ -201,9 +295,11 @@ function buildWith(
     getSubscription: async (id: string) => (id === remote.providerSubscriptionId ? remote : null),
   } as unknown as BillingProvider;
 
+  /* 📌 F121: the container's real invalidator, so the fan-out is genuine. */
   return new SubscriptionReconcilerService(
     h.dataSource.getRepository(Subscription),
     h.dataSource.getRepository(PlanPrice),
     provider,
+    h.app.get(PlanChangeInvalidatorService, { strict: false }),
   );
 }

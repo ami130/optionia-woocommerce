@@ -5,6 +5,7 @@ import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import type { BillingNotifierService } from './billing-notifier.service';
+import type { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { Invoice } from './entities/invoice.entity';
 import { GRACE_DAYS, SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
@@ -114,6 +115,17 @@ describe('SubscriptionLifecycleService', () => {
       findOne: jest.fn(async () => seed.price ?? null),
     } as unknown as Repository<PlanPrice>;
 
+    /*
+     * 🔴 **F121's spy.** No billing path bumped `configVersion` at all, so a
+     * merchant who upgraded kept a stale config and read it as *"I paid and
+     * nothing happened"*. What is asserted here is *whether* invalidation is
+     * triggered and for which tenant; the fan-out across stores belongs to
+     * `plan-change-invalidator.service.spec`.
+     */
+    const invalidate = jest.fn(async () => 1);
+
+    const invalidator = { invalidate } as unknown as PlanChangeInvalidatorService;
+
     return {
       service: new SubscriptionLifecycleService(
         subscriptions,
@@ -121,7 +133,9 @@ describe('SubscriptionLifecycleService', () => {
         prices,
         dataSource,
         notifier,
+        invalidator,
       ),
+      invalidate,
       tenant,
       tenants,
       prices,
@@ -754,6 +768,58 @@ describe('SubscriptionLifecycleService', () => {
 
       expect(subscription.planId).toBe('plan_pro');
       expect(subscription.planPriceId).toBe('price_row_pro');
+    });
+
+    /**
+     * 🔴 **F121: the plan moved, so the storefronts must be told.** No billing
+     * path bumped `configVersion` at all — M9.4b predicted this and assigned it
+     * to Phase 23, and Phase 23 built every subscription-state path without it.
+     * A merchant who upgraded kept a stale config for up to fifteen minutes and
+     * read it as *"I paid and nothing happened"*.
+     */
+    it('invalidates the tenant’s cached config when the plan moves', async () => {
+      const { service, invalidate } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_free',
+        price: { id: 'price_row_pro', planId: 'plan_pro' } as PlanPrice,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(invalidate).toHaveBeenCalledWith('tenant_1');
+    });
+
+    /**
+     * 🔴 **A plan that did NOT move invalidates nothing.** Stripe sends
+     * `customer.subscription.updated` for changes that touch no plan, and
+     * bumping on each one would enqueue a push per storefront telling them
+     * nothing had changed.
+     */
+    it('does not invalidate when the plan is already the one billed', async () => {
+      const { service, invalidate } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_pro',
+        planPriceId: 'price_row_pro',
+        price: { id: 'price_row_pro', planId: 'plan_pro' } as PlanPrice,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(invalidate).not.toHaveBeenCalled();
+    });
+
+    /** ⚠️ And an unknown price changes no plan, so it invalidates nothing. */
+    it('does not invalidate when the price is unknown', async () => {
+      const { service, invalidate } = build({
+        providerSubscriptionId: 'sub_1',
+        planId: 'plan_free',
+        planPriceId: 'price_row_free',
+        price: null,
+      });
+
+      await service.apply('customer.subscription.updated', upgrade);
+
+      expect(invalidate).not.toHaveBeenCalled();
     });
 
     it('joins on providerPriceId, which is what that column is for', async () => {

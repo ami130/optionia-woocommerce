@@ -7,6 +7,7 @@ import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { BillingNotifierService } from './billing-notifier.service';
+import { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { Invoice } from './entities/invoice.entity';
 import { mapInvoice, type MappedInvoiceColumns } from './invoice.mapper';
 
@@ -57,6 +58,8 @@ export class SubscriptionLifecycleService {
     private readonly prices: Repository<PlanPrice>,
     private readonly dataSource: DataSource,
     private readonly notifier: BillingNotifierService,
+    /* 📌 F121: every path that moves a plan must invalidate cached config. */
+    private readonly invalidator: PlanChangeInvalidatorService,
   ) {}
 
   /**
@@ -250,7 +253,7 @@ export class SubscriptionLifecycleService {
      * ⚠️ **ADR-117 depends on this.** "Limit raises apply at once" cannot
      * happen if nothing propagates which plan was bought.
      */
-    await this.adoptPlanFromPrice(subscription, remote);
+    const planMoved = await this.adoptPlanFromPrice(subscription, remote);
 
     /*
      * 🔴 **Recovering clears the grace clock.** Leaving a stale `graceEndsAt` on
@@ -262,6 +265,20 @@ export class SubscriptionLifecycleService {
     }
 
     await this.subscriptions.save(subscription);
+
+    /*
+     * 🔴 **F121: the plan moved, so every storefront must be told.** No billing
+     * path bumped `configVersion` at all — M9.4b predicted this and assigned it
+     * to Phase 23, and Phase 23 built every subscription-state path without it.
+     * A merchant who upgraded kept a stale config for up to fifteen minutes and
+     * read it as *"I paid and nothing happened"*.
+     *
+     * ⚠️ **After the save, deliberately.** The plan change is what must
+     * survive; the invalidation is a notification and is best-effort inside.
+     */
+    if (planMoved) {
+      await this.invalidator.invalidate(subscription.tenantId);
+    }
 
     return { changed: true, detail: `subscription ${providerSubscriptionId} is now ${status}` };
   }
@@ -560,11 +577,11 @@ export class SubscriptionLifecycleService {
   private async adoptPlanFromPrice(
     subscription: Subscription,
     remote: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const providerPriceId = this.readPriceId(remote);
 
     if (providerPriceId === null) {
-      return;
+      return false;
     }
 
     const price = await this.prices.findOne({ where: { providerPriceId } });
@@ -575,11 +592,21 @@ export class SubscriptionLifecycleService {
           `${providerPriceId}; the plan was left unchanged.`,
       );
 
-      return;
+      return false;
     }
+
+    /*
+     * 🔴 **Only a real move counts (F121).** Returning true unconditionally
+     * would bump every storefront on every `customer.subscription.updated` —
+     * and Stripe sends those for changes that touch no plan at all, so each
+     * one would enqueue a push telling storefronts nothing had changed.
+     */
+    const moved = subscription.planPriceId !== price.id || subscription.planId !== price.planId;
 
     subscription.planId = price.planId;
     subscription.planPriceId = price.id;
+
+    return moved;
   }
 
   /**

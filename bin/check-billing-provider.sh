@@ -650,6 +650,52 @@ else
   printf '        Logic with no entry point is a mechanism with no trigger.\n'
 fi
 
+# --- 32. F121: a plan change invalidates cached storefront config ----------
+#
+# 🔴 **No billing path bumped `configVersion` at all.** Every caller lived in
+# `src/option-sets/` — publish, assignments, cascade, hard-delete — so a merchant
+# who upgraded kept a stale config and read it as *"I paid and nothing
+# happened"*, and one who downgraded kept serving higher-tier options.
+#
+# ⚠️ **M9.4b predicted this and assigned it to Phase 23.** Its trigger table says
+# in bold *"Plan or subscription changed — 🔴 not covered… wire it in Phase 23"*,
+# and F39 closed only the documentation overclaim, not the work. Phase 23 then
+# built every subscription-state path without it.
+#
+# 📌 **BOTH paths are pinned, because that was F121's whole argument**: fixing
+# the webhook and not the reconciler would leave one silently broken while the
+# finding looked closed.
+INVALIDATOR="$BILLING/plan-change-invalidator.service.ts"
+
+if [ -f "$INVALIDATOR" ] && grep -q "configVersion.bump" "$INVALIDATOR"; then
+  pass "a plan change has something to invalidate cached config with"
+else
+  fail "the plan-change invalidator is missing, or no longer bumps"
+  printf '        A merchant who upgrades would wait out the cron for their plan.\n'
+fi
+
+MISSING_INVALIDATION=""
+
+for path in "$LIFECYCLE" "$BILLING/subscription-reconciler.service.ts"; do
+  grep -q "invalidator.invalidate" "$path" 2>/dev/null \
+    || MISSING_INVALIDATION="$MISSING_INVALIDATION $(basename "$path")"
+done
+
+if [ -z "$MISSING_INVALIDATION" ]; then
+  pass "every path that moves a plan invalidates cached config (F121)"
+else
+  fail "these move a plan without invalidating config:$MISSING_INVALIDATION"
+  printf '        Fixing one path and not the other is how this stayed open.\n'
+fi
+
+# 🔴 Best-effort inside, so a store bookkeeping problem cannot fail a webhook.
+if grep -q "catch (error)" "$INVALIDATOR" 2>/dev/null; then
+  pass "an unbumpable store cannot fail the webhook that moved the plan"
+else
+  fail "the invalidator no longer tolerates a store it cannot bump"
+  printf '        bump() throws to roll back a publish; a webhook must not die of it.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

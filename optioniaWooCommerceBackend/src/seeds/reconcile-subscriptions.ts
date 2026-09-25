@@ -3,6 +3,8 @@ import { DataSource } from 'typeorm';
 
 import { createStripeClient } from '../billing/billing.module';
 import { StripeProvider } from '../billing/stripe.provider';
+import { ConfigVersionService } from '../common/config-version.service';
+import { PlanChangeInvalidatorService } from '../billing/plan-change-invalidator.service';
 import { SubscriptionReconcilerService } from '../billing/subscription-reconciler.service';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
@@ -62,10 +64,14 @@ async function main(): Promise<void> {
       config.billing.webhookSecret ?? '',
     );
 
+    /* 📌 F121: a repaired plan invalidates the tenant's storefront config. */
+    const invalidator = new PlanChangeInvalidatorService(dataSource, new ConfigVersionService());
+
     const reconciler = new SubscriptionReconcilerService(
       dataSource.getRepository(Subscription),
       dataSource.getRepository(PlanPrice),
       provider,
+      invalidator,
     );
 
     const outcome = await reconciler.reconcile({ dryRun: !repair });

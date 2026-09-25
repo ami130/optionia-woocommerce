@@ -8,6 +8,7 @@ import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import type { BillingNotifierService } from './billing-notifier.service';
+import type { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
 
 /**
@@ -77,6 +78,11 @@ describe('SubscriptionLifecycleService against the library types', () => {
       trialEnding: jest.fn(async () => undefined),
     } as unknown as BillingNotifierService;
 
+    /* 📌 F121: a plan move invalidates config; stubbed here, asserted in the service spec. */
+    const invalidator = {
+      invalidate: jest.fn(async () => 0),
+    } as unknown as PlanChangeInvalidatorService;
+
     return {
       service: new SubscriptionLifecycleService(
         subscriptions,
@@ -84,6 +90,7 @@ describe('SubscriptionLifecycleService against the library types', () => {
         prices,
         dataSource,
         notifier,
+        invalidator,
       ),
       subscription,
     };
