@@ -60,9 +60,9 @@ Thumbs.db
 
 # Scratch space for rescued artefacts during an audit.
 #
-# 📌 Currently holds the three `.github/workflows/ci.yml` files that each service
-# carried before the repositories were merged on 2026-09-22. They are redundant —
-# the root `backend.yml`, `dashboard.yml` and `plugin.yml` are supersets, verified
-# job by job — and kept only until the stale nested `.git` directories they came
-# from are dealt with (G7).
+# 📌 Holds the three retired nested `.git` directories (F107), the pre-consolidation
+# `ci.yml` files they carried, and a manifest of their history. All of it is
+# redundant — every one of the 176 commit subjects on those branches exists in this
+# repository's history — and it is kept, rather than deleted, so the decision to
+# retire them is reversible by anyone who later disagrees with it.
 /.archive/
