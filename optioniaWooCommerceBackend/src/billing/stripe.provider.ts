@@ -76,8 +76,20 @@ export class StripeProvider implements BillingProvider {
       billing_address_collection: 'required',
       tax_id_collection: { enabled: true },
 
+      /*
+       * 🔴 **No `customer_creation` here — Stripe rejects it in subscription
+       * mode.** The exact error, from the sandbox: *"`customer_creation` can
+       * only be used in `payment` mode."* A subscription always produces a
+       * customer, so the parameter is not merely unnecessary, it is invalid, and
+       * **every first-time checkout would have failed in production.**
+       *
+       * ⚠️ **Only the sandbox could find this.** The contract tests asserted the
+       * parameter was *sent*, which is all a stubbed SDK can observe — the
+       * clearest possible demonstration that "satisfies the contract" is weaker
+       * than "works against Stripe", as this adapter's own docblock warned.
+       */
       ...(input.providerCustomerId === null
-        ? { customer_creation: 'always' as const }
+        ? {}
         : { customer: input.providerCustomerId, customer_update: { address: 'auto' as const } }),
 
       /*

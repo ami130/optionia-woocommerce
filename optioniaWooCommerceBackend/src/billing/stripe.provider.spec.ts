@@ -117,6 +117,46 @@ describe('StripeProvider contract', () => {
   });
 
   /**
+   * 🔴 **`customer_creation` is INVALID in subscription mode**, and this test
+   * exists because the sandbox said so, not because I reasoned it out.
+   *
+   * The adapter sent `customer_creation: 'always'` for a first-time buyer.
+   * Stripe's reply: *"`customer_creation` can only be used in `payment` mode."*
+   * A subscription always produces a customer, so the parameter is not merely
+   * redundant — it is rejected, and **every first-time checkout would have
+   * failed in production**.
+   *
+   * ⚠️ **Nothing tested it.** It sat in the code untested, and a stubbed SDK
+   * could not have caught it anyway: a contract test can only observe that a
+   * parameter was *sent*, never that the provider accepts it. This is the
+   * clearest case this project has produced of *"satisfies the contract"* being
+   * weaker than *"works against Stripe"*.
+   */
+  it('omits customer_creation, which subscription mode rejects', async () => {
+    await provider.createCheckout(checkoutInput);
+
+    const [options] = calls[0].args as [Record<string, unknown>];
+
+    expect(options.mode).toBe('subscription');
+    expect(options).not.toHaveProperty('customer_creation');
+  });
+
+  /**
+   * ⚠️ And with a known customer, the address is written back — Stripe Tax
+   * computes from the customer's address, so without this the *next* invoice
+   * has nothing to compute from.
+   */
+  it('reuses a known customer and writes their address back', async () => {
+    await provider.createCheckout({ ...checkoutInput, providerCustomerId: 'cus_9' });
+
+    const [options] = calls[0].args as [Record<string, unknown>];
+
+    expect(options.customer).toBe('cus_9');
+    expect(options.customer_update).toEqual({ address: 'auto' });
+    expect(options).not.toHaveProperty('customer_creation');
+  });
+
+  /**
    * 🔴 **The webhook arrives with no request context**, so the session must
    * carry the tenant — M22.4 takes state from the webhook and never the
    * redirect, and an event that cannot route itself is an orphan.
