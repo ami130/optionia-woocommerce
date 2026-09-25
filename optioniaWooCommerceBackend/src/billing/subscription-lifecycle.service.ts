@@ -218,7 +218,26 @@ export class SubscriptionLifecycleService {
     }
 
     subscription.status = status;
-    subscription.currentPeriodEnd = this.asDate(remote.current_period_end);
+
+    /*
+     * 🔴 **The period lives on the ITEM, not the subscription.**
+     * `Subscription.current_period_end` does not exist in this API version —
+     * verified by the compiler, not assumed — so reading it returned
+     * `undefined` and `currentPeriodEnd` was **always null**.
+     *
+     * ⚠️ **Three things were broken by that, all merchant-visible.** F112's
+     * `settling` flag is *"linked to a provider subscription, no billing period
+     * yet"*, so every paying merchant saw **"Confirming your payment…" for ever**
+     * with the page polling every three seconds; no renewal date was ever
+     * shown; and cancellation fell back to *"the end of the paid term"* instead
+     * of a date.
+     *
+     * 📌 **The adapter twelve lines away had it right** (`item?.current_period_end`),
+     * and so does `readPriceId` below — two readers of one concept disagreed and
+     * only one was correct. This is the **third** Stripe field this project has
+     * found relocated, after `subscription` and `tax` in F96.
+     */
+    subscription.currentPeriodEnd = this.asDate(this.readPeriodEnd(remote));
     subscription.cancelAt = this.asDate(remote.cancel_at);
 
     /*
@@ -561,6 +580,23 @@ export class SubscriptionLifecycleService {
 
     subscription.planId = price.planId;
     subscription.planPriceId = price.id;
+  }
+
+  /**
+   * The current billing period's end, from the first line item.
+   *
+   * ⚠️ **Same place as the price**, which is what makes the original mistake so
+   * easy to miss: `readPriceId` below already reached into `items.data[0]`,
+   * twenty lines from a read that did not.
+   */
+  private readPeriodEnd(remote: Record<string, unknown>): unknown {
+    const items = this.asRecord(remote.items).data;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return undefined;
+    }
+
+    return this.asRecord(items[0]).current_period_end;
   }
 
   /** Stripe carries the price on the subscription's first line item. */

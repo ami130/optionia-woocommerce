@@ -777,4 +777,98 @@ describe('Billing webhook (e2e)', () => {
       expect(Number(count)).toBe(1);
     });
   });
+  /**
+   * X1 — the billing period, proven to reach the database.
+   *
+   * 🔴 **`currentPeriodEnd` was ALWAYS null in production.** The lifecycle read
+   * `current_period_end` from the subscription, where this API version does not
+   * put it — it lives on `items.data[0]`. Every layer agreed with the mistake:
+   * the unit fixture supplied the defunct field, and `billing-account.e2e` sets
+   * the column by hand rather than earning it through a webhook.
+   *
+   * ⚠️ **Nothing above this suite could have caught it.** The contract spec
+   * proves the shape against the library's types; only this proves the value
+   * survives a real signature, a real handler and a real MySQL column — which
+   * is what the merchant's screen actually depends on.
+   */
+  describe('the billing period reaches the database (X1)', () => {
+    it('stores the period end from the item, clearing the settling notice', async () => {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const providerCustomerId = `cus_${run}_${seq}`;
+      const providerSubscriptionId = `sub_${run}_${seq}_period`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `Period ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      const subscriptions = dataSource.getRepository(Subscription);
+
+      /*
+       * 📌 **Seeded exactly as a just-paid merchant is**: linked to a provider
+       * subscription, with no billing period yet. That is F112's `settling`
+       * state — the one that showed "Confirming your payment…" for ever.
+       */
+      const subscription = await subscriptions.save(
+        subscriptions.create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerCustomerId,
+          providerSubscriptionId,
+          status: SubscriptionStatus.TRIALING,
+          currentPeriodEnd: null,
+        }),
+      );
+
+      /* 2026-12-01T00:00:00Z, as Stripe sends it: epoch SECONDS. */
+      const periodEnd = 1_796_083_200;
+
+      const { body, signature } = signedEvent({
+        type: 'customer.subscription.updated',
+        data: {
+          object: {
+            id: providerSubscriptionId,
+            object: 'subscription',
+            status: 'active',
+            customer: providerCustomerId,
+            cancel_at: null,
+            /* 🔴 On the ITEM. A payload with the field on the subscription is
+             * one this API version never sends, and the old code only read. */
+            items: {
+              object: 'list',
+              data: [{ id: `si_${run}_${seq}`, current_period_end: periodEnd }],
+            },
+          },
+        },
+      });
+
+      expect((await post(body, signature)).status).toBe(200);
+
+      const updated = await subscriptions.findOneByOrFail({ id: subscription.id });
+
+      expect(updated.status).toBe(SubscriptionStatus.ACTIVE);
+
+      /* 🔴 The value, through the column, not merely non-null. */
+      expect(updated.currentPeriodEnd).not.toBeNull();
+      expect(updated.currentPeriodEnd?.toISOString()).toBe('2026-12-01T00:00:00.000Z');
+
+      /*
+       * 🔴 **The merchant-visible consequence.** F112 computes `settling` from
+       * exactly these three columns; with the period stored, the notice clears.
+       */
+      const settling =
+        updated.provider !== 'none' &&
+        updated.providerSubscriptionId !== null &&
+        updated.currentPeriodEnd === null;
+
+      expect(settling).toBe(false);
+    });
+  });
 });

@@ -297,13 +297,23 @@ describe('SubscriptionLifecycleService', () => {
       expect(subscription.graceEndsAt).toEqual(original);
     });
 
+    /**
+     * 🔴 **This test passed while the feature was broken**, and that is why it
+     * is written this way now. Its fixture carried a *subscription-level*
+     * `current_period_end` — a field Stripe does not send in this API version —
+     * so the test and the code shared one false assumption and agreed with each
+     * other. `currentPeriodEnd` was always null in production.
+     *
+     * 📌 The period lives on the item, beside the price. `subscription.contract.spec`
+     * now types these fixtures so the next relocation stops the build instead.
+     */
     it('records the period end and any scheduled cancellation', async () => {
       const { service, subscription } = build({ providerSubscriptionId: 'sub_1' });
 
       await service.apply('customer.subscription.updated', {
         id: 'sub_1',
         status: 'active',
-        current_period_end: 1_755_216_000,
+        items: { data: [{ current_period_end: 1_755_216_000 }] },
         cancel_at: 1_757_808_000,
       });
 
