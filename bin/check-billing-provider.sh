@@ -552,6 +552,58 @@ else
   printf '        A notifier method with no case is a mechanism with no trigger.\n'
 fi
 
+# --- 30. The contract specs, which nothing enforced until F118 ------------
+#
+# 🔴 **F118 happened BECAUSE this check did not exist.** F96 found three Stripe
+# fields relocated between API versions (`invoice.tax`→`total_taxes[]`,
+# `paid_at`→`status_transitions.paid_at`, `invoice.subscription`→
+# `parent.subscription_details.subscription`) and answered them with a contract
+# spec: fixtures typed as real Stripe objects, so a rename **stops the build**.
+#
+# ⚠️ **Nothing made that mechanism spread, and nothing kept it alive.** The
+# subscription lifecycle never got one, and a fourth field moved unnoticed —
+# `current_period_end` off the subscription and onto the item — leaving
+# `currentPeriodEnd` permanently null. Five merchant-visible behaviours broke on
+# that one line: the settling notice never cleared, the renewal date never
+# rendered, the cancellation notice fell back to generic text, and the dashboard
+# hid BOTH the cancel section and the whole change-plan section.
+#
+# 📌 **Existence is not enough, so the type-level assertions are pinned too.** A
+# file that survives with its assertions gutted is the same defect wearing the
+# same filename.
+CONTRACT_SUBSCRIPTION="$BILLING/subscription-lifecycle.contract.spec.ts"
+CONTRACT_INVOICE="$BILLING/invoice.mapper.contract.spec.ts"
+
+if [ -f "$CONTRACT_SUBSCRIPTION" ] && [ -f "$CONTRACT_INVOICE" ]; then
+  pass "both Stripe contract specs are still present"
+else
+  fail "a Stripe contract spec is missing"
+  printf '        F96 and F118 were four renamed fields caught only by typed fixtures.\n'
+fi
+
+# 🔴 The two aliases that make the X1 mistake a compile error rather than a null.
+if grep -q "'current_period_end' extends keyof Stripe.Subscription" "$CONTRACT_SUBSCRIPTION" 2>/dev/null \
+  && grep -q "'current_period_end' extends keyof Stripe.SubscriptionItem" "$CONTRACT_SUBSCRIPTION" 2>/dev/null; then
+  pass "the period end is pinned to the item, and away from the subscription"
+else
+  fail "the F118 type assertions are gone from the subscription contract spec"
+  printf '        Without them currentPeriodEnd can silently return to null.\n'
+fi
+
+# ⚠️ F96's three relocated fields, each pinned by the fixture that found it.
+MISSING_FIELDS=""
+
+for field in "total_taxes" "status_transitions" "parent"; do
+  grep -q "$field" "$CONTRACT_INVOICE" 2>/dev/null || MISSING_FIELDS="$MISSING_FIELDS $field"
+done
+
+if [ -z "$MISSING_FIELDS" ]; then
+  pass "every field F96 found relocated is still pinned by a typed fixture"
+else
+  fail "the invoice contract spec no longer pins:$MISSING_FIELDS"
+  printf '        These moved once already; an untyped fixture would not notice again.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
