@@ -773,6 +773,35 @@ else
   printf '        Built, tested, and invoked by nothing is how five of these shipped.\n'
 fi
 
+# --- 35. F92/D4: every invoice status is one the reporting query counts ----
+#
+# 🔴 **`invoices.status` is `varchar(20)`, not a database enum.** F92/D4 called
+# it *"an enum written as prose"*: the tax report filters `status = 'paid'`, so
+# an adapter writing `Paid` or `succeeded` would silently drop rows from a tax
+# total — a return that does not reconcile against the bank.
+#
+# ✅ **The mapper closes it at runtime** by rejecting an unrecognised status
+# before it reaches the database, and it is the only writer of these rows.
+#
+# ⚠️ **What stays open is a FUTURE writer that bypasses the mapper**, which a
+# column type cannot prevent either — `varchar(20)` accepts `Paid` just as
+# happily. So the guard that matters is the rejection itself, pinned here.
+if grep -q "KNOWN_STATUSES" "$BILLING/invoice.mapper.ts" \
+  && grep -q "unknown invoice status" "$BILLING/invoice.mapper.ts"; then
+  pass "an unrecognised invoice status is refused, not stored (F92/D4)"
+else
+  fail "the invoice mapper no longer refuses an unknown status"
+  printf '        The tax report filters status = paid; a stray spelling drops rows.\n'
+fi
+
+# 🔴 F92/D2: the arithmetic invariant lives in the schema, not a docblock.
+if grep -rq "ck_invoices_totals" "$SRC/migrations"; then
+  pass "subtotal + tax = total is enforced by the database (F92/D2)"
+else
+  fail "the ck_invoices_totals CHECK constraint is gone"
+  printf '        This caught a wrong fixture in its own test suite once already.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
