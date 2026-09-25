@@ -444,6 +444,37 @@ else
   fail "the billing portal route is missing (M22.3/M22.5)"
 fi
 
+# --- 24. A claimed webhook that never finished must be retryable ----------
+#
+# 🔴 **N1: the provider's retries were consumed by our own idempotency check.**
+# The event row is claimed *before* the handler runs, so a handler that threw
+# left it claimed and unprocessed — and the retry then hit the duplicate branch,
+# answered 200, and never ran the handler again. A merchant whose `invoice.paid`
+# failed once stayed `past_due` for ever.
+#
+# ⚠️ Measured before it was fixed: a probe with a handler that failed once then
+# succeeded showed it running exactly once.
+WEBHOOK_SVC="$BILLING/billing-webhook.service.ts"
+
+if grep -q "existing.processedAt !== null" "$WEBHOOK_SVC"; then
+  pass "a claimed-but-unprocessed event is re-run, not skipped"
+else
+  fail "a failed webhook can no longer be recovered by a retry (N1)"
+  printf '        The provider retries; answering \"already handled\" loses the event for ever.\n'
+fi
+
+# --- 25. invoice.paid is one transaction ----------------------------------
+#
+# 🔴 **N2: the invoice and the activation were separate commits.** A failure
+# between them stored the receipt and left the merchant `past_due` — they had
+# paid, we had the invoice, and they were locked out.
+if grep -q "this.dataSource.transaction" "$LIFECYCLE"; then
+  pass "a paid invoice and its activation commit together"
+else
+  fail "invoice.paid is no longer atomic (N2)"
+  printf '        A crash between the two writes leaves a paid merchant locked out.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

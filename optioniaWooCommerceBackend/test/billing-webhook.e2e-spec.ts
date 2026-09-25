@@ -501,4 +501,128 @@ describe('Billing webhook (e2e)', () => {
       expect(updated.providerSubscriptionId).toBe(providerSubscriptionId);
     });
   });
+
+  /**
+   * N1 — recovery of an event claimed by a delivery that failed.
+   *
+   * 🔴 **Only the real unique index can prove this.** The claim is an INSERT
+   * that collides; a stubbed repository can imitate the collision but not the
+   * row that survives it, and the row is the whole point.
+   */
+  describe('a webhook that failed midway (N1)', () => {
+    it('re-runs the handler when a redelivery finds unfinished work', async () => {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const providerSubscriptionId = `sub_${run}_${seq}_n1`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `N1 ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      const subscriptions = dataSource.getRepository(Subscription);
+      const subscription = await subscriptions.save(
+        subscriptions.create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerSubscriptionId,
+          status: SubscriptionStatus.PAST_DUE,
+        }),
+      );
+
+      const { body, signature, eventId } = signedEvent({
+        type: 'customer.subscription.updated',
+        data: { object: { id: providerSubscriptionId, status: 'active' } },
+      });
+
+      /*
+       * ⚠️ **The claim is simulated, not forced by breaking the app.** Writing
+       * the row with `processedAt` null is exactly the state a failed handler
+       * leaves behind, and it can be created without making the server throw —
+       * which would be a far less precise test of a far larger surface.
+       */
+      await dataSource.query(
+        `INSERT INTO billing_events (id, provider, providerEventId, type, payload, processedAt, error, createdAt, updatedAt)
+         VALUES (UUID(), 'stripe', ?, 'customer.subscription.updated', '{}', NULL, 'transient failure', NOW(3), NOW(3))`,
+        [eventId],
+      );
+
+      const response = await post(body, signature);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('processed');
+
+      /* 🔴 The merchant is active: the work the first delivery owed is done. */
+      const after = await subscriptions.findOneByOrFail({ id: subscription.id });
+      expect(after.status).toBe(SubscriptionStatus.ACTIVE);
+
+      /* ⚠️ And the row is finished, with the earlier error cleared. */
+      const [row] = await dataSource.query(
+        `SELECT processedAt, error FROM billing_events WHERE providerEventId = ?`,
+        [eventId],
+      );
+
+      expect(row.processedAt).not.toBeNull();
+      expect(row.error).toBeNull();
+    });
+
+    /**
+     * 🔴 **A FINISHED event stays a no-op**, which is the guarantee the N1 fix
+     * must not trade away — re-applying a completed event is the double-charge
+     * the whole mechanism exists to prevent.
+     */
+    it('still ignores a redelivery of an event that completed', async () => {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const providerSubscriptionId = `sub_${run}_${seq}_done`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `N1done ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      const subscriptions = dataSource.getRepository(Subscription);
+      const subscription = await subscriptions.save(
+        subscriptions.create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerSubscriptionId,
+          status: SubscriptionStatus.PAST_DUE,
+        }),
+      );
+
+      const { body, signature, eventId } = signedEvent({
+        type: 'customer.subscription.updated',
+        data: { object: { id: providerSubscriptionId, status: 'active' } },
+      });
+
+      /* Already processed by an earlier delivery. */
+      await dataSource.query(
+        `INSERT INTO billing_events (id, provider, providerEventId, type, payload, processedAt, error, createdAt, updatedAt)
+         VALUES (UUID(), 'stripe', ?, 'customer.subscription.updated', '{}', NOW(3), NULL, NOW(3), NOW(3))`,
+        [eventId],
+      );
+
+      const response = await post(body, signature);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('duplicate');
+
+      /* The handler did not run: the merchant is untouched. */
+      const after = await subscriptions.findOneByOrFail({ id: subscription.id });
+      expect(after.status).toBe(SubscriptionStatus.PAST_DUE);
+    });
+  });
 });

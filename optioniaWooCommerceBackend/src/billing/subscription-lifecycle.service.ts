@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 
 import { SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
@@ -50,12 +50,11 @@ export class SubscriptionLifecycleService {
   constructor(
     @InjectRepository(Subscription)
     private readonly subscriptions: Repository<Subscription>,
-    @InjectRepository(Invoice)
-    private readonly invoices: Repository<Invoice>,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
     @InjectRepository(PlanPrice)
     private readonly prices: Repository<PlanPrice>,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -244,18 +243,31 @@ export class SubscriptionLifecycleService {
       return { changed: false, reason: 'no subscription matches this invoice' };
     }
 
-    await this.storeInvoice(subscription, columns);
-
     /*
-     * 📌 A paid invoice ends any grace period, whatever order the events arrive
-     * in — `invoice.paid` and `customer.subscription.updated` are not ordered.
+     * 🔴 **One transaction, because these two writes must agree (N2).** Storing
+     * the invoice and activating the subscription were separate commits, so a
+     * failure between them left the invoice recorded and the merchant still
+     * `past_due` — they had paid, we had the receipt, and they were locked out.
+     *
+     * ⚠️ **N1 is why that mattered so much**: the retry that should have
+     * repaired it was answered "already handled" by the claimed event row.
+     * Both are fixed, and this one means a retry has nothing to repair.
      */
-    if (subscription.status !== SubscriptionStatus.ACTIVE) {
-      subscription.status = SubscriptionStatus.ACTIVE;
-    }
-    subscription.graceEndsAt = null;
+    await this.dataSource.transaction(async (manager) => {
+      await this.storeInvoice(manager, subscription, columns);
 
-    await this.subscriptions.save(subscription);
+      /*
+       * 📌 A paid invoice ends any grace period, whatever order the events
+       * arrive in — `invoice.paid` and `customer.subscription.updated` are not
+       * ordered.
+       */
+      if (subscription.status !== SubscriptionStatus.ACTIVE) {
+        subscription.status = SubscriptionStatus.ACTIVE;
+      }
+      subscription.graceEndsAt = null;
+
+      await manager.save(Subscription, subscription);
+    });
 
     return { changed: true, detail: `recorded invoice ${columns.providerInvoiceId} as paid` };
   }
@@ -327,21 +339,23 @@ export class SubscriptionLifecycleService {
    * bargain the webhook's own idempotency strikes, one level down.
    */
   private async storeInvoice(
+    manager: EntityManager,
     subscription: Subscription,
     columns: MappedInvoiceColumns,
   ): Promise<void> {
-    const existing = await this.invoices.findOne({
+    const existing = await manager.findOne(Invoice, {
       where: { provider: 'stripe', providerInvoiceId: columns.providerInvoiceId },
     });
 
     if (existing !== null) {
-      await this.invoices.save(Object.assign(existing, columns));
+      await manager.save(Invoice, Object.assign(existing, columns));
 
       return;
     }
 
-    await this.invoices.save(
-      this.invoices.create({
+    await manager.save(
+      Invoice,
+      manager.create(Invoice, {
         tenantId: subscription.tenantId,
         subscriptionId: subscription.id,
         provider: 'stripe',

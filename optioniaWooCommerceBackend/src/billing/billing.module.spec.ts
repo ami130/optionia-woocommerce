@@ -1,5 +1,7 @@
+import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 /* 🔴 See BillingModule: a default import of `stripe` is `undefined` at runtime. */
 import Stripe = require('stripe');
@@ -73,7 +75,35 @@ describe('BillingModule', () => {
       update: async () => ({ affected: 1 }),
     };
 
-    const moduleRef = await Test.createTestingModule({ imports: [BillingModule] })
+    /*
+     * ⚠️ **A `DataSource` provider, not an override, because `BillingModule`
+     * does not provide one** — the real one comes from TypeORM's root module,
+     * and `overrideProvider` can only replace what a module already declares.
+     * The lifecycle needs it since `invoice.paid` became one transaction (N2);
+     * this suite is about the provider factory and has no database in it.
+     */
+    /*
+     * 📌 **A GLOBAL module, because that is how the real app provides it.**
+     * `TypeOrmModule.forRoot` is global, so `DataSource` reaches every module
+     * without any of them importing it — and a provider declared beside
+     * `imports` here is not visible inside `BillingModule`'s own scope, which
+     * is why the obvious two attempts failed.
+     */
+    @Global()
+    @Module({
+      providers: [
+        {
+          provide: DataSource,
+          useValue: { transaction: async (work: (m: unknown) => unknown) => work(stub) },
+        },
+      ],
+      exports: [DataSource],
+    })
+    class FakeDatabaseModule {}
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [FakeDatabaseModule, BillingModule],
+    })
       .overrideProvider(getRepositoryToken(BillingEvent))
       .useValue(stub)
       .overrideProvider(getRepositoryToken(Invoice))

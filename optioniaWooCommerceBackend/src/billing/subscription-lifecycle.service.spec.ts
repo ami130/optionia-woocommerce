@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 import { SubscriptionStatus } from '../common/database/enums';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
@@ -51,6 +51,34 @@ describe('SubscriptionLifecycleService', () => {
       }),
     } as unknown as Repository<Invoice>;
 
+    /*
+     * ⚠️ **The transaction runs inline against the same stubs (N2).** What is
+     * under test is *what* gets written and in what order, not MySQL's commit
+     * semantics — `billing-webhook.e2e-spec` proves atomicity against the real
+     * database, which is the only place that claim can be made.
+     */
+    const savedSubscriptions: Subscription[] = [];
+
+    const manager = {
+      findOne: async () => (invoices.findOne as jest.Mock)(),
+      create: (_target: unknown, input: unknown) => input,
+      save: async (target: unknown, entity: unknown) => {
+        const isInvoice = String(target) === String(Invoice) || (target as { name?: string })?.name === 'Invoice';
+
+        if (isInvoice) {
+          storedInvoices.push(entity as Invoice);
+        } else {
+          savedSubscriptions.push(entity as Subscription);
+        }
+
+        return entity;
+      },
+    };
+
+    const dataSource = {
+      transaction: async (work: (m: unknown) => Promise<unknown>) => work(manager),
+    } as unknown as DataSource;
+
     const tenant = {
       id: 'tenant_1',
       country: null,
@@ -69,7 +97,7 @@ describe('SubscriptionLifecycleService', () => {
     } as unknown as Repository<PlanPrice>;
 
     return {
-      service: new SubscriptionLifecycleService(subscriptions, invoices, tenants, prices),
+      service: new SubscriptionLifecycleService(subscriptions, tenants, prices, dataSource),
       tenant,
       tenants,
       prices,
@@ -77,6 +105,7 @@ describe('SubscriptionLifecycleService', () => {
       subscriptions,
       invoices,
       storedInvoices,
+      savedSubscriptions,
     };
   }
 

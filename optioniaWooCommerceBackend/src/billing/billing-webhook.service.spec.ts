@@ -26,6 +26,7 @@ describe('BillingWebhookService', () => {
       save?: jest.Mock;
       update?: jest.Mock;
       apply?: jest.Mock;
+      findOne?: jest.Mock;
     } = {},
   ) {
     const save = overrides.save ?? jest.fn(async (e: BillingEvent) => e);
@@ -38,10 +39,20 @@ describe('BillingWebhookService', () => {
       verifyWebhook: overrides.verify ?? jest.fn(async () => verified),
     } as unknown as BillingProvider;
 
+    /*
+     * ⚠️ **`findOne` defaults to a COMPLETED row**, because the duplicate path
+     * now asks whether the claimed event was ever finished (N1). A stub
+     * returning null would make every duplicate look like abandoned work.
+     */
+    const findOne =
+      overrides.findOne ??
+      jest.fn(async () => ({ id: 'row_1', processedAt: new Date(), error: null }));
+
     const events = {
       create: (input: Partial<BillingEvent>) => ({ id: 'row_1', ...input }) as BillingEvent,
       save,
       update,
+      findOne,
     } as unknown as Repository<BillingEvent>;
 
     const lifecycle = { apply } as unknown as SubscriptionLifecycleService;
@@ -52,6 +63,7 @@ describe('BillingWebhookService', () => {
       save,
       update,
       apply,
+      findOne,
     };
   }
 
@@ -113,7 +125,10 @@ describe('BillingWebhookService', () => {
         }),
       );
 
-      expect(update).toHaveBeenCalledWith({ id: 'row_1' }, { processedAt: expect.any(Date) });
+      expect(update).toHaveBeenCalledWith(
+        { id: 'row_1' },
+        { processedAt: expect.any(Date), error: null },
+      );
     });
 
     /**
@@ -272,7 +287,128 @@ describe('BillingWebhookService', () => {
         eventId: 'evt_123',
       });
 
-      expect(update).toHaveBeenCalledWith({ id: 'row_1' }, { processedAt: expect.any(Date) });
+      expect(update).toHaveBeenCalledWith(
+        { id: 'row_1' },
+        { processedAt: expect.any(Date), error: null },
+      );
+    });
+  });
+
+  /**
+   * N1 — the defect that lost a merchant's payment.
+   *
+   * 🔴 **The provider's retries were being consumed by our own idempotency
+   * check.** The row is claimed before the handler runs, so a handler that
+   * threw left it claimed and unprocessed; the retry then hit the duplicate
+   * branch, answered 200, and never ran the handler again. Measured: the
+   * handler ran exactly once and the merchant stayed `past_due` for ever.
+   */
+  describe('recovering a claimed but unprocessed event', () => {
+    /** A row claimed by a previous delivery that failed before finishing. */
+    const unfinished = {
+      id: 'row_1',
+      processedAt: null,
+      error: 'transient database failure',
+    };
+
+    it('re-runs the handler when the claimed row was never processed', async () => {
+      const save = jest.fn(async () => {
+        throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+      });
+      const { service, apply } = build({
+        save,
+        findOne: jest.fn(async () => unfinished),
+      });
+
+      await expect(service.handle(input)).resolves.toEqual({
+        status: 'processed',
+        eventId: 'evt_123',
+      });
+
+      expect(apply).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ⚠️ **And clears the previous attempt's error.** A row that succeeded on
+     * retry still carrying the first message would read as a permanent failure
+     * to the query M23.4 will add.
+     */
+    it('marks it processed and clears the earlier error', async () => {
+      const save = jest.fn(async () => {
+        throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+      });
+      const { service, update } = build({
+        save,
+        findOne: jest.fn(async () => unfinished),
+      });
+
+      await service.handle(input);
+
+      expect(update).toHaveBeenCalledWith(
+        { id: 'row_1' },
+        { processedAt: expect.any(Date), error: null },
+      );
+    });
+
+    /**
+     * 🔴 **A FINISHED row stays a no-op.** Re-running a completed event is the
+     * double-charge this whole mechanism exists to prevent — the fix must not
+     * trade one failure for a worse one.
+     */
+    it('does not re-run a row that already completed', async () => {
+      const save = jest.fn(async () => {
+        throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+      });
+      const { service, apply, update } = build({
+        save,
+        findOne: jest.fn(async () => ({ id: 'row_1', processedAt: new Date(), error: null })),
+      });
+
+      await expect(service.handle(input)).resolves.toEqual({
+        status: 'duplicate',
+        eventId: 'evt_123',
+      });
+
+      expect(apply).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠️ **A duplicate whose row cannot be found is treated as handled.** The
+     * alternative — re-running on a row we cannot see — risks double-applying
+     * an event on the strength of a failed lookup, which is the worse error.
+     */
+    it('treats an unreadable row as already handled', async () => {
+      const save = jest.fn(async () => {
+        throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+      });
+      const { service, apply } = build({ save, findOne: jest.fn(async () => null) });
+
+      await expect(service.handle(input)).resolves.toEqual({
+        status: 'duplicate',
+        eventId: 'evt_123',
+      });
+
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    /** 📌 A second failure records the new reason and still asks for a retry. */
+    it('records a fresh failure and rethrows', async () => {
+      const save = jest.fn(async () => {
+        throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+      });
+      const apply = jest.fn(async () => {
+        throw new Error('still failing');
+      });
+      const { service, update } = build({
+        save,
+        apply,
+        findOne: jest.fn(async () => unfinished),
+      });
+
+      await expect(service.handle(input)).rejects.toThrow('still failing');
+
+      expect(update).toHaveBeenCalledWith({ id: 'row_1' }, { error: 'still failing' });
     });
   });
 });

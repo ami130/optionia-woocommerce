@@ -106,6 +106,8 @@ export class BillingWebhookService {
       error: null,
     });
 
+    let claimed = event;
+
     try {
       /*
        * 📌 `save`, not `insert`, only because TypeORM's `insert` cannot type a
@@ -115,13 +117,46 @@ export class BillingWebhookService {
        */
       await this.events.save(event);
     } catch (error) {
-      if (this.isDuplicate(error)) {
+      if (!this.isDuplicate(error)) {
+        throw error;
+      }
+
+      /*
+       * 🔴 **A duplicate is not automatically "already handled" (N1).**
+       *
+       * The row is inserted *before* the handler runs, so a handler that throws
+       * leaves the event claimed and unprocessed. The 5xx we return asks the
+       * provider to retry — and the retry then hit this branch, saw the row,
+       * answered 200, and **never ran the handler again**. A merchant whose
+       * `invoice.paid` failed once stayed `past_due` for ever, with the
+       * provider's retries consumed by our own idempotency check.
+       *
+       * ⚠️ **Measured before it was fixed**: a probe with a handler that failed
+       * once then succeeded showed it running exactly once, the retry returning
+       * `duplicate`. The docblock above called the unprocessed row *"a visible,
+       * queryable started-and-did-not-finish"* — visible to nobody, because
+       * nothing looked.
+       *
+       * 📌 **`processedAt` is the discriminator.** A row that finished is a
+       * genuine duplicate and must stay a no-op; a row that did not is work
+       * still owed, and this delivery is the chance to complete it.
+       */
+      const existing = await this.events.findOne({
+        where: { provider: providerName, providerEventId: verified.eventId },
+      });
+
+      if (existing === null || existing.processedAt !== null) {
         this.logger.log(`Ignoring a redelivered event: ${verified.eventId}`);
 
         return { status: 'duplicate', eventId: verified.eventId };
       }
 
-      throw error;
+      this.logger.warn(
+        `Re-processing ${verified.eventId}, claimed but never completed` +
+          (existing.error === null ? '' : `: ${existing.error}`),
+      );
+
+      claimed = existing;
     }
 
     /*
@@ -137,7 +172,13 @@ export class BillingWebhookService {
     try {
       const result = await this.lifecycle.apply(verified.type, verified.payload);
 
-      await this.events.update({ id: event.id }, { processedAt: new Date() });
+      /*
+       * ⚠️ **`error` is cleared, not left behind.** A row that succeeded on a
+       * retry still carrying the first attempt's message would read as a
+       * permanent failure to whoever queries for them later — which is exactly
+       * the query M23.4 will add.
+       */
+      await this.events.update({ id: claimed.id }, { processedAt: new Date(), error: null });
 
       this.logger.log(
         result.changed
@@ -145,7 +186,7 @@ export class BillingWebhookService {
           : `${verified.type}: no change (${result.reason})`,
       );
     } catch (error) {
-      await this.events.update({ id: event.id }, { error: (error as Error).message });
+      await this.events.update({ id: claimed.id }, { error: (error as Error).message });
 
       throw error;
     }
