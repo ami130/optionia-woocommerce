@@ -990,6 +990,62 @@ else
   printf '        M24.5: enforcement decisions remain server-side, always.\n'
 fi
 
+# --- 41. Analytics is a paid feature, and something enforces that (F148) ----
+#
+# 🔴 **`plans.features` carried `analytics` from Phase 22 and NOTHING read it.**
+# All three plans seeded it — false on Free, true on Pro and Business — so the
+# gating decision was made a phase before it could be enforced and then enforced
+# nowhere. Ninth instance of this project's dominant defect: a mechanism with no
+# caller.
+#
+# ⚠️ **Counted at the CALL SITE, as gate 39 learned to.** A test calling
+# `PlanFeatureGuard` directly proves it decides correctly and says nothing about
+# whether a route consults it — which is exactly how F130 shipped fifteen green
+# tests around an unwired guard. This reads the controller.
+ANALYTICS_CTRL="$SRC/analytics/analytics.controller.ts"
+
+if [ ! -f "$ANALYTICS_CTRL" ]; then
+  fail "the analytics controller is missing — M25.3 has no surface"
+elif grep -q "assertHasFeature(" "$ANALYTICS_CTRL"; then
+  pass "the analytics route consults the plan's feature flags (M25.3)"
+else
+  fail "the analytics route never calls assertHasFeature"
+  printf '        plans.features.analytics is false on Free. A route that does not\n'
+  printf '        ask is a paid feature given away, and F148 was exactly that.\n'
+fi
+
+# 🔴 And the read must not happen before the refusal.
+#
+# A guard called *after* the query has already done the work it was meant to
+# withhold — on a plan that excludes analytics, the work IS the product.
+if [ -f "$ANALYTICS_CTRL" ]; then
+  GUARD_LINE=$(grep -n "assertHasFeature(" "$ANALYTICS_CTRL" | head -1 | cut -d: -f1)
+  READ_LINE=$(grep -n "service.summary(" "$ANALYTICS_CTRL" | head -1 | cut -d: -f1)
+
+  if [ -n "$GUARD_LINE" ] && [ -n "$READ_LINE" ] && [ "$GUARD_LINE" -lt "$READ_LINE" ]; then
+    pass "the plan is checked before the analytics read, not after"
+  else
+    fail "the analytics read is not preceded by the plan check"
+    printf '        A refusal that arrives with the data already fetched has still\n'
+    printf '        done the work the plan was meant to withhold.\n'
+  fi
+fi
+
+# 🔒 And free text must never reach a merchant-facing aggregate.
+#
+# `value_label` is null for free text by the time it leaves the shop, but an
+# aggregate that GROUPED on it would still create a row per customer message.
+# The rule Phase 25 is held to: carry `valueKey`, never `valueLabel`.
+ANALYTICS_SVC="$SRC/analytics/analytics.service.ts"
+
+if [ -f "$ANALYTICS_SVC" ] && ! grep -qE 'GROUP BY[^;]*valueLabel|PARTITION BY[^)]*valueLabel' "$ANALYTICS_SVC"; then
+  pass "analytics groups on value keys, never on customer text (M25.6)"
+else
+  fail "an analytics aggregate groups on valueLabel"
+  printf '        An engraving message is the customer own words. Grouping on it\n'
+  printf '        puts personal data into a rollup Phase 26b would have to erase.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

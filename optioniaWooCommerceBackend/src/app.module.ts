@@ -17,6 +17,7 @@ import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MailModule } from './mail/mail.module';
 import { ConfigDeliveryModule } from './config-delivery/config-delivery.module';
 import { OptionSetsModule } from './option-sets/option-sets.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
@@ -96,6 +97,7 @@ import { HealthModule } from './health/health.module';
     OptionSetsModule,
     ConfigDeliveryModule,
     OrdersModule,
+    AnalyticsModule,
     ProductsModule,
     HealthModule,
     ActivationModule,

@@ -30301,11 +30301,109 @@ endpoint, which arrives in 25-1. ⚠️ **Shipping the guard and calling it done
 would be F130 exactly** — a mechanism with fifteen passing tests and no route
 invoking it. It is wired, with an HTTP-level test, in 25-1 or not at all.
 
+#### Stage 25-1.0 — the decisions, measured rather than assumed (2026-09-28)
+
+**F149 is real but does NOT bite yet, and my first statement of it was wrong.**
+I claimed the analytics index "cannot serve a tenant-scoped query" and implied
+25-1 was blocked on it. Measured on a 480k-row scratch copy, dropped afterwards:
+
+| Selections | No extra index | With covering indexes |
+|---|---|---|
+| 60k, one tenant | 127 ms | 130 ms |
+| 60k, four tenants | 32 ms | 33 ms |
+| **480k** | **253 ms** | **72 ms** |
+
+📌 **Below roughly 100k selections the indexes do nothing** — the optimizer scans
+because scanning is genuinely cheaper, and adding them would be paying write cost
+for a read that is already fast. **Above it they are worth 3.5×.** So the
+decision is a recorded threshold, not a migration: when a tenant approaches 100k
+selections, add `order_events (storeId, id)` and
+`order_selections (orderEventId, optionKey, priceDeltaMinor)`.
+
+**Attach rate needs NO view events, and my deferral note said it did.**
+`OrderReporter::queue()` carries no options filter — every `processing` and
+`completed` order is queued, and `test_an_order_with_no_options_still_reports`
+pins that an optionless order reports with an empty selections array. **The
+denominator is already in `order_events`**, so attach rate and
+conversion-with-vs-without are both one query today. That makes **four** of
+M25.3's five deliverables answerable from existing data, not three, and
+strengthens the case for deferring M25.1's view events rather than weakening it.
+
+🔴 **F150 — "revenue per option set" has no column, and the plugin already holds
+the data.** `order_selections` carries no option-set reference and
+`ReportOrderSelectionDto` accepts none, while `OrderLineItem` writes
+`META_OPTION_SET_ID` onto the order line and never sends it. The same shape as
+F132 and F137: captured at one end, dropped before the end that needs it. This is
+the one M25.3 deliverable that **cannot** be answered from existing data.
+
+🔴 **F151 — M25.4's "per product" has no reference either**, and unlike F150 the
+plugin does not send one. It belongs to stage 25-3 but **shares F150's
+migration**: doing them separately means two migrations and two plugin releases
+where one would do. ⚠️ **Both columns only populate for orders placed after the
+plugin update** — the same discontinuity F146's quantity fix created, on a second
+axis, and it must be said in the merchant-facing copy rather than discovered.
+
+⚠️ **F152 — one `optionKey` can carry several `optionLabel`s.** Labels are
+snapshotted at order time on purpose (a rename must not rewrite past receipts),
+so a year's grouping can surface several names for one key. **Decision: the most
+recent label by `occurredAt` wins** — it is what the merchant last chose, so it
+is the name they will recognise.
+
+🔴 **And the obvious implementation of that is wrong.** `GROUP_CONCAT(... ORDER
+BY occurredAt DESC)` with `SUBSTRING_INDEX` reads correctly and **silently
+truncates at `group_concat_max_len`, which is 1024 by default — about five rows
+at a 200-character label**, after which it picks whatever survived the cut. A
+window function (`FIRST_VALUE` / `ROW_NUMBER`) answers the same question with no
+cap; MySQL 8.0+ has them and CI runs `mysql:8.4`.
+
+🔴 **F153 — "dead options" cannot come from `order_selections` at all.** The exit
+criterion asks for the highest-revenue options **and the dead ones**, and a dead
+option is one that exists in configuration with *zero* selections — absent from
+the order tables by construction. It needs a join to live config
+(`option_sets → option_groups → options`, each on `deletedAt = LIVE_SENTINEL`),
+with `NOT EXISTS` against the selections. Prototyped against the real database:
+it returns real dead options today. ⚠️ **Building revenue-per-option and ticking
+the phase would leave half the exit criterion unmet** — which is how Phase 24 came
+to be ticked twice.
+
+📌 **A soft-deleted option is NOT dead.** It is gone, not ignored, and listing it
+would ask the merchant to act on something they already removed.
+
+🟢 **F154 — tenant isolation is structural here.** `order_selections` reaches a
+tenant only through `order_events.storeId → stores.tenantId`, so every analytics
+query must join `stores`; a forgotten `WHERE` is a join error rather than a
+cross-tenant leak. Asserted anyway, as `plan-usage.e2e-spec` does.
+
+#### Stage 25-1.1 — the read service, shipped (2026-09-28)
+
+`GET /v1/analytics` returns option revenue, value revenue, attach rate and dead
+options in one call, gated on `ANALYTICS_VIEW` **and** `plan.features.analytics`.
+
+🔴 **This is `PlanFeatureGuard`'s first caller, and the guard existed for a
+commit without one.** The refusal is asserted over HTTP rather than at the
+service, because a service-level test passes against a controller that forgot to
+call the guard — which is how F130 survived review. **Gate 41** now counts the
+call site, checks it runs *before* the read, and refuses any aggregate that
+groups on `valueLabel`.
+
+📌 **Four of M25.3's five deliverables now answered from existing data.** Only
+revenue-per-option-set remains, and it needs F150's migration.
+
+✏️ **A mutation survived and produced a test.** Dropping
+`AND e.storeId = os.storeId` from the dead-option query changed nothing, because
+every fixture tenant had one store — so the clause was load-bearing and unproven.
+An option key is unique within its group, not across a tenant's shops, and
+without it a busy store's orders would hide an unused option in a quiet one.
+
+⚠️ **One endpoint, not four.** The sections answer one question, and splitting
+them would let a merchant see revenue from one moment beside dead options from
+another — which reads as a contradiction rather than as a lag.
+
 #### Stage order
 
 ```text
 25-0  ✅ decisions + the two revenue defects + the ledger gate   (no schema)
-25-1     M25.3 over existing order_selections + PlanFeatureGuard caller
+25-1  ◐  M25.3 read service + PlanFeatureGuard caller  — 25-1.4 OPEN
 25-2     M25.2 rollups, obeying the valueKey rule
 25-3     M25.4 comparisons, M25.5 CSV export
 25-4     M25.1 non-order events — see the deferral below
