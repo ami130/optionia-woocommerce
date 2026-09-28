@@ -420,6 +420,100 @@ final class OrderPayloadTest extends TestCase {
 		$this->assertSame( -500, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
 	}
 
+	// --- Option set attribution (F150) ---------------------------------------
+
+	/**
+	 * 🔴 **Each selection reports which set it came from** (F150, M25.3).
+	 *
+	 * The order already carried `_optionia_option_set_id` — a flat LIST of the
+	 * sets a line touched — and it cannot answer *"what did THIS option earn for
+	 * THAT set"*, which is the whole of M25.3's last clause. Attributing a
+	 * multi-set line's revenue to every set it touched makes the per-set figures
+	 * sum to more than the order did.
+	 */
+	public function test_a_selection_reports_the_set_it_came_from(): void {
+		$order = optionia_test_order( 1 );
+		$item  = $this->line( 'finish', 'lux', '99.00' );
+
+		$item->add_meta_data(
+			Keys::META_OPTION_SETS,
+			wp_json_encode( array( 'finish' => 'set-abc' ) ),
+			true
+		);
+
+		$order->items[] = $item;
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertSame( 'set-abc', $selections[0]['option_set_id'] );
+	}
+
+	/**
+	 * ⚠️ **An order placed before the plugin sent it reports null, not a
+	 * guess.** The older flat list cannot say which option belongs to which set,
+	 * so there is nothing to infer — and inventing an attribution would be worse
+	 * than admitting the boundary date.
+	 */
+	public function test_a_selection_without_the_meta_reports_null(): void {
+		$order          = optionia_test_order( 1 );
+		$order->items[] = $this->line( 'finish', 'lux', '99.00' );
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertNull( $selections[0]['option_set_id'] );
+	}
+
+	/**
+	 * 🔴 **Each option gets its OWN set**, which is the point of the change.
+	 */
+	public function test_each_option_reports_its_own_set(): void {
+		$order = optionia_test_order( 1 );
+		$item  = optionia_test_order_item();
+
+		$item->add_meta_data(
+			Keys::META_SELECTIONS,
+			wp_json_encode( array( 'finish' => 'lux', 'engraving' => 'yes' ) ),
+			true
+		);
+		$item->add_meta_data( Keys::META_PRICE_DELTA, '10.00', true );
+		$item->add_meta_data(
+			Keys::META_OPTION_SETS,
+			wp_json_encode( array( 'finish' => 'set-a', 'engraving' => 'set-b' ) ),
+			true
+		);
+
+		$order->items[] = $item;
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+		$by_key     = array();
+
+		foreach ( $selections as $selection ) {
+			$by_key[ $selection['option_key'] ] = $selection['option_set_id'];
+		}
+
+		$this->assertSame( 'set-a', $by_key['finish'] );
+		$this->assertSame( 'set-b', $by_key['engraving'] );
+	}
+
+	/**
+	 * ⚠️ **Malformed meta yields no attribution, never a dropped line.** Order
+	 * meta is editable from the admin screen, and losing an order's revenue over
+	 * a provenance field would be the wrong trade every time.
+	 */
+	public function test_malformed_set_meta_does_not_lose_the_line(): void {
+		$order = optionia_test_order( 1 );
+		$item  = $this->line( 'finish', 'lux', '99.00' );
+
+		$item->add_meta_data( Keys::META_OPTION_SETS, '{"broken":', true );
+		$order->items[] = $item;
+
+		$body = ( new OrderPayload() )->build( $order );
+
+		$this->assertCount( 1, $body['selections'] );
+		$this->assertNull( $body['selections'][0]['option_set_id'] );
+		$this->assertSame( 9900, $body['option_revenue_minor'] );
+	}
+
 	// --- Quantity (F146) -----------------------------------------------------
 
 	/**

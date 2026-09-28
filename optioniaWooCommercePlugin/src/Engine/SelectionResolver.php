@@ -487,7 +487,7 @@ final class SelectionResolver {
 	 * `min_date`, `max_date`, `blackout_dates`, `allowed_weekdays` — need no
 	 * clock and always apply.
 	 *
-	 * @return Result Ok with `array{deltas, resolved, total_minor, unpriced, labels, set_ids}`,
+	 * @return Result Ok with `array{deltas, resolved, total_minor, unpriced, labels, set_ids, option_sets}`,
 	 *                where `deltas` is keyed by option id and summed across that
 	 *                option's chosen values (ADR-061), or errors.
 	 */
@@ -542,6 +542,17 @@ final class SelectionResolver {
 		$unpriced     = array();
 		$labels       = array();
 		$set_ids      = array();
+
+		/*
+		 * 🔴 **Which set each option came from, beside the flat list** (F150).
+		 *
+		 * `$set_ids` answers *"which sets did this line touch"*; it cannot answer
+		 * *"what did THIS option earn for THAT set"*, which is what M25.3's
+		 * "revenue per option set" asks. Attributing a multi-set line's revenue
+		 * to every set it touched would make the per-set figures sum to more than
+		 * the order did.
+		 */
+		$option_sets  = array();
 
 		// Bytes of customer-supplied text accepted so far, across every option.
 		$text_bytes = 0;
@@ -740,8 +751,13 @@ final class SelectionResolver {
 
 				$set_id = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
-				if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
-					$set_ids[] = $set_id;
+				if ( '' !== $set_id ) {
+					if ( ! in_array( $set_id, $set_ids, true ) ) {
+						$set_ids[] = $set_id;
+					}
+
+					// Per option, so revenue can be attributed without double-counting.
+					$option_sets[ $option_id ] = $set_id;
 				}
 
 				$chosen[ $option_id ] = $configured;
@@ -833,8 +849,13 @@ final class SelectionResolver {
 
 				$set_id = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
-				if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
-					$set_ids[] = $set_id;
+				if ( '' !== $set_id ) {
+					if ( ! in_array( $set_id, $set_ids, true ) ) {
+						$set_ids[] = $set_id;
+					}
+
+					// Per option, so revenue can be attributed without double-counting.
+					$option_sets[ $option_id ] = $set_id;
 				}
 
 				$chosen[ $option_id ] = $candidate;
@@ -990,8 +1011,13 @@ final class SelectionResolver {
 
 				$set_id = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
-				if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
-					$set_ids[] = $set_id;
+				if ( '' !== $set_id ) {
+					if ( ! in_array( $set_id, $set_ids, true ) ) {
+						$set_ids[] = $set_id;
+					}
+
+					// Per option, so revenue can be attributed without double-counting.
+					$option_sets[ $option_id ] = $set_id;
 				}
 
 				$chosen[ $option_id ] = $text;
@@ -1106,8 +1132,13 @@ final class SelectionResolver {
 
 				$set_id = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
-				if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
-					$set_ids[] = $set_id;
+				if ( '' !== $set_id ) {
+					if ( ! in_array( $set_id, $set_ids, true ) ) {
+						$set_ids[] = $set_id;
+					}
+
+					// Per option, so revenue can be attributed without double-counting.
+					$option_sets[ $option_id ] = $set_id;
 				}
 
 				$chosen[ $option_id ] = $date;
@@ -1202,8 +1233,13 @@ final class SelectionResolver {
 
 				$set_id = (string) ( $options[ $option_id ]['__set_id'] ?? '' );
 
-				if ( '' !== $set_id && ! in_array( $set_id, $set_ids, true ) ) {
-					$set_ids[] = $set_id;
+				if ( '' !== $set_id ) {
+					if ( ! in_array( $set_id, $set_ids, true ) ) {
+						$set_ids[] = $set_id;
+					}
+
+					// Per option, so revenue can be attributed without double-counting.
+					$option_sets[ $option_id ] = $set_id;
 				}
 
 				$chosen[ $option_id ] = $canonical;
@@ -1625,6 +1661,7 @@ final class SelectionResolver {
 				'unpriced'           => $unpriced,
 				'labels'             => $labels,
 				'set_ids'            => $set_ids,
+				'option_sets'        => $option_sets,
 
 				/*
 				 * 🔴 **Per unit, never multiplied by quantity.** WooCommerce's

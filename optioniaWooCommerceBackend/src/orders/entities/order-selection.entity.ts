@@ -23,6 +23,7 @@ import { OrderEvent } from './order-event.entity';
 @Entity('order_selections')
 @Index('ix_order_selections_event', ['orderEventId'])
 @Index('ix_order_selections_analytics', ['optionKey', 'valueKey'])
+@Index('ix_order_selections_set', ['optionSetId', 'optionKey'])
 export class OrderSelection extends BaseEntity {
   @Column({ type: 'char', length: 36 })
   orderEventId: string;
@@ -46,6 +47,22 @@ export class OrderSelection extends BaseEntity {
 
   @Column({ type: 'varchar', length: 64, nullable: true })
   valueKey: string | null;
+
+  /**
+   * Which option set this choice came from (F150, M25.3).
+   *
+   * 🔴 **Denormalised and unconstrained, like `optionKey`.** ADR-016: an order is
+   * a historical fact and does not change because configuration later did, so a
+   * foreign key would either block the set's deletion or cascade the order
+   * record away — both wrong.
+   *
+   * ⚠️ **Null for every order placed before the plugin sent it**, and nothing can
+   * backfill it: the older per-line meta is a flat list of the sets a line
+   * touched and cannot say which option belongs to which. Analytics presents a
+   * boundary date rather than reporting those orders as belonging to no set.
+   */
+  @Column({ type: 'char', length: 36, nullable: true })
+  optionSetId: string | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   valueLabel: string | null;

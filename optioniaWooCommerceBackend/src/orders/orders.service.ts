@@ -117,7 +117,7 @@ export class OrdersService {
 
       if (dto.selections.length > 0) {
         const values = dto.selections
-          .map(() => `(UUID(), ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`)
+          .map(() => `(UUID(), ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`)
           .join(', ');
 
         const parameters = dto.selections.flatMap((selection) => [
@@ -126,6 +126,13 @@ export class OrdersService {
           selection.option_label,
           selection.value_key ?? null,
           selection.value_label ?? null,
+          /*
+           * ⚠️ **Null for an order from a plugin older than F150**, and nothing
+           * can infer it later: the previous per-line meta is a flat list of the
+           * sets a line touched and cannot say which option belongs to which.
+           * "Revenue per option set" therefore carries a boundary date.
+           */
+          selection.option_set_id ?? null,
           selection.price_delta_minor,
           selection.config_version ?? 0,
         ]);
@@ -133,7 +140,7 @@ export class OrdersService {
         await manager.query(
           `INSERT INTO order_selections
              (id, orderEventId, optionKey, optionLabel, valueKey, valueLabel,
-              priceDeltaMinor, configVersion, createdAt, updatedAt)
+              optionSetId, priceDeltaMinor, configVersion, createdAt, updatedAt)
            VALUES ${values}`,
           parameters,
         );

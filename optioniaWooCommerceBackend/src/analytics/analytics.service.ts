@@ -57,6 +57,24 @@ export interface DeadOption {
  * deferred. That deferral is therefore not free, and the Phase 25 section says
  * so rather than leaving it to be discovered at exit-criteria time.
  */
+/**
+ * What one option set earned (M25.3, F150).
+ *
+ * ⚠️ **A set's figure is "what we can attribute", never "what it earned".**
+ * Orders placed before the plugin sent a per-option set id carry none, and
+ * nothing can backfill them — the older per-line meta is a flat list of the sets
+ * a line touched and cannot say which option belongs to which. A merchant
+ * comparing two sets needs to know that one of them predates the data, which is
+ * why `unattributedSelections` travels beside this.
+ */
+export interface OptionSetRevenue {
+  readonly optionSetId: string;
+  readonly name: string;
+  readonly revenueMinor: number;
+  /** Order lines naming an option from this set. */
+  readonly orders: number;
+}
+
 export interface AttachRate {
   readonly orders: number;
   readonly ordersWithOptions: number;
@@ -107,6 +125,16 @@ export interface AnalyticsSummary {
    */
   readonly leastValues: Capped<ValueRevenue>;
   readonly deadOptions: Capped<DeadOption>;
+  /** Revenue per option set — M25.3's last clause (F150). */
+  readonly optionSets: Capped<OptionSetRevenue>;
+  /**
+   * Selections carrying no set attribution.
+   *
+   * 🔴 **Reported rather than hidden.** These are orders from a plugin older
+   * than F150, and their revenue is real but unattributable — a per-set total
+   * presented without this number reads as complete when it is not.
+   */
+  readonly unattributedSelections: number;
 }
 
 /**
@@ -152,15 +180,26 @@ export class AnalyticsService {
 
   /** Everything the screen needs, in one round trip per section. */
   async summary(tenantId: string): Promise<AnalyticsSummary> {
-    const [attach, topOptions, topValues, leastValues, deadOptions] = await Promise.all([
-      this.attachRate(tenantId),
-      this.optionRevenue(tenantId),
-      this.valueRevenue(tenantId, 'most'),
-      this.valueRevenue(tenantId, 'least'),
-      this.deadOptions(tenantId),
-    ]);
+    const [attach, topOptions, topValues, leastValues, deadOptions, optionSets, unattributed] =
+      await Promise.all([
+        this.attachRate(tenantId),
+        this.optionRevenue(tenantId),
+        this.valueRevenue(tenantId, 'most'),
+        this.valueRevenue(tenantId, 'least'),
+        this.deadOptions(tenantId),
+        this.optionSetRevenue(tenantId),
+        this.unattributedSelections(tenantId),
+      ]);
 
-    return { attach, topOptions, topValues, leastValues, deadOptions };
+    return {
+      attach,
+      topOptions,
+      topValues,
+      leastValues,
+      deadOptions,
+      optionSets,
+      unattributedSelections: unattributed,
+    };
   }
 
   /**
@@ -466,6 +505,92 @@ export class AnalyticsService {
     )) as { total: number }[];
 
     return this.capped(rows, Number(count?.total ?? 0));
+  }
+
+  /**
+   * What each option set earned (M25.3's last clause, F150).
+   *
+   * ## Why the name comes from live configuration
+   *
+   * 📌 **A set id alone is unreadable**, and unlike `optionLabel` the order does
+   * not snapshot the set's name — so this joins `option_sets` for it. The
+   * consequence is deliberate: a **deleted** set has no name to show and drops
+   * out, which is honest, because a merchant cannot act on revenue attributed to
+   * something that no longer exists. Its selections still appear in
+   * `topOptions`, so no revenue vanishes from the report as a whole.
+   *
+   * ⚠️ **`optionSetId IS NOT NULL` is REDUNDANT here, and kept deliberately.**
+   * The inner `JOIN option_sets` already drops a row whose `optionSetId` is
+   * null — measured, not assumed, so removing it is an *equivalent mutation*
+   * that no test can kill. It stays because the exclusion is the point: orders
+   * from a plugin older than F150 carry no set, and a reader must not have to
+   * derive that from join semantics. They are counted separately by
+   * `unattributedSelections`, because counting them as one anonymous group would
+   * invent a set that never existed and dropping them silently would make the
+   * per-set total read as complete.
+   */
+  async optionSetRevenue(tenantId: string): Promise<Capped<OptionSetRevenue>> {
+    const rows = (await this.dataSource.query(
+      `SELECT
+         sel.optionSetId AS optionSetId,
+         os.name AS name,
+         SUM(sel.priceDeltaMinor) AS revenueMinor,
+         COUNT(*) AS orders
+       FROM order_selections sel
+       JOIN order_events e ON e.id = sel.orderEventId
+       JOIN stores s ON s.id = e.storeId
+       JOIN option_sets os
+         ON os.id = sel.optionSetId AND os.deletedAt = '${LIVE_SENTINEL_SQL}'
+      WHERE s.tenantId = ? AND sel.optionSetId IS NOT NULL
+      GROUP BY sel.optionSetId, os.name
+      ORDER BY revenueMinor DESC, orders DESC, os.name ASC
+      LIMIT ${MAX_ROWS}`,
+      [tenantId],
+    )) as { optionSetId: string; name: string; revenueMinor: string; orders: number }[];
+
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(DISTINCT sel.optionSetId) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+         JOIN option_sets os
+           ON os.id = sel.optionSetId AND os.deletedAt = '${LIVE_SENTINEL_SQL}'
+        WHERE s.tenantId = ? AND sel.optionSetId IS NOT NULL`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(
+      rows.map((row) => ({
+        optionSetId: row.optionSetId,
+        name: row.name,
+        revenueMinor: Number(row.revenueMinor),
+        orders: Number(row.orders),
+      })),
+      Number(count?.total ?? 0),
+    );
+  }
+
+  /**
+   * How many selections carry no set attribution at all.
+   *
+   * 🔴 **This number is why the per-set report can be trusted.** Every order
+   * placed before the plugin began sending a per-option set id has a null here,
+   * permanently — nothing can backfill it, because the older per-line meta is a
+   * flat list of the sets a line touched and cannot say which option belongs to
+   * which. Reporting per-set revenue without saying how much sits outside it
+   * presents a partial figure as a complete one.
+   */
+  async unattributedSelections(tenantId: string): Promise<number> {
+    const [row] = (await this.dataSource.query(
+      `SELECT COUNT(*) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ? AND sel.optionSetId IS NULL`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return Number(row?.total ?? 0);
   }
 
   /**

@@ -88,6 +88,7 @@ final class OrderLineItem {
 		Keys::META_SELECTIONS,
 		Keys::META_CONFIG_VERSION,
 		Keys::META_OPTION_SET_ID,
+		Keys::META_OPTION_SETS,
 		Keys::META_PRICE_DELTA,
 		Keys::META_SKU_SUFFIX,
 	);
@@ -268,6 +269,18 @@ final class OrderLineItem {
 
 		if ( is_array( $set_ids ) && array() !== $set_ids ) {
 			$item->add_meta_data( Keys::META_OPTION_SET_ID, wp_json_encode( array_values( $set_ids ) ), true );
+		}
+
+		/*
+		 * 🔴 **And which set each option came from** (F150). The flat list above
+		 * says a line touched two sets; only this says which option belongs to
+		 * which, and without it "revenue per option set" has to attribute a
+		 * multi-set line's whole revenue to every set it touched.
+		 */
+		$option_sets = $optionia[ Keys::CART_ITEM_OPTION_SETS ] ?? null;
+
+		if ( is_array( $option_sets ) && array() !== $option_sets ) {
+			$item->add_meta_data( Keys::META_OPTION_SETS, wp_json_encode( $option_sets ), true );
 		}
 
 		/*

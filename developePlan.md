@@ -30511,11 +30511,56 @@ fixtures rather than the code were what changed:
   column is NULL. Measured rather than assumed, and the redundant filter is kept
   so the count reads as the same population the list selected.
 
+#### Stage 25-1.4 — revenue per option set, and the shape that made it hard (2026-09-28)
+
+**M25.3's last clause, and the one thing that genuinely needed a migration.**
+
+🔴 **The plugin already sent set ids and they could not answer the question.**
+`_optionia_option_set_id` is a **flat list** of the sets a *line* touched — so a
+line drawing options from two sets could only be attributed *"all of it, to
+each"*, under which a merchant's per-set revenue **exceeds their actual
+revenue** and every comparison between sets is wrong. My earlier note said "the
+plugin already holds the data", which was true of the ids and false of the
+shape.
+
+**The fix is per-selection, decided with you.** `SelectionResolver` already knew
+`__set_id` per option and flattened it by choice, not by limitation — so a
+parallel `option_id => set_id` map now travels beside the list, through the cart
+payload, onto the order line, and into `order_selections.optionSetId`.
+
+⚠️ **Outside the signature, like `set_ids` and `labels`.** It records provenance,
+not money; signing it would make a set reorganisation invalidate a frozen price.
+
+🔴 **`unattributedSelections` ships beside the per-set figures, and is the
+reason they can be trusted.** Orders placed before this plugin update carry no
+set id and **nothing can backfill them**, so their revenue is real and
+unattributable. A per-set total presented without that number reads as complete
+when it is not, and the merchant would conclude their sets earn less than they
+do. Same discontinuity as F146's quantity fix, on a second axis, recorded rather
+than discovered.
+
+📌 **A deleted set drops out of the report, deliberately.** The order does not
+snapshot a set's name — unlike `optionLabel` — so the name is joined from live
+configuration, and a merchant cannot act on revenue attributed to something that
+no longer exists. Those selections still appear in `topOptions`, so nothing
+vanishes from the report as a whole.
+
+✏️ **Two things only running it could have shown.** The e2e database is separate
+(`optionia_woo_test`) and needed the migration run against it — 17 suites failed
+with *"Unknown column"* until it was. And a `git checkout` I ran to restore a
+mutation **discarded uncommitted work**; caught because the gate that had just
+passed started failing, which is the argument for gates over memory.
+
+📌 **Equivalent mutant, measured not assumed:** removing `optionSetId IS NOT
+NULL` from the per-set query changes nothing, because the inner
+`JOIN option_sets` already drops a null row. Kept anyway — the exclusion is the
+point, and a reader should not have to derive it from join semantics.
+
 #### Stage order
 
 ```text
 25-0  ✅ decisions + the two revenue defects + the ledger gate   (no schema)
-25-1  ◐  M25.3 read service + PlanFeatureGuard caller  — 25-1.4 OPEN
+25-1  ✅ M25.3 complete — read service, plan gate, revenue per option set
 25-2     M25.2 rollups, obeying the valueKey rule
 25-3     M25.4 comparisons, M25.5 CSV export
 25-4     M25.1 non-order events — see the deferral below

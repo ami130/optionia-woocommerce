@@ -75,6 +75,27 @@ export class ReportOrderSelectionDto {
   value_label?: string | null;
 
   /**
+   * Which option set this choice came from (F150, M25.3).
+   *
+   * 🔴 **Optional, and null for every order placed before the plugin update.**
+   * The order meta carrying it did not exist, and nothing can infer it: the
+   * older `_optionia_option_set_id` is a flat list of the sets a *line* touched,
+   * which cannot say which option belongs to which — the whole reason the
+   * per-option key was added.
+   *
+   * ⚠️ **So "revenue per option set" has a boundary date**, and analytics must
+   * present it as such rather than reporting older orders as belonging to no
+   * set. The same discontinuity F146's quantity fix created, on a second axis.
+   *
+   * 36 characters: a UUID. Mirrored in `OrderPayload::MAX_SET_ID`.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  @ApiPropertyOptional({ maxLength: 36, nullable: true })
+  option_set_id?: string | null;
+
+  /**
    * What this option added, in integer minor units.
    *
    * Signed: a negative delta is a legitimate discount option, so this is not

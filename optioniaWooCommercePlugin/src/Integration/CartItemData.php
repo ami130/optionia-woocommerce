@@ -258,6 +258,10 @@ final class CartItemData {
 		$set_ids = $result->value()['set_ids'] ?? array();
 		sort( $set_ids );
 
+		/* Per-option provenance, beside the flat list (F150). */
+		$option_sets = $result->value()['option_sets'] ?? array();
+		ksort( $option_sets );
+
 		/*
 		 * Sorted by option id, so one configuration produces one SKU.
 		 *
@@ -274,6 +278,7 @@ final class CartItemData {
 				Keys::CART_ITEM_SELECTIONS   => $selections,
 				Keys::CART_ITEM_LABELS       => $labels,
 				Keys::CART_ITEM_SET_IDS      => $set_ids,
+				Keys::CART_ITEM_OPTION_SETS  => $option_sets,
 				Keys::CART_ITEM_SKU_SUFFIXES => $sku_suffixes,
 			);
 
@@ -295,6 +300,7 @@ final class CartItemData {
 			 */
 			Keys::CART_ITEM_LABELS         => $labels,
 			Keys::CART_ITEM_SET_IDS        => $set_ids,
+			Keys::CART_ITEM_OPTION_SETS    => $option_sets,
 
 			/*
 			 * Outside the signature, like labels and set ids: it records what the

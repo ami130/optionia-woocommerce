@@ -60,6 +60,8 @@ final class OrderPayload {
 	private const MAX_OPTION_LABEL = 200;
 	private const MAX_VALUE_KEY    = 64;
 	private const MAX_VALUE_LABEL  = 500;
+	/** Matches the API's `option_set_id` validator: a UUID is 36 characters. */
+	private const MAX_SET_ID       = 36;
 
 	/**
 	 * The most selections one report may carry, matching the API's cap.
@@ -183,6 +185,12 @@ final class OrderPayload {
 	 * @return array<int, array<string, mixed>>
 	 */
 	private function line_selections( object $item ): array {
+		/*
+		 * Decoded once per line rather than per option: `json_decode` on a
+		 * twenty-option line would otherwise run twenty times for one answer.
+		 */
+		$option_sets = $this->decode_map( $item, Keys::META_OPTION_SETS );
+
 		$raw = $item->get_meta( Keys::META_SELECTIONS );
 
 		if ( ! is_string( $raw ) || '' === $raw ) {
@@ -252,11 +260,27 @@ final class OrderPayload {
 			 */
 			$key = $this->clamp( (string) $value_key, self::MAX_VALUE_KEY );
 
+			/*
+			 * 🔴 **Which set this option came from** (F150), so M25.3 can report
+			 * revenue per option set without attributing a multi-set line's whole
+			 * revenue to every set it touched.
+			 *
+			 * ⚠️ **Null for an order placed before the plugin update.** The meta
+			 * did not exist, and there is nothing to infer it from — the flat
+			 * `META_OPTION_SET_ID` list cannot say which option belongs to which
+			 * set, which is the whole reason this key was added. The backend
+			 * column is nullable for exactly this discontinuity.
+			 */
+			$set_id = $option_sets[ $option_id ] ?? null;
+
 			$out[] = array(
 				'option_key'        => $this->clamp( (string) $option_id, self::MAX_OPTION_KEY ),
 				'option_label'      => $this->clamp( $labels['option'], self::MAX_OPTION_LABEL ),
 				'value_key'         => '' === $key ? null : $key,
 				'value_label'       => $labels['value'],
+				'option_set_id'     => is_scalar( $set_id )
+					? $this->clamp( (string) $set_id, self::MAX_SET_ID )
+					: null,
 				'price_delta_minor' => 0,
 				'config_version'    => $config_version,
 			);
@@ -434,6 +458,30 @@ final class OrderPayload {
 		$selections[0]['price_delta_minor'] = $minor;
 
 		return $selections;
+	}
+
+	/**
+	 * A JSON-encoded meta map, decoded defensively.
+	 *
+	 * ⚠️ **Absent is an empty map, never a failure.** Order meta is editable from
+	 * the admin screen and orders placed before a key existed simply do not carry
+	 * it — so anything unreadable yields no attribution rather than dropping the
+	 * line, which would lose revenue over a provenance field.
+	 *
+	 * @param object $item An order line item.
+	 * @param string $key  The meta key holding the map.
+	 * @return array<string, mixed>
+	 */
+	private function decode_map( object $item, string $key ): array {
+		$raw = $item->get_meta( $key );
+
+		if ( ! is_string( $raw ) || '' === $raw ) {
+			return array();
+		}
+
+		$decoded = json_decode( $raw, true );
+
+		return is_array( $decoded ) ? $decoded : array();
 	}
 
 	/**

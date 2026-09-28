@@ -1145,6 +1145,47 @@ else
   printf '        is told their editing is paused. Two is the documented ceiling.\n'
 fi
 
+# --- 44. Revenue per option set is attributed per SELECTION (F150) ----------
+#
+# 🔴 **The plugin already sent a per-LINE list of sets, and it cannot answer
+# M25.3.** `_optionia_option_set_id` says which sets a line touched; a line
+# drawing options from two sets could only be attributed "all of it, to each",
+# under which a merchant's per-set revenue exceeds their actual revenue and every
+# comparison between sets is wrong.
+#
+# ⚠️ **Checked at both ends.** The plugin must send it and the backend must
+# accept and store it — F150's whole shape was data captured at one end and
+# dropped before the end that needed it, which is F132 and F137 over again.
+PAYLOAD="$PLUGIN_SRC/Reporting/OrderPayload.php"
+
+if [ -f "$PAYLOAD" ] && grep -q "'option_set_id'" "$PAYLOAD"; then
+  pass "the plugin reports which set each selection came from (F150)"
+else
+  fail "the plugin does not send a per-selection option set id"
+  printf '        The per-LINE list cannot attribute a multi-set line without\n'
+  printf '        counting its revenue once per set it touched.\n'
+fi
+
+if grep -q "option_set_id" "$SRC/orders/dto/report-order.dto.ts" \
+  && grep -q "optionSetId" "$SRC/orders/orders.service.ts"; then
+  pass "the API accepts and stores the per-selection option set id"
+else
+  fail "the API drops the option set id the plugin now sends"
+  printf '        Captured at one end and discarded before the end that needs\n'
+  printf '        it — the exact shape of F132, F137 and F150 itself.\n'
+fi
+
+# 🔴 **And what cannot be attributed must be COUNTED, not hidden.** Orders placed
+# before the plugin update carry no set id and nothing can backfill them, so a
+# per-set total shown without that number reads as complete when it is not.
+if grep -q "unattributedSelections" "$SRC/analytics/analytics.service.ts"; then
+  pass "selections with no set attribution are reported, not silently dropped"
+else
+  fail "analytics hides the selections it cannot attribute to a set"
+  printf '        A partial figure presented as a complete one is worse than\n'
+  printf '        no figure: the merchant concludes their sets earn less.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

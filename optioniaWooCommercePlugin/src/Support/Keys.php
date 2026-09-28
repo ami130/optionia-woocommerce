@@ -161,6 +161,20 @@ final class Keys {
 	/** Hidden: option set id the line was priced against. */
 	public const META_OPTION_SET_ID = '_optionia_option_set_id';
 
+	/**
+	 * Hidden: which set each of the line's options came from (F150).
+	 *
+	 * 🔴 **`META_OPTION_SET_ID` above is the flat list and cannot answer M25.3.**
+	 * That key says which sets a line touched; this one says which set each
+	 * option belongs to, so an order's revenue can be attributed per set without
+	 * counting a multi-set line twice.
+	 *
+	 * JSON-encoded `option_id => set_id`, for the same reason `META_SELECTIONS`
+	 * is: order item meta is a flat key/value table, and a key per option would
+	 * add a hidden row per option to every line.
+	 */
+	public const META_OPTION_SETS = '_optionia_option_sets';
+
 	/** Hidden: total option price delta, in minor units. */
 	public const META_PRICE_DELTA = '_optionia_price_delta';
 
@@ -273,6 +287,25 @@ final class Keys {
 	 * outcome as signing labels.
 	 */
 	public const CART_ITEM_SET_IDS = 'set_ids';
+
+	/**
+	 * Sub-key mapping each chosen option to the set it came from.
+	 *
+	 * 🔴 **`CART_ITEM_SET_IDS` above is a FLAT LIST and that is why this exists**
+	 * (F150). A line can draw options from several sets, so the list answers
+	 * *"which sets did this line touch"* and cannot answer *"what did THIS option
+	 * earn for THAT set"* — which is exactly what M25.3's *"revenue per option
+	 * set"* asks. Attributing a line's revenue to every set it touched would make
+	 * the per-set figures sum to more than the order did.
+	 *
+	 * **An audit sub-key and not signed**, for the same reasons as the list: it
+	 * records provenance rather than money, and a merchant moving an option
+	 * between sets must not invalidate a frozen price or split one cart line into
+	 * two.
+	 *
+	 * Shape: `option_id => set_id`, mirroring `CART_ITEM_SELECTIONS`.
+	 */
+	public const CART_ITEM_OPTION_SETS = 'option_sets';
 
 	/**
 	 * Sub-key holding the SKU suffixes a line's choices contribute.

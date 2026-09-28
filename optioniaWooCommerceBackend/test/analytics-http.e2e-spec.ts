@@ -64,7 +64,13 @@ describe('Analytics over HTTP (e2e)', () => {
   async function order(
     externalId: string,
     totalMinor: number,
-    selections: Array<{ optionKey: string; label: string; valueKey: string | null; deltaMinor: number }>,
+    selections: Array<{
+      optionKey: string;
+      label: string;
+      valueKey: string | null;
+      deltaMinor: number;
+      optionSetId?: string | null;
+    }>,
     occurredAt = '2026-09-01 12:00:00.000',
   ): Promise<void> {
     const optionRevenue = selections.reduce((sum, s) => sum + s.deltaMinor, 0);
@@ -88,14 +94,15 @@ describe('Analytics over HTTP (e2e)', () => {
       await dataSource.query(
         `INSERT INTO order_selections
            (id, orderEventId, optionKey, optionLabel, valueKey, valueLabel,
-            priceDeltaMinor, configVersion, createdAt, updatedAt)
-         VALUES (UUID(), ?, ?, ?, ?, ?, ?, 1, NOW(3), NOW(3))`,
+            optionSetId, priceDeltaMinor, configVersion, createdAt, updatedAt)
+         VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, 1, NOW(3), NOW(3))`,
         [
           eventId,
           selection.optionKey,
           selection.label,
           selection.valueKey,
           selection.valueKey,
+          selection.optionSetId ?? null,
           selection.deltaMinor,
         ],
       );
@@ -483,6 +490,106 @@ describe('Analytics over HTTP (e2e)', () => {
     expect(response.body.data.attach.averageOrderValueWithoutOptionsMinor).toBeNull();
     /* And the rate is null too, for the same reason: nothing to divide by. */
     expect(response.body.data.attach.rate).toBeNull();
+  });
+
+  /**
+   * 🔴 **Revenue per option set — M25.3's last clause** (F150).
+   *
+   * This is what the flat per-line set list could never answer. A line drawing
+   * options from two sets would have had its whole revenue attributed to both,
+   * so the per-set figures would have summed to more than the order did.
+   */
+  it('reports what each option set earned', async () => {
+    const setId = await optionSet('Earning set', 'from_set');
+
+    try {
+      await order('a-set-1', 9_000, [
+        {
+          optionKey: 'from_set',
+          label: 'From set',
+          valueKey: 'yes',
+          deltaMinor: 2_500,
+          optionSetId: setId,
+        },
+      ]);
+
+      const sets = (await get()).body.data.optionSets.rows as Array<{
+        optionSetId: string;
+        name: string;
+        revenueMinor: number;
+        orders: number;
+      }>;
+
+      const mine = sets.find((row) => row.optionSetId === setId);
+
+      expect(mine).toMatchObject({ name: 'Earning set', revenueMinor: 2_500, orders: 1 });
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-set-1'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-set-1'`);
+      await removeOptionSet(setId);
+    }
+  });
+
+  /**
+   * 🔴 **A line spanning two sets splits its revenue; it does not double it.**
+   *
+   * ⚠️ **This is the whole reason F150 changed the plugin's meta shape.** The
+   * old per-line key was a flat LIST of the sets a line touched, so the only
+   * available attribution was "all of it, to each" — under which a merchant's
+   * per-set revenue exceeds their actual revenue and every comparison between
+   * sets is wrong.
+   */
+  it('splits a multi-set line rather than counting it twice', async () => {
+    const first = await optionSet('Set A', 'opt_a');
+    const second = await optionSet('Set B', 'opt_b');
+
+    try {
+      await order('a-set-2', 10_000, [
+        { optionKey: 'opt_a', label: 'A', valueKey: 'y', deltaMinor: 3_000, optionSetId: first },
+        { optionKey: 'opt_b', label: 'B', valueKey: 'y', deltaMinor: 1_000, optionSetId: second },
+      ]);
+
+      const sets = (await get()).body.data.optionSets.rows as Array<{
+        optionSetId: string;
+        revenueMinor: number;
+      }>;
+
+      expect(sets.find((r) => r.optionSetId === first)?.revenueMinor).toBe(3_000);
+      expect(sets.find((r) => r.optionSetId === second)?.revenueMinor).toBe(1_000);
+
+      /* 4000 total, not 8000 — the sum is the line, not the line times its sets. */
+      const total = sets
+        .filter((r) => r.optionSetId === first || r.optionSetId === second)
+        .reduce((sum, r) => sum + r.revenueMinor, 0);
+
+      expect(total).toBe(4_000);
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-set-2'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-set-2'`);
+      await removeOptionSet(first);
+      await removeOptionSet(second);
+    }
+  });
+
+  /**
+   * 🔴 **Orders older than the plugin update are COUNTED, not hidden.**
+   *
+   * They carry no set id and nothing can backfill them, so their revenue is real
+   * and unattributable. A per-set total presented without this number reads as
+   * complete when it is not — and the merchant would conclude their sets earn
+   * less than they do.
+   */
+  it('counts the selections it cannot attribute to a set', async () => {
+    const summary = (await get()).body.data as { unattributedSelections: number };
+
+    /* Every fixture above predates the set id, so all of them land here. */
+    expect(summary.unattributedSelections).toBeGreaterThan(0);
   });
 
   /**
