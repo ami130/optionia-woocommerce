@@ -82,9 +82,17 @@ if bash bin/check-package.sh; then :; else FAILED=$((FAILED + 1)); fi
 
 section "12/14  Coding standards (PHPCS, WordPress-Extra)"
 if [ -x vendor/bin/phpcs ]; then
+  # ✏️ **Summary on success, FULL report on failure.**
+  #
+  # 🔴 **`--report=summary` alone names the files and not the rules**, so a CI
+  # failure said "16 errors in 7 files" and nothing about what to change —
+  # measured 2026-09-28, on a machine with no PHP where CI is the only way to
+  # see this at all. A gate that reports a problem without reporting the problem
+  # costs a full push-and-wait cycle per guess.
   if "$PHP" vendor/bin/phpcs -q --report=summary; then
     printf '\033[32mok\033[0m    PHPCS clean\n'
   else
+    "$PHP" vendor/bin/phpcs -q --report=full || true
     FAILED=$((FAILED + 1))
   fi
 else
