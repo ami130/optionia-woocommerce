@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { UsageModule } from '../usage/usage.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuditModule } from '../audit/audit.module';
@@ -63,6 +64,9 @@ import { OptionTypeValidator } from './types/option-type.validator';
     AuthModule,
     AuditModule,
     ConfigVersionModule,
+
+    /* 📌 M24.2: plan-limit enforcement on the creation paths. */
+    UsageModule,
     // The catalogue's ownership check: an assignment may only target a product
     // in its own set's store (finding A3). Imported rather than re-querying
     // `store_products` here, so "what counts as scoped" has one answer.

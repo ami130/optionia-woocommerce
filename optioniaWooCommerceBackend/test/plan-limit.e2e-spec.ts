@@ -25,6 +25,26 @@ describe('Plan limit enforcement (e2e)', () => {
     h = await createHarness('planlimit');
     dataSource = h.dataSource;
     guard = h.app.get(PlanLimitGuard, { strict: false });
+
+    /*
+     * 🔴 **This suite PINS the numbers it asserts rather than inheriting them.**
+     *
+     * `setup-e2e` raises Free's limits for the whole e2e run, because the other
+     * suites create fixtures far beyond a real Free plan and a limit firing
+     * mid-fixture says nothing about what they test. That made this suite's
+     * assertions depend on a value another file controls — so it sets its own.
+     *
+     * ⚠️ **The numbers are still the SEEDED ones** (Free 10, Pro 50): what is
+     * asserted is the product's real allowance, written here so it cannot drift
+     * with a harness change.
+     */
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', 10) WHERE code = 'free'`,
+    );
+
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', 50) WHERE code = 'pro'`,
+    );
   }, 120_000);
 
   afterAll(async () => {
@@ -226,8 +246,19 @@ describe('Plan limit enforcement (e2e)', () => {
   });
 });
 
+/**
+ * A tenant on FREE, whatever the harness defaults to.
+ *
+ * 📌 The harness puts its tenants on Business so unrelated fixtures are not
+ * refused; this suite is *about* the refusal, so it puts them back.
+ */
 async function named(h: Harness, which: string): Promise<string> {
   await h.tenant(which);
+
+  await h.dataSource.query(
+    `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'free') WHERE slug = ?`,
+    [`planlimit-${which}`],
+  );
 
   return which;
 }

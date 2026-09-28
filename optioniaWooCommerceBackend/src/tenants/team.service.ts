@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 
@@ -35,6 +36,8 @@ export class TeamService {
     private readonly invitations: Repository<TenantInvitation>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    /* 📌 M24.2: seats are a plan limit, charged at invitation (M24.1). */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /**
@@ -56,6 +59,16 @@ export class TeamService {
   ): Promise<string> {
     this.assertCanGrant(inviterRole, role);
 
+    /*
+     * 🔴 **M24.2: a seat is charged when the invitation is SENT, not accepted.**
+     * M24.1 is explicit about why — *"otherwise a tenant can exceed its seat
+     * limit by holding invitations open"* — and the counter honours that, so
+     * the check has to happen here rather than at acceptance.
+     *
+     * ⚠️ **Before the duplicate check below runs?** No — after. Re-inviting
+     * someone who is already a member should say so, not blame the plan; the
+     * clearer error wins when both apply.
+     */
     const address = email.trim().toLowerCase();
 
     const existing = await this.members
@@ -69,6 +82,8 @@ export class TeamService {
     if (existing) {
       throw DomainException.conflict('That person is already a member of this workspace.');
     }
+
+    await this.planLimits.assertWithinPlan(tenantId, 'team_seats');
 
     // Supersede any outstanding invitation for the same address, so a resend
     // does not leave two live links with possibly different roles.

@@ -1,4 +1,6 @@
 import { config as loadDotenv } from 'dotenv';
+import { PlanLimitGuard } from '../src/usage/plan-limit.guard';
+import { UsageCounterService } from '../src/usage/usage-counter.service';
 import { DataSource } from 'typeorm';
 
 import { TenantRole } from '../src/common/database/enums';
@@ -40,6 +42,12 @@ describe('TeamService (integration)', () => {
       dataSource.getRepository(TenantInvitation),
       dataSource,
       new AuditService(dataSource.getRepository(AuditLog)),
+      /*
+       * 📌 **M24.2's seat guard, built here because this suite constructs the
+       * service by hand.** It is the real guard over the real database — a stub
+       * would let a seat limit regress without this suite noticing.
+       */
+      new PlanLimitGuard(new UsageCounterService(dataSource), dataSource),
     );
   }, 30_000);
 
@@ -405,6 +413,7 @@ describe('TeamService (integration)', () => {
         dataSource.getRepository(TenantInvitation),
         dataSource,
         failing,
+        new PlanLimitGuard(new UsageCounterService(dataSource), dataSource),
       );
 
       await expect(broken.remove(TENANT, await memberId(ADMIN))).resolves.toBeUndefined();

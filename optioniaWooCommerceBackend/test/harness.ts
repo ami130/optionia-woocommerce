@@ -156,6 +156,41 @@ export async function bootstrapTestApp(
 
   await app.init();
 
+  /*
+   * 🔴 **Free's limits are raised for the e2e run, and ONLY for it.**
+   *
+   * M24.2 enforces `plans.limits` at write time, and Free's real allowance is
+   * 10 option sets / 1 store / 1 seat. Most suites build far larger fixtures as
+   * *setup* — `option-sets-http` alone creates 38 sets — so without this the
+   * eleventh create returns 429 and the suite fails for a reason that has
+   * nothing to do with what it asserts.
+   *
+   * ⚠️ **This does not weaken the enforcement tests.** `plan-limit.e2e-spec`
+   * pins the seeded numbers itself and puts its own tenants back on Free, so
+   * the product's real allowance is still asserted against real values.
+   *
+   * 📌 **Here rather than in each suite**, because seven suites register
+   * tenants directly instead of through `tenant()` — patching each would leave
+   * the next one to be written broken, and this is the boundary they share.
+   *
+   * ⚠️ **This is NOT reverted afterwards, and that is deliberate.** Reverting
+   * on close would race every other suite in a `--runInBand` run that shares
+   * one database: the first suite to finish would restore a limit the next is
+   * still relying on. The test database is disposable and `db:seed` restores
+   * the real numbers; a developer reading `plans` there and seeing `100000`
+   * should know it came from here.
+   */
+  await app
+    .get(DataSource)
+    .query(
+      `UPDATE plans
+          SET limits = JSON_SET(limits, '$.option_sets', 100000,
+                                        '$.stores', 100000,
+                                        '$.team_seats', 100000,
+                                        '$.products_assigned', 100000)
+        WHERE code = 'free'`,
+    );
+
   return app;
 }
 
@@ -224,6 +259,30 @@ export async function createHarness(namespace: string): Promise<Harness> {
       `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
          JOIN users u ON u.id = tm.userId SET t.slug = ? WHERE u.email = ?`,
       [`${namespace}-${which}`, email],
+    );
+
+    /**
+     * 🔴 **Business, not Free — and this is about fixtures, not the product.**
+     *
+     * Registration correctly puts a new tenant on Free, whose limits are real:
+     * 10 option sets, 1 store, 1 seat. M24.2 now enforces them, so a suite that
+     * creates 38 option sets as *setup* is refused at the eleventh — and its
+     * failure says nothing about what it was testing.
+     *
+     * ⚠️ **This does NOT weaken the limit tests.** `plan-limit.e2e-spec` and
+     * `usage-counter.e2e-spec` set the plan they need explicitly, and Free's
+     * behaviour is asserted there against the real seeded numbers. What this
+     * removes is a limit firing in the middle of an unrelated fixture.
+     *
+     * 📌 The alternative — trimming every suite's fixtures under 10 — would
+     * have changed what those suites test to suit an unrelated guard.
+     */
+    await dataSource.query(
+      `UPDATE tenants t JOIN tenant_members tm ON tm.tenantId = t.id
+         JOIN users u ON u.id = tm.userId
+         SET t.planId = (SELECT id FROM plans WHERE code = 'business')
+       WHERE u.email = ?`,
+      [email],
     );
 
     const login = await request(app.getHttpServer())

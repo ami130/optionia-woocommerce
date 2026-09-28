@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { DataSource } from 'typeorm';
 
 import { diff } from '../audit/audit-diff';
@@ -50,6 +51,8 @@ export class OptionSetsService {
     private readonly trees: OptionSetTreeLoader,
     private readonly serializer: OptionSetSerializer,
     private readonly validator: OptionTypeValidator,
+    /* 📌 M24.2: plan limits, distinct from AUTHORING_LIMITS' structural caps. */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /**
@@ -99,6 +102,18 @@ export class OptionSetsService {
 
   async create(name: string, storeId: string): Promise<OptionSet> {
     await this.assertStoreBelongsToTenant(storeId);
+
+    /*
+     * 🔴 **M24.2: the plan's ceiling, checked before the row exists.** Phase 15
+     * ticked *"per-plan quotas enforced and metered"* with only the meter, and
+     * this is the enforcement half. The guard names the plan, the usage and the
+     * upgrade, so a refused merchant knows what to do without a support ticket.
+     */
+    const tenantId = getTenantId();
+
+    if (tenantId !== null) {
+      await this.planLimits.assertWithinPlan(tenantId, 'option_sets');
+    }
 
     const created = await this.repository.create({
       name: name.trim(),

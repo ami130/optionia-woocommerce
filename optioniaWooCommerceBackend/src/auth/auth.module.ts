@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { UsageModule } from '../usage/usage.module';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -37,6 +38,8 @@ import { RefreshToken } from './entities/refresh-token.entity';
  */
 @Module({
   imports: [
+    /* 📌 M24.2: team seats are a plan limit (TeamService.invite). */
+    UsageModule,
     TypeOrmModule.forFeature([
       User,
       Tenant,
