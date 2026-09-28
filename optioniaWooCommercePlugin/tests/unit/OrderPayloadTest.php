@@ -472,13 +472,23 @@ final class OrderPayloadTest extends TestCase {
 
 		$item->add_meta_data(
 			Keys::META_SELECTIONS,
-			wp_json_encode( array( 'finish' => 'lux', 'engraving' => 'yes' ) ),
+			wp_json_encode(
+				array(
+					'finish'    => 'lux',
+					'engraving' => 'yes',
+				)
+			),
 			true
 		);
 		$item->add_meta_data( Keys::META_PRICE_DELTA, '10.00', true );
 		$item->add_meta_data(
 			Keys::META_OPTION_SETS,
-			wp_json_encode( array( 'finish' => 'set-a', 'engraving' => 'set-b' ) ),
+			wp_json_encode(
+				array(
+					'finish'    => 'set-a',
+					'engraving' => 'set-b',
+				)
+			),
 			true
 		);
 
@@ -533,10 +543,10 @@ final class OrderPayloadTest extends TestCase {
 	 * produce.
 	 */
 	public function test_option_revenue_multiplies_by_line_quantity(): void {
-		$order            = optionia_test_order( 1 );
-		$item             = $this->line( 'engraving', 'yes', '5.00', 'Engraving', 'yes' );
-		$item->quantity   = 10;
-		$order->items[]   = $item;
+		$order          = optionia_test_order( 1 );
+		$item           = $this->line( 'engraving', 'yes', '5.00', 'Engraving', 'yes' );
+		$item->quantity = 10;
+		$order->items[] = $item;
 
 		$this->assertSame( 5000, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
 	}
@@ -661,15 +671,25 @@ final class OrderPayloadTest extends TestCase {
 
 		// A line item exposing meta but no quantity, as older WooCommerce did.
 		$order->items[] = new class( $item ) {
-			/** @var object */
+			/**
+			 * The item whose meta this exposes.
+			 *
+			 * @var object
+			 */
 			private $inner;
 
-			/** @param object $inner The item whose meta this exposes. */
+			/**
+			 * Wrap an item, exposing its meta but not its quantity.
+			 *
+			 * @param object $inner The item whose meta this exposes.
+			 */
 			public function __construct( object $inner ) {
 				$this->inner = $inner;
 			}
 
 			/**
+			 * One meta value, delegated to the wrapped item.
+			 *
 			 * @param string $key Meta key.
 			 * @return mixed
 			 */
@@ -678,6 +698,8 @@ final class OrderPayloadTest extends TestCase {
 			}
 
 			/**
+			 * Visible meta, delegated to the wrapped item.
+			 *
 			 * @param string $hideprefix Prefix marking a key as hidden.
 			 * @return array<int, object>
 			 */

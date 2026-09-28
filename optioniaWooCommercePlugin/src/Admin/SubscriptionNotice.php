@@ -44,6 +44,8 @@ final class SubscriptionNotice {
 	private Repository $config;
 
 	/**
+	 * Hold the cached configuration the notice reads its plan state from.
+	 *
 	 * @param Repository $config Cached configuration.
 	 */
 	public function __construct( Repository $config ) {

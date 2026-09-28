@@ -60,8 +60,9 @@ final class OrderPayload {
 	private const MAX_OPTION_LABEL = 200;
 	private const MAX_VALUE_KEY    = 64;
 	private const MAX_VALUE_LABEL  = 500;
+
 	/** Matches the API's `option_set_id` validator: a UUID is 36 characters. */
-	private const MAX_SET_ID       = 36;
+	private const MAX_SET_ID = 36;
 
 	/**
 	 * The most selections one report may carry, matching the API's cap.

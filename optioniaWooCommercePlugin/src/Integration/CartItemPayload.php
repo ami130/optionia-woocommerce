@@ -73,6 +73,7 @@ final class CartItemPayload {
 		Keys::CART_ITEM_SIGNATURE,
 		Keys::CART_ITEM_LABELS,
 		Keys::CART_ITEM_SET_IDS,
+
 		/*
 		 * 🔴 **Audit, exactly like `CART_ITEM_SET_IDS` beside it** (F150).
 		 *

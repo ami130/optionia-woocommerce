@@ -77,7 +77,13 @@ final class StorageNoticeTest extends TestCase {
 	 * refused, the merchant sees nothing, and a lost sale has no visible cause.
 	 */
 	public function test_it_warns_when_uploads_are_being_refused(): void {
-		$html = $this->render( array( 'at' => time(), 'ok' => true, 'uploads_allowed' => false ) );
+		$html = $this->render(
+			array(
+				'at'              => time(),
+				'ok'              => true,
+				'uploads_allowed' => false,
+			)
+		);
 
 		$this->assertStringContainsString( 'file storage is full', $html );
 		$this->assertStringContainsString( 'declined', $html );
@@ -89,7 +95,13 @@ final class StorageNoticeTest extends TestCase {
 	 * selling exactly as before.
 	 */
 	public function test_it_says_the_rest_of_the_shop_is_unaffected(): void {
-		$html = $this->render( array( 'at' => time(), 'ok' => true, 'uploads_allowed' => false ) );
+		$html = $this->render(
+			array(
+				'at'              => time(),
+				'ok'              => true,
+				'uploads_allowed' => false,
+			)
+		);
 
 		$this->assertStringContainsString( 'keeps working normally', $html );
 		$this->assertStringContainsString( 'nothing has been deleted', $html );
@@ -97,7 +109,13 @@ final class StorageNoticeTest extends TestCase {
 
 	/** ⚠️ **A warning, never an error** — the shop is not down. */
 	public function test_it_is_a_warning_not_an_error(): void {
-		$html = $this->render( array( 'at' => time(), 'ok' => true, 'uploads_allowed' => false ) );
+		$html = $this->render(
+			array(
+				'at'              => time(),
+				'ok'              => true,
+				'uploads_allowed' => false,
+			)
+		);
 
 		$this->assertStringContainsString( 'notice-warning', $html );
 		$this->assertStringNotContainsString( 'notice-error', $html );
@@ -107,7 +125,13 @@ final class StorageNoticeTest extends TestCase {
 	public function test_it_says_nothing_while_uploads_are_allowed(): void {
 		$this->assertSame(
 			'',
-			$this->render( array( 'at' => time(), 'ok' => true, 'uploads_allowed' => true ) )
+			$this->render(
+				array(
+					'at'              => time(),
+					'ok'              => true,
+					'uploads_allowed' => true,
+				)
+			)
 		);
 	}
 
@@ -119,7 +143,13 @@ final class StorageNoticeTest extends TestCase {
 	public function test_it_says_nothing_when_the_heartbeat_predates_the_field(): void {
 		$this->assertSame(
 			'',
-			$this->render( array( 'at' => time(), 'ok' => true, 'cloud_config_version' => 4 ) )
+			$this->render(
+				array(
+					'at'                   => time(),
+					'ok'                   => true,
+					'cloud_config_version' => 4,
+				)
+			)
 		);
 	}
 
@@ -137,7 +167,13 @@ final class StorageNoticeTest extends TestCase {
 
 		$this->assertSame(
 			'',
-			$this->render( array( 'at' => time(), 'ok' => true, 'uploads_allowed' => false ) )
+			$this->render(
+				array(
+					'at'              => time(),
+					'ok'              => true,
+					'uploads_allowed' => false,
+				)
+			)
 		);
 	}
 
@@ -148,7 +184,11 @@ final class StorageNoticeTest extends TestCase {
 	public function test_is_showing_agrees_with_what_is_rendered(): void {
 		update_option(
 			Keys::OPTION_LAST_HEARTBEAT,
-			array( 'at' => time(), 'ok' => true, 'uploads_allowed' => false ),
+			array(
+				'at'              => time(),
+				'ok'              => true,
+				'uploads_allowed' => false,
+			),
 			false
 		);
 

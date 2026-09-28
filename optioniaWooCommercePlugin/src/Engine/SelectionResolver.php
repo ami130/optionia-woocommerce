@@ -552,7 +552,7 @@ final class SelectionResolver {
 		 * to every set it touched would make the per-set figures sum to more than
 		 * the order did.
 		 */
-		$option_sets  = array();
+		$option_sets = array();
 
 		// Bytes of customer-supplied text accepted so far, across every option.
 		$text_bytes = 0;

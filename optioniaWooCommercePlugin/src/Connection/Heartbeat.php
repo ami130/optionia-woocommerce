@@ -232,7 +232,7 @@ final class Heartbeat {
 	/**
 	 * Record the outcome for System Status.
 	 *
-	 * @param bool     $ok             Whether the cloud accepted the ping.
+	 * @param bool                 $ok             Whether the cloud accepted the ping.
 	 * @param int|null             $config_version Version the cloud reports holding.
 	 * @param array<string, mixed> $data           The full response body, for M15.6's allowance.
 	 */
