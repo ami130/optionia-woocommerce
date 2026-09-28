@@ -367,4 +367,57 @@ export interface ConfigDocument {
   readonly generated_at: string;
 
   readonly option_sets: readonly PublishedOptionSet[];
+
+  /**
+   * 🔴 **M24.5 — plan STATE, never plan permission.**
+   *
+   * The milestone's second clause is the hard constraint: *"enforcement
+   * decisions remain server-side"*. This document is served to a WordPress
+   * install the merchant controls, so anything here is effectively theirs to
+   * read and edit — a plugin that decided anything from it would be a second
+   * source of truth on a machine we do not own.
+   *
+   * ⚠️ **So it carries no limits, no counts and no `can_*` flags.** The plugin
+   * is told what is true so it can show an accurate notice; what is *allowed*
+   * is answered by the API refusing a write, and only there.
+   *
+   * 📌 **Additive, so `schema_version` stays 1** — the contract's own rule,
+   * made true by `normaliseSnapshot` filling mandatory keys on read.
+   */
+  readonly plan: ConfigPlanState;
+}
+
+/**
+ * What the storefront is told about the merchant's subscription (M24.5).
+ *
+ * 📌 **Every field is something a NOTICE needs**, and nothing else: which plan
+ * they are on, whether it has lapsed, and by when. A plugin can say *"your
+ * Optionia subscription needs attention"* without being able to conclude
+ * anything about what may be created.
+ */
+export interface ConfigPlanState {
+  /** `free`, `pro`, `business` — stable, for logic the plugin may key on. */
+  readonly code: string;
+
+  /** The merchant-facing name, for the notice itself. */
+  readonly name: string;
+
+  /**
+   * 🔴 **True once the grace period has expired** (ADR-116).
+   *
+   * ⚠️ **The storefront still renders — that is the whole policy.** This says
+   * *authoring* is read-only, so the plugin can explain why the dashboard
+   * refuses an edit. A plugin that stopped rendering options on this would
+   * break the merchant's shop over a failed card, which ADR-116 exists to
+   * prevent.
+   */
+  readonly read_only: boolean;
+
+  /**
+   * When authoring goes read-only, ISO-8601, or null when nothing is owed.
+   *
+   * 📌 Carried so a notice can say *"by 9 October"* rather than *"soon"* — the
+   * same reasoning as the dunning mail's spelled-out date.
+   */
+  readonly grace_ends_at: string | null;
 }

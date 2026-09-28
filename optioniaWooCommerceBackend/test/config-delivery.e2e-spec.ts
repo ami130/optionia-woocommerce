@@ -575,9 +575,23 @@ describe('config delivery (e2e)', () => {
         await assign(third, 'manual', { type: 'product', ref: '22' });
         const withThree = await counted();
 
-        expect(withOne).toBe(6);
-        expect(withTwo).toBe(6);
-        expect(withThree).toBe(6);
+        /*
+         * ✏️ **Six until M24.5, seven after — and the number is not the point.**
+         *
+         * 🔴 **What this test guards is CONSTANT vs PROPORTIONAL.** A build that
+         * queried per set would read 6, 7, 8 here and grow with every set a
+         * merchant publishes; that is the defect, and it is still caught.
+         *
+         * ⚠️ **The extra query is M24.5's plan read, and it was a deliberate
+         * choice.** Folding it into the store lookup above would mean replacing
+         * a typed `findOne` — which also applies the tenant narrowing a
+         * dashboard caller depends on — with raw SQL, trading a
+         * security-relevant guard for one round trip on a cached path. The
+         * ETag means most storefront requests never reach this code at all.
+         */
+        expect(withOne).toBe(7);
+        expect(withTwo).toBe(7);
+        expect(withThree).toBe(7);
       });
 
       /**
@@ -1038,6 +1052,133 @@ describe('config delivery (e2e)', () => {
       expect(response.body.data.store_id).toBe(second.id);
       expect(response.body.data.store_id).not.toBe(first.id);
       expect(response.body.data.config_version).toBe(3);
+    });
+  });
+  /**
+   * M24.5 — the storefront is told the plan, and nothing it could enforce.
+   *
+   * 🔴 **The milestone's second clause is the hard one**: *"enforcement
+   * decisions remain server-side"*. This document is served to a WordPress
+   * install the merchant controls, so every key here is effectively theirs to
+   * read and edit — a plugin deciding anything from it would be a second source
+   * of truth on a machine we do not own.
+   *
+   * 📌 **Asserted over the store-token path deliberately.** `getTenantId()` is
+   * **null** for a store credential, so a plan read through the request context
+   * would work in every dashboard test and fail on the only path this feature
+   * is for.
+   */
+  describe('plan state (M24.5)', () => {
+    it('carries the tenant’s real plan, over a store credential', async () => {
+      const store = await connected();
+
+      const response = await fetch(store.token).expect(200);
+
+      /* The harness puts tenants on Business; the point is that it is REAL. */
+      expect(response.body.data.plan).toMatchObject({
+        code: expect.any(String) as unknown as string,
+        name: expect.any(String) as unknown as string,
+        read_only: false,
+        grace_ends_at: null,
+      });
+
+      expect(response.body.data.plan.code).not.toBe('unknown');
+    });
+
+    /**
+     * 🔴 **No limits, no counts, no `can_*` flags.** The plugin is told what is
+     * true so it can show an accurate notice; what is *allowed* is answered by
+     * the API refusing a write, and only there.
+     */
+    it('carries no limit, count or permission a plugin could enforce', async () => {
+      const store = await connected();
+
+      const response = await fetch(store.token).expect(200);
+      const plan = response.body.data.plan as Record<string, unknown>;
+
+      expect(Object.keys(plan).sort()).toEqual([
+        'code',
+        'grace_ends_at',
+        'name',
+        'read_only',
+      ]);
+    });
+
+    /**
+     * 🔴 **`read_only` means the grace period EXPIRED, not that it started.**
+     * ADR-116 gives fourteen days of full function after a failed payment; a
+     * plugin told `read_only` on day one would explain a restriction the
+     * merchant does not yet have.
+     */
+    it('is not read-only while the grace period is still running', async () => {
+      const store = await connected();
+
+      await dataSource.query(
+        `UPDATE subscriptions SET graceEndsAt = DATE_ADD(NOW(3), INTERVAL 7 DAY)
+          WHERE tenantId = (SELECT tenantId FROM stores WHERE id = ?)`,
+        [store.id],
+      );
+
+      const response = await fetch(store.token).expect(200);
+
+      expect(response.body.data.plan.read_only).toBe(false);
+      expect(response.body.data.plan.grace_ends_at).not.toBeNull();
+    });
+
+    /** ⚠️ And once it has passed, authoring is read-only — the storefront is not. */
+    it('is read-only once the grace period has passed', async () => {
+      const store = await connected();
+
+      await dataSource.query(
+        `UPDATE subscriptions SET graceEndsAt = DATE_SUB(NOW(3), INTERVAL 1 DAY)
+          WHERE tenantId = (SELECT tenantId FROM stores WHERE id = ?)`,
+        [store.id],
+      );
+
+      const response = await fetch(store.token).expect(200);
+
+      expect(response.body.data.plan.read_only).toBe(true);
+
+      /* 🔴 ADR-116: the options are still served. The shop never goes dark. */
+      expect(Array.isArray(response.body.data.option_sets)).toBe(true);
+    });
+
+    /**
+     * 🔴 **The plan follows the STORE's owner, not whoever is asking.**
+     *
+     * ✏️ **This test exists because a mutation survived.** Swapping
+     * `store.tenantId` for the request context changed nothing — both resolve
+     * to the same tenant on every path today, since `StoreTokenGuard` joins the
+     * tenant from `stores`. The first path where they diverge would ship one
+     * tenant's billing state to another's storefront, so the distinction is
+     * asserted rather than left to coincidence.
+     */
+    it('takes the plan from the store’s owner, not the caller', async () => {
+      const store = await connected();
+
+      /* Move THIS store's tenant to Free; the caller's identity is unchanged. */
+      await dataSource.query(
+        `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'free')
+          WHERE id = (SELECT tenantId FROM stores WHERE id = ?)`,
+        [store.id],
+      );
+
+      const response = await fetch(store.token).expect(200);
+
+      expect(response.body.data.plan.code).toBe('free');
+    });
+
+    /**
+     * ⚠️ **Additive, so the shape contract is unchanged.** The plugin refuses a
+     * document whose `schema_version` it does not know, so bumping it for a new
+     * key would blank every storefront running the shipped plugin.
+     */
+    it('does not bump schema_version for an added key', async () => {
+      const store = await connected();
+
+      const response = await fetch(store.token).expect(200);
+
+      expect(response.body.data.schema_version).toBe(1);
     });
   });
 });

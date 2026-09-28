@@ -9,7 +9,7 @@ import { OptionSetAssignment } from '../entities/option-set-assignment.entity';
 import { OptionSetVersion } from '../entities/option-set-version.entity';
 import { OptionSet } from '../entities/option-set.entity';
 import { Store } from '../../stores/entities/store.entity';
-import type { ConfigDocument, PublishedAssignment, PublishedOptionSet } from './projections';
+import type { ConfigPlanState, ConfigDocument, PublishedAssignment, PublishedOptionSet } from './projections';
 
 /**
  * The shape version of the document, not its content (M7.5).
@@ -206,6 +206,65 @@ export class ConfigDocumentBuilder {
       // content re-fetched an hour later is the same document, newly stamped.
       generated_at: new Date().toISOString(),
       option_sets: optionSets,
+      plan: await this.planState(store.tenantId),
+    };
+  }
+
+  /**
+   * The merchant's subscription, as a storefront needs to describe it (M24.5).
+   *
+   * 📌 **From `store.tenantId`, which is the row this document describes.**
+   *
+   * ✏️ **My first reason for this was wrong and a mutation exposed it.** I
+   * wrote that `getTenantId()` is null for a store token, citing the comment on
+   * the store lookup above — but `StoreTokenGuard` *does* set `tenantId`,
+   * joined from `stores`, so the context would in fact have worked. The
+   * mutation that swapped them survived, which is how I found out.
+   *
+   * 🔴 **The real reason is that they can DISAGREE.** The context tenant is
+   * whoever authenticated; `store.tenantId` is who owns the store this document
+   * is for. They match today on both paths — but a document describing one
+   * store must take its plan from that store's owner, not from whoever happens
+   * to be asking, or the first path where those differ ships one tenant's
+   * billing state to another's storefront.
+   *
+   * ⚠️ **One query, joined, on a hot path.** `deliver()` runs on every
+   * storefront request that misses its ETag; splitting this into a tenant read
+   * and a plan read would double that for a value that lives in one row.
+   */
+  private async planState(tenantId: string): Promise<ConfigPlanState> {
+    const [row] = (await this.dataSource.query(
+      `SELECT p.code, p.name, s.status, s.graceEndsAt
+         FROM tenants t
+         JOIN plans p ON p.id = t.planId
+         LEFT JOIN subscriptions s ON s.tenantId = t.id
+        WHERE t.id = ?`,
+      [tenantId],
+    )) as { code: string; name: string; status: string | null; graceEndsAt: Date | null }[];
+
+    if (row === undefined) {
+      /*
+       * ⚠️ **A store whose tenant vanished still serves its options.** The
+       * document is what keeps a merchant's storefront working; refusing to
+       * build one over missing billing metadata would take the shop down for a
+       * bookkeeping problem — the inverse of ADR-116's whole principle.
+       */
+      return { code: 'unknown', name: 'Unknown', read_only: false, grace_ends_at: null };
+    }
+
+    /*
+     * 🔴 **Read-only means the grace period EXPIRED, not that it started.**
+     * ADR-116 gives fourteen days of full function after a failed payment; a
+     * plugin told `read_only` on day one would explain a restriction the
+     * merchant does not yet have.
+     */
+    const graceEndsAt = row.graceEndsAt;
+
+    return {
+      code: row.code,
+      name: row.name,
+      read_only: graceEndsAt !== null && graceEndsAt.getTime() <= Date.now(),
+      grace_ends_at: graceEndsAt?.toISOString() ?? null,
     };
   }
 }
