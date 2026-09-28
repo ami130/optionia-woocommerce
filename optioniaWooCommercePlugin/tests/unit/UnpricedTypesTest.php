@@ -46,6 +46,21 @@ final class UnpricedTypesTest extends TestCase {
 		$GLOBALS['optionia_test_actions'] = array();
 		$GLOBALS['optionia_test_filters'] = array();
 
+		/*
+		 * ✏️ **Set explicitly, because inheriting it FAILED in CI.**
+		 * `render()` returns early for a user who cannot manage, and this file
+		 * never said which it wanted — so it passed only while every earlier
+		 * test happened to leave the global true. The day a notice test left it
+		 * false, this rendered nothing and failed on an assertion about text it
+		 * had no quarrel with.
+		 *
+		 * 📌 **A test depending on another test's leftovers is not a test of
+		 * this class**; it is a test of the order the suite happens to run in.
+		 * Four other files set this global false in one case and never put it
+		 * back, so the hazard was latent long before it bit.
+		 */
+		$GLOBALS['optionia_test_can'] = true;
+
 		delete_option( Keys::OPTION_UNPRICED_TYPES );
 	}
 

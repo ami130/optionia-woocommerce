@@ -73,6 +73,22 @@ final class CartItemPayload {
 		Keys::CART_ITEM_SIGNATURE,
 		Keys::CART_ITEM_LABELS,
 		Keys::CART_ITEM_SET_IDS,
+		/*
+		 * 🔴 **Audit, exactly like `CART_ITEM_SET_IDS` beside it** (F150).
+		 *
+		 * ✏️ **Added 2026-09-28 after CI caught its absence**, which is what
+		 * this list's own docblock warns about: *"a new audit field must be
+		 * added here or it starts splitting cart lines."* I added
+		 * `CART_ITEM_OPTION_SETS` for per-option revenue attribution and did
+		 * not add it here.
+		 *
+		 * ⚠️ **The cost was a real merchant defect, not a failing test.** It
+		 * records which set each option came from — provenance, never what the
+		 * customer chose — so a merchant moving an option between sets would
+		 * have changed the cart key, and two identical configurations added
+		 * before and after that move would have sat as two separate lines.
+		 */
+		Keys::CART_ITEM_OPTION_SETS,
 		Keys::CART_ITEM_SKU_SUFFIXES,
 	);
 

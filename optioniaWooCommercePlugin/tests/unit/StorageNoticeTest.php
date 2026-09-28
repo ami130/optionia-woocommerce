@@ -32,6 +32,25 @@ final class StorageNoticeTest extends TestCase {
 	/**
 	 * Reset state between tests.
 	 */
+	/**
+	 * Restore the shared capability global.
+	 *
+	 * 🔴 **A test that sets `optionia_test_can = false` and does not put it back
+	 * poisons every test that runs after it**, and CI proved it: this file left
+	 * it false, and `UnpricedTypesTest` — which never sets it and reasonably
+	 * expects a manager — rendered an empty notice and failed on an assertion
+	 * about text it had nothing to do with.
+	 *
+	 * ⚠️ **`setUp` alone is not enough**, which is why this exists. Setting it
+	 * true at the start of *this* file's cases protects this file; it does
+	 * nothing for a file that never sets it and runs next.
+	 */
+	protected function tearDown(): void {
+		$GLOBALS['optionia_test_can'] = true;
+
+		parent::tearDown();
+	}
+
 	protected function setUp(): void {
 		$GLOBALS['optionia_test_options'] = array();
 		$GLOBALS['optionia_test_can']     = true;
