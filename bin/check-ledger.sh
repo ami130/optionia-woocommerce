@@ -203,6 +203,49 @@ else
       | awk '/◀ HERE/{found=1} {print} found{exit}' \
       | grep -oE '\[[x ~ ]\] [0-9]+[a-z]?' | grep -oE '[0-9]+[a-z]?$')
 
+    # ✏️ **And every phase on a STARTED stage**, which the scan above cannot see.
+    #
+    # 🔴 **The marker moves backwards legitimately.** When Phase 25 closed, the
+    # marker went back to GATE 2 — the honest position, since Stage 4's phases
+    # were done and Gate 2 was what stood before launch. That put Phases 22-26
+    # *below* it, outside `REACHED`, and un-ticking Phase 25 then produced **no
+    # failure at all**: the drift check had gone blind to the whole of Stage 4.
+    #
+    # ⚠️ **The first fix was CIRCULAR and is recorded so it is not re-proposed.**
+    # It added every phase that was `[x]` or `[~]`, which cannot catch a phase
+    # being un-ticked: un-ticking removes it from the set the check then walks.
+    # Both mutations survived, and the gate reported green.
+    #
+    # 📌 **A stage with ANY ticked phase has been started**, and that property
+    # survives one of its boxes being emptied. Every phase on such a stage is in
+    # scope; a stage with nothing ticked is genuinely not started and stays out.
+    # ⚠️ **Per STAGE, and a stage spans several lines.** The ledger wraps — Stage
+    # 4 puts 22-25 on one line and 26/26b on the next — so the lines are joined
+    # back into one block per `STAGE ` heading before being read.
+    #
+    # 🔴 **EVERY phase on a started stage, whatever its own box says.** Filtering
+    # on each phase's `[x]` was the circular fix a second time: un-ticking one
+    # removes it from the set the check then walks, so the very drift this
+    # catches makes itself invisible. Measured — both un-tick mutations survived.
+    #
+    # ⚠️ **A phase carrying a footnote marker is EXCLUDED**, because a marker is
+    # a statement. Phase 26 shares Stage 4 with four finished phases and is
+    # genuinely not begun; its `§§` note says so and says why. Demanding a `[~]`
+    # instead would mean claiming partial progress that does not exist — the
+    # ledger bending to satisfy the gate rather than the gate describing the
+    # ledger.
+    #
+    # 📌 **A bare `[ ]` with no marker is still caught**, which is the drift:
+    # Phases 22-25 all sat that way while shipped.
+    STARTED=$(printf '%s\n' "$LEDGER" | awk '
+      /^STAGE /  { if (buf ~ /\[[x~]\]/) print buf; buf = $0; next }
+      /\[/      { buf = buf " " $0; next }
+                 { if (buf ~ /\[[x~]\]/) print buf; buf = "" }
+      END        { if (buf ~ /\[[x~]\]/) print buf }
+    ' | grep -oE '\[[x ~]\] [0-9]+[a-z]?' | grep -oE '[0-9]+[a-z]?$')
+
+    REACHED=$(printf '%s\n%s\n' "$REACHED" "$STARTED" | grep -v '^$' | sort -u)
+
     # ⚠️ **The phase the marker POINTS AT is excluded.** It is the work in
     # progress by definition -- the marker means "here" -- and failing on it
     # would mean the gate is red for the whole of every phase, which is a gate
@@ -233,6 +276,13 @@ else
         *" $phase "*) ;;
         *) continue ;;
       esac
+
+      # Deliberately unstarted, and said so in a footnote. A marker beside the
+      # box is a claim someone made; silence is what this check is for.
+      if printf '%s\n' "$LEDGER" \
+        | grep -qE "\\[ \\] ${phase} [A-Za-z][^][]*[*†‡§¶]"; then
+        continue
+      fi
 
       # Only phases the ledger actually tracks. A phase with no box is not drift.
       BOX=$(printf '%s\n' "$LEDGER" \
@@ -300,7 +350,11 @@ for phase in $PHASES; do
   # "satisfied by the wrong thing" defect gate 37 had (its own render test) and
   # gate 40 had (a comment). So the dagger the entry carries has to also open a
   # line elsewhere in the plan, which is where a human states the grading.
-  MARK=$(printf '%s' "$ENTRY" | grep -oE '†+' | head -1)
+  # ✏️ **`†` and `‡` both, because the ledger already uses both.** The first
+  # draft matched daggers only, and Phase 25's `‡‡` footnote — a real grading
+  # with a clause-by-clause table — was rejected as missing. A gate that refuses
+  # a valid marker teaches its reader to work around it.
+  MARK=$(printf '%s' "$ENTRY" | grep -oE '[†‡]+' | head -1)
 
   if [ -n "$MARK" ] && grep -qF "$MARK **" "$PLAN"; then
     continue

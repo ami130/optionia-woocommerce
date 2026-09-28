@@ -55,49 +55,57 @@ skipping it silently (F145), which is what let Phases 22-25 drift unseen.
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 25](#phase-25--analytics), stage 25-1 — merchant analytics over the
-order data that already exists.**
+🔴 **GATE 2, not Phase 26 — and almost nothing left in it is code.**
 
-✅ **Stage 25-0 is complete** (2026-09-28). It took no schema and fixed two live
-defects in shipped code, both of which corrupt the exact number Phase 25 exists
-to report:
+Phase 25 closed 2026-09-28 (see the ledger's `‡‡` note). The marker now sits on
+Phase 26, but **Gate 2 is the thing between this project and a launch**, and it
+has been open since before Stage 4 began. Its six remaining criteria:
 
-| | What was wrong | Where |
-|---|---|---|
-| **F146** | option revenue was **per-unit**, never multiplied by line quantity — ten mugs at +5.00 reported 500, not 5000 | `Reporting\OrderPayload` |
-| **F147** | a **truncated** report summed only the rows that survived the 200-row cap, under-stating its own revenue | same |
-| **F148** | `plans.features` was seeded in Phase 22 and **read by nothing** — 9th mechanism-with-no-caller | `PlanFeatureGuard` now exists |
-| **F145** | the ledger gate **skipped every prose-exit phase**, so 22-25 sat `[ ]` while shipped | `bin/check-ledger.sh` |
+| Criterion | Who can close it |
+|---|---|
+| 3 non-team testers reach publish unaided | **You** — recruitment; no code can close it |
+| Fulfilment verified on a **printed** packing slip | **You** — a physical check. Verified from WooCommerce's source, which is a code-path argument, not this |
+| Every pricing-page promise delivered or corrected | **You** — compares against `optionia-websites`, a repository this project does not contain |
+| Classic cart + Checkout block summary in a browser | Environmental — needs a differently configured store (21b's own `[~]`) |
+| Activation **target** set | Deferred with Phase 33, by decision |
+| **File-upload per-plan quotas enforced** | 🔴 **Mine, and the only buildable one** |
 
-🔴 **F146's damage was the ranking, not the totals.** M25.3 exists so a merchant
-can see which options earn most, and an option typically bought in tens was
-scored as though bought singly — the report inverted the ordering it exists to
-produce. Fixing it after rollups were built would have meant rebuilding them.
+### The one buildable item: `file_storage_mb` — Phase 15's carried `[~]`
 
-📌 **Start 25-1 at the read side, not the write side.** `order_events` and
-`order_selections` are built, migrated, indexed — `ix_order_selections_analytics
-(optionKey, valueKey)` is named for this phase — and have two production readers
-already (`activation/funnel-steps.ts`, `option-sets/hard-delete.service.ts`).
-**M25.3's revenue questions are answerable from existing data**, so the
-merchant-visible half of the exit criterion lands before any ingestion work.
+⚠️ **Phase 15's exit read *"per-plan quotas enforced and metered"* and only
+metering shipped.** It is the **last unenforced plan limit** — every other one is
+refused by `PlanLimitGuard`, and `docs/SUBSCRIPTION-POLICY.md` tells merchants
+so in as many words: *"storage is the one allowance we do not yet enforce"*.
 
-⚠️ **25-1 must wire `PlanFeatureGuard` to the analytics route it builds**, with
-an HTTP-level test. The guard is proven (9 e2e, 3 mutations killed) and
-**deliberately has no caller yet** — shipping it as "done" would be F130 exactly,
-which passed fifteen unit tests while no route invoked it.
+📌 **`UploadQuota.php` is NOT this.** Measured: it bounds *per-visitor abuse* of
+the upload endpoint — the nonce problem, where a guest nonce is identical for
+every visitor for 24 hours. A different question from *"has this tenant used its
+5 GB?"*.
 
-🔒 **The rule 25-2's rollups obey: carry `valueKey`, never `valueLabel`.** Free
-text never leaves the merchant's server today (`OrderPayload` writes a label only
-for merchant-defined choices), and a rollup that stored labels would import
-personal data into a table Phase 26b would then have to erase from.
+🔴 **The refusal has to reach the plugin**, because the bytes are on the
+merchant's own server and the cloud cannot intercept an upload. The channel
+already exists: the config document carries plan state (M24.5) and the plugin
+already reads it (F137), so the quota can travel the same way.
 
-📌 **Historical rows are left as they are**, and the boundary is recorded: option
-revenue reported **before 2026-09-28** understates multi-quantity lines.
-Rewriting financial history is worse than a documented discontinuity.
+### Then, in order
 
-⏸️ **M25.1's view/add-to-cart events are recommended for deferral** — see the
-Phase 25 section for the reasoning. No transport is designed, and views are
-every product page load rather than one event per checkout.
+1. **M25.5 CSV export** — small, genuinely wanted, and
+   `plugin-download.controller.ts` already has the `Content-Disposition`
+   precedent. A feature rather than a gate item, so it follows.
+2. **Phase 26 — Super Admin**, which the marker points at.
+
+### Explicitly NOT next, each with a reason
+
+- **M25.2 rollups** — measured: 253ms → 72ms at 480k selections, and **nothing**
+  at 60k. Building now pays write cost for a read that is already fast.
+- **M25.1 view events** — no transport designed, and it risks the one property
+  Phase 25's exit criterion protects.
+- **M25.4 per-product** — needs a plugin release; wait for one that is needed
+  anyway.
+
+⚠️ **B4 and B5 are still yours and now sit on the critical path.** B5
+(positioning) gates Phase 33's recruiting, which is what closes Gate 2's
+"3 testers" criterion — so the business decision blocks the engineering one.
 
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
@@ -503,9 +511,9 @@ STAGE 2    [x] 5 Data model     [~] 6 Tenancy/Auth† [x] 7 Authoring API    [x]
            [x] 13 Builder UI    [x] 🚩 GATE 1 — all 10 criteria met, 2026-09-03
 STAGE 3    [x] 14 Type library‡ [x] 15 File upload  [x] 16 Adv. pricing§   [x] 17 Cond. logic
            [x] 18 Groups        [x] 19 Product sync [~] 20 Full builder**  [~] 20b Onboarding¶
-           [x] 21 Preview       [x] 21b Cart price  [x] 21c Styling        [ ] 🚩 GATE 2
-STAGE 4    [x] 22 Billing††     [x] 23 Webhooks††   [x] 24 Limits††        [ ] 25 Analytics ◀ HERE
-           [ ] 26 Super admin   [ ] 26b Compliance
+           [x] 21 Preview       [x] 21b Cart price  [x] 21c Styling  [ ] 🚩 GATE 2 ◀ HERE
+STAGE 4    [x] 22 Billing††     [x] 23 Webhooks††   [x] 24 Limits††        [x] 25 Analytics‡‡
+           [ ] 26 Super admin§§ [ ] 26b Compliance§§
 STAGE 4B   [ ] 26c Design geom. [ ] 26d Authoring   [ ] 26e Storefront/order   (gated on D7)
 STAGE 5    [ ] 27 Security      [ ] 28 Performance  [ ] 29 Compatibility   [ ] 29b Diagnostics
            [ ] 30 Tests         [ ] 31 Monitoring   [ ] 32 Docs            [ ] 🚩 GATE 3
@@ -545,6 +553,53 @@ boxes said `[ ]` at the time. The remaining two are open **by decision, not by o
 on a schedule; and *"3 non-team testers reach publish unaided"* is recruitment, owned by
 **you**, and is also a Gate 2 criterion. Ticking it would claim a funnel nobody has
 walked.
+
+§§ **Phases 26 and 26b are NOT started, and sit on a stage that is finished.**
+Stage 4's other four phases closed on 2026-09-28, which puts these two in the
+ledger gate's scope — a phase sitting `[ ]` beside finished work is exactly the
+drift that gate exists to surface, so the marker is deliberate rather than
+decorative. Both are genuinely not begun: Phase 26 is the super-admin realm
+(`STAFF_CAPABILITIES` and `platform_staff` exist and **no guard reads them** for
+anything but plan pricing), and Phase 26b is data protection, which
+[M26b.2](#m26b2--merchant-data-export)'s export and
+[M26b.3](#m26b3--deletion-and-erasure)'s erasure both require and neither has.
+
+‡‡ **Phase 25 ticked 2026-09-28 against its exit criterion, with four
+milestones deferred to named successors.** The exit line is *"a merchant can
+identify their highest-revenue options and their dead ones; ingestion never
+affects storefront performance"* — graded clause by clause, end to end, not
+against the fact that work happened:
+
+| Clause | Evidence |
+|---|---|
+| a merchant can identify their **highest-revenue options** | `topOptions` → `/analytics` page, rendered; `analytics-http.e2e-spec` + `summary.render.test.tsx` |
+| **and their dead ones** | `deadOptions`, computed from live config minus what was ordered — absent from the order tables by construction |
+| **ingestion never affects storefront performance** | structural: `OrderReporter::queue()` pushes an id and returns; all HTTP happens on cron. Pinned by *"queueing an order never touches the network"* |
+
+⚠️ **The subject of that first clause is a MERCHANT, not the API**, and I once
+graded it as met while no screen existed. `GET /analytics` had twenty e2e tests
+and no page — the tenth instance of this project's mechanism-with-no-caller
+defect. It is ticked now because `/analytics` exists and renders.
+
+**Deferred, each to a named successor** — the same shape as Phase 16's `formula`
+pointing at 16b, rather than "all" silently meaning "some":
+
+| Milestone | Where it goes, and why |
+|---|---|
+| **M25.1** event ingestion (views, add-to-cart) | ⏸️ **Deferred.** No transport is designed, and views are every product page load — a cron queue would mean a database write per pageview on the merchant's own server, which is what this phase's own exit criterion forbids. 🔴 **The cost is named, not hidden**: M25.3's *"conversion with vs. without options"* is unanswerable without it (F157), and average order value ships as the honest substitute |
+| **M25.2** rollup tables | ⏸️ **Deferred on measurement, not on guesswork.** On a 480k-row scratch copy the covering indexes are worth 3.5× (253ms → 72ms); at 60k they are worth **nothing** — 127ms against 130ms, because the optimizer scans and scanning is cheaper. Build them when a tenant approaches **100k selections**, not before |
+| **M25.4** comparisons over time and per product | ⏸️ Needs a product reference on `order_selections` (F151) and therefore a plugin release. Waiting for one that is needed anyway |
+| **M25.5** CSV export | ⏸️ Small and genuinely wanted; a feature rather than an exit criterion, so it follows GATE 2's remaining item |
+
+✅ **M25.6 privacy is met structurally**, not by a promise: `OrderPayload` writes
+a `value_label` only for a merchant-defined choice, so free text — an engraving,
+a name — never leaves the shop. Pinned by *"The customer's own words must not
+leave the store."*
+
+📌 **Four defects were found auditing this phase and all four are fixed**: option
+revenue was per-unit rather than per-line (F146), a truncated report understated
+its own revenue (F147), `plans.features` was seeded and read by nothing (F148),
+and the page printed raw minor units as money (F161).
 
 †† **Phases 22-24 ticked 2026-09-28, and the gate could not see they were
 open.** All three state their exit as prose (`**Exit:** ...`) rather than as
