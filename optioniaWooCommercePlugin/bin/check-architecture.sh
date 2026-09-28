@@ -270,8 +270,26 @@ fi
 # caught it -- a gate narrower than the bug it names is a gate that reports safety
 # it has not checked. `$item['quantity']` is matched too, since the value can be
 # read straight out of the cart item without ever landing in a variable.
+# ✏️ **`src/Reporting/` is excluded, and the exclusion is the narrow one.**
+#
+# 🔴 **The overcharge this guards is specific to the PRICING path** — a line
+# total handed to `set_price()` is multiplied by quantity again by
+# `WC_Cart_Totals`. `src/Reporting/` never calls `set_price()`, never touches a
+# cart item, and cannot charge anyone: it builds the analytics payload posted
+# after checkout, where the customer has already paid.
+#
+# ⚠️ **And there the OPPOSITE mistake was live.** `META_PRICE_DELTA` is a
+# per-unit amount, so reporting it unmultiplied under-stated every multi-quantity
+# line — ten engraved mugs at +5.00 reported 500 rather than 5000 (F146). That
+# inverted M25.3's ranking: an option bought in tens scored as though bought
+# once. The blanket scope was correct when every quantity multiplication in
+# `src/` was a pricing bug, and stopped being correct when analytics arrived.
+#
+# 📌 **The pricing path is still checked absolutely.** `Integration/CartTotals`
+# and everything else under `src/` fails on quantity arithmetic anywhere, which
+# is where the silent overcharge would live.
 QTY_MATH=$(grep -rInE '\*[[:space:]]*\$[a-z_]*(quantity|qty)|\$[a-z_]*(quantity|qty)[[:space:]]*\*|\*[[:space:]]*\$[a-z_]+\[.?(quantity|qty).?\]|\$[a-z_]+\[.?(quantity|qty).?\][[:space:]]*\*' \
-           src --include='*.php' \
+           src --include='*.php' --exclude-dir='Reporting' \
            | grep -vE ':[[:space:]]*(\*|//|#)' || true)
 
 if [ -n "$QTY_MATH" ]; then
@@ -280,6 +298,23 @@ if [ -n "$QTY_MATH" ]; then
   printf '        A line total handed to set_price() is multiplied by quantity again.\n'
 else
   pass "no quantity arithmetic in the pricing path (prices stay per unit)"
+
+  # 🔴 **And the exclusion must stay narrow.** If reporting ever reaches the cart
+  # the exemption becomes a hole, so the one property that makes it safe is
+  # asserted rather than assumed.
+  # ⚠️ **Comment lines excluded first**, exactly as the quantity check above does
+  # — and for the same reason it records: the rule is DISCUSSED in prose in the
+  # very file it governs. `OrderPayload`'s docblock explains why the delta is
+  # per-unit by naming `set_price()`, and the first draft of this check failed on
+  # that sentence. Fourth time this repository has hit prose satisfying a check
+  # about code.
+  if grep -rInE "set_price|WC_Cart|cart_item_data" src/Reporting --include="*.php" 2>/dev/null \
+    | grep -qvE ':[[:space:]]*(\*|//|#)'; then
+    fail "src/Reporting touches the pricing path, so its quantity exemption is unsafe"
+    printf '        The exclusion above holds only while reporting cannot charge.\n'
+  else
+    pass "reporting stays out of the pricing path, so its exemption is safe"
+  fi
 fi
 
 # --- The frozen deltas have exactly one trust gate ---------------------------
