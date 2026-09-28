@@ -21,6 +21,7 @@ use Optionia\Admin\OrderFiles;
 use Optionia\Admin\Notices;
 use Optionia\Admin\ConnectionSection;
 use Optionia\Admin\SchemaNotice;
+use Optionia\Admin\SubscriptionNotice;
 use Optionia\Admin\UnpricedTypesNotice;
 use Optionia\Admin\ReconnectNotice;
 use Optionia\Admin\SettingsPage;
@@ -727,6 +728,13 @@ final class Plugin {
 			( new ReconnectNotice() )->register();
 			( new SchemaNotice() )->register();
 			( new UnpricedTypesNotice() )->register();
+
+			/*
+			 * M24.5: the cloud ships `plan.read_only`; until this registered,
+			 * nothing read it and no merchant ever saw the notice the
+			 * milestone exists to produce.
+			 */
+			( new SubscriptionNotice( $this->container->get( Repository::class ) ) )->register();
 		}
 
 		// Declares compatibility with High-Performance Order Storage. Without

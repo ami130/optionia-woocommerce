@@ -956,6 +956,40 @@ else
   printf '        A limit sold and never applied is a promise the code does not keep.\n'
 fi
 
+# --- 40. The plugin reads the plan state the document ships (M24.5) --------
+#
+# 🔴 **The backend shipped `plan.read_only` and the plugin ignored it.** M24.5
+# says the document carries plan state *"so the plugin can show accurate
+# notices"* — the data half passed every test while **no merchant ever saw a
+# notice**, because nothing in `optioniaWooCommercePlugin/src` referenced the
+# key.
+#
+# ⚠️ **This is F132 one repository over.** There the backend shipped `usage[]`
+# and the dashboard ignored it; check 37 now pins that side. A contract checked
+# in one direction is how both drifted.
+PLUGIN_SRC="optioniaWooCommercePlugin/src"
+
+# ✏️ **Matched as an ARRAY KEY, not as a word.** The first version grepped for
+# `read_only` anywhere under `src` and was satisfied by the comment in
+# `Plugin.php` explaining the registration — prose passing a check about code,
+# which is the same weakness gate 39 had.
+if grep -rq "\['read_only'\]" "$PLUGIN_SRC" 2>/dev/null; then
+  pass "the plugin reads the plan state the config document carries (M24.5)"
+else
+  fail "nothing in the plugin reads plan.read_only"
+  printf '        The document carries it so a merchant can be told; nobody is.\n'
+fi
+
+# 🔴 The notice must never conclude anything the server has not decided.
+NOTICE="$PLUGIN_SRC/Admin/SubscriptionNotice.php"
+
+if [ -f "$NOTICE" ] && ! grep -qE 'wp_die|wc_get_product|remove_action' "$NOTICE"; then
+  pass "the subscription notice informs and never enforces"
+else
+  fail "the subscription notice does more than inform"
+  printf '        M24.5: enforcement decisions remain server-side, always.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
