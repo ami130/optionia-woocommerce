@@ -870,6 +870,40 @@ else
   printf '        "Prompt for explicit choices" cannot be met by an API field alone.\n'
 fi
 
+# --- 38. The lapse policy merchants are shown (M24.3) ----------------------
+#
+# 🔴 **This document is a PROMISE to customers**, which makes it the one place
+# where "asserted in prose" is not a defect but the product. What would be a
+# defect is prose that outlives the code it describes.
+POLICY="docs/SUBSCRIPTION-POLICY.md"
+
+if [ -f "$POLICY" ]; then
+  pass "the subscription policy merchants are shown exists (M24.3)"
+else
+  fail "docs/SUBSCRIPTION-POLICY.md is missing"
+  printf '        GATE 3 requires it published to merchants before launch.\n'
+fi
+
+# 🔴 The headline promise must match the code it depends on.
+if grep -q "GRACE_DAYS = 14" "$LIFECYCLE" 2>/dev/null \
+  && grep -q "14-day grace" "$POLICY" 2>/dev/null; then
+  pass "the policy's grace period matches the one the code applies"
+else
+  fail "the policy and GRACE_DAYS disagree about the grace period"
+  printf '        A merchant reading a different number than the software applies.\n'
+fi
+
+# ⚠️ **The status table must keep naming what is NOT enforced.** Three of the
+# four lifecycle stages are operational rather than built; a policy that quietly
+# dropped that column would read as a guarantee the software cannot keep.
+if grep -q "not enforced" "$POLICY" 2>/dev/null \
+  && grep -q "Implementation status" "$POLICY" 2>/dev/null; then
+  pass "the policy still records which stages software does not enforce"
+else
+  fail "the policy no longer distinguishes enforced stages from operational ones"
+  printf '        Publishing a lifecycle the code does not implement is the worse failure.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
