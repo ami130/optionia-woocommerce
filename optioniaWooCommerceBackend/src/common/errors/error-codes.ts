@@ -59,6 +59,22 @@ export const ErrorCode = {
    * permissions one.
    */
   PLAN_FEATURE_UNAVAILABLE: 'PLAN_FEATURE_UNAVAILABLE',
+  /**
+   * The subscription has lapsed, so authoring is paused (ADR-116).
+   *
+   * 🔴 **403, and distinct from every other 403 here**, because the remedy is
+   * different again: `FORBIDDEN` means *ask someone with more permission*,
+   * `PLAN_FEATURE_UNAVAILABLE` means *change the plan*, and this means *settle
+   * an outstanding payment*. A dashboard showing one message for three
+   * situations sends two-thirds of merchants somewhere useless.
+   *
+   * ⚠️ **Not 402 Payment Required.** That status is reserved and effectively
+   * unused on the web, and clients, proxies and error trackers treat it
+   * unpredictably; this project already maps every refusal through
+   * `ERROR_STATUS`, and a code the ecosystem does not handle buys nothing over
+   * a 403 with a specific code.
+   */
+  SUBSCRIPTION_LAPSED: 'SUBSCRIPTION_LAPSED',
 
   // 404 — no such resource, or none visible to this caller.
   NOT_FOUND: 'NOT_FOUND',
@@ -99,6 +115,7 @@ export const ERROR_STATUS: Record<ErrorCodeValue, HttpStatus> = {
   [ErrorCode.EMAIL_NOT_VERIFIED]: HttpStatus.FORBIDDEN,
   [ErrorCode.INSUFFICIENT_ROLE]: HttpStatus.FORBIDDEN,
   [ErrorCode.PLAN_FEATURE_UNAVAILABLE]: HttpStatus.FORBIDDEN,
+  [ErrorCode.SUBSCRIPTION_LAPSED]: HttpStatus.FORBIDDEN,
 
   [ErrorCode.NOT_FOUND]: HttpStatus.NOT_FOUND,
 

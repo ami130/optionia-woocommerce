@@ -125,7 +125,7 @@ worse than publishing nothing.
 | Over-limit blocks new work only | ✅ enforced | `PlanLimitGuard`, with usage reported on the subscription summary |
 | Storefront told the plan state | ✅ shipped | `plan.read_only` and `plan.grace_ends_at` in the config document (M24.5) |
 | Storage (`file_storage_mb`) | 🔴 **not enforced** | plugin-side by design: the bytes are on the merchant's own server, so the refusal has to reach the plugin's upload endpoint |
-| Dashboard read-only after grace | 🔴 **not enforced** | the state is computed and published; no write path refuses on it yet |
+| Dashboard read-only after grace | ✅ **enforced** | `SubscriptionGuard`, global via `APP_GUARD`: every tenant-realm mutation is refused once `graceEndsAt` has passed, with `SUBSCRIPTION_LAPSED`. Reads, the storefront and the billing routes are exempt |
 | Rendering suspended at day 44 | 🔴 not implemented | operational until built |
 | 90-day retention and deletion | 🔴 not implemented | owned by Phase 26b |
 
@@ -141,7 +141,18 @@ switch off your shop because a card failed" holds because the delivery path has
 no billing dependency at all — not because a flag is set correctly. That is the
 guarantee least likely to regress, and it is the one merchants care most about.
 
-⚠️ **Read-only enforcement is a real gap.** M24.5 ships `plan.read_only` to the
-storefront, so the state exists and is published; what is missing is the
-dashboard refusing writes on it. Until that lands, day 14's editing pause is a
-policy we would have to apply by hand.
+✅ **Read-only enforcement landed 2026-09-28, and it was this document's own
+gap for four days.** M24.5 shipped `plan.read_only` to the storefront and F137
+had the plugin render a notice from it, while every write path still accepted
+the edit the notice said was paused — so a merchant was *told* their editing had
+stopped and it had not. `SubscriptionGuard` closes it with one global guard
+rather than 56 route edits, which is what ADR-116 specified and why a new
+endpoint is refused by default instead of being silently unguarded.
+
+🔴 **Three things are deliberately still allowed while lapsed**, and each is a
+promise in its own right: **reading** everything you have built, because the
+policy says you can still sign in and see your work; the **storefront**, which
+never stops serving; and the **billing routes**, because a read-only state that
+blocked the payment which would lift it is a trap rather than a policy. The last
+is enforced as a ceiling — `check-billing-provider.sh` fails if more than two
+controllers ever claim the exemption.

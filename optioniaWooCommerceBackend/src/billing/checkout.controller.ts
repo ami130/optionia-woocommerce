@@ -3,6 +3,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { WritableWhenLapsed } from '../auth/guards/writable-when-lapsed.decorator';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { Capability } from '../auth/permissions/capabilities';
 import { CapabilityGuard } from '../auth/permissions/capability.guard';
@@ -34,7 +35,21 @@ const DEFAULT_INVOICE_PAGE_SIZE = 25;
  * chain. Two routes in one subsystem with opposite auth models is the kind of
  * asymmetry worth stating rather than leaving a reader to infer.
  */
+/*
+ * 🔴 **Exempt from the lapsed-subscription guard, at the CONTROLLER level.**
+ *
+ * Every route here is part of paying: starting a checkout, changing plan,
+ * cancelling, and opening the provider's portal to fix a card. ADR-116 pauses
+ * authoring when a subscription lapses — and a read-only state that blocks the
+ * payment which would lift it is a trap, not a policy. The merchant could never
+ * recover, and the pressure the policy applies would have nowhere to convert.
+ *
+ * ⚠️ **Whole controller rather than four decorators**, because the exemption is
+ * a property of what this controller IS. A fifth billing route added later
+ * should inherit it; a route that should *not* be exempt does not belong here.
+ */
 @Controller('billing')
+@WritableWhenLapsed()
 @ApiBearerAuth('tenant')
 @UseGuards(JwtAuthGuard, TenantGuard, CapabilityGuard)
 export class CheckoutController {

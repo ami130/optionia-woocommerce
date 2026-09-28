@@ -1087,6 +1087,64 @@ else
   fi
 fi
 
+# --- 43. Authoring actually pauses when a subscription lapses (ADR-116) -----
+#
+# 🔴 **`docs/SUBSCRIPTION-POLICY.md` promised merchants that editing pauses and
+# NOTHING refused.** `plan.read_only` was computed (M24.5), shipped to the
+# storefront, and rendered as a notice by the plugin (F137) while every write
+# path still accepted the edit the notice said was paused — the policy's own
+# status table recorded it as the one promise the software did not keep.
+LAPSE_GUARD="$SRC/auth/guards/subscription.guard.ts"
+
+if [ ! -f "$LAPSE_GUARD" ]; then
+  fail "no SubscriptionGuard — the lapse policy is a document, not a behaviour"
+elif grep -q "APP_GUARD, useClass: SubscriptionGuard" "$SRC/app.module.ts"; then
+  pass "authoring pauses when a subscription lapses (ADR-116)"
+else
+  fail "SubscriptionGuard exists but is not registered globally"
+  printf '        ADR-116: enforced by ONE guard, not 56 edits. Applied per\n'
+  printf '        controller, the newest endpoint is always the unguarded one.\n'
+fi
+
+# ⚠️ **Ordered AFTER JwtAuthGuard, and that is load-bearing.** The guard reads
+# `tenantId` from the request context, which the authentication guard populates.
+# Registered first, every request would look like it had no tenant and the guard
+# would stand aside on all of them — passing its own tests and enforcing nothing.
+if [ -f "$LAPSE_GUARD" ]; then
+  AUTH_AT=$(grep -n "useClass: JwtAuthGuard" "$SRC/app.module.ts" | head -1 | cut -d: -f1)
+  LAPSE_AT=$(grep -n "useClass: SubscriptionGuard" "$SRC/app.module.ts" | head -1 | cut -d: -f1)
+
+  if [ -n "$AUTH_AT" ] && [ -n "$LAPSE_AT" ] && [ "$AUTH_AT" -lt "$LAPSE_AT" ]; then
+    pass "the lapse guard runs after authentication, so a tenant is resolved"
+  else
+    fail "SubscriptionGuard is registered before JwtAuthGuard"
+    printf '        It reads tenantId from the context that guard populates.\n'
+  fi
+fi
+
+# 🔴 **A lapsed merchant must still be able to PAY.** A read-only state that
+# blocks the checkout which would lift it is a trap: the merchant cannot recover,
+# so the state never ends and the pressure ADR-116 applies has nowhere to go.
+if [ -f "$SRC/billing/checkout.controller.ts" ] \
+  && grep -q "WritableWhenLapsed()" "$SRC/billing/checkout.controller.ts"; then
+  pass "billing routes stay open while lapsed, so the lapse can be ended"
+else
+  fail "the billing routes are not exempt from the lapse guard"
+  printf '        A merchant who cannot pay can never stop being lapsed.\n'
+fi
+
+# ⚠️ **And the exemption must stay rare enough to read.** It is the only way
+# through a global guard, so a growing list is the policy quietly dissolving.
+EXEMPT=$(grep -rl "WritableWhenLapsed()" "$SRC" --include="*.controller.ts" 2>/dev/null | wc -l | tr -d ' ')
+
+if [ "$EXEMPT" -le 2 ]; then
+  pass "only $EXEMPT controller(s) are exempt from the lapse guard"
+else
+  fail "$EXEMPT controllers are exempt from the lapse guard — the policy is dissolving"
+  printf '        Each exemption is a route that keeps working while the merchant\n'
+  printf '        is told their editing is paused. Two is the documented ceiling.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

@@ -430,8 +430,10 @@ one place this plan's ordering works against you.
 | ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24 (ADR-117): prices grandfathered indefinitely; limit RAISES apply at once, limit CUTS at the next renewal.** 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
 | ~~B9~~ | ~~**What billing identity is collected, and when**~~ ✅ **DECIDED 2026-09-24 (ADR-118): at first paid checkout, never at registration.** Stripe Checkout collects and validates the address and tax id; `tenants.country`, `vatNumber` and `billingCurrency` are populated from the completed session. 📌 **Every field on a signup form costs conversion**, and M22.6 requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency **before** they pay — a tax form on signup works directly against that. ⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax location, which is correct because it is not billable; the columns are nullable for exactly this reason (F84) | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 
-**Nothing blocks Phase 17.** B2–B5 are business decisions due before their own phases (22,
-21c, and Stage 4B); B1 was withdrawn. Work continues now.
+**Nothing blocks Phase 25.** ⚠️ **This line said "Phase 17" until 2026-09-28**, eight
+phases after Phase 17 closed — the exact staleness the paragraph below warns about,
+sitting directly above its own warning. **B4 (D7) and B5 (D3) are the only live
+blockers and both are yours**; B1 was withdrawn and B2, B3, B6–B9 are decided.
 
 ⚠️ This line read *"Nothing blocks Phase 8"* until 2026-09-10 — nine phases after Phase 8
 closed. It was true when written and stayed on the page as the plan moved past it, which is
@@ -29220,7 +29222,7 @@ tested.
 [x] Unstyled options inherit the theme; hostile style config yields defaults, not injection (21c) — gated by check-theme-inheritance.sh and two validation layers
 [x] One measure function backs per-char pricing, the counter and length limits (M11.1a) — `Engine\Text`, *"the one normative text measurement"*
 [x] Option/value ids proven stable across an edit; foreign ids rejected (M5.0a) — ids are never regenerated on any update path; foreign ids refused in both services
-[ ] Plan change alone invalidates cached config within the M9.4 window (M9.4b) — 🔴 **explicitly not covered**: nothing plan-related calls `configVersion.bump()`, and `src/plans/` and `src/subscriptions/` hold entities only. Owned by [Phase 23](#phase-23--billing-webhooks)
+[x] Plan change alone invalidates cached config within the M9.4 window (M9.4b) — `PlanChangeInvalidatorService`, called by **all three** plan-moving paths: the webhook lifecycle, the reconciler and the reconcile command. Unit-spec'd, e2e'd, and gated by `check-billing-provider.sh` check 45. ✏️ **This row read "🔴 explicitly not covered" until 2026-09-28, weeks after F121 closed it.** The text went stale while the box stayed correctly `[ ]` — other criteria here are genuinely open — and `check-ledger.sh` compares the **box** against its criteria, so a criterion whose *prose* rots is invisible to it. Third instance of this plan's record drifting from its code, and the first inside a gate block
 [ ] Every pricing-page promise either delivered or corrected — **M1.5 delivered 2026-09-22** (`docs/COMPETITIVE-ANALYSIS.md`), so M1.6's scope work is unblocked. ⚠️ **The reconciliation half is not reachable here**: it compares against the live pricing page in `optionia-websites`, a repository this project does not contain
 [x] Gate 1 canonical E2E still green — 2 passed, re-run 2026-09-22
 ```
@@ -30398,6 +30400,51 @@ without it a busy store's orders would hide an unused option in a quiet one.
 ⚠️ **One endpoint, not four.** The sections answer one question, and splitting
 them would let a merchant see revenue from one moment beside dead options from
 another — which reads as a contradiction rather than as a lag.
+
+#### ADR-116's read-only enforcement, built (2026-09-28)
+
+🔴 **Not Phase 25, and done before it because a merchant was being told
+something untrue.** `docs/SUBSCRIPTION-POLICY.md` promises that after the
+fourteen-day grace period *"editing pauses"*. M24.5 computed `plan.read_only`,
+shipped it to the storefront and F137 had the plugin render a notice from it —
+while **every write path still accepted the edit the notice said was paused**.
+The policy's own status table recorded it as the one promise the software did
+not keep, and it stayed that way for four days.
+
+`SubscriptionGuard` is global via `APP_GUARD`, as ADR-116 specified: *"enforced
+by one guard, not 56 edits"*. Sixty-three write routes, and a **new** endpoint is
+refused by default rather than being silently unguarded — which is the shape of
+the nine mechanism-with-no-caller defects this project has produced.
+
+⚠️ **Registration order is load-bearing and gated.** The guard reads `tenantId`
+from the request context, which `JwtAuthGuard` populates; registered first, every
+request would look like it had no tenant and the guard would stand aside on all
+of them — passing its own tests while enforcing nothing.
+
+**Three exemptions, each a promise in its own right:**
+
+| Exempt | Why |
+|---|---|
+| **Reads** | ADR-116: a lapsed merchant can *"sign in and see all of their work"* |
+| **The storefront** | *"We do not switch off your shop because a card failed"* |
+| **Billing routes** | A read-only state blocking the payment that would lift it is a trap, not a policy |
+
+📌 **The exemption list is capped at two controllers by gate 43.** It is the only
+way through a global guard, so a growing list is the policy quietly dissolving.
+
+✏️ **A docblock claim of mine was wrong and is corrected in place.** It said the
+`@StoreRoute()` stand-aside is what keeps the storefront working. Measured:
+deleting that check leaves the store-realm test passing, because Nest runs global
+guards **before** controller-scoped ones, so `StoreTokenGuard` has not resolved a
+tenant yet and the `!tenantId` return is the real mechanism. The explicit check
+is kept as defence in depth — the store realm should be excluded by statement,
+not by the order two guards happen to run in.
+
+✏️ **And a test of mine proved nothing until it was rewritten.** The first
+storefront assertion sent a deliberately invalid token and checked only that the
+answer was not the lapse code — which a 401 satisfies whatever the guard does. It
+now mints a real credential and asserts a customer's order **succeeds** while the
+merchant is lapsed.
 
 #### Stage 25-1.2 — the gaps in 25-1.1, closed (2026-09-28)
 

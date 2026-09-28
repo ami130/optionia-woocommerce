@@ -14,6 +14,7 @@ import { PlansModule } from './plans/plans.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthThrottlerGuard } from './auth/auth-throttler.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { SubscriptionGuard } from './auth/guards/subscription.guard';
 import { MailModule } from './mail/mail.module';
 import { ConfigDeliveryModule } from './config-delivery/config-delivery.module';
 import { OptionSetsModule } from './option-sets/option-sets.module';
@@ -133,6 +134,24 @@ import { HealthModule } from './health/health.module';
      * it costs a signature verification.
      */
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+
+    /**
+     * Authoring pauses when a subscription lapses (ADR-116), and routes opt
+     * **out** with `@WritableWhenLapsed()`.
+     *
+     * 🔴 **Ordered AFTER `JwtAuthGuard`, and that is load-bearing.** This guard
+     * reads `tenantId` from the request context, which the authentication guard
+     * is what populates — registered before it, every request would look like it
+     * had no tenant and the guard would stand aside on all of them. Global
+     * guards run in registration order, so this is the mechanism, not a
+     * convention.
+     *
+     * ⚠️ **Global for the same reason authentication is**: sixty-three write
+     * routes, and the one that matters is the one added next month by someone
+     * who has never read ADR-116. Applied per controller, the newest endpoint is
+     * always the unguarded one.
+     */
+    { provide: APP_GUARD, useClass: SubscriptionGuard },
   ],
 })
 export class AppModule {}
