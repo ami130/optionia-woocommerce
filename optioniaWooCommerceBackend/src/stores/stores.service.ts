@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 import { AuditAction, AuditService } from '../audit/audit.service';
@@ -7,6 +7,7 @@ import { generateStoreToken } from '../common/crypto/tokens';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { HeartbeatDto } from './dto/heartbeat.dto';
+import { PlanLimitGuard, type PlanUsage } from '../usage/plan-limit.guard';
 import { UsageService } from '../usage/usage.service';
 import { StoresRepository } from './stores.repository';
 import { StoreStateService } from './store-state.service';
@@ -69,6 +70,37 @@ export interface HeartbeatResult {
   readonly status: StoreStatus;
   /** Whether a fresh handshake is required. Structurally false until `[8i]`. */
   readonly reauthorize: boolean;
+
+  /**
+   * Whether this tenant may still accept customer file uploads (M15.6).
+   *
+   * 🔴 **The refusal has to travel DOWN to the plugin, because the bytes never
+   * come up.** A customer's file is written to the merchant's own server; the
+   * cloud never sees it and cannot intercept the request. So enforcement is the
+   * plugin refusing on an answer the cloud gave it — the same shape as
+   * `plan.read_only` in the config document (M24.5).
+   *
+   * ⚠️ **Computed from the tenant, not this store.** `file_storage_mb` is a
+   * *tenant* limit and a Business tenant may hold ten stores; one store under
+   * its own share can still be over the tenant's.
+   *
+   * 📌 **`true` on a plan with no storage limit, and `true` when the limit is
+   * unknown.** A tenant whose plan does not mention storage is unmetered, and a
+   * plugin that could not be told must not start refusing a merchant's
+   * customers over a number nobody computed.
+   */
+  readonly uploads_allowed: boolean;
+
+  /**
+   * Megabytes allowed, or `null` for unlimited/unmetered.
+   *
+   * Sent so the merchant's own admin screens can say *"94 of 100 MB"* rather
+   * than only discovering the ceiling when a customer hits it.
+   */
+  readonly storage_limit_mb: number | null;
+
+  /** Megabytes currently attributed to this tenant, across every live store. */
+  readonly storage_used_mb: number;
 }
 
 /**
@@ -118,12 +150,21 @@ export interface RotateResult {
  */
 @Injectable()
 export class StoresService {
+  private readonly logger = new Logger(StoresService.name);
+
   constructor(
     private readonly stores: StoresRepository,
     private readonly state: StoreStateService,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
     private readonly usage: UsageService,
+    /*
+     * 📌 **For `report()`, not `assertWithinPlan()`.** The heartbeat does not
+     * refuse anything — it hands the plugin the numbers so the plugin can. The
+     * guard is the one place that already knows how to read a plan's limits
+     * against measured usage, and a second reader would be a second answer.
+     */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /**
@@ -336,9 +377,19 @@ export class StoresService {
       );
     }
 
+    /*
+     * 🔴 **Read AFTER `recordStorage` above**, so the answer reflects the figure
+     * this very heartbeat reported. Reading first would tell a plugin it may
+     * upload on the strength of a number it has just superseded.
+     */
+    const storage = await this.storageAllowance(store.tenantId as string);
+
     return {
       config_version: safeInteger(store.configVersion, 'stores.configVersion'),
       status: store.status as StoreStatus,
+      uploads_allowed: storage.allowed,
+      storage_limit_mb: storage.limitMb,
+      storage_used_mb: storage.usedMb,
       /**
        * Structurally `false` until `[8i]`.
        *
@@ -349,6 +400,62 @@ export class StoresService {
        */
       reauthorize: false,
     };
+  }
+
+  /**
+   * Whether this tenant may still accept customer uploads, and by how much
+   * (M15.6).
+   *
+   * ## Why the plugin is told rather than the cloud refusing
+   *
+   * 🔴 **The bytes never reach us.** A customer's file is written to the
+   * merchant's own WordPress install; the cloud sees a *total* on the next
+   * heartbeat and nothing else. So the only place a refusal can happen is the
+   * plugin's own upload endpoint, which means the cloud's job is to tell it —
+   * the same shape as `plan.read_only` in the config document (M24.5).
+   *
+   * ## Why every uncertainty answers "allowed"
+   *
+   * ⚠️ **A tenant whose plan does not mention storage is unmetered**, and one
+   * whose plan sets it `null` is unlimited; both must upload freely.
+   *
+   * 🔴 **And a failure here must not refuse anyone.** This runs inside a
+   * heartbeat that already did its real work; an error computing an allowance is
+   * our bookkeeping problem, and turning it into a customer being unable to
+   * complete a purchase would be the inverse of ADR-116's principle — the
+   * merchant's business must not break over our own state.
+   */
+  private async storageAllowance(
+    tenantId: string,
+  ): Promise<{ allowed: boolean; limitMb: number | null; usedMb: number }> {
+    try {
+      const usage = await this.planLimits.report(tenantId);
+      const storage = usage.find((row: PlanUsage) => row.metric === 'file_storage_mb');
+
+      if (storage === undefined) {
+        /* The plan has no opinion on storage: unmetered, so never refused. */
+        return { allowed: true, limitMb: null, usedMb: 0 };
+      }
+
+      return {
+        /*
+         * ⚠️ **`atLimit` refuses, not `overLimit`.** At exactly the allowance
+         * the merchant has used all of it — the same boundary `PlanLimitGuard`
+         * enforces for every other metric, where `current < limit` is the only
+         * passing case.
+         */
+        allowed: storage.limit === null ? true : !storage.atLimit,
+        limitMb: storage.limit,
+        usedMb: storage.current,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Could not compute the storage allowance for tenant ${tenantId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+
+      return { allowed: true, limitMb: null, usedMb: 0 };
+    }
   }
 
   /**

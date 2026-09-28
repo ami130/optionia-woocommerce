@@ -40,6 +40,7 @@ declare( strict_types=1 );
 
 namespace Optionia\Upload;
 
+use Optionia\Connection\Heartbeat;
 use Optionia\Support\Keys;
 use Optionia\Support\Logger;
 use WP_REST_Request;
@@ -267,6 +268,26 @@ final class UploadEndpoint {
 
 		if ( ! $this->quota->allows( $session, $size ) ) {
 			return $this->refused( 'quota' );
+		}
+
+		/*
+		 * 🔴 **The merchant's PLAN allowance, which the cloud cannot enforce
+		 * itself** (M15.6).
+		 *
+		 * `UploadQuota` above bounds one visitor's abuse of this endpoint; this
+		 * bounds the whole store against what the merchant pays for. The bytes
+		 * are written to this server and never reach the cloud, so the cloud
+		 * sends its verdict on the heartbeat and this is where it binds — the
+		 * last unenforced plan limit, and Phase 15's exit criterion reads
+		 * *"per-plan quotas **enforced** and metered"*.
+		 *
+		 * ⚠️ **Checked last, after every cheap rejection.** A file that is too
+		 * large or the wrong type is refused for that reason whatever the
+		 * store's storage state, so a merchant reading their logs sees the real
+		 * cause rather than a quota message standing in for it.
+		 */
+		if ( ! Heartbeat::uploads_allowed() ) {
+			return $this->refused( 'storage_full' );
 		}
 
 		$original = (string) $file['name'];

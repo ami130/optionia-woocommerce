@@ -30,6 +30,12 @@ fail() { printf '\033[31mFAIL\033[0m  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 
 SRC="optioniaWooCommerceBackend/src"
+
+# ✏️ **Hoisted from further down.** Checks from M15.6 onward read the plugin as
+# well as the backend, and this sat *below* the first of them — which under
+# `set -u` aborted the whole script rather than failing one check.
+PLUGIN_SRC="optioniaWooCommercePlugin/src"
+
 BILLING="$SRC/billing"
 
 printf 'Checking the billing provider wiring…\n'
@@ -896,7 +902,12 @@ fi
 # ⚠️ **The status table must keep naming what is NOT enforced.** Three of the
 # four lifecycle stages are operational rather than built; a policy that quietly
 # dropped that column would read as a guarantee the software cannot keep.
-if grep -q "not enforced" "$POLICY" 2>/dev/null \
+# ✏️ **Widened from the literal "not enforced" when storage became enforced**
+# (M15.6). That was the last row using those words, so the check failed on a
+# policy that had got MORE honest — a gate pinned to one phrasing rather than to
+# the property it is about. The two remaining unbuilt stages say "not
+# implemented", which is the same statement.
+if grep -qE "not enforced|not implemented" "$POLICY" 2>/dev/null \
   && grep -q "Implementation status" "$POLICY" 2>/dev/null; then
   pass "the policy still records which stages software does not enforce"
 else
@@ -947,13 +958,43 @@ fi
 
 # 📌 `file_storage_mb` is deliberately absent above: the bytes are on the
 # merchant's own server, so the refusal has to reach the plugin's upload
-# endpoint. M24.2 says so, and the policy document records it as unenforced.
-if grep -q "file_storage_mb" docs/SUBSCRIPTION-POLICY.md 2>/dev/null \
-  || grep -q "plugin-side" docs/SUBSCRIPTION-POLICY.md 2>/dev/null; then
-  pass "storage's plugin-side limit is disclosed rather than assumed"
+# endpoint rather than a backend creation path.
+#
+# ✏️ **This check used to assert the policy DISCLOSED the gap.** It was the
+# honest thing to check while the limit was unenforced — and it would now pass
+# for ever on a document that still said so, which is a check describing history.
+# It asserts enforcement instead, at both ends.
+if grep -q "uploads_allowed" "$SRC/stores/stores.service.ts"; then
+  pass "the heartbeat tells a plugin whether its storage allowance is used (M15.6)"
 else
-  fail "the policy does not record that storage is unenforced"
-  printf '        A limit sold and never applied is a promise the code does not keep.\n'
+  fail "the heartbeat carries no storage verdict"
+  printf '        The cloud cannot refuse the upload — the bytes never reach it —\n'
+  printf '        so the verdict has to travel down on the heartbeat.\n'
+fi
+
+if grep -q "uploads_allowed" "$PLUGIN_SRC/Upload/UploadEndpoint.php"; then
+  pass "the plugin refuses an upload once the allowance is used"
+else
+  fail "the plugin never consults the storage allowance"
+  printf '        A verdict the plugin does not read is F132 again: shipped at\n'
+  printf '        one end, ignored at the other.\n'
+fi
+
+# 🔴 **And the merchant has to be told, because the refusal is opaque.**
+# `UploadEndpoint::refused()` returns one shape for every reason so a caller
+# cannot map the ceilings — which means a shopper sees "upload failed" and the
+# merchant would otherwise see nothing at all.
+# ✏️ **Matched on the CALL, not the name.** `grep "StorageNotice"` is satisfied
+# by the `use` import alone — measured: deleting the registration left this
+# passing. That is the same "satisfied by the wrong thing" defect as gate 37 (its
+# own render test) and gate 40 (a comment), making four.
+if [ -f "$PLUGIN_SRC/Admin/StorageNotice.php" ] \
+  && grep -q "new StorageNotice() )->register()" "$PLUGIN_SRC/Plugin.php"; then
+  pass "the merchant is told why uploads stopped, and the notice is registered"
+else
+  fail "nothing tells the merchant their storage is full"
+  printf '        The refusal is deliberately opaque to the customer, so this\n'
+  printf '        notice is the only place the cause is visible.\n'
 fi
 
 # --- 40. The plugin reads the plan state the document ships (M24.5) --------
@@ -967,7 +1008,6 @@ fi
 # ⚠️ **This is F132 one repository over.** There the backend shipped `usage[]`
 # and the dashboard ignored it; check 37 now pins that side. A contract checked
 # in one direction is how both drifted.
-PLUGIN_SRC="optioniaWooCommercePlugin/src"
 
 # ✏️ **Matched as an ARRAY KEY, not as a word.** The first version grepped for
 # `read_only` anywhere under `src` and was satisfied by the comment in

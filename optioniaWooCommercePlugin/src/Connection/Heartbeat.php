@@ -134,7 +134,8 @@ final class Heartbeat {
 
 		$this->record(
 			true,
-			isset( $data['config_version'] ) ? (int) $data['config_version'] : null
+			isset( $data['config_version'] ) ? (int) $data['config_version'] : null,
+			$data
 		);
 
 		return true;
@@ -232,9 +233,10 @@ final class Heartbeat {
 	 * Record the outcome for System Status.
 	 *
 	 * @param bool     $ok             Whether the cloud accepted the ping.
-	 * @param int|null $config_version Version the cloud reports holding.
+	 * @param int|null             $config_version Version the cloud reports holding.
+	 * @param array<string, mixed> $data           The full response body, for M15.6's allowance.
 	 */
-	private function record( bool $ok, ?int $config_version ): void {
+	private function record( bool $ok, ?int $config_version, array $data = array() ): void {
 		$entry = array(
 			'at' => time(),
 			'ok' => $ok,
@@ -244,7 +246,47 @@ final class Heartbeat {
 			$entry['cloud_config_version'] = $config_version;
 		}
 
+		/*
+		 * 🔴 **The storage allowance, recorded so uploads can be refused
+		 * locally** (M15.6).
+		 *
+		 * `file_storage_mb` is a plan limit the cloud sells and **cannot
+		 * enforce**: a customer's file is written to this server and never
+		 * reaches it. So the cloud sends its verdict on the heartbeat and the
+		 * upload endpoint acts on it — the same shape as `plan.read_only` in the
+		 * config document, where the server decides and the plugin obeys.
+		 *
+		 * ⚠️ **Absent means ALLOWED, and that is deliberate.** A cloud older
+		 * than M15.6 sends no verdict, and a plugin defaulting to "refuse" would
+		 * break every upload on every store the moment it updated ahead of the
+		 * backend. Refusing is the state that needs saying; permitting is the
+		 * one that needs no instruction.
+		 */
+		if ( isset( $data['uploads_allowed'] ) ) {
+			$entry['uploads_allowed'] = (bool) $data['uploads_allowed'];
+		}
+
 		update_option( Keys::OPTION_LAST_HEARTBEAT, $entry, false );
+	}
+
+	/**
+	 * Whether the cloud last said this store may accept customer uploads (M15.6).
+	 *
+	 * 🔴 **Only an explicit `false` refuses.** No heartbeat yet, a heartbeat from
+	 * before this field existed, or a corrupted option all answer *allowed* — a
+	 * merchant's customers must not be blocked from completing a purchase
+	 * because the plugin could not reach us or could not read its own record.
+	 * The cost of being wrong in that direction is some bytes over an allowance;
+	 * the cost in the other direction is a sale that cannot happen.
+	 */
+	public static function uploads_allowed(): bool {
+		$last = get_option( Keys::OPTION_LAST_HEARTBEAT, null );
+
+		if ( ! is_array( $last ) || ! isset( $last['uploads_allowed'] ) ) {
+			return true;
+		}
+
+		return false !== $last['uploads_allowed'];
 	}
 
 	/**

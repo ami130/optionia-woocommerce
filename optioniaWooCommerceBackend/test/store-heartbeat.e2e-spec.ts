@@ -812,6 +812,130 @@ describe('store heartbeat (e2e)', () => {
    * the canonical E2E disconnects through the *dashboard*, the path that already
    * worked.
    */
+  /**
+   * M15.6 — the storage allowance the plugin enforces on our behalf.
+   *
+   * 🔴 **`file_storage_mb` was the LAST unenforced plan limit**, and Phase 15's
+   * exit criterion reads *"per-plan quotas **enforced** and metered"* — only
+   * metering had shipped. `docs/SUBSCRIPTION-POLICY.md` said so to merchants in
+   * as many words.
+   *
+   * ⚠️ **The cloud cannot refuse the upload itself.** A customer's file is
+   * written to the merchant's own WordPress install and never reaches us, so the
+   * only place a refusal can happen is the plugin — which means the cloud's job
+   * is to tell it, on the heartbeat it already makes.
+   */
+  describe('the storage allowance (M15.6)', () => {
+    /** Put the tenant on a plan with a named storage ceiling. */
+    async function withLimit(storeId: string, limitMb: number | null): Promise<void> {
+      const [row] = await dataSource.query(`SELECT tenantId FROM stores WHERE id = ?`, [storeId]);
+
+      await dataSource.query(
+        `UPDATE plans SET limits = JSON_SET(limits, '$.file_storage_mb', CAST(? AS JSON))
+          WHERE code = 'free'`,
+        [limitMb === null ? 'null' : String(limitMb)],
+      );
+
+      await dataSource.query(
+        `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'free') WHERE id = ?`,
+        [row.tenantId],
+      );
+    }
+
+    /**
+     * 🔴 **`file_storage_mb` is a TENANT limit, and this suite's stores share a
+     * tenant.** Every `connected()` adds another store to tenant `a`, and
+     * `recordStorage` sums them — which is the product behaving correctly, and
+     * which made a fixture asserting "4 MB" read 9. The other stores' figures
+     * are zeroed so each case measures only the bytes it reported.
+     */
+    async function onlyThisStore(storeId: string): Promise<void> {
+      const [row] = await dataSource.query(`SELECT tenantId FROM stores WHERE id = ?`, [storeId]);
+
+      await dataSource.query(
+        `UPDATE stores SET storageBytes = 0 WHERE tenantId = ? AND id <> ?`,
+        [row.tenantId, storeId],
+      );
+    }
+
+    afterEach(async () => {
+      /* ⚠️ Restored, or every later suite inherits it — the K4 aggressor pattern. */
+      await dataSource.query(
+        `UPDATE plans SET limits = JSON_SET(limits, '$.file_storage_mb', 100000)
+          WHERE code = 'free'`,
+      );
+    });
+
+    /**
+     * 🔴 **The whole point: a tenant at its ceiling is told to stop accepting
+     * uploads.** If this is wrong, the limit is sold and never binds.
+     */
+    it('refuses uploads once the tenant has used its allowance', async () => {
+      const store = await connected();
+      await withLimit(store.id, 5);
+      await onlyThisStore(store.id);
+
+      /* 5 MB reported against a 5 MB allowance — used up, not merely close. */
+      const response = await ping(store.token, { storage_bytes: 5 * 1024 * 1024 }).expect(200);
+
+      expect(response.body.data.uploads_allowed).toBe(false);
+      expect(response.body.data.storage_limit_mb).toBe(5);
+      expect(response.body.data.storage_used_mb).toBe(5);
+    });
+
+    /**
+     * 📌 **Under the ceiling, uploads continue.** The boundary is `atLimit`, the
+     * same one `PlanLimitGuard` applies to every other metric — `current <
+     * limit` is the only passing case.
+     */
+    it('allows uploads while the tenant is under its allowance', async () => {
+      const store = await connected();
+      await withLimit(store.id, 10);
+      await onlyThisStore(store.id);
+
+      const response = await ping(store.token, { storage_bytes: 4 * 1024 * 1024 }).expect(200);
+
+      expect(response.body.data.uploads_allowed).toBe(true);
+      expect(response.body.data.storage_used_mb).toBe(4);
+    });
+
+    /**
+     * 🔴 **An unlimited plan never refuses.** Treating `null` as zero would
+     * refuse the most permissive plan first — the inversion `PlanLimitGuard`
+     * records as the one a merchant notices and trusts least.
+     */
+    it('never refuses a plan with no storage ceiling', async () => {
+      const store = await connected();
+      await withLimit(store.id, null);
+      await onlyThisStore(store.id);
+
+      const response = await ping(store.token, { storage_bytes: 900 * 1024 * 1024 }).expect(200);
+
+      expect(response.body.data.uploads_allowed).toBe(true);
+      expect(response.body.data.storage_limit_mb).toBeNull();
+    });
+
+    /**
+     * ⚠️ **The answer reflects the figure THIS heartbeat reported**, not the
+     * previous one. Reading the allowance before recording the new total would
+     * tell a plugin it may upload on the strength of a number it has just
+     * superseded.
+     */
+    it('answers on the figure the same heartbeat carried', async () => {
+      const store = await connected();
+      await withLimit(store.id, 6);
+      await onlyThisStore(store.id);
+
+      /* First ping is well under. */
+      const under = await ping(store.token, { storage_bytes: 1024 * 1024 }).expect(200);
+      expect(under.body.data.uploads_allowed).toBe(true);
+
+      /* The very next one reports the ceiling and must be refused immediately. */
+      const at = await ping(store.token, { storage_bytes: 6 * 1024 * 1024 }).expect(200);
+      expect(at.body.data.uploads_allowed).toBe(false);
+    });
+  });
+
   describe('store-initiated disconnect', () => {
     it('revokes the credential that made the call', async () => {
       const { id, token } = await connected();

@@ -70,22 +70,29 @@ has been open since before Stage 4 began. Its six remaining criteria:
 | Activation **target** set | Deferred with Phase 33, by decision |
 | **File-upload per-plan quotas enforced** | 🔴 **Mine, and the only buildable one** |
 
-### The one buildable item: `file_storage_mb` — Phase 15's carried `[~]`
+### ✅ DONE — `file_storage_mb` enforced (M15.6, 2026-09-28)
 
-⚠️ **Phase 15's exit read *"per-plan quotas enforced and metered"* and only
-metering shipped.** It is the **last unenforced plan limit** — every other one is
-refused by `PlanLimitGuard`, and `docs/SUBSCRIPTION-POLICY.md` tells merchants
-so in as many words: *"storage is the one allowance we do not yet enforce"*.
+Phase 15's exit read *"per-plan quotas **enforced** and metered"* and only
+metering had shipped. It was the **last** unenforced plan limit.
 
-📌 **`UploadQuota.php` is NOT this.** Measured: it bounds *per-visitor abuse* of
-the upload endpoint — the nonce problem, where a guest nonce is identical for
-every visitor for 24 hours. A different question from *"has this tenant used its
-5 GB?"*.
+🔴 **The cloud cannot refuse the upload**, and that is structural rather than an
+oversight: a customer's file is written to the merchant's own WordPress install
+and never reaches us. So `uploads_allowed` travels **down** on the heartbeat,
+`UploadEndpoint` refuses on it, and enforcement happens where the bytes are —
+the same shape as `plan.read_only` in the config document (M24.5).
 
-🔴 **The refusal has to reach the plugin**, because the bytes are on the
-merchant's own server and the cloud cannot intercept an upload. The channel
-already exists: the config document carries plan state (M24.5) and the plugin
-already reads it (F137), so the quota can travel the same way.
+⚠️ **The customer is NOT told which ceiling they hit.** `UploadEndpoint::refused()`
+returns one shape for every reason on the recorded reasoning that *"a caller that
+learns which ceiling it hit can map them"* — a security property this did not
+weaken. **The merchant is told instead**, by `Admin\StorageNotice`, because they
+are the one who can act: a shopper sees "upload failed" and leaves, and without
+the notice the merchant would never connect a lost sale to an allowance.
+
+📌 **Every uncertainty answers *allowed*.** No heartbeat yet, a cloud older than
+M15.6, an unreadable option, or an error computing the allowance all permit the
+upload. Refusing is the state that needs saying; the cost of being wrong that way
+is some bytes over a limit, and the cost the other way is a sale that cannot
+happen.
 
 ### Then, in order
 
@@ -29262,7 +29269,7 @@ tested.
 
 ```text
 [x] All committed option types shipped with the full seven artifacts each — 15 types, five sources agree, gated by check-option-type-parity.sh
-[~] File upload production-ready end-to-end — Phase 15, tokens gated by check-uninstall.sh and the secret scan; **per-plan quotas are metered, not enforced** (Phase 15's own `[~]`)
+[x] File upload production-ready end-to-end — Phase 15, tokens gated by check-uninstall.sh and the secret scan. ✅ **Per-plan quotas are now ENFORCED (M15.6, 2026-09-28)**: the cloud cannot refuse an upload — the bytes are written to the merchant's own server and never reach it — so `uploads_allowed` travels down on the heartbeat, `UploadEndpoint` refuses on it, and `Admin\StorageNotice` tells the merchant why. Gated by three checks in `check-billing-provider.sh`. ✏️ **This read *"metered, not enforced"* from Phase 15 until now**, and `file_storage_mb` was the **last** unenforced plan limit — every other one is refused by `PlanLimitGuard`
 [x] All **five committed** pricing models correct; fixtures green in both languages — 4 shared fixtures byte-identical, gated by check-fixture-parity.sh. ✏️ *"All"* read as the five Phase 16 ships; `formula` is [Phase 16b](#phase-16b--formula-pricing) and its sandbox review is Phase 16's own `[~]`
 [x] Conditional logic correct, cycle-safe, server-enforced — cycles refused at publish (17-3); a hidden option's submitted value is refused with `ERROR_HIDDEN_BY_RULE` and is neither charged nor stored (17-8, 17-11, 17-11a). ✏️ **Graded `[~]` on 2026-09-22 from a findings row that had been stale for weeks** — the work was done; the record was not (F4)
 [x] Product sync self-healing on a large catalogue — Phase 19, gated by check-catalogue-limits.sh

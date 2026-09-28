@@ -21,6 +21,7 @@ use Optionia\Admin\OrderFiles;
 use Optionia\Admin\Notices;
 use Optionia\Admin\ConnectionSection;
 use Optionia\Admin\SchemaNotice;
+use Optionia\Admin\StorageNotice;
 use Optionia\Admin\SubscriptionNotice;
 use Optionia\Admin\UnpricedTypesNotice;
 use Optionia\Admin\ReconnectNotice;
@@ -735,6 +736,15 @@ final class Plugin {
 			 * milestone exists to produce.
 			 */
 			( new SubscriptionNotice( $this->container->get( Repository::class ) ) )->register();
+
+			/*
+			 * M15.6: `file_storage_mb` is a limit the cloud sells and cannot
+			 * enforce — the bytes are on this server. `UploadEndpoint` refuses
+			 * on the cloud's verdict, and this is the only place the merchant
+			 * learns why: the refusal itself is deliberately opaque, so without
+			 * this a shopper sees "upload failed" and the merchant sees nothing.
+			 */
+			( new StorageNotice() )->register();
 		}
 
 		// Declares compatibility with High-Performance Order Storage. Without

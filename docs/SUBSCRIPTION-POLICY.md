@@ -79,9 +79,11 @@ under our retention policy.
 Separately from payment, each plan includes a set allowance — option sets,
 connected stores, team seats, product assignments and storage.
 
-**Storage is the one allowance we do not yet enforce.** Files live on your own
-server, so we can measure them but not refuse an upload from here. We will
-contact you rather than surprise you.
+**Storage is enforced on your own server, because that is where the files are.**
+We cannot refuse an upload from here — it never reaches us — so we tell your
+plugin how much of your allowance is left, and it declines new customer uploads
+once it is used. Everything else on your shop keeps working, nothing is deleted,
+and your dashboard says so plainly.
 
 **Reaching a limit blocks new work, never existing work.** If you create your
 tenth option set on a plan that includes ten, the tenth keeps working and the
@@ -124,7 +126,7 @@ worse than publishing nothing.
 | **Storefront keeps serving** | ✅ **structural** | `config-delivery` reads no billing state — there is no dependency to fail |
 | Over-limit blocks new work only | ✅ enforced | `PlanLimitGuard`, with usage reported on the subscription summary |
 | Storefront told the plan state | ✅ shipped | `plan.read_only` and `plan.grace_ends_at` in the config document (M24.5) |
-| Storage (`file_storage_mb`) | 🔴 **not enforced** | plugin-side by design: the bytes are on the merchant's own server, so the refusal has to reach the plugin's upload endpoint |
+| Storage (`file_storage_mb`) | ✅ **enforced** | plugin-side by necessity: the bytes are on the merchant's own server, so the heartbeat carries the cloud's verdict and `UploadEndpoint` refuses on it. An admin notice tells the merchant, because the refusal itself is deliberately opaque |
 | Dashboard read-only after grace | ✅ **enforced** | `SubscriptionGuard`, global via `APP_GUARD`: every tenant-realm mutation is refused once `graceEndsAt` has passed, with `SUBSCRIPTION_LAPSED`. Reads, the storefront and the billing routes are exempt |
 | Rendering suspended at day 44 | 🔴 not implemented | operational until built |
 | 90-day retention and deletion | 🔴 not implemented | owned by Phase 26b |
