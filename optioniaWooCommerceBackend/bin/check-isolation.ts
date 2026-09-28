@@ -86,6 +86,84 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'PATCH /v1/activation/preferences',
 
   /**
+   * What a merchant's options earned, added for M25.3.
+   *
+   * Names **no id** — the tenant comes from the request context — so there is
+   * nothing foreign to ask for and no 404 to assert. And the property runs
+   * deeper than usual here: `order_selections` carries no tenant column at all,
+   * so scoping exists only through `order_events.storeId → stores.tenantId`. A
+   * forgotten `WHERE` is therefore a **join error**, not a silent leak.
+   *
+   * Proven anyway rather than argued, in `analytics-http.e2e-spec`: two tenants
+   * each place an order, and each sees only their own figures — *"never reports
+   * another tenant's orders"*.
+   */
+  'GET /v1/analytics',
+
+  /**
+   * The public plan catalogue, added for Phase 22.
+   *
+   * 🔴 **There is no tenant data here to leak.** It returns the same public
+   * plans to every caller — `listPublic()` takes no tenant and reads no
+   * tenant-owned row. A cross-tenant probe would assert that two tenants see
+   * *identical* output, which is the opposite of an isolation property and
+   * would pass against a completely unscoped implementation.
+   *
+   * It is tenant-scoped only in the sense that it sits behind `BILLING_VIEW`,
+   * which is an authorisation question and is covered by the capability tests.
+   */
+  'GET /v1/billing/plans',
+
+  /**
+   * This account's own subscription, invoices, and the four routes that change
+   * them — added for Phase 22 and Phase 23.
+   *
+   * None of them name a tenant id. Every one resolves its tenant through
+   * `requireTenantId()` from the request context, which `billing-account`'s own
+   * docblock states as the rule: *"scoped by `requireTenantId()`, never by a
+   * parameter"*. There is no foreign id for a caller to substitute, so there is
+   * no 404 to probe for.
+   *
+   * ⚠️ **`GET /v1/billing/invoices` is the one carrying real, per-tenant
+   * financial history**, and it is proven directly rather than by argument:
+   * *"never returns another tenant's invoices"* in `billing-account.e2e-spec`.
+   * The subscription read is proven alongside it.
+   *
+   * 📌 **The four writes act only on the caller's own tenant** — start a
+   * checkout, change plan, cancel, open the provider's portal — and each is
+   * exercised end to end in `billing-account.e2e-spec`. A write that touched
+   * another tenant would have to invent a tenant id it is never given.
+   */
+  'GET /v1/billing/subscription',
+  'GET /v1/billing/invoices',
+  'POST /v1/billing/checkout',
+  'POST /v1/billing/plan',
+  'DELETE /v1/billing/subscription',
+  'POST /v1/billing/portal',
+
+  /**
+   * The platform staff routes, added for M22.1a.
+   *
+   * 🔴 **These are not tenant-scoped at all — they are a different realm.**
+   * `StaffGuard` resolves a `platform_staff` row from `userId` and the
+   * controller deliberately omits `TenantGuard`, because *"a tenant admin
+   * editing what they pay is not a feature, it is a vulnerability"*. Probing
+   * them for cross-*tenant* leakage would assert the wrong boundary.
+   *
+   * The boundary that matters is cross-*realm*, and it is proven in
+   * `plans-admin.e2e-spec`: a tenant owner — the highest role a merchant holds —
+   * is refused, an unauthenticated caller is refused, and a SUPPORT staff member
+   * is refused the price route while READ_ONLY may list but not change.
+   *
+   * ⚠️ **`:code` is a plan code, not a tenant's resource.** Plans are platform
+   * data; there is no merchant-owned row for one tenant to reach through it.
+   */
+  'GET /v1/admin/plans',
+  'POST /v1/admin/plans/:code/price',
+  'PATCH /v1/admin/plans/:code/visibility',
+  'GET /v1/admin/billing/tax-report',
+
+  /**
    * `authorize` names a connection request, not a tenant's resource.
    *
    * There is no foreign id to refuse: a request id belongs to a pending

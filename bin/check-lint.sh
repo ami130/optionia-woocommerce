@@ -81,6 +81,36 @@ else
   (cd "$ROOT/optioniaWooCommerceBackend" && bash bin/check-docs.sh 2>&1 | grep -E '✗' | sed 's/^/        /') || true
 fi
 
+# --- The rest of the backend's own checks, which CI runs and this did not -----
+#
+# 🔴 **Four separate checks lived only in CI**, and the first push in 57 commits
+# failed on all four in turn: lint, DATABASE.md, the API contract, and tenant
+# isolation. Each was green locally the whole time, because `bin/check.sh` did
+# not run them.
+#
+# ⚠️ **`check:isolation` is a SECURITY check**, not a documentation one: it
+# requires every tenant-scoped route to have a negative test proving one tenant
+# cannot read another's data. Leaving that reachable only by pushing is the worst
+# case of this whole class.
+#
+# 📌 **Named individually rather than running `npm run check`.** That script also
+# runs the full unit and e2e suites, which take minutes and belong in their own
+# step — a gate nobody waits for is a gate nobody runs.
+for check in check:api check:isolation check:reachable check:openapi; do
+  if [ ! -d "$ROOT/optioniaWooCommerceBackend/node_modules" ]; then
+    printf '\033[33mskip\033[0m  %s: dependencies not installed\n' "$check"
+    continue
+  fi
+
+  if (cd "$ROOT/optioniaWooCommerceBackend" && npm run "$check" --silent >/dev/null 2>&1); then
+    pass "backend $check"
+  else
+    fail "backend $check"
+    (cd "$ROOT/optioniaWooCommerceBackend" && npm run "$check" --silent 2>&1 \
+      | sed 's/\x1b\[[0-9;]*m//g' | grep -E '✗|FAIL' | head -6 | sed 's/^/        /') || true
+  fi
+done
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

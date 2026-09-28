@@ -89,19 +89,57 @@ const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes(
  *   `config/data-source.ts` registers
  *   `entities: [__dirname + '/../**' + '/*.entity{.ts,.js}']` and
  *   `migrations: [__dirname + '/../migrations/*{.ts,.js}']`.
- * - `seeds/run-*.ts` are npm entry points: `db:seed` and `db:seed:demo`.
+ * - A file named by a **script in `package.json`** is an entry point: an
+ *   operator runs it with `npm run`, which is a caller this gate cannot see.
+ *   Read from `package.json` rather than matched by a naming convention, so a
+ *   new command is covered the day it is added.
+ *
+ *   ✏️ **This replaced a `seeds/run-*.ts` pattern that was too narrow.**
+ *   `billing:link-prices` and `billing:reconcile` point at
+ *   `seeds/link-provider-prices.ts` and `seeds/reconcile-subscriptions.ts`,
+ *   which do not match that shape — so two legitimate commands, both pinned by
+ *   `check-billing-provider.sh`, were reported as code the product never runs.
+ *   A pattern that encodes today's filenames fails the moment somebody picks a
+ *   different one.
  *
  * ⚠️ **This is not the exemption list.** These are reachable by a route this
  * gate cannot see. `EXEMPT` is for a module that genuinely has no caller yet,
  * and every entry there is a fuse with a stage attached.
  */
+/**
+ * Every `src/…` file an npm script points at.
+ *
+ * 📌 **Read once, from `package.json` itself.** The alternative — a regex over
+ * filenames — encodes the naming convention in use on the day it was written,
+ * and silently stops covering a command that picks a different one.
+ */
+const npmEntryPoints = (): Set<string> => {
+  const scripts = (
+    JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    }
+  ).scripts;
+
+  const found = new Set<string>();
+
+  for (const command of Object.values(scripts ?? {})) {
+    for (const [, path] of command.matchAll(/src\/([\w./-]+\.ts)\b/g)) {
+      found.add(path);
+    }
+  }
+
+  return found;
+};
+
+const NPM_ENTRIES = npmEntryPoints();
+
 const isEntry = (rel: string): boolean =>
   rel === 'main.ts' ||
   rel.endsWith('.module.ts') ||
   rel.endsWith('.d.ts') ||
   rel.endsWith('.entity.ts') ||
   rel.startsWith('migrations/') ||
-  /^seeds\/run-[\w-]+\.ts$/.test(rel);
+  NPM_ENTRIES.has(rel);
 
 function everyTsFileUnder(dir: string): string[] {
   const found: string[] = [];
