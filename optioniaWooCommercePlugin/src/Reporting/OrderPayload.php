@@ -92,32 +92,51 @@ final class OrderPayload {
 			return null;
 		}
 
-		$selections = $this->selections( $order );
+		/*
+		 * 🔴 **The rows and the revenue come from ONE pass, and the revenue is
+		 * NOT a sum of the rows** (F147).
+		 *
+		 * `selections()` caps what it lists at `MAX_SELECTIONS`; summing the
+		 * returned rows therefore counted survivors only, so an order past the
+		 * cap under-reported its earnings and looked exactly like an order that
+		 * earned less. The cap bounds what is *listed*, never what is *counted*.
+		 */
+		$report = $this->selections( $order );
 
 		return array(
 			'external_order_id'    => $this->clamp( $order_id, self::MAX_ORDER_ID ),
 			'order_total_minor'    => $this->minor( $order, 'get_total' ),
 			'currency'             => $this->currency( $order ),
-			'option_revenue_minor' => $this->option_revenue( $selections ),
+			'option_revenue_minor' => $report['revenue'],
 			'occurred_at'          => $this->occurred_at( $order ),
-			'selections'           => $selections,
+			'selections'           => $report['selections'],
 		);
 	}
 
 	/**
-	 * Every option selected across the order's lines.
+	 * Every option selected across the order's lines, and what they earned.
+	 *
+	 * Returns both because the two are measured over different populations: the
+	 * rows are capped at `MAX_SELECTIONS`, the revenue is not. Splitting them
+	 * into two methods is what produced F147 -- the caller summed the capped
+	 * array because that was the only thing it had.
 	 *
 	 * @param object $order A `WC_Order`.
-	 * @return array<int, array<string, mixed>>
+	 * @return array{selections: array<int, array<string, mixed>>, revenue: int}
 	 */
 	private function selections( object $order ): array {
 		$items = $order->get_items();
 
 		if ( ! is_array( $items ) ) {
-			return array();
+			return array(
+				'selections' => array(),
+				'revenue'    => 0,
+			);
 		}
 
 		$selections = array();
+		$revenue    = 0;
+		$full       = false;
 
 		foreach ( $items as $item ) {
 			if ( ! is_object( $item ) || ! method_exists( $item, 'get_meta' ) ) {
@@ -125,20 +144,36 @@ final class OrderPayload {
 			}
 
 			foreach ( $this->line_selections( $item ) as $selection ) {
+				$revenue += (int) $selection['price_delta_minor'];
+
+				if ( $full ) {
+					continue;
+				}
+
 				if ( count( $selections ) >= self::MAX_SELECTIONS ) {
 					/*
 					 * The cap is the API's. Sending more would earn a 400 for
 					 * the whole order, so a truncated report is strictly better
-					 * than none -- the event and its revenue are still recorded.
+					 * than none.
+					 *
+					 * ⚠️ **`continue`, not `return`** (F147). The loop runs on
+					 * so the remaining lines still reach `$revenue`: what the
+					 * merchant earned does not depend on how much of it fits in
+					 * one request.
 					 */
-					return $selections;
+					$full = true;
+
+					continue;
 				}
 
 				$selections[] = $selection;
 			}
 		}
 
-		return $selections;
+		return array(
+			'selections' => $selections,
+			'revenue'    => $revenue,
+		);
 	}
 
 	/**
@@ -334,6 +369,19 @@ final class OrderPayload {
 	 * selection and the rest report zero: the line's total is then right, which
 	 * is the number Phase 25 sums.
 	 *
+	 * ## Why the quantity is applied here (F146)
+	 *
+	 * 🔴 **`META_PRICE_DELTA` is a PER-UNIT amount, and this class treated it as
+	 * the line's total for ten phases.** It is written from the value handed to
+	 * `WC_Product::set_price()` (`Integration\CartTotals`), and WooCommerce
+	 * defines that as the price of one unit -- it multiplies by quantity itself
+	 * to reach the line subtotal. Nothing here ever did, so ten engraved mugs at
+	 * +5.00 each reported 500 rather than 5000.
+	 *
+	 * ⚠️ **The ranking was the damage, not just the totals.** Phase 25 exists so
+	 * a merchant can see which options earn most; scoring an option bought in
+	 * tens as though it were bought singly inverts exactly that ordering.
+	 *
 	 * @param array<int, array<string, mixed>> $selections The line's selections.
 	 * @param object                           $item       An order line item.
 	 * @return array<int, array<string, mixed>>
@@ -360,11 +408,28 @@ final class OrderPayload {
 			return $selections;
 		}
 
-		$minor = $money->minor();
+		/*
+		 * ⚠️ **The bound is checked by DIVISION, never by multiplying first.**
+		 *
+		 * Integer overflow in PHP silently produces a *float*, so a guard of the
+		 * form `$unit * $qty > MAX` can be handed a value that is no longer an
+		 * integer -- and would then send a rounded amount as though it were
+		 * exact, in a class whose entire premise is that money is integral
+		 * (Principle 5). `MAX_MINOR` is `2^53 - 1` and `PHP_INT_MAX` is
+		 * `2^63 - 1`, so the product leaves `int` range at roughly 1024 units:
+		 * reachable by a typo in a quantity field, not only in theory.
+		 *
+		 * Asking whether `$unit` exceeds `MAX_MINOR / $qty` answers the same
+		 * question without ever forming the oversized product.
+		 */
+		$unit     = $money->minor();
+		$quantity = $this->quantity( $item );
 
-		if ( abs( $minor ) > self::MAX_MINOR ) {
+		if ( abs( $unit ) > intdiv( self::MAX_MINOR, $quantity ) ) {
 			return $selections;
 		}
+
+		$minor = $unit * $quantity;
 
 		$selections[0]['price_delta_minor'] = $minor;
 
@@ -372,18 +437,34 @@ final class OrderPayload {
 	}
 
 	/**
-	 * What the options contributed across the order.
+	 * How many of a line the customer bought, as a usable multiplier.
 	 *
-	 * @param array<int, array<string, mixed>> $selections Every selection.
+	 * ⚠️ **Falls back to 1, never 0.** A refunded line can report a quantity of
+	 * zero and an item from an older WooCommerce may not answer at all -- and
+	 * multiplying by either would erase the line's revenue, reporting nothing
+	 * for an order that earned money. One unit is the conservative reading: it
+	 * can under-report a large line, never erase it.
+	 *
+	 * `WC_Order_Item_Product::get_quantity()` returns an int, but a decimal
+	 * quantity reaches this through third-party unit-of-measure plugins, so the
+	 * value is cast rather than assumed.
+	 *
+	 * @param object $item An order line item.
 	 */
-	private function option_revenue( array $selections ): int {
-		$total = 0;
-
-		foreach ( $selections as $selection ) {
-			$total += (int) $selection['price_delta_minor'];
+	private function quantity( object $item ): int {
+		if ( ! method_exists( $item, 'get_quantity' ) ) {
+			return 1;
 		}
 
-		return $total;
+		$quantity = $item->get_quantity();
+
+		if ( ! is_numeric( $quantity ) ) {
+			return 1;
+		}
+
+		$quantity = (int) $quantity;
+
+		return $quantity > 0 ? $quantity : 1;
 	}
 
 	/**

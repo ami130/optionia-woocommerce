@@ -43,6 +43,22 @@ export const ErrorCode = {
    * unverified account rather than by reading the handler.
    */
   EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
+  /**
+   * The tenant's plan does not include this feature (F148).
+   *
+   * 🔴 **403, not 429 like `PLAN_LIMIT_EXCEEDED`.** The two look alike — both
+   * are resolved by upgrading — and mean opposite things to a client. A limit
+   * says *you have used all of yours*, so retrying later can succeed and the
+   * merchant may free some up by deleting. A feature gate says *your plan has
+   * none of these*: no amount of waiting or deleting helps, and a 429 would
+   * invite a retry that can never succeed.
+   *
+   * Distinct from `FORBIDDEN` for the reason `EMAIL_NOT_VERIFIED` is: the
+   * remedy differs. `FORBIDDEN` means *ask someone with more permission*; this
+   * means *change the plan*, which is an owner's billing act rather than a
+   * permissions one.
+   */
+  PLAN_FEATURE_UNAVAILABLE: 'PLAN_FEATURE_UNAVAILABLE',
 
   // 404 — no such resource, or none visible to this caller.
   NOT_FOUND: 'NOT_FOUND',
@@ -82,6 +98,7 @@ export const ERROR_STATUS: Record<ErrorCodeValue, HttpStatus> = {
   [ErrorCode.FORBIDDEN]: HttpStatus.FORBIDDEN,
   [ErrorCode.EMAIL_NOT_VERIFIED]: HttpStatus.FORBIDDEN,
   [ErrorCode.INSUFFICIENT_ROLE]: HttpStatus.FORBIDDEN,
+  [ErrorCode.PLAN_FEATURE_UNAVAILABLE]: HttpStatus.FORBIDDEN,
 
   [ErrorCode.NOT_FOUND]: HttpStatus.NOT_FOUND,
 

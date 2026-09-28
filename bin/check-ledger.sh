@@ -92,6 +92,7 @@ else
   UNTICKED=0
   GRADED=0
   DASH_SEEN=0
+  SEEN_PHASES=""
 
   for phase in $PHASES; do
     START=$(grep -nE "^## Phase ${phase} —" "$PLAN" | head -1 | cut -d: -f1)
@@ -118,6 +119,7 @@ else
     [ "$TOTAL" -eq 0 ] && continue
 
     GRADED=$((GRADED + 1))
+    SEEN_PHASES="$SEEN_PHASES $phase"
 
     # Phase 18 is the only phase written in the `- [x]` notation, so it is also
     # the only evidence that this gate still reads it. Counted by name: a floor
@@ -162,6 +164,81 @@ else
 
     if [ "$UNTICKED" -eq 0 ]; then
       pass "no phase with all criteria met is left unticked"
+    fi
+
+    # -----------------------------------------------------------------------
+    # A phase this gate cannot grade must SAY so (F145)
+    #
+    # 🔴 **Phases 22, 23, 24 and 25 write their exit as prose -- `**Exit:** ...`
+    # -- and were therefore skipped ENTIRELY by the loop above.** `TOTAL -eq 0
+    # && continue` is silent, so the gate reported "graded 26 phases" and passed
+    # while never looking at the four phases the project was actually working
+    # on. All four sat at `[ ]` in the ledger with their work shipped.
+    #
+    # ⚠️ **This is the gate's own defect repeating one level down.** Its first
+    # draft read one notation of two and passed; this draft reads both notations
+    # and silently ignores every phase that uses neither. A gate that cannot see
+    # a phase must not imply it checked it.
+    #
+    # 📌 **What is checked is VISIBILITY, not completion.** Whether a prose exit
+    # is met is a human judgement -- but a phase whose section exists, whose
+    # ledger box is `[ ]`, and which this gate cannot grade, must be named out
+    # loud rather than skipped. Naming it is what stops "all checks passed" from
+    # meaning "I did not look".
+    # -----------------------------------------------------------------------
+
+    # 📌 **Scoped to the work that has been REACHED.** The marker already means
+    # "this is where we are", so the gate reuses the plan's own signal rather
+    # than inventing a second one: every phase named on the marker's stage line
+    # and on the stages above it. Phases further down are not drift -- they are
+    # simply not started, and flagging eighteen of them every run is how a gate
+    # teaches its reader to ignore it.
+    REACHED=$(printf '%s\n' "$LEDGER" \
+      | awk '/◀ HERE/{found=1} {print} found{exit}' \
+      | grep -oE '\[[x ~ ]\] [0-9]+[a-z]?' | grep -oE '[0-9]+[a-z]?$')
+
+    # ⚠️ **The phase the marker POINTS AT is excluded.** It is the work in
+    # progress by definition -- the marker means "here" -- and failing on it
+    # would mean the gate is red for the whole of every phase, which is a gate
+    # nobody can act on and therefore a gate everybody silences. What is caught
+    # is a phase the marker has moved PAST while its box stayed empty, which is
+    # the drift that actually happened.
+    CURRENT=$(printf '%s\n' "$LEDGER" | grep '◀ HERE' \
+      | grep -oE '\[[x ~ ]\] [0-9]+[a-z]? [A-Za-z]+ ◀ HERE' \
+      | grep -oE '[0-9]+[a-z]?' | head -1)
+
+    REACHED=$(printf '%s\n' $REACHED | grep -vxF "${CURRENT:-__none__}" || true)
+
+    UNGRADED=""
+
+    for phase in $PHASES; do
+      case " $SEEN_PHASES " in
+        *" $phase "*) continue ;;
+      esac
+
+      # Not yet reached: not this gate's business.
+      case " $(printf '%s ' $REACHED)" in
+        *" $phase "*) ;;
+        *) continue ;;
+      esac
+
+      # Only phases the ledger actually tracks. A phase with no box is not drift.
+      BOX=$(printf '%s\n' "$LEDGER" \
+        | grep -oE "\[[x ~]\] ${phase} [A-Za-z]" | head -1 | cut -c2)
+
+      [ -z "$BOX" ] && continue
+      [ "$BOX" != " " ] && continue
+
+      UNGRADED="$UNGRADED $phase"
+    done
+
+    if [ -z "$UNGRADED" ]; then
+      pass "every phase reached so far is graded, ticked, or knowingly partial"
+    else
+      fail "ungradable and unticked:$UNGRADED — prose exits this gate cannot read"
+      printf '      These phases state their exit as **Exit:** prose, so the criteria\n'
+      printf '      loop skips them. Grade each by hand and tick it, or give it\n'
+      printf '      checkbox criteria. Silence here is how 22-25 drifted.\n'
     fi
   fi
 fi

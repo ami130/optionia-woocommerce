@@ -17,287 +17,88 @@
 > is reference material. Update it at the end of each milestone; never let it go stale — a
 > wrong status is worse than no status.
 >
-> **Last updated:** 2026-09-10 — repo-verified
+> **Last updated:** 2026-09-28 — repo-verified, suites re-run
 
 ## Where we are
 
-**Verified against the repos 2026-09-10.** ⚠️ The previous STATUS was stale *again*: dated
-2026-09-02, it still named Gate 1 as the next thing to do and said *"do not start Phase 14"*
-— while Phases 14, 15 and 16 were built past it. **This block going stale is now a
-twice-observed pattern, not an accident**; see [the sixth instance](#a-defect-in-this-plan-not-in-the-code--recorded-2026-09-09).
+**Verified against the repos 2026-09-28**, with every suite re-run rather than
+quoted from the last entry.
 
 ```text
 GATE 1    🚩 ARCHITECTURE PROVEN        PASSED ✅  all 10 criteria, 2026-09-03
-                                        orders #42/#47/#48/#50 · classic + block
-                                        HPOS on, off, and sync off
+GATE 2    🚩 FEATURE COMPLETE           OPEN   ⬜  needs 3 non-team testers (M20.x)
 
-BACKEND   optioniaWooCommerceBackend    Phases 5-16 built  ✅  838 unit · 893 e2e green
-                                        5 price types · option-level pricing
-                                        Phase 6 is 8/10 — see the ledger's † note
-PLUGIN    optioniaWooCommercePlugin     Phases 3, 8-16 built ✅  1371 tests, 2618 assertions
-                                        Engine/{Pricing,SelectionResolver,Text,Measure}
-                                        Support/{Money,BasePrice} · Upload/* (Phase 15)
-                                        15 option types, convention-resolved templates
-DASHBOARD optioniaWooCommerceFrontend   Phase 13 built      ✅  Next.js + shadcn
-                                        auth · dashboard · option-sets · stores · connect
-                                        463 tests · CI added 2026-09-10 (F1)
-
-⚠️ All three repositories were uncommitted until 2026-09-10 — plugin and backend
-   both last committed 2026-08-28, the end of Phase 8. 411 files, ~99k insertions,
-   now committed on `develop` in each. See F2 below: the finding named only the
-   dashboard and the defect was project-wide.
-WP ENV    local Studio site             READY               ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
-                                                                HPOS on · block cart/checkout
+BACKEND   optioniaWooCommerceBackend    Phases 5-24 built ✅  1518 unit (77 suites)
+                                        billing · webhooks · plan limits · features
+DASHBOARD optioniaWooCommerceFrontend   Phase 13-21c built ✅  1823 tests (88 files)
+                                        ⚠️ vitest, NOT jest — `npx jest` reports
+                                        "90 failed / 0 total", which is the
+                                        wrong-runner signature, not a red suite
+PLUGIN    optioniaWooCommercePlugin     Phases 3, 8-21c built ✅  CI-verified only
+                                        🔴 NO PHP BINARY on this machine — the
+                                        plugin's suites run in CI (parse on the
+                                        7.4 floor, PHPUnit on 8.4) and cannot be
+                                        run locally. Plugin changes are reviewed
+                                        by hand against 7.4 and proven by CI.
+GATES     bin/check.sh                  19 gates ✅  auto-discovers check-*.sh
+WP ENV    local Studio site             READY  ✅  WP 7.1 · WC 11.0.1 · PHP 8.4
+                                                   HPOS on · block cart/checkout
 ```
+
+⚠️ **This block was stale for six phases and a gate now catches that.** It sat
+at 2026-09-10 pointing at *"Phase 19, stage 19-2"* while 19, 20b, 21, 21b, 21c,
+22, 23 and 24 all shipped — the **seventh** instance of the plan's most-repeated
+defect. `check-ledger.sh` now names any reached phase it cannot grade instead of
+skipping it silently (F145), which is what let Phases 22-25 drift unseen.
+
+---
 
 ## ▶ THE NEXT THING TO DO
 
-**[Phase 19](#phase-19--product-sync--assignment), stage 19-2 — the catalogue
-push.** 19-1' is closed.
+**[Phase 25](#phase-25--analytics), stage 25-1 — merchant analytics over the
+order data that already exists.**
 
-🔴 **Start at step 1 — a live defect, measured on the running API.** There is no
-configured request body limit, so Express's 100 kb default applies and an
-oversized body answers **`500`**, not `413`. `OrderReporter` treats `>= 500` as
-retryable and `break`s the drain, so **one oversized order blocks the whole
-order queue for ever**. `ReportOrderDto` permits ~148 kb, so it is reachable
-(ADR-072). The catalogue batch size is then derived from that limit rather than
-guessed.
+✅ **Stage 25-0 is complete** (2026-09-28). It took no schema and fixed two live
+defects in shipped code, both of which corrupt the exact number Phase 25 exists
+to report:
 
-⬜ **OPEN: three backend gate failures whose cause was never found.** They
-carried the documented M30.11 signature — empty-bodied `404 {}`, a different
-test each time, across two suites, each passing alone — but came in an
-unusual run of three, immediately after the harness gained a 1 MB body limit and
-two tests that push 529 kB and 5.26 MB bodies. **My explanation for them was
-disproved** (Nest does not double-parse; see the entry in Phase 19). Four
-hypotheses are ruled out by measurement. Whether the larger payloads perturb a
-latency-sensitive flake is **untested**. Four subsequent full runs are clean, so
-this is a watch item, not a blocker — but it must not be recorded as solved.
-
-⚠️ **Carry into 19-2: make E2E staleness detectable.** `npm run e2e` sits
-outside every `npm run check`, which is how five wrong locator classes survived
-five stages of UI rewrites with all gates green. Either run it in CI or gate
-that its locators resolve — otherwise the drift restarts unobserved.
-
-✅ **19-0 and 19-0a are complete.** ✏️ **19-1 is withdrawn**: the `categories`
-and `tags` columns it would have added **already exist**, in the entity and the
-initial migration. My earlier claim was wrong, and the record says so.
-
-🔴 **19-1' is the blocker that was actually there.** `assignments.service.ts`
-hardcoded `MANUAL` + `PRODUCT`, and `AssignProductsDto` took
-`externalProductIds` only — so **three of five target types and two of three
-modes could not be authored at all**. M19.4's acceptance signal
-(`ProductIndex::skipped_count()` → 0) can only report on assignments nothing can
-create.
-
-✅ **19-1' is COMPLETE — all six steps, verified end to end.** The API accepts
-any of the five target types (DTO, service, controller), a category assignment
-authored through the API reaches the storefront config document, the dashboard
-picker can author one (free-text reference; a chooser needs M19.1's import to
-name categories), and **the canonical E2E passes** — `EXIT=0`, both tests.
-
-🔴 **Getting there meant fixing the E2E itself, which had NEVER passed.** Seven
-defects, five of them locators for controls that never existed, dating to the
-commit that wrote the spec. Root cause: unbound `<label>` elements left
-placeholders — example copy — as the only handle. Fixed at source across four
-forms including the shared auth `Field`, and guarded.
-
-📌 **Step 6's acceptance is confirmed by measurement**: the plugin's stored
-index went `'skipped' => 0` → **`'skipped' => 1`**. ✏️ The plan said the count
-*"falls"*; it **rises**. Resolution is M19.4 per ADR-069.
-
-✏️ **This paragraph used to say `categories` and `tags` "were specified in M5.6
-and never built".** That was the withdrawn F1 claim — **both columns exist**, in
-the entity and the initial migration — and it survived four lines below the
-correction that withdrew it. Left visible rather than deleted: a stale claim
-sitting beside its own retraction is the failure mode the retraction was for.
-What remains true is that the picker needs them named, and that 19-2's import is
-what populates them.
-
-📌 **Two milestones changed shape at 19-0, and the plan text still reads the old
-way:**
-
-| Milestone | Written as | Actually |
+| | What was wrong | Where |
 |---|---|---|
-| **M19.1** | *"pull from the WC REST API"* | **The store pushes** — the cloud holds no WooCommerce credentials, and a pull would break AC8 |
-| **M19.2** | WooCommerce webhooks + HMAC | **WordPress hooks** — same mechanism as the push, no signature infrastructure |
+| **F146** | option revenue was **per-unit**, never multiplied by line quantity — ten mugs at +5.00 reported 500, not 5000 | `Reporting\OrderPayload` |
+| **F147** | a **truncated** report summed only the rows that survived the 200-row cap, under-stating its own revenue | same |
+| **F148** | `plans.features` was seeded in Phase 22 and **read by nothing** — 9th mechanism-with-no-caller | `PlanFeatureGuard` now exists |
+| **F145** | the ledger gate **skipped every prose-exit phase**, so 22-25 sat `[ ]` while shipped | `bin/check-ledger.sh` |
 
-⚠️ **`BATCH_SIZE` is the trap in 19-2.** Copying `OrderReporter`'s ten would make
-a 100k catalogue take **104 days**. Ten is right *there* because each report is
-one request; a catalogue push fits many per request.
+🔴 **F146's damage was the ranking, not the totals.** M25.3 exists so a merchant
+can see which options earn most, and an option typically bought in tens was
+scored as though bought singly — the report inverted the ordering it exists to
+produce. Fixing it after rollups were built would have meant rebuilding them.
 
-⚠️ **Uncommitted work is in the tree** from Phase 18's audit rounds — twelve
-files across four repos, all suites green.
+📌 **Start 25-1 at the read side, not the write side.** `order_events` and
+`order_selections` are built, migrated, indexed — `ix_order_selections_analytics
+(optionKey, valueKey)` is named for this phase — and have two production readers
+already (`activation/funnel-steps.ts`, `option-sets/hard-delete.service.ts`).
+**M25.3's revenue questions are answerable from existing data**, so the
+merchant-visible half of the exit criterion lands before any ingestion work.
 
-⏸ **Two stages are deferred with named reasons, not forgotten**: **18-4a**
-(`stepped`, ADR-063 — a wizard collides with the rule runtime's visibility
-model) and **M18.1a** (nesting, ADR-058).
+⚠️ **25-1 must wire `PlanFeatureGuard` to the analytics route it builds**, with
+an HTTP-level test. The guard is proven (9 e2e, 3 mutations killed) and
+**deliberately has no caller yet** — shipping it as "done" would be F130 exactly,
+which passed fifteen unit tests while no route invoked it.
 
-🔴 **18-6 is smaller than its name and bigger than its plan row.** The row says
-*"drag-and-drop ordering over the existing endpoints"* — but ordering **already
-works**, by move-up/move-down buttons the codebase chose deliberately:
+🔒 **The rule 25-2's rollups obey: carry `valueKey`, never `valueLabel`.** Free
+text never leaves the merchant's server today (`OrderPayload` writes a label only
+for merchant-defined choices), and a rollup that stored labels would import
+personal data into a table Phase 26b would then have to erase from.
 
-> *"Drag needs a library, does not work from a keyboard without extra handling,
-> and is awkward on the phones merchants actually use."*
+📌 **Historical rows are left as they are**, and the boundary is recorded: option
+revenue reported **before 2026-09-28** understates multi-quantity lines.
+Rewriting financial history is worse than a documented discontinuity.
 
-⚠️ **Replacing that with drag would trade working, accessible UX for a library
-and a keyboard regression.** The stage should be re-scoped or the choice
-re-affirmed — not executed as written.
+⏸️ **M25.1's view/add-to-cart events are recommended for deferral** — see the
+Phase 25 section for the reasoning. No transport is designed, and views are
+every product page load rather than one event per checkout.
 
-🔴 **The real gap is the same shape as 18-3a's F1: an endpoint the dashboard
-never calls.** `POST /option-sets/:id/reorder` takes a `ReorderGroupsDto` and is
-fully built; the dashboard has no client for it, so **a merchant cannot reorder
-groups at all** — only options within one. On a product with three sections,
-their order is whatever order they were created in, permanently.
-
-📌 **18-5 and 18-7 both need new columns and a migration.** Neither
-`minSelections` nor `columns`/`swatchSize`/`labelPlacement` exists on
-`option_groups` — a different shape from the last five stages, which all
-consumed fields already stored. ⚠️ **And 18-7 overlaps 18-3a**: M18.4's example
-is *"choose at least 2 from this group"*, which now exists per **option**. Whether
-the group-level version is a second mechanism or a real need is a decision, not
-an implementation.
-
-✅ **18-0 and 18-1 are done.** Three ADRs, then the array path through the
-resolver: `checkbox.php` branches on `cardinality`, and the resolver accepts,
-deduplicates, validates and prices a list.
-
-🔴 **18-1's analysis found two defects that were live, not pending.** Every
-checkbox shared one field name, so PHP kept only the last — a customer checking
-two boxes was **charged for one with nothing failing**. And `required` sat on
-every input, which HTML reads as *"check all of them"*.
-
-⚠️ **18-2 is the risky stage.** Nine consumers still expect a scalar, and
-`deltas_by_option()` pairs `resolved` with `deltas` **positionally**, returning
-empty on a count mismatch — 16c's defect, which quoted 85.00 and charged 130.00.
-
-🔴 **18-1's audit found that 18-1 itself opened that defect, and a fence now
-holds it shut.** Before the stage, a `cardinality: many` document hit
-`ERROR_NOT_SCALAR` and the line was refused — fail-closed by accident. Teaching
-the resolver to accept an array was correct, but it moved the fence without
-moving the wall behind it: a `many` document then produced one selection
-carrying two deltas, `deltas_by_option()` returned `array()`, `trusted_deltas()`
-returned null, and **the line priced live**. Reachable without anybody authoring
-a multi-select, because AC4 makes the document input rather than authority and
-the plugin validates no `cardinality` on the cached document.
-
-📌 **18-2'S FIRST ACT IS TO DELETE THE FENCE — IN TWO PLACES.**
-
-In `SelectionResolver`: `ERROR_MANY_UNSUPPORTED`, the
-`if ( $is_many && ! $allow_many )` guard, the `$allow_many` parameter, and its
-entry in `PriceConfigDeltaTest`'s exact-signature list (which shortens back to
-four). `tests/unit/MultiSelectFenceTest.php` goes with them — except
-`test_a_many_result_would_break_positional_pairing`, which should be **rewritten
-rather than dropped**: "can a multi-select line still be paired?" outlives the
-fence, and if 18-2 makes the pairing key-based that test is how it is proven.
-
-In the resolver's **required pass**: the `takes_many()` skip that sits beside
-the rule-hidden one. 🔴 **Without it a required multi-select made the product
-unbuyable** — the renderer skipped the option, the resolver still demanded it,
-and the customer read "Please choose all required options" with nothing to
-choose. Found by composing the two halves, not by either half's own tests.
-
-In `Renderer::option_markup()`: the `cardinality === 'many'` skip, plus
-`test_a_multi_select_option_is_not_rendered` and
-`test_a_single_value_checkbox_still_renders`. **The storefront fence matters as
-much as the resolver's** — without it the checkboxes render, the customer ticks
-two boxes, and add-to-cart refuses with a generic "that selection is not
-available" they cannot act on. It follows the precedent already in that method:
-an unknown option type renders nothing, because a control the server will refuse
-is worse than no control. The `cache_typed( $type, $extras, $option_extras )`
-third parameter can stay; it is generally useful for option-level fields.
-
-⚠️ **A parameter, not a filter, and the reason is the point.** A filter is a
-supported extension point; a third-party plugin switching this on would re-open
-live pricing in a store nobody was watching. All five production callers take
-the default. Only `MultiSelectResolutionTest` passes `true`, to prove the
-resolution logic waiting behind the fence.
-
-✅ **Two smaller 18-1 findings are fixed outright, and stay fixed after 18-2.**
-A multi-value line rendered the raw option id and the word `"Array"` — `labels`
-now carries a list of real option/value names. And value order split one product
-into two cart lines: `["red","blue"]` and `["blue","red"]` hashed differently,
-because `CartItemData`'s `ksort()` sorts option *ids* and says nothing about
-values within one option. Chosen keys are now sorted into the **merchant's
-authored order** at the point the order originates.
-
-✅ **Phase 17 is complete**: 17-0 (seven ADRs) through **17-11**, each with its
-own audit, plus **M17.4a**, and three whole-phase passes afterwards. All ten exit
-criteria met.
-
-⚠️ **Two of its six actions were withdrawn rather than shipped** — `set_default`
-(ADR-055) and `show` (ADR-056), each blocked by a decision already taken
-elsewhere rather than by effort. The rule vocabulary now contains **four actions,
-all of which work**, which is the first point in the phase where nothing in it
-does nothing.
-
-📌 **Phase 18 inherits one of those shapes.** `display_type` — `inline`,
-`accordion`, `tabs`, `stepped` — is on the group entity, published in the config
-document, and **read by nothing**: every group renders as a plain fieldset.
-M18.2 is the milestone that gives it a consumer, and until then it is the same
-"specified, carried, applied nowhere" state those two ADRs withdrew actions for.
-
-✅ **17-7 was absorbed, not skipped**, and this marker pointed at it for two
-stages after it was finished. Its three obligations all shipped inside other
-stages: the cap itself (`MAX_PASSES` / `MAX_RULE_PASSES`, both **10**) in 17-4
-and 17-6; refusal-on-reaching-it as a **shared-fixture case** both languages
-execute; and enforcement independent of publish as `ERROR_RULES_UNSETTLED` in
-17-8. Verified by reading the code, not the record.
-
-✅ **17-9 closed the window 17-8 opened.** Rules now reach the page, a **third
-evaluator** runs in the browser against the same 46-case shared fixture, and a
-rule-hidden option is no longer rendered. Nine mutants, nine killed — and the
-visibility tests caught a real defect on the way: an untouched form hid an
-option, because the typed-field selector matched an *unchecked radio*.
-
-⚠️ **Two things 17-9 deliberately did not do.** The price estimate still ignores
-`set_price` — a separate decision about what the browser may compute, and the one
-place a customer could see a number the server will change (**17-11**). And
-animation and focus polish belong with **21c**, where option styling lives;
-`hidden` is correct and accessible without them.
-
-✅ **Both remaining Phase 17 criteria closed in 17-8:** a rule-hidden option is
-now **rejected server-side** (`ERROR_HIDDEN_BY_RULE`) and is **neither charged
-nor stored** (ADR-051), proven by nine mutants and thirteen named tests. The
-evaluator has a caller.
-
-✅ **`RuleEvaluator` was deleted from `check-architecture.sh`'s exemption list**
-in 17-8, and the gate passed without it — the class was pending rather than dead.
-Second time that fuse has produced exactly the evidence it was built for.
-
-🔴 **17-8 found M17.4a's defect a layer down**: with `sortOrder` correctly
-ignored, `set_price` still resolved by *last writer wins*, so **document order**
-decided the price (1700 versus 1500 on the same pair). The publish gate blocks
-that pair, but AC4 makes the document input rather than authority. Conflicting
-amounts now **cancel** in both languages and are reported, never charged.
-
-⚠️ **O1 — a cap refusal tells the customer to do something that cannot help.**
-Found while confirming 17-7. `ERROR_RULES_UNSETTLED` is raised with
-**`field => null`**, because a cascade that never settles is not about any one
-option — but `CheckoutValidator::message()` skips errors with no field, so all
-four of its buckets stay empty and it falls through to *"one of the products in
-your cart uses an option that is no longer available. Please remove it and choose
-again."*
-
-Both halves are wrong: no option was removed, and **removing the line cannot fix
-it** — the merchant's rules are what did not settle. The behaviour is otherwise
-correct and fail-closed: add-to-cart refuses, the cart reverts to base price, and
-both paths log `rules_unsettled`. Only the wording misleads.
-
-📌 **Fold into 17-9**, which is already touching this surface, or 17-11. Small
-and contained: one branch in `message()`, on the same terms as the rule-hidden
-case 17-8 added.
-
-🔴 **The TypeScript evaluator had no production caller from M17.4 to M17.10**,
-and the backend had no gate that could say so — the plugin has had one since
-Stage 6 and it has fired twice. `bin/check-reachable.ts` is now that gate, and
-writing it found two more pending modules (`line-total`, `price-config-delta`),
-both exempted by name with a fuse naming Phase 21.
-
-⚠️ **K3 is still open** (from the 17-5 audit): a pre-M17.1 row whose
-`conditions` is an object publishes as a rule that **never fires** — safe,
-silent, and with no publish finding. Not folded into 17-8: that stage restructured
-the *plugin's* resolver, and K3 wants a **publish-time warning** in the backend.
-Carried to **17-11**, where the exit audit covers publish findings.
 
 ## 🔍 Code audit — 2026-09-02 (all three repos read, not just the plan)
 
@@ -700,8 +501,8 @@ STAGE 2    [x] 5 Data model     [~] 6 Tenancy/Auth† [x] 7 Authoring API    [x]
            [x] 13 Builder UI    [x] 🚩 GATE 1 — all 10 criteria met, 2026-09-03
 STAGE 3    [x] 14 Type library‡ [x] 15 File upload  [x] 16 Adv. pricing§   [x] 17 Cond. logic
            [x] 18 Groups        [x] 19 Product sync [~] 20 Full builder**  [~] 20b Onboarding¶
-           [x] 21 Preview       [x] 21b Cart price  [x] 21c Styling        [ ] 🚩 GATE 2 ◀ HERE
-STAGE 4    [ ] 22 Billing       [ ] 23 Webhooks     [ ] 24 Limits          [ ] 25 Analytics
+           [x] 21 Preview       [x] 21b Cart price  [x] 21c Styling        [ ] 🚩 GATE 2
+STAGE 4    [x] 22 Billing††     [x] 23 Webhooks††   [x] 24 Limits††        [ ] 25 Analytics ◀ HERE
            [ ] 26 Super admin   [ ] 26b Compliance
 STAGE 4B   [ ] 26c Design geom. [ ] 26d Authoring   [ ] 26e Storefront/order   (gated on D7)
 STAGE 5    [ ] 27 Security      [ ] 28 Performance  [ ] 29 Compatibility   [ ] 29b Diagnostics
@@ -742,6 +543,34 @@ boxes said `[ ]` at the time. The remaining two are open **by decision, not by o
 on a schedule; and *"3 non-team testers reach publish unaided"* is recruitment, owned by
 **you**, and is also a Gate 2 criterion. Ticking it would claim a funnel nobody has
 walked.
+
+†† **Phases 22-24 ticked 2026-09-28, and the gate could not see they were
+open.** All three state their exit as prose (`**Exit:** ...`) rather than as
+checkboxes, and `check-ledger.sh` skips a phase with no checkbox criteria —
+silently, via `[ "$TOTAL" -eq 0 ] && continue`. So the gate reported *"graded 26
+phases"* and passed while never looking at the four the project was actually
+working on. **Seventh instance of this plan's most-repeated defect, and the
+first inside the mechanism built to prevent it** (F145).
+
+Each was graded against its own exit line before being ticked, not against the
+fact that work had happened:
+
+| Phase | Exit clause | Evidence |
+|---|---|---|
+| 22 | staff change a price through the UI | `plans-admin.e2e-spec` — staff-only, role-scoped |
+| 22 | an existing subscriber's invoice is unchanged | `plan-price-pinning.e2e-spec` — *"keeps a SUBSCRIPTION on the price it bought"* |
+| 22 | every change attributable to a named staff user | *"attributes the change to the staff user who made it"* |
+| 23 | lifecycle events handled idempotently | `billing-webhook.e2e-spec` — *"is idempotent across redelivery"*, *"stores one row when the same event arrives concurrently"* |
+| 23 | provider and local state provably reconciled | `billing-reconcile.e2e-spec` |
+| 23 | **no state derived from a browser redirect** | gate 19 check 9 — *"a redirect can be forged; a signed webhook cannot"* |
+| 24 | limits enforced with clear messaging | `plan-limit-http.e2e-spec` — refusal over HTTP naming allowance, usage and upgrade |
+| 24 | lapsed-then-recovered merchant loses nothing | `billing-webhook.e2e-spec:1062` — *"keeps a merchant's configuration through fail, lapse and recovery"* |
+
+🔴 **The gate now names what it cannot grade instead of skipping it.** A prose
+exit still needs a human, but a phase that has been *reached*, sits at `[ ]`,
+and cannot be graded is printed by name — because "all checks passed" must not
+be able to mean "I did not look". Scoped to the marker's stage and the next one,
+so unstarted phases stay quiet.
 
 ⚠️ **Ledger corrected 2026-09-21, and it had been wrong for four phases.** It read
 `[~] 18 Groups ◀ HERE` while 18, 19, 20, 21 and 21b were all shipped — the marker is
@@ -30389,6 +30218,88 @@ Per roadmap Phase 25, analytics must answer real merchant decisions: *which opti
 money, which are ignored, what should be priced differently.* Not vanity charts. This is
 also a core [D5](#d3--positioning-against-one-time-purchase-competitors) differentiator —
 self-hosted plugins cannot compute it.
+
+### Phase 25 — Stage 25-0, the decisions taken before any schema (2026-09-28)
+
+🔴 **Two live defects in shipped code were found auditing this phase, and both
+corrupt the exact number Phase 25 is built to report.** They are fixed before
+any rollup exists, because a rollup would bake them in permanently.
+
+**F146 — option revenue was per-unit, never multiplied by quantity.**
+`META_PRICE_DELTA` is written from the value handed to
+`WC_Product::set_price()`, which WooCommerce defines as the price of **one**
+unit — it multiplies by quantity itself to reach the line subtotal.
+`Reporting\OrderPayload` never did, so ten engraved mugs at +5.00 each reported
+**500 instead of 5000**. ⚠️ **The ranking was the damage, not only the totals**:
+M25.3 exists so a merchant can see which options earn most, and an option
+typically bought in tens was scored as though bought singly — the report
+inverted the very ordering it exists to produce. Proven at both ends
+(`CartTotals` writes per-unit; `grep` for `get_quantity` matched nothing in
+either file).
+
+**F147 — a truncated report under-stated its own revenue.** `selections()` caps
+rows at `MAX_SELECTIONS` and the revenue was summed over the survivors, so an
+order past the cap reported less than it earned, unreadable from an order that
+genuinely earned less. **The cap now bounds what is *listed*, never what is
+*counted*.**
+
+📌 **The historical rows are left alone, and the boundary date is recorded
+here.** Rewriting financial history is worse than a documented discontinuity:
+option revenue reported **before 2026-09-28** understates multi-quantity lines.
+Analytics built in 25-1 reads rows from both sides of that date, and the
+discontinuity belongs in the merchant-facing copy rather than in a migration.
+
+#### The rule every rollup obeys (M25.6)
+
+🔒 **A rollup may carry `valueKey`. It may never carry `valueLabel`.**
+
+`OrderPayload` already enforces the matching rule at source: `value_label` is
+written **only** when a merchant-defined `value_key` exists, so free text — an
+engraving, a gift note, a name — arrives as `null` and customer words never
+leave the shop. Tested by name: *"The customer's own words must not leave the
+store."*
+
+⚠️ **So M25.6 is NOT blocked on Phase 26b**, despite 26b declaring a dependency
+on 25. What 26b owns is erasure and retention *mechanisms*; what M25.6 needs is
+that analytics introduces no new personal data — which holds by construction as
+long as rollups key on `valueKey`. Breaking this rule is the single most
+expensive mistake available in this phase, because the rollups would have to be
+rebuilt rather than corrected.
+
+#### F148 — `plans.features` was seeded in Phase 22 and read by nothing
+
+All three plans carry `analytics` (`false` on Free, `true` on Pro and Business),
+so the gating decision was made a phase before it could be enforced, and then
+enforced nowhere: `grep` for `.features` outside the entity found no production
+reader. **The ninth instance of this project's dominant defect.**
+
+`PlanFeatureGuard` and `PLAN_FEATURE_UNAVAILABLE` (403, deliberately **not**
+429 — a feature gate cannot be waited out or freed up by deleting) are built and
+proven, but **25-0.3 is deliberately NOT ticked**: its caller is the analytics
+endpoint, which arrives in 25-1. ⚠️ **Shipping the guard and calling it done
+would be F130 exactly** — a mechanism with fifteen passing tests and no route
+invoking it. It is wired, with an HTTP-level test, in 25-1 or not at all.
+
+#### Stage order
+
+```text
+25-0  ✅ decisions + the two revenue defects + the ledger gate   (no schema)
+25-1     M25.3 over existing order_selections + PlanFeatureGuard caller
+25-2     M25.2 rollups, obeying the valueKey rule
+25-3     M25.4 comparisons, M25.5 CSV export
+25-4     M25.1 non-order events — see the deferral below
+```
+
+⏸️ **M25.1's view/add-to-cart events are recommended for deferral.** Revenue and
+dead options need no view events; attach rate and conversion-with-vs-without do.
+Orders can ride a cron drain because checkout is rare and the customer has
+already left — **views are every product page load**, so the same mechanism
+means a database write per pageview on the merchant's own server, which is what
+*"ingestion never affects storefront performance"* forbids. No transport is
+designed (`grep` for `beacon|sendBeacon|impression|pageview` matches nothing in
+any repository). Closing Phase 25 without them, with attach rate named as owned
+by a later milestone, is better than holding the revenue analytics merchants
+asked for behind an undesigned beacon.
 
 **Exit:** a merchant can identify their highest-revenue options and their dead ones;
 ingestion never affects storefront performance.

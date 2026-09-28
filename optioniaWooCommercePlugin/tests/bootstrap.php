@@ -941,6 +941,19 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 			public array $meta = array();
 
 			/**
+			 * How many of this line the customer bought.
+			 *
+			 * 🔴 **Absent until F146, which is why the defect was invisible.**
+			 * `OrderPayload` never called `get_quantity()`, so nothing here
+			 * needed to answer it -- and a fake that cannot be asked a question
+			 * makes the question look answered. Defaults to 1 so every existing
+			 * test keeps the meaning it already had.
+			 *
+			 * @var int
+			 */
+			public int $quantity = 1;
+
+			/**
 			 * The order in which keys were added, so display order is testable.
 			 *
 			 * @var array<int, string>
@@ -1045,6 +1058,15 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 			 */
 			public function get_meta( string $key ) {
 				return $this->meta[ $key ] ?? null;
+			}
+
+			/**
+			 * The line's quantity, as `WC_Order_Item_Product` reports it.
+			 *
+			 * @return int
+			 */
+			public function get_quantity(): int {
+				return $this->quantity;
 			}
 		};
 	}

@@ -420,6 +420,166 @@ final class OrderPayloadTest extends TestCase {
 		$this->assertSame( -500, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
 	}
 
+	// --- Quantity (F146) -----------------------------------------------------
+
+	/**
+	 * 🔴 **The line's quantity multiplies its option revenue, and it was being
+	 * DROPPED.**
+	 *
+	 * `META_PRICE_DELTA` is written from the value handed to
+	 * `WC_Product::set_price()`, which WooCommerce defines as the price of
+	 * **one** unit -- it multiplies by quantity itself to reach the line
+	 * subtotal. This class never did, so ten engraved mugs at +5.00 each
+	 * reported 500 instead of 5000.
+	 *
+	 * ⚠️ **The damage is the ranking, not only the total.** Phase 25's exit
+	 * criterion is *"a merchant can identify their highest-revenue options"*,
+	 * and an option typically bought in tens was scored as though it were
+	 * bought singly -- so the report inverted the very ordering it exists to
+	 * produce.
+	 */
+	public function test_option_revenue_multiplies_by_line_quantity(): void {
+		$order            = optionia_test_order( 1 );
+		$item             = $this->line( 'engraving', 'yes', '5.00', 'Engraving', 'yes' );
+		$item->quantity   = 10;
+		$order->items[]   = $item;
+
+		$this->assertSame( 5000, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * 🔴 **The per-selection delta scales too**, not just the order total.
+	 *
+	 * M25.3 sums `price_delta_minor` per option key to rank options against
+	 * each other. A correct grand total built from per-unit rows would still
+	 * rank every option wrongly, so the row a rollup reads has to carry the
+	 * line amount.
+	 */
+	public function test_the_selection_row_carries_the_line_amount(): void {
+		$order          = optionia_test_order( 1 );
+		$item           = $this->line( 'engraving', 'yes', '5.00', 'Engraving', 'yes' );
+		$item->quantity = 10;
+		$order->items[] = $item;
+
+		$selections = ( new OrderPayload() )->build( $order )['selections'];
+
+		$this->assertSame( 5000, $selections[0]['price_delta_minor'] );
+	}
+
+	/**
+	 * 📌 **Quantity 1 is unchanged**, which is what makes this fix safe to
+	 * apply to a shipped plugin: every single-unit order reports exactly what
+	 * it reported before.
+	 */
+	public function test_a_single_unit_line_is_unchanged(): void {
+		$order          = optionia_test_order( 1 );
+		$order->items[] = $this->line( 'finish', 'lux', '99.00' );
+
+		$this->assertSame( 9900, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * ⚠️ **A discount scales with quantity in the same direction.** Ten of a
+	 * bundled line is ten times the discount, and a fix that multiplied only
+	 * positive deltas would silently over-report revenue on every discounted
+	 * line.
+	 */
+	public function test_a_negative_delta_scales_with_quantity(): void {
+		$order          = optionia_test_order( 1 );
+		$item           = $this->line( 'bundle', 'yes', '-5.00', 'Bundle', 'yes' );
+		$item->quantity = 3;
+		$order->items[] = $item;
+
+		$this->assertSame( -1500, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * ⚠️ **A missing or nonsensical quantity falls back to 1, never 0.**
+	 *
+	 * A refunded line can report quantity 0, and an item object from an older
+	 * WooCommerce may not answer `get_quantity()` at all. Treating either as a
+	 * multiplier would erase the line's revenue -- reporting 0 for an order
+	 * that earned money, which is indistinguishable from an order that did
+	 * not.
+	 */
+	public function test_an_unusable_quantity_falls_back_to_one(): void {
+		$order          = optionia_test_order( 1 );
+		$item           = $this->line( 'finish', 'lux', '7.00' );
+		$item->quantity = 0;
+		$order->items[] = $item;
+
+		$this->assertSame( 700, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * 📌 **Mixed quantities across lines each scale by their own.** A single
+	 * order-wide multiplier would look right on a one-line order and be wrong
+	 * on every real basket.
+	 */
+	public function test_each_line_scales_by_its_own_quantity(): void {
+		$order = optionia_test_order( 1 );
+
+		$first           = $this->line( 'engraving', 'yes', '5.00', 'Engraving', 'yes' );
+		$first->quantity = 10;
+
+		$second           = $this->line( 'gift', 'yes', '2.00', 'Gift wrap', 'yes' );
+		$second->quantity = 2;
+
+		$order->items[] = $first;
+		$order->items[] = $second;
+
+		// 5.00 x 10 = 5000, plus 2.00 x 2 = 400.
+		$this->assertSame( 5400, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * ⚠️ **An amount that would overflow when scaled is refused, not rounded.**
+	 *
+	 * `MAX_MINOR` is `2^53 - 1` and `PHP_INT_MAX` is `2^63 - 1`, so a per-unit
+	 * delta inside the cap can leave `int` range once multiplied. PHP turns an
+	 * overflowed integer into a **float** silently, and a float amount sent as
+	 * money is the precision loss `Support\Money` exists to prevent -- so the
+	 * line keeps its zero delta rather than reporting an approximation.
+	 */
+	public function test_a_delta_that_would_overflow_when_scaled_is_refused(): void {
+		$order = optionia_test_order( 1 );
+
+		// 90,000,000,000,000.00 in minor units is 9e15, just past 2^53 - 1.
+		$item           = $this->line( 'vast', 'yes', '90000000000000.00', 'Vast', 'yes' );
+		$item->quantity = 1000;
+		$order->items[] = $item;
+
+		$body = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( 0, $body['option_revenue_minor'] );
+		$this->assertSame( 0, $body['selections'][0]['price_delta_minor'] );
+	}
+
+	// --- Truncation and revenue (F147) ---------------------------------------
+
+	/**
+	 * 🔴 **A truncated report still states the order's full option revenue.**
+	 *
+	 * `selections()` stops at `MAX_SELECTIONS` and `option_revenue()` was then
+	 * summed over the **survivors**, so an order past the cap under-reported
+	 * its earnings with nothing to mark it as partial -- unreadable, in a
+	 * rollup, from an order that genuinely earned less.
+	 *
+	 * The cap bounds what is *listed*, never what is *counted*.
+	 */
+	public function test_a_truncated_report_still_states_full_revenue(): void {
+		$order = optionia_test_order( 1 );
+
+		for ( $i = 0; $i < 250; $i++ ) {
+			$order->items[] = $this->line( 'opt-' . $i, 'v', '1.00', 'Option', 'v' );
+		}
+
+		$body = ( new OrderPayload() )->build( $order );
+
+		$this->assertCount( 200, $body['selections'], 'The listed rows are still capped.' );
+		$this->assertSame( 25000, $body['option_revenue_minor'], 'All 250 lines are counted.' );
+	}
+
 	// --- Boundaries ----------------------------------------------------------
 
 	/** An order with no options is still reportable revenue. */
