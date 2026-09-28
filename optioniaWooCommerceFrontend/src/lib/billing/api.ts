@@ -29,6 +29,40 @@ export interface SubscriptionSummary {
    * paid sees the plan they left, which reads like a failed payment.
    */
   settling: boolean;
+
+  /**
+   * 🔴 **M24.4 — what this tenant uses against what the plan allows.**
+   *
+   * Every metered metric, not only the breached ones: a card reading *"9 of
+   * 10 option sets"* before the merchant is blocked is the difference between
+   * a warning and a surprise.
+   *
+   * 📌 **It rides on this response rather than a second endpoint**, so the plan
+   * and the verdict are always from the same instant — a merchant who has just
+   * upgraded must never see their new plan beside their old usage.
+   */
+  usage: PlanUsage[];
+}
+
+/**
+ * One metric's usage against the plan (M24.4).
+ *
+ * ⚠️ **`atLimit` and `overLimit` are different questions.** At the limit a
+ * merchant is blocked from creating more, but they chose this; **over** it
+ * they were downgraded into a state they did not choose, and only that second
+ * case earns the banner asking them to pick what to disable.
+ *
+ * 📌 **`limit: null` is unlimited.** Never render it as a ceiling of zero —
+ * the same inversion the server guards against, which would show the most
+ * permissive plan as the most breached.
+ */
+export interface PlanUsage {
+  metric: string;
+  label: string;
+  current: number;
+  limit: number | null;
+  overLimit: boolean;
+  atLimit: boolean;
 }
 
 /**

@@ -35,8 +35,22 @@ export type CountableMetric =
  * That is a genuinely different kind of number and it reads from
  * `usage_records` rather than counting.
  *
- * 📌 **Cost is not a reason to cache these.** Each is a single indexed
- * `COUNT(*)` on a write path a merchant triggers by hand, not a hot read.
+ * ✏️ **This said *"not a hot read"*, and two commits later it was one.**
+ * M24.4 put `report()` on `GET /v1/billing/subscription`, which the dashboard
+ * polls **every three seconds while a checkout is settling** — so one merchant
+ * mid-payment drives roughly 140 counts a minute across five tables, where the
+ * original claim assumed a merchant clicking Create by hand.
+ *
+ * 📌 **Still not cached, and now for a reason that survives the move.** Each
+ * count is a single indexed `COUNT(*)` on a tenant-scoped table, the poll is
+ * bounded (it stops the moment `settling` clears, typically seconds), and a
+ * cache would reintroduce exactly the drift these live counts exist to avoid —
+ * a stored figure that disagrees with the rows and refuses a merchant a write
+ * they are entitled to.
+ *
+ * ⚠️ **What would change the answer**: a second polled caller, or a metric
+ * whose count is not index-backed. Either makes this a measurement to redo
+ * rather than a comment to re-read.
  */
 @Injectable()
 export class UsageCounterService {

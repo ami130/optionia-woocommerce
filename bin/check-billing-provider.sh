@@ -829,6 +829,47 @@ else
   printf '        A crash-looping handler would never reach the dead-letter limit.\n'
 fi
 
+# --- 37. The subscription summary the dashboard actually reads -------------
+#
+# 🔴 **The backend shipped `usage[]` and the dashboard ignored it.** M24.4's
+# numbers reached the API and stopped there: `SubscriptionSummary` in the
+# dashboard declared no `usage` field and no component referenced it, so a
+# downgraded merchant was refused on create and never told what they were over
+# on. Every one of the 19 gates passed throughout.
+#
+# ⚠️ **Check 26 asserts the backend EMITS `settling`; nothing asserted the
+# dashboard CONSUMES it.** One-sided contract checks are how this drifted, and
+# the next field would drift the same way.
+#
+# 📌 **Field names, not shapes.** A full schema comparison across two languages
+# would be a parser; what actually breaks is a field the server sends and the
+# client never reads, and a name is enough to catch that.
+DASHBOARD_BILLING="optioniaWooCommerceFrontend/src/lib/billing/api.ts"
+MISSING_FIELDS=""
+
+for field in settling usage graceEndsAt currentPeriodEnd; do
+  grep -q "^\s*$field" "$DASHBOARD_BILLING" 2>/dev/null \
+    || MISSING_FIELDS="$MISSING_FIELDS $field"
+done
+
+if [ -z "$MISSING_FIELDS" ]; then
+  pass "the dashboard's summary type carries every field the API sends"
+else
+  fail "the dashboard never reads:$MISSING_FIELDS"
+  printf '        The API sends them; a field nothing consumes is a feature nobody sees.\n'
+fi
+
+# 🔴 M24.4's prompt is a UI act: the numbers must reach a screen.
+# ⚠️ **Excluding tests**, or a render test keeps this passing after the page
+# stops rendering it — measured: renaming the field in `page.tsx` alone left
+# this check green because the spec beside it still held the string.
+if grep -rq "overLimit" optioniaWooCommerceFrontend/src/app --include="page.tsx"; then
+  pass "an over-limit tenant is told so in the dashboard (M24.4)"
+else
+  fail "nothing in the dashboard renders the over-limit state"
+  printf '        "Prompt for explicit choices" cannot be met by an API field alone.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

@@ -17,6 +17,7 @@ import {
   openPortal,
   startCheckout,
   type InvoiceSummary,
+  type PlanUsage,
   type PurchasablePlan,
   type SubscriptionSummary,
 } from '@/lib/billing/api';
@@ -239,6 +240,8 @@ function CurrentPlan({
 
         <StatusNotice summary={summary} />
 
+        <UsageSection usage={summary.usage} />
+
         {canManage && (
           <div className="space-y-2">
             <Button onClick={onOpenPortal} disabled={portalPending}>
@@ -260,6 +263,65 @@ function CurrentPlan({
  * banner teaches a merchant to skip all of them; the settling state matters
  * more than a renewal date, and a grace deadline matters more than either.
  */
+/**
+ * What the tenant uses against what the plan allows (M24.4).
+ *
+ * 🔴 **The over-limit banner is the milestone's actual deliverable.** M24.4
+ * asks to *"prompt for explicit choices about what to disable"*, and a prompt
+ * is a UI act: the server shipped the numbers, and until this rendered them a
+ * downgraded merchant was refused on create and never told what they were over
+ * on.
+ *
+ * ⚠️ **It never offers to delete anything.** The same milestone says *"never
+ * silently delete merchant work"* — a button here that removed the excess would
+ * be that deletion with a dialog in front of it. The merchant is told which
+ * metric and by how much, and acts through the screens they already use.
+ */
+export function UsageSection({ usage }: { usage: PlanUsage[] }) {
+  if (usage.length === 0) {
+    return null;
+  }
+
+  const over = usage.filter((row) => row.overLimit);
+
+  return (
+    <div className="space-y-3">
+      {over.length > 0 && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p className="font-medium">Your plan no longer covers everything here.</p>
+            <p>
+              Nothing has been deleted and your storefront keeps working. To make changes
+              again, remove{' '}
+              {over
+                .map((row) => `${row.current - (row.limit ?? 0)} ${row.label}`)
+                .join(', and ')}
+              {' '}— or upgrade your plan.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="space-y-1">
+        {usage.map((row) => (
+          <div key={row.metric} className="flex justify-between text-sm">
+            <span className="text-muted-foreground">{row.label}</span>
+            <span className={row.overLimit ? 'font-medium text-destructive' : undefined}>
+              {/*
+                🔴 **`limit === null` is unlimited, never a ceiling of zero.**
+                The same inversion the server guards against — rendering it as
+                "3 of 0" would show the most permissive plan as the most
+                breached.
+              */}
+              {row.limit === null ? `${row.current} (unlimited)` : `${row.current} of ${row.limit}`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatusNotice({ summary }: { summary: SubscriptionSummary }) {
   if (summary.settling) {
     return (
