@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { requireTenantId } from '../common/context/request-context';
+import { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { DataSource, EntityManager } from 'typeorm';
 
 import { ConfigVersionService } from '../common/config-version.service';
@@ -132,6 +134,8 @@ export class AssignmentsService {
     private readonly products: ProductsRepository,
     private readonly configVersion: ConfigVersionService,
     private readonly dataSource: DataSource,
+    /* 📌 M24.2: assignments count against the plan. */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /** A set's live assignments. */
@@ -201,6 +205,37 @@ export class AssignmentsService {
     }
 
     return this.dataSource.transaction(async (manager) => {
+      /*
+       * 🔴 **M24.2: the plan's assignment allowance, counting only what is NEW.**
+       *
+       * ⚠️ **The write below is an UPSERT**, so re-assigning a target already
+       * live adds no row. Charging for `wanted.length` would refuse a merchant
+       * who re-saved the same picker selection — asking again for what they
+       * already have must never cost them their allowance.
+       *
+       * 📌 **Inside the transaction**, so the count and the inserts are one unit
+       * of work: counting outside it lets two concurrent saves both read "19 of
+       * 20" and both proceed.
+       */
+      const [{ live }] = (await manager.query(
+        `SELECT COUNT(*) AS live
+           FROM option_set_assignments
+          WHERE optionSetId = ?
+            AND deletedAt = ?
+            AND CONCAT(targetType, ':', targetRef) IN (${wanted.map(() => '?').join(', ') || "''"})`,
+        [
+          optionSetId,
+          LIVE_SENTINEL_SQL,
+          ...wanted.map((t) => `${t.targetType}:${t.targetRef}`),
+        ],
+      )) as { live: number }[];
+
+      const additions = wanted.length - Number(live);
+
+      for (let i = 0; i < additions; i += 1) {
+        await this.planLimits.assertWithinPlan(requireTenantId(), 'products_assigned', manager);
+      }
+
       for (const target of wanted) {
         /*
          * 🔴 **Upsert, not `SELECT`-then-`INSERT`.**

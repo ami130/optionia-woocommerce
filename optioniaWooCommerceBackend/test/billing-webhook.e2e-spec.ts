@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { ConfigDocumentBuilder } from '../src/option-sets/serialization/config-document';
 /* ⚠️ `* as`, not a default import — the same esModuleInterop gap as `stripe`. */
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
@@ -83,6 +84,22 @@ describe('Billing webhook (e2e)', () => {
   afterAll(async () => {
     /* Every run's rows, not just this one's: a failing run never reaches here. */
     await dataSource.query(`DELETE FROM billing_events WHERE providerEventId LIKE 'evt_e2e_%'`);
+
+    /*
+     * ⚠️ **The lifecycle test's own fixtures, removed before the tenants.**
+     * `option_sets` and `stores` are RESTRICT on `tenantId`, so leaving them
+     * makes the tenant delete below fail — and the suite reports a teardown
+     * error after every test has passed, which reads as a product failure.
+     */
+    await dataSource.query(
+      `DELETE FROM option_sets WHERE tenantId IN
+         (SELECT id FROM tenants WHERE slug LIKE 'whook-%')`,
+    );
+
+    await dataSource.query(
+      `DELETE FROM stores WHERE tenantId IN
+         (SELECT id FROM tenants WHERE slug LIKE 'whook-%')`,
+    );
 
     /* Invoices are RESTRICT on tenant, so they go before subscriptions and tenants. */
     await dataSource.query(
@@ -1024,6 +1041,176 @@ describe('Billing webhook (e2e)', () => {
 
       expect(row.processedAt).toBeNull();
       expect(Number(row.attempts)).toBe(0);
+    });
+  });
+  /**
+   * Phase 24's exit criteria, walked as one merchant (F135).
+   *
+   * 🔴 **Phase 24 was ticked with this untested, and the tick was wrong.** Its
+   * exit asks for *"the full lapse lifecycle tested end-to-end"* and *"no
+   * scenario in which a paid, then lapsed, then recovered merchant loses
+   * configuration"*. Coverage existed per stage and **nothing followed one
+   * merchant through** — so the phase's strongest promise, that configuration
+   * survives a lapse, was asserted nowhere.
+   *
+   * 📌 **The closest existing test asserts the BILLING FLAG only**: that a
+   * recovered subscription is `ACTIVE` with `graceEndsAt` null. It never looks
+   * at an option set. A merchant does not care whether a column cleared; they
+   * care whether their work is still there.
+   */
+  describe('the full lapse lifecycle (Phase 24 exit)', () => {
+    it('keeps a merchant’s configuration through fail, lapse and recovery', async () => {
+      const plan = await dataSource.getRepository(Plan).findOneOrFail({ where: { code: 'free' } });
+
+      seq += 1;
+      const providerSubscriptionId = `sub_${run}_${seq}_lifecycle`;
+
+      const tenant = await dataSource.getRepository(Tenant).save(
+        dataSource.getRepository(Tenant).create({
+          name: `Lifecycle ${run}-${seq}`,
+          slug: `whook-${run}-${seq}`,
+          planId: plan.id,
+          billingCurrency: 'EUR',
+        }),
+      );
+
+      const subscriptions = dataSource.getRepository(Subscription);
+      const subscription = await subscriptions.save(
+        subscriptions.create({
+          tenantId: tenant.id,
+          planId: plan.id,
+          provider: 'stripe',
+          providerCustomerId: `cus_${run}_${seq}`,
+          providerSubscriptionId,
+          status: SubscriptionStatus.ACTIVE,
+        }),
+      );
+
+      /*
+       * The merchant's work: a store and a published option set. This is what
+       * the criterion is about — everything below asserts it is still here.
+       */
+      const [store] = (await dataSource.query('SELECT UUID() AS id')) as { id: string }[];
+
+      await dataSource.query(
+        `INSERT INTO stores (id, tenantId, platform, name, storeUrl, status, configVersion,
+                             createdAt, updatedAt)
+         VALUES (?, ?, 'woocommerce', 'Lifecycle', ?, 'connected', 1, NOW(3), NOW(3))`,
+        [store.id, tenant.id, `https://lifecycle-${run}-${seq}.example.com`],
+      );
+
+      const [set] = (await dataSource.query('SELECT UUID() AS id')) as { id: string }[];
+
+      await dataSource.query(
+        `INSERT INTO option_sets (id, tenantId, storeId, name, status, createdAt, updatedAt)
+         VALUES (?, ?, ?, 'Engraving', 'published', NOW(3), NOW(3))`,
+        [set.id, tenant.id, store.id],
+      );
+
+      const survives = async (): Promise<{ sets: number; stores: number }> => {
+        const [row] = (await dataSource.query(
+          /* ⚠️ `sets` is a MySQL reserved word; the aliases are quoted names. */
+          `SELECT
+             (SELECT COUNT(*) FROM option_sets
+               WHERE tenantId = ? AND deletedAt = '1970-01-01 00:00:00.000') AS setCount,
+             (SELECT COUNT(*) FROM stores WHERE tenantId = ?) AS storeCount`,
+          [tenant.id, tenant.id],
+        )) as { setCount: number; storeCount: number }[];
+
+        return { sets: Number(row.setCount), stores: Number(row.storeCount) };
+      };
+
+      expect(await survives()).toEqual({ sets: 1, stores: 1 });
+
+      /* ── Stage 1: the payment fails, and a 14-day clock starts. ── */
+      const failed = signedEvent({
+        type: 'invoice.payment_failed',
+        data: {
+          object: {
+            id: `in_e2e_${run}_${seq}_fail`,
+            object: 'invoice',
+            status: 'open',
+            parent: { subscription_details: { subscription: providerSubscriptionId } },
+          },
+        },
+      });
+
+      expect((await post(failed.body, failed.signature)).status).toBe(200);
+
+      const lapsing = await subscriptions.findOneByOrFail({ id: subscription.id });
+
+      expect(lapsing.status).toBe(SubscriptionStatus.PAST_DUE);
+      expect(lapsing.graceEndsAt).not.toBeNull();
+
+      /* 🔴 Nothing is deleted when a payment fails. */
+      expect(await survives()).toEqual({ sets: 1, stores: 1 });
+
+      /* ── Stage 2: the grace period expires. ── */
+      await dataSource.query(
+        `UPDATE subscriptions SET graceEndsAt = DATE_SUB(NOW(3), INTERVAL 1 DAY) WHERE id = ?`,
+        [subscription.id],
+      );
+
+      /*
+       * 🔴 **The storefront still serves, which is ADR-116's whole point.**
+       * Asserted through the document builder rather than a flag: this is the
+       * path a customer's browser reaches, and it must not consult billing.
+       */
+      const documents = app.get(ConfigDocumentBuilder, { strict: false });
+      const lapsed = await documents.build(store.id);
+
+      expect(lapsed.plan.read_only).toBe(true);
+
+      /* 🔴 The store still has a servable document — the shop is not dark. */
+      expect(lapsed.config_version).toBe(1);
+      expect(lapsed.store_id).toBe(store.id);
+      expect(await survives()).toEqual({ sets: 1, stores: 1 });
+
+      /* ── Stage 3: the merchant pays. ── */
+      const paid = signedEvent({
+        type: 'invoice.paid',
+        data: {
+          object: {
+            id: `in_e2e_${run}_${seq}_paid`,
+            object: 'invoice',
+            status: 'paid',
+            currency: 'eur',
+            subtotal: 2900,
+            total_taxes: [{ amount: 609 }],
+            total: 3509,
+            created: 1_755_216_000,
+            status_transitions: { paid_at: 1_755_216_060 },
+            customer_address: { country: 'de' },
+            parent: { subscription_details: { subscription: providerSubscriptionId } },
+          },
+        },
+      });
+
+      expect((await post(paid.body, paid.signature)).status).toBe(200);
+
+      const recovered = await subscriptions.findOneByOrFail({ id: subscription.id });
+
+      expect(recovered.status).toBe(SubscriptionStatus.ACTIVE);
+      expect(recovered.graceEndsAt).toBeNull();
+
+      /*
+       * 🔴 **The criterion itself**: paid → lapsed → recovered, and the
+       * merchant's configuration is exactly as they left it.
+       */
+      expect(await survives()).toEqual({ sets: 1, stores: 1 });
+
+      const restored = await documents.build(store.id);
+
+      /*
+       * 🔴 **The plan state recovers with the subscription.** The rendered
+       * `option_sets` array is deliberately NOT asserted here: a document lists
+       * a set only when a matching `option_set_versions` snapshot exists, which
+       * is publishing's contract and is proven in `publish.e2e-spec`. What this
+       * criterion is about — *did the merchant lose configuration* — is the row
+       * count above, checked at all three stages.
+       */
+      expect(restored.plan.read_only).toBe(false);
+      expect(restored.plan.grace_ends_at).toBeNull();
     });
   });
 });

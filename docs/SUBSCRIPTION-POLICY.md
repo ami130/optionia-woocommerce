@@ -79,6 +79,10 @@ under our retention policy.
 Separately from payment, each plan includes a set allowance — option sets,
 connected stores, team seats, product assignments and storage.
 
+**Storage is the one allowance we do not yet enforce.** Files live on your own
+server, so we can measure them but not refuse an upload from here. We will
+contact you rather than surprise you.
+
 **Reaching a limit blocks new work, never existing work.** If you create your
 tenth option set on a plan that includes ten, the tenth keeps working and the
 eleventh is refused, with a message naming your allowance, your current usage,
@@ -120,6 +124,7 @@ worse than publishing nothing.
 | **Storefront keeps serving** | ✅ **structural** | `config-delivery` reads no billing state — there is no dependency to fail |
 | Over-limit blocks new work only | ✅ enforced | `PlanLimitGuard`, with usage reported on the subscription summary |
 | Storefront told the plan state | ✅ shipped | `plan.read_only` and `plan.grace_ends_at` in the config document (M24.5) |
+| Storage (`file_storage_mb`) | 🔴 **not enforced** | plugin-side by design: the bytes are on the merchant's own server, so the refusal has to reach the plugin's upload endpoint |
 | Dashboard read-only after grace | 🔴 **not enforced** | the state is computed and published; no write path refuses on it yet |
 | Rendering suspended at day 44 | 🔴 not implemented | operational until built |
 | 90-day retention and deletion | 🔴 not implemented | owned by Phase 26b |

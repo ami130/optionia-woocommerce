@@ -904,6 +904,48 @@ else
   printf '        Publishing a lifecycle the code does not implement is the worse failure.\n'
 fi
 
+# --- 39. Every plan limit has a guard on its creation path (M24.2) ---------
+#
+# 🔴 **Phase 24 was ticked with 2 of 5 limits enforced.** `option_sets` and
+# `team_seats` were guarded; `stores` and `products_assigned` were not, so a
+# Free tenant could connect unlimited stores against an allowance of one. Found
+# auditing the phase against its own exit criteria — a check that had not run.
+#
+# ⚠️ **A test calling the guard directly cannot catch this.** It proves the
+# guard decides correctly, not that a creation path consults it — the exact
+# shape of F130, where the guard shipped with no caller and fifteen green
+# tests. This check reads the call sites instead.
+UNGUARDED=""
+
+for pair in "option_sets:$SRC/option-sets/option-sets.service.ts" \
+  "team_seats:$SRC/tenants/team.service.ts" \
+  "stores:$SRC/stores/connect.service.ts" \
+  "products_assigned:$SRC/option-sets/assignments.service.ts"; do
+  metric="${pair%%:*}"
+  path="${pair#*:}"
+
+  grep -q "assertWithinPlan(.*'$metric'" "$path" 2>/dev/null \
+    || UNGUARDED="$UNGUARDED $metric"
+done
+
+if [ -z "$UNGUARDED" ]; then
+  pass "every enforceable plan limit is guarded on its creation path"
+else
+  fail "these plan limits are metered but never enforced:$UNGUARDED"
+  printf '        A tenant can exceed them freely; the meter is not the guard.\n'
+fi
+
+# 📌 `file_storage_mb` is deliberately absent above: the bytes are on the
+# merchant's own server, so the refusal has to reach the plugin's upload
+# endpoint. M24.2 says so, and the policy document records it as unenforced.
+if grep -q "file_storage_mb" docs/SUBSCRIPTION-POLICY.md 2>/dev/null \
+  || grep -q "plugin-side" docs/SUBSCRIPTION-POLICY.md 2>/dev/null; then
+  pass "storage's plugin-side limit is disclosed rather than assumed"
+else
+  fail "the policy does not record that storage is unenforced"
+  printf '        A limit sold and never applied is a promise the code does not keep.\n'
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

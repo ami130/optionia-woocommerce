@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { DataSource } from 'typeorm';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -48,16 +49,22 @@ import { UsageModule } from '../usage/usage.module';
     StoresService,
     {
       provide: ConnectService,
-      inject: [DataSource, AuditService, StoreStateService],
+      inject: [DataSource, AuditService, StoreStateService, PlanLimitGuard],
       useFactory: (
         dataSource: DataSource,
         audit: AuditService,
         state: StoreStateService,
+        /* 📌 M24.2: the plan allowance a new store counts against. */
+        planLimits: PlanLimitGuard,
       ): ConnectService =>
         // The dashboard URL is read once, here, so no flow builds a link from a
         // value it guessed — `authorize_url` must point at the dashboard, never
         // at the API.
-        new ConnectService(dataSource, audit, state, loadConfig().appUrl),
+        //
+        // ⚠️ `appUrl` is a positional string, so a dependency added after it
+        // must appear in BOTH `inject` and the argument list — a mismatch here
+        // is silent, and passes the wrong value rather than failing to boot.
+        new ConnectService(dataSource, audit, state, loadConfig().appUrl, planLimits),
     },
   ],
   exports: [ConnectService, StoreStateService, StoresService],

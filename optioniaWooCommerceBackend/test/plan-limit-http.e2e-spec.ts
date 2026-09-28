@@ -1,5 +1,6 @@
 /* ⚠️ `* as`, not a default import — the same esModuleInterop gap as `stripe`. */
 import * as request from 'supertest';
+import { PlanLimitGuard } from '../src/usage/plan-limit.guard';
 import { DataSource } from 'typeorm';
 
 import { createHarness, type Harness } from './harness';
@@ -39,9 +40,21 @@ describe('Plan limits over HTTP (e2e)', () => {
     storeId = await h.store('owner');
     tenantId = await h.tenantIdOf('owner');
 
-    /* The real Free allowance, pinned here rather than inherited. */
+    /*
+     * The allowances this suite asserts, pinned rather than inherited.
+     *
+     * ✏️ **Pro was added after the harness began raising every public plan.**
+     * `bootstrapTestApp` lifts all of them so unrelated fixtures are not
+     * refused mid-setup — which made the upgrade sentence read *"Upgrade to Pro
+     * for 100000 option sets"*. A suite asserting a number must pin **every**
+     * plan that number comes from, not only the one it puts the tenant on.
+     */
     await dataSource.query(
       `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', 2) WHERE code = 'free'`,
+    );
+
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', 50) WHERE code = 'pro'`,
     );
 
     await dataSource.query(
@@ -132,6 +145,38 @@ describe('Plan limits over HTTP (e2e)', () => {
     )) as { n: number }[];
 
     expect(Number(row.n)).toBe(2);
+  });
+
+  /**
+   * 🔴 **`stores` is enforced too — 2 of 5 limits was not "limits enforced".**
+   *
+   * ✏️ **Phase 24 was ticked with only `option_sets` and `team_seats`
+   * guarded.** A Free tenant could connect unlimited stores against an
+   * allowance of one. Found auditing the phase against its own exit criteria —
+   * a check I had not run.
+   *
+   * 📌 **Asserted at the service, not over the full handshake.** Creating a
+   * second store needs `initiate` → `authorize` → `exchange` with a real PKCE
+   * pair, which `connect-handshake.e2e-spec` owns and proves. What is in doubt
+   * here is only whether the limit is consulted at all, and that is one call.
+   */
+  it('refuses a store beyond the plan’s allowance', async () => {
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.stores', 1) WHERE code = 'free'`,
+    );
+
+    try {
+      const guard = h.app.get(PlanLimitGuard, { strict: false });
+
+      /* The tenant already holds one store, which is the whole allowance. */
+      await expect(guard.assertWithinPlan(tenantId, 'stores')).rejects.toThrow(
+        /Free plan allows 1 stores/,
+      );
+    } finally {
+      await dataSource.query(
+        `UPDATE plans SET limits = JSON_SET(limits, '$.stores', 100000) WHERE code = 'free'`,
+      );
+    }
   });
 
   /**

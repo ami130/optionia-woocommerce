@@ -159,6 +159,11 @@ export async function bootstrapTestApp(
   /*
    * 🔴 **Free's limits are raised for the e2e run, and ONLY for it.**
    *
+   * ✏️ **Every public plan, not only Free.** The first version raised Free
+   * alone, on the assumption that suites run as free tenants. They do not —
+   * `tenant()` puts them on Business, whose **10-store** allowance
+   * `connect-handshake` also exceeds while testing redemption failures.
+   *
    * M24.2 enforces `plans.limits` at write time, and Free's real allowance is
    * 10 option sets / 1 store / 1 seat. Most suites build far larger fixtures as
    * *setup* — `option-sets-http` alone creates 38 sets — so without this the
@@ -188,7 +193,7 @@ export async function bootstrapTestApp(
                                         '$.stores', 100000,
                                         '$.team_seats', 100000,
                                         '$.products_assigned', 100000)
-        WHERE code = 'free'`,
+        WHERE code IN ('free', 'pro', 'business')`,
     );
 
   return app;

@@ -110,6 +110,47 @@ describe('assignments (e2e)', () => {
    * stored row rather than the response, because the row is what the config
    * document reads.
    */
+  /**
+   * 🔴 **M24.2: assignments count against the plan — but only NEW ones.**
+   *
+   * ✏️ **Phase 24 was ticked with this path unguarded**, so a Free tenant could
+   * create unlimited assignments against an allowance of 20.
+   *
+   * ⚠️ **The write is an UPSERT**, so re-saving the same picker selection adds
+   * no row. Charging for every target in the request would refuse a merchant
+   * who pressed Save twice — asking again for what they already have must
+   * never cost them their allowance.
+   */
+  it('does not charge the plan for re-saving an assignment it already has', async () => {
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.products_assigned', 2)
+        WHERE code IN ('free', 'pro', 'business')`,
+    );
+
+    try {
+      await assign(['wc-1', 'wc-2']).expect(200);
+
+      /* The same two again: no new rows, so no new allowance consumed. */
+      await assign(['wc-1', 'wc-2']).expect(200);
+
+      const [row] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM option_set_assignments
+          WHERE optionSetId = ? AND deletedAt = '1970-01-01 00:00:00.000'`,
+        [setId],
+      );
+
+      expect(Number(row.n)).toBe(2);
+
+      /* 🔴 And a genuinely NEW third target is refused, at the limit. */
+      await assign(['wc-1', 'wc-2', 'wc-3']).expect(429);
+    } finally {
+      await dataSource.query(
+        `UPDATE plans SET limits = JSON_SET(limits, '$.products_assigned', 100000)
+          WHERE code IN ('free', 'pro', 'business')`,
+      );
+    }
+  });
+
   it('writes mode=manual and targetType=product', async () => {
     await assign(['wc-1']).expect(200);
 

@@ -158,6 +158,17 @@ describe('Plan usage reporting (e2e)', () => {
    * plan as the most breached.
    */
   it('never reports an unlimited metric as over', async () => {
+    /*
+     * ✏️ **Business's `option_sets` is seeded `null`, and the harness overwrites
+     * it.** `bootstrapTestApp` raises every public plan so unrelated fixtures
+     * are not refused, which turns unlimited into 100000 — so this suite puts
+     * the `null` back, because *unlimited* is exactly what it is asserting.
+     */
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', CAST('null' AS JSON))
+        WHERE code = 'business'`,
+    );
+
     await dataSource.query(
       `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'business') WHERE id = ?`,
       [tenantId],

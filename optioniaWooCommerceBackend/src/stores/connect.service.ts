@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { createHash } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -70,6 +71,8 @@ export class ConnectService {
     private readonly audit: AuditService,
     private readonly state: StoreStateService,
     private readonly appUrl: string,
+    /* 📌 M24.2: the plan allowance for stores. */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /**
@@ -501,6 +504,21 @@ export class ConnectService {
 
       return { storeId: existing[0].id, reconnected: true };
     }
+
+    /*
+     * 🔴 **M24.2: the plan's store allowance, checked only for a NEW store.**
+     *
+     * ⚠️ **After the reconnect branch returns, deliberately.** A merchant whose
+     * existing store re-handshakes — a plugin upgrade, a moved site, a routine
+     * reconnect — must never be refused: they are not consuming another store,
+     * and blocking that would take a working shop offline over a limit they
+     * have not exceeded.
+     *
+     * 📌 **Inside the caller's transaction**, so the count and the insert are
+     * one unit of work; counting outside it lets two concurrent handshakes both
+     * read "0 of 1" and both proceed.
+     */
+    await this.planLimits.assertWithinPlan(tenantId, 'stores', manager);
 
     const storeId = uuidv7();
 
