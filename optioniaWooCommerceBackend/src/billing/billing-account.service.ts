@@ -1,4 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { PlanLimitGuard, type PlanUsage } from '../usage/plan-limit.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -50,6 +51,13 @@ export interface SubscriptionSummary {
    * `customer.subscription.updated` and by nothing else.
    */
   readonly settling: boolean;
+
+  /**
+   * 🔴 **M24.4** — every metered metric, not only the breached ones. A card
+   * reading *"9 of 10 option sets"* before the merchant is blocked is the
+   * difference between a warning and a surprise.
+   */
+  readonly usage: PlanUsage[];
 }
 
 /** One invoice, as a merchant needs to see it. */
@@ -103,6 +111,8 @@ export class BillingAccountService {
     private readonly invoices: Repository<Invoice>,
     @InjectRepository(PlanPrice)
     private readonly prices: Repository<PlanPrice>,
+    /* 📌 M24.4: what the tenant uses against what the plan allows. */
+    private readonly planLimits: PlanLimitGuard,
   ) {}
 
   /** E1 — the current subscription, with the plan and price it is pinned to. */
@@ -110,7 +120,16 @@ export class BillingAccountService {
     const subscription = await this.load({ withPrice: true });
     const price = subscription.planPrice;
 
+    /*
+     * 🔴 **M24.4: usage rides with the plan, not on a second endpoint.** The
+     * over-limit banner needs both, and two requests could show a plan and a
+     * usage figure fetched moments apart — a merchant who just upgraded would
+     * see their new plan beside their old verdict.
+     */
+    const usage = await this.planLimits.report(requireTenantId());
+
     return {
+      usage,
       planCode: subscription.plan?.code ?? 'unknown',
       planName: subscription.plan?.name ?? 'Unknown',
       status: subscription.status,

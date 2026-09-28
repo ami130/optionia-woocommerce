@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { UsageModule } from '../usage/usage.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuthModule } from '../auth/auth.module';
@@ -29,6 +30,8 @@ import { CheckoutService } from './checkout.service';
  */
 @Module({
   imports: [
+    /* 📌 M24.4: the subscription summary carries usage against limits. */
+    UsageModule,
     TypeOrmModule.forFeature([PlanPrice, Subscription, Tenant, Invoice]),
     AuthModule,
     BillingModule,

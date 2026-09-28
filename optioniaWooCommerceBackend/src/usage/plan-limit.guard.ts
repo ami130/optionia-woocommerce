@@ -4,6 +4,23 @@ import { DataSource, EntityManager } from 'typeorm';
 import { DomainException } from '../common/errors/domain.exception';
 import { UsageCounterService, type CountableMetric } from './usage-counter.service';
 
+/**
+ * One metric's usage against the plan (M24.4).
+ *
+ * 📌 **`atLimit` and `overLimit` are different questions.** At the limit the
+ * merchant is blocked from creating more; *over* it they were downgraded into a
+ * state they did not choose, and only that second case needs the banner asking
+ * them to pick what to disable.
+ */
+export interface PlanUsage {
+  readonly metric: CountableMetric;
+  readonly label: string;
+  readonly current: number;
+  readonly limit: number | null;
+  readonly overLimit: boolean;
+  readonly atLimit: boolean;
+}
+
 /** What a metric is called when a merchant reads it. */
 const METRIC_LABEL: Record<CountableMetric, string> = {
   option_sets: 'option sets',
@@ -96,6 +113,75 @@ export class PlanLimitGuard {
         params: { limit, current, plan: plan.code },
       },
     ]);
+  }
+
+  /**
+   * What the tenant is using against what their plan allows (M24.4).
+   *
+   * 🔴 **Reports; never repairs.** M24.4 asks to *"prompt for explicit choices
+   * about what to disable"* and, in the same breath, to *"never silently delete
+   * merchant work"*. An endpoint that offered to delete the excess would be
+   * that silent deletion with a dialog in front of it — so this returns the
+   * numbers and the merchant acts through the screens they already use.
+   *
+   * 📌 **Every metric, not only the breached ones.** A dashboard showing "9 of
+   * 10 option sets" before the merchant is blocked is the difference between a
+   * warning and a surprise.
+   */
+  async report(tenantId: string, manager?: EntityManager): Promise<PlanUsage[]> {
+    const runner = manager ?? this.dataSource;
+
+    const [plan] = (await runner.query(
+      `SELECT p.limits FROM tenants t JOIN plans p ON p.id = t.planId WHERE t.id = ?`,
+      [tenantId],
+    )) as { limits: unknown }[];
+
+    if (plan === undefined) {
+      return [];
+    }
+
+    const limits = this.asLimits(plan.limits);
+
+    const metrics: CountableMetric[] = [
+      'option_sets',
+      'stores',
+      'team_seats',
+      'products_assigned',
+      'file_storage_mb',
+    ];
+
+    const usage: PlanUsage[] = [];
+
+    for (const metric of metrics) {
+      const limit = limits[metric];
+
+      /*
+       * ⚠️ **A metric the plan does not mention is not reported.** Listing it
+       * as "0 of unlimited" would put a row in the merchant's dashboard for
+       * something their plan has no opinion about.
+       */
+      if (limit === undefined) {
+        continue;
+      }
+
+      const current = await this.counter.count(tenantId, metric, manager);
+
+      usage.push({
+        metric,
+        label: METRIC_LABEL[metric],
+        current,
+        limit,
+        /*
+         * 🔴 **`null` is unlimited and can never be over.** The same inversion
+         * the guard protects against: treating it as 0 would report the most
+         * permissive plan as the most breached.
+         */
+        overLimit: limit !== null && current > limit,
+        atLimit: limit !== null && current >= limit,
+      });
+    }
+
+    return usage;
   }
 
   /**

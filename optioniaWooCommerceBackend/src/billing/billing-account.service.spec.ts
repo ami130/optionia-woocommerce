@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import type { PlanLimitGuard } from '../usage/plan-limit.guard';
 import { Repository } from 'typeorm';
 
 import * as requestContext from '../common/context/request-context';
@@ -113,7 +114,10 @@ describe('BillingAccountService', () => {
     } as unknown as Repository<PlanPrice>;
 
     return {
-      service: new BillingAccountService(provider, subscriptions, invoices, prices),
+      service: new BillingAccountService(provider, subscriptions, invoices, prices, {
+        /* 📌 M24.4: usage is proven in the e2e; this spec is about the plan card. */
+        report: async () => [],
+      } as unknown as PlanLimitGuard),
       subscriptions,
       invoices,
       updates,
@@ -128,6 +132,13 @@ describe('BillingAccountService', () => {
       const { service } = build();
 
       await expect(service.summary()).resolves.toEqual({
+        /*
+         * 📌 **Empty because this spec's guard is a stub.** M24.4's usage is
+         * proven against real plans and real counts in `plan-usage.e2e-spec`;
+         * what this assertion still owns is the plan card's exact shape, and
+         * `toEqual` is exhaustive so a new field cannot arrive unnoticed.
+         */
+        usage: [],
         planCode: 'pro',
         planName: 'Pro',
         status: SubscriptionStatus.ACTIVE,
