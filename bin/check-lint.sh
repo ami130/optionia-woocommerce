@@ -57,6 +57,30 @@ for project in optioniaWooCommerceBackend optioniaWooCommerceFrontend; do
   fi
 done
 
+# --- The backend's own doc check, which CI runs and bin/check.sh did not ------
+#
+# 🔴 **`invoices` and `plan_prices` went undocumented for four days** while every
+# gate here was green, because `bin/check-docs.sh` lives in the backend and runs
+# only in CI. Same blind spot as the lint errors above, found on the same push.
+#
+# ⚠️ **It needs a database with migrations applied**, so it is SKIPPED rather
+# than failed when one is unreachable — a gate that fails on a laptop with MySQL
+# stopped is a gate people stop running. CI always has one.
+DOCS="$ROOT/optioniaWooCommerceBackend/bin/check-docs.sh"
+
+if [ ! -f "$DOCS" ]; then
+  fail "the backend's doc check is missing"
+elif [ ! -d "$ROOT/optioniaWooCommerceBackend/node_modules" ]; then
+  printf '\033[33mskip\033[0m  DATABASE.md: dependencies not installed\n'
+elif (cd "$ROOT/optioniaWooCommerceBackend" && bash bin/check-docs.sh >/dev/null 2>&1); then
+  pass "docs/DATABASE.md still describes the schema migrations produce"
+else
+  # ✏️ **The output is shown, unlike the lint checks above.** This one names the
+  # exact table or foreign key, and hiding that would cost a round trip.
+  fail "docs/DATABASE.md disagrees with the schema"
+  (cd "$ROOT/optioniaWooCommerceBackend" && bash bin/check-docs.sh 2>&1 | grep -E '✗' | sed 's/^/        /') || true
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

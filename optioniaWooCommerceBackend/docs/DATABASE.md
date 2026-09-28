@@ -406,7 +406,15 @@ order reporting, and a retry must not double-count revenue.
 ### `order_selections` — [ADR-016](DECISIONS.md#adr-016--option_key-outlives-its-option-by-design)
 
 `id`, `order_event_id` FK, `option_key`, `option_label`, `value_key`,
-`value_label`, `price_delta_minor` BIGINT, `config_version` BIGINT.
+`value_label`, `option_set_id` CHAR(36) NULL, `price_delta_minor` BIGINT,
+`config_version` BIGINT.
+
+`option_set_id` is denormalised and unconstrained for the same reason
+`option_key` is (F150, M25.3): it answers *"what did this option earn for that
+set"*, and a foreign key would either block a set's deletion or cascade last
+quarter's revenue away. **Null for every order placed before the plugin sent
+it**, and nothing can backfill it — the plugin's older per-line meta is a flat
+list of the sets a line touched and cannot say which option belongs to which.
 
 **No foreign key to `options` or `option_values`, deliberately.** Phase 4 proved a
 deleted option still completes an order; an order is a historical fact and does
@@ -438,6 +446,37 @@ cannot be measured cannot be sold.
 
 `provider` is a plain string so D1 (billing provider, still open) fits without a
 migration.
+
+### `plan_prices` — [ADR-117](DECISIONS.md#adr-117--grandfathering)
+
+`id`, `plan_id` FK, `currency` CHAR(3), `interval`, `amount_minor` BIGINT,
+`provider_price_id` VARCHAR(128), `retired_at`, `created_at`.
+
+🔴 **A price is a ROW, never a column on the plan.** ADR-117 grandfathers prices
+indefinitely, and that is enforced structurally rather than by policy: a
+subscription pins `plan_price_id`, so editing a plan's price inserts a new row
+and retires the old one instead of rewriting what anyone already bought. A price
+column on `plans` would make a retroactive rise a single `UPDATE`.
+
+⚠️ **`retired_at` rather than a delete.** A subscription can still point at it,
+and `ON DELETE RESTRICT` on that pin is what makes the pointer trustworthy.
+
+### `invoices` — [ADR-115](DECISIONS.md#adr-115--stripe-tax)
+
+`id`, `tenant_id` FK, `subscription_id` FK, `provider_invoice_id` VARCHAR(128),
+`number`, `status`, `currency` CHAR(3), `subtotal_minor`, `tax_minor`,
+`total_minor` all BIGINT, `country` CHAR(2), `vat_number`, `issued_at`,
+`paid_at`, `hosted_url`, `pdf_url`.
+
+🔴 **Tax is a compliance record, not a display figure.** ADR-114 makes ParseLab
+merchant of record, so selling to EU consumers creates a VAT liability from the
+first sale with no threshold — these rows are what a return is filed from.
+`subtotal + tax = total` is enforced by a CHECK constraint (F92/D2), because an
+invoice that does not add up is a filing that does not either.
+
+⚠️ **`subscription_id` is `SET NULL`, not `CASCADE`.** A cancelled subscription
+must not take its invoice history with it; the invoice outlives what produced
+it, which is the same reasoning `order_events` applies to revenue.
 
 ### `usage_records`
 
@@ -720,9 +759,13 @@ order_selections.order_event_id → order_events(id)  ON DELETE CASCADE
 order_selections.option_key     → (no FK — ADR-016)
 
 -- Billing ------------------------------------------------------------------
-subscriptions.tenant_id    → tenants(id)            ON DELETE RESTRICT
-subscriptions.plan_id      → plans(id)              ON DELETE RESTRICT
-usage_records.tenant_id    → tenants(id)            ON DELETE CASCADE
+subscriptions.tenant_id       → tenants(id)         ON DELETE RESTRICT
+subscriptions.plan_id         → plans(id)           ON DELETE RESTRICT
+subscriptions.plan_price_id   → plan_prices(id)     ON DELETE RESTRICT
+plan_prices.plan_id           → plans(id)           ON DELETE RESTRICT
+invoices.tenant_id            → tenants(id)         ON DELETE RESTRICT
+invoices.subscription_id      → subscriptions(id)   ON DELETE SET NULL
+usage_records.tenant_id       → tenants(id)         ON DELETE CASCADE
 
 -- Operational --------------------------------------------------------------
 webhook_deliveries.store_id → stores(id)            ON DELETE CASCADE
