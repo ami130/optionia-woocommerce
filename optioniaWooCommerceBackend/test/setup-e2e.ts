@@ -37,6 +37,30 @@ import { config as loadDotenv } from 'dotenv';
 process.env.DB_NAME ??= 'optionia_woo_test';
 process.env.NODE_ENV ??= 'test';
 
+/*
+ * 🔴 **No mail leaves this machine, whatever `.env` says (F78).**
+ *
+ * This is the one override here that is **not** `??=`, and the difference is
+ * deliberate: a developer's `.env` legitimately carries a real `SMTP_HOST` for
+ * testing delivery by hand, and `??=` would leave it in place.
+ *
+ * ⚠️ **F78 is what this prevents, and it already happened once.** With
+ * `SMTP_HOST` populated, every e2e run sent real verification mail to
+ * addresses like `e2e-…@optionia.test`, and every one bounced *"Address not
+ * found"* into the owner's real inbox. The suite creates users constantly —
+ * that is its job — so the volume is the whole suite, not one message.
+ *
+ * 🔴 **Until now the protection was a person remembering to empty the file.**
+ * That was described in this repository as a guard; it was not one. Emptying
+ * `SMTP_HOST` here makes `loadMailConfig()` choose `MailTransport.LOG`, which
+ * still returns a message id, so `email_deliveries` rows are still written and
+ * the mail assertions still prove what they proved before.
+ *
+ * 📌 The credentials are left alone: without a host they are never used, and
+ * blanking them would hide a config error rather than prevent a send.
+ */
+process.env.SMTP_HOST = '';
+
 process.env.THROTTLE_SHORT_LIMIT ??= '100000';
 process.env.THROTTLE_DEFAULT_LIMIT ??= '100000';
 process.env.THROTTLE_SUSTAINED_LIMIT ??= '100000';
