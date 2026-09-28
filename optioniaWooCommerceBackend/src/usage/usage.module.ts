@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { UsageRecord } from './entities/usage-record.entity';
+import { UsageCounterService } from './usage-counter.service';
 import { UsageService } from './usage.service';
 
 /**
@@ -14,7 +15,8 @@ import { UsageService } from './usage.service';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([UsageRecord])],
-  providers: [UsageService],
-  exports: [UsageService],
+  /* 📌 M24.1: the counter is what Phase 24's guards compare against. */
+  providers: [UsageService, UsageCounterService],
+  exports: [UsageService, UsageCounterService],
 })
 export class UsageModule {}
