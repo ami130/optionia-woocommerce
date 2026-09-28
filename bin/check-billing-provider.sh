@@ -1135,14 +1135,26 @@ fi
 
 # ⚠️ **And the exemption must stay rare enough to read.** It is the only way
 # through a global guard, so a growing list is the policy quietly dissolving.
-EXEMPT=$(grep -rl "WritableWhenLapsed()" "$SRC" --include="*.controller.ts" 2>/dev/null | wc -l | tr -d ' ')
+# ✏️ **`grep -rl` counts FILES, and the first draft of this ceiling did too.**
+# Measured: two method-level exemptions added inside one controller left it
+# reporting "only 2 controller(s)" and passing. That is gate 39's per-file
+# blindness, which this repository already fixed once — ten exemptions in one
+# file dissolve the policy exactly as well as ten files.
+#
+# 📌 **`grep -ro` counts OCCURRENCES**, which is what the ceiling is about: every
+# one of them is a route that keeps working while the merchant is told their
+# editing is paused.
+EXEMPT=$(grep -ro "WritableWhenLapsed()" "$SRC" --include="*.controller.ts" 2>/dev/null | wc -l | tr -d ' ')
 
+# The decorator's own definition is not an exemption; it lives outside
+# `*.controller.ts`, so the include pattern already excludes it.
 if [ "$EXEMPT" -le 2 ]; then
-  pass "only $EXEMPT controller(s) are exempt from the lapse guard"
+  pass "only $EXEMPT exemption(s) from the lapse guard"
 else
-  fail "$EXEMPT controllers are exempt from the lapse guard — the policy is dissolving"
-  printf '        Each exemption is a route that keeps working while the merchant\n'
-  printf '        is told their editing is paused. Two is the documented ceiling.\n'
+  fail "$EXEMPT exemptions from the lapse guard — the policy is dissolving"
+  printf '        Each one is a route that keeps working while the merchant is\n'
+  printf '        told their editing is paused. Two is the documented ceiling,\n'
+  printf '        and it counts CALL SITES, not files (gate 39 learned this).\n'
 fi
 
 # --- 44. Revenue per option set is attributed per SELECTION (F150) ----------

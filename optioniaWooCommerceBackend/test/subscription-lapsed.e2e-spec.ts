@@ -2,6 +2,7 @@
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { PlatformStaff } from '../src/admin/entities/platform-staff.entity';
 import { generateStoreToken } from '../src/common/crypto/tokens';
 import { createHarness, type Harness } from './harness';
 
@@ -233,6 +234,60 @@ describe('Lapsed subscriptions (e2e)', () => {
       .send({ email: 'nobody@example.com', password: 'wrong-password' });
 
     expect(attempted.body.error?.code).not.toBe('SUBSCRIPTION_LAPSED');
+  });
+
+  /**
+   * 🔴 **Platform staff are not refused by their OWN lapsed subscription**
+   * (F162).
+   *
+   * ⚠️ **Staff identity is a `platform_staff` row; the credential is an
+   * ordinary tenant JWT.** `JwtAuthGuard` sets `ctx.tenantId` from it, so a
+   * support engineer who is also a tenant member carries a tenant id — and
+   * without the staff check their personal lapse would lock them out of
+   * platform pricing, which has nothing to do with their own bill.
+   *
+   * 📌 **Not reachable while `platform_staff` is empty**, and Phase 26 is the
+   * phase that fills it. Pinned now rather than discovered then.
+   */
+  it('never refuses platform staff over their own lapsed subscription', async () => {
+    await lapsed();
+
+    const [user] = (await dataSource.query(`SELECT id FROM users WHERE email = ?`, [
+      'lapsed-owner@example.com',
+    ])) as { id: string }[];
+
+    const staff = dataSource.getRepository(PlatformStaff);
+    const existing = await staff.findOne({ where: { userId: user.id } });
+
+    await staff.save(
+      existing
+        ? Object.assign(existing, { role: 'super_admin', revokedAt: null })
+        : staff.create({ userId: user.id, role: 'super_admin', grantedAt: new Date() }),
+    );
+
+    try {
+      /*
+       * A platform write, on a tenant whose own subscription has lapsed. What
+       * matters is that it is not the LAPSE refusal — the route may still
+       * answer 400 for a body this test does not build.
+       */
+      const response = await api()
+        .patch('/v1/admin/plans/free/visibility')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isPublic: true });
+
+      /*
+       * ✏️ **The path is load-bearing, and my first attempt had it wrong.** I
+       * posted to `/prices`, which does not exist — the route is `/price` — so
+       * the request 404'd before any guard ran and the test passed with the
+       * staff exemption deliberately removed. A test that cannot reach the code
+       * it is about proves nothing.
+       */
+      expect(response.status).not.toBe(404);
+      expect(response.body.error?.code).not.toBe('SUBSCRIPTION_LAPSED');
+    } finally {
+      await dataSource.query(`DELETE FROM platform_staff WHERE userId = ?`, [user.id]);
+    }
   });
 
   /**

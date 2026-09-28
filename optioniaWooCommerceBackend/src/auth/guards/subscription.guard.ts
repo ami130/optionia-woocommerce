@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { DataSource } from 'typeorm';
 
+import { REQUIRED_STAFF_ROLES } from '../../admin/staff.guard';
 import { getContext } from '../../common/context/request-context';
 import { DomainException } from '../../common/errors/domain.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
@@ -52,6 +53,11 @@ const MUTATIONS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
  * 🔴 **Paying.** `@WritableWhenLapsed()` exempts checkout and subscription
  * management. A read-only state that blocks the payment which would lift it is
  * a trap rather than a policy.
+ *
+ * 🔴 **The platform realm.** Staff carry an ordinary tenant JWT, so a support
+ * engineer whose own subscription lapsed would otherwise be refused the
+ * platform pricing routes (F162). A staff route is recognised by
+ * `REQUIRED_STAFF_ROLES`, which `StaffGuard` requires of every one of them.
  */
 @Injectable()
 export class SubscriptionGuard implements CanActivate {
@@ -98,6 +104,35 @@ export class SubscriptionGuard implements CanActivate {
     );
 
     if (standsAside) {
+      return true;
+    }
+
+    /*
+     * 🔴 **The platform realm is not a tenant, and its token looks like one**
+     * (F162).
+     *
+     * Staff identity is a `platform_staff` row keyed on `userId`; the credential
+     * is an **ordinary tenant JWT**, and `JwtAuthGuard` sets
+     * `ctx.tenantId = claims.tid` from it. So a staff member who is also a
+     * tenant member carries a tenant id — and without this check, their own
+     * lapsed subscription would refuse them `POST /v1/admin/plans`. A support
+     * engineer whose personal trial expired would be locked out of platform
+     * pricing.
+     *
+     * ⚠️ **Not reachable while `platform_staff` is empty, and Phase 26 is the
+     * phase that fills it.** Recorded and fixed now rather than found then.
+     *
+     * 📌 **`REQUIRED_STAFF_ROLES` is the right marker.** `StaffGuard` **fails
+     * closed** on a staff route that declares no roles, so every reachable one
+     * carries this metadata — and a tenant route can never carry it by
+     * accident, because nothing else sets it.
+     */
+    const isStaffRoute = this.reflector.getAllAndOverride<readonly string[]>(
+      REQUIRED_STAFF_ROLES,
+      [context.getHandler(), context.getClass()],
+    );
+
+    if (isStaffRoute !== undefined && isStaffRoute.length > 0) {
       return true;
     }
 
@@ -152,10 +187,19 @@ export class SubscriptionGuard implements CanActivate {
    * claim.
    */
   private async hasLapsed(tenantId: string): Promise<boolean> {
+    /*
+     * 📌 **One row at most, guaranteed by `uq_subscriptions_tenant`** — a UNIQUE
+     * index on `tenantId`. An earlier draft added `ORDER BY graceEndsAt DESC`,
+     * which is harmless and **misleading**: it implies the schema permits
+     * several subscriptions per tenant, which it forbids. A reader should not
+     * have to check the index to know that.
+     *
+     * Measured at 0.08 ms on the unique index; the `IS NOT NULL` filter keeps a
+     * healthy tenant from carrying a row through to the date comparison below.
+     */
     const [row] = (await this.dataSource.query(
       `SELECT graceEndsAt FROM subscriptions
         WHERE tenantId = ? AND graceEndsAt IS NOT NULL
-        ORDER BY graceEndsAt DESC
         LIMIT 1`,
       [tenantId],
     )) as { graceEndsAt: Date | null }[];

@@ -231,19 +231,46 @@ function AttachSection({
         */}
         <Figure
           label="Average order, with options"
-          value={withOptions === null ? '—' : (money(withOptions) ?? `${withOptions}`)}
-          note={withOptions === null ? 'No such orders yet' : undefined}
+          {...average(withOptions, money, 'No such orders yet')}
         />
         <Figure
           label="Average order, without"
-          value={
-            withoutOptions === null ? '—' : (money(withoutOptions) ?? `${withoutOptions}`)
-          }
-          note={withoutOptions === null ? 'Every order used options' : undefined}
+          {...average(withoutOptions, money, 'Every order used options')}
         />
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * An average order value, and why it is absent when it is.
+ *
+ * 🔴 **A `null` currency must NOT fall through to the raw number** (F161). Every
+ * figure here is in **minor units**, so `9000` means £90.00 — and printing it
+ * bare is exactly the mislabelling the currency field was added to prevent. I
+ * shipped that fallback one function below the guard that forbids it.
+ *
+ * ⚠️ **Two different reasons produce a dash, and they need different notes.**
+ * *No orders of this kind* is a fact about the shop; *no single currency* is a
+ * fact about what can be displayed. Collapsing them would tell a merchant with
+ * plenty of option orders that they have none.
+ */
+function average(
+  minor: number | null,
+  money: (minor: number) => string | null,
+  emptyNote: string,
+): { value: string; note?: string } {
+  if (minor === null) {
+    return { value: '—', note: emptyNote };
+  }
+
+  const formatted = money(minor);
+
+  if (formatted === null) {
+    return { value: '—', note: 'Shown only in a single currency' };
+  }
+
+  return { value: formatted };
 }
 
 function Figure({
@@ -292,9 +319,14 @@ function RankedSection<T extends OptionRevenue | ValueRevenue>({
             <li key={rowKey(row)} className="flex items-baseline justify-between py-2">
               <span className="truncate pr-4 text-sm">{name(row)}</span>
               <span className="text-muted-foreground shrink-0 text-sm tabular-nums">
-                {money(row.revenueMinor) ?? ''}
-                {money(row.revenueMinor) === null ? '' : ' · '}
-                {row.orders} {row.orders === 1 ? 'order' : 'orders'}
+                {/*
+                  Formatted once. The earlier form called `money()` twice per row
+                  to decide whether to print a separator, which is the same
+                  question asked twice and drifts the moment one changes.
+                */}
+                {[money(row.revenueMinor), `${row.orders} ${row.orders === 1 ? 'order' : 'orders'}`]
+                  .filter((part): part is string => part !== null)
+                  .join(' · ')}
               </span>
             </li>
           ))}

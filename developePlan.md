@@ -30591,6 +30591,44 @@ moved from disabled to enabled, so that floor was stale. **Lowered to 2 with the
 reason recorded** — a disabled count that only ever rises would mean the product
 never finishes anything.
 
+#### Four defects found auditing 25-2, three of them mine (2026-09-28)
+
+🔴 **F161 was live and merchant-visible.** The analytics page's two
+average-order figures fell through to `${minor}` when the currency was unknown,
+printing a bare **`9000`** where the value is £90.00 — **the exact mislabelling
+the `currency` field was added to prevent**, written one function below the guard
+that forbids it. My multi-currency render test asserted only that a *list row*
+withheld money and never looked at the averages panel.
+
+Now a shared `average()` helper, and *"no such orders"* is distinguished from
+*"no single currency"* — collapsing them would tell a merchant with plenty of
+option orders that they have none.
+
+🟡 **F162 — `SubscriptionGuard` could block platform staff.** Staff identity is a
+`platform_staff` row keyed on `userId`; the credential is an **ordinary tenant
+JWT**, and `JwtAuthGuard` sets `ctx.tenantId` from its claim. So a support
+engineer who is also a tenant member carries a tenant id, and their **own** lapsed
+subscription would have refused them `PATCH /admin/plans/:code/visibility`. Not
+reachable while `platform_staff` is empty — and **Phase 26 is the phase that
+fills it**. Fixed by recognising `REQUIRED_STAFF_ROLES`, which `StaffGuard` fails
+closed without, so every reachable staff route carries it.
+
+🟡 **F163 — gate 43's exemption ceiling counted FILES.** `grep -rl` lists files,
+so two method-level exemptions inside one controller left it reporting *"only 2
+controller(s)"* and passing — measured. **That is gate 39's per-file blindness,
+which this repository already fixed once.** Now `grep -ro`, counting call sites.
+
+🟢 **F164 — a misleading query.** The guard's `ORDER BY graceEndsAt DESC` implied
+a tenant can hold several subscriptions; `uq_subscriptions_tenant` is UNIQUE on
+`tenantId` and forbids it. Removed. Measured at **0.08 ms** per mutation on that
+index, so the guard is free.
+
+✏️ **And my F162 test proved nothing until it was corrected.** It posted to
+`/admin/plans/free/prices`, which does not exist — the route is `/price` — so the
+request 404'd before any guard ran, and it **passed with the fix deliberately
+removed**. It now asserts `status !== 404` as well, because a test that cannot
+reach the code it is about is not a test.
+
 #### Stage order
 
 ```text

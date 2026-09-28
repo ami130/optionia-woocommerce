@@ -161,6 +161,58 @@ describe('Analytics summary', () => {
   });
 
   /**
+   * 🔴 **And the AVERAGES withhold too — this is F161, shipped and live.**
+   *
+   * ✏️ **The test above looked only at a list row.** The average-order figures
+   * fell through to `${minor}` when the currency was null, printing a bare
+   * `9000` where the value is £90.00 — the exact mislabelling the currency field
+   * exists to prevent, written one function below the guard that forbids it.
+   *
+   * ⚠️ **Asserting the raw numbers are absent, not that a dash is present.** A
+   * dash could appear for the unrelated reason that there are no such orders;
+   * what must never happen is a minor-unit integer reaching the screen.
+   */
+  it('never prints a raw minor-unit amount when the currency is unknown', () => {
+    const { container } = render(<Summary data={summary({ currency: null })} />);
+
+    /* 9000 and 4000 are the two averages in the fixture, in minor units. */
+    expect(container.textContent).not.toContain('9000');
+    expect(container.textContent).not.toContain('4000');
+
+    /* And the merchant is told WHY the figure is missing. */
+    expect(container.textContent).toContain('single currency');
+  });
+
+  /**
+   * ⚠️ **"No such orders" and "no single currency" are different absences.**
+   * Collapsing them would tell a merchant with plenty of option orders that they
+   * have none — a fact about the shop stated where a fact about display belongs.
+   */
+  it('distinguishes having no such orders from having no single currency', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          attach: {
+            orders: 10,
+            ordersWithOptions: 10,
+            rate: 1,
+            optionRevenueMinor: 12_000,
+            totalRevenueMinor: 90_000,
+            averageOrderValueWithOptionsMinor: 9_000,
+            /* Every order used options, so there is no "without" average. */
+            averageOrderValueWithoutOptionsMinor: null,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('Every order used options');
+    /* The currency is known here, so the other figure still shows money. */
+    expect(container.textContent).toContain('£90.00');
+    expect(container.textContent).not.toContain('single currency');
+  });
+
+  /**
    * 📌 **No orders is an empty state, not zero.** A shop that has sold nothing
    * has no analytics, and "£0.00 earned" invites the conclusion that the
    * options do not work.
