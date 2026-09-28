@@ -126,7 +126,7 @@ describe('Analytics over HTTP (e2e)', () => {
 
     expect(response.status).toBe(200);
 
-    const options = response.body.data.topOptions as Array<{
+    const options = response.body.data.topOptions.rows as Array<{
       optionKey: string;
       revenueMinor: number;
       orders: number;
@@ -158,7 +158,7 @@ describe('Analytics over HTTP (e2e)', () => {
       '2026-09-20 12:00:00.000',
     );
 
-    const options = (await get()).body.data.topOptions as Array<{
+    const options = (await get()).body.data.topOptions.rows as Array<{
       optionKey: string;
       label: string;
     }>;
@@ -195,7 +195,7 @@ describe('Analytics over HTTP (e2e)', () => {
     const setId = await optionSet('Engraving set', 'never_chosen');
 
     try {
-      const dead = (await get()).body.data.deadOptions as Array<{
+      const dead = (await get()).body.data.deadOptions.rows as Array<{
         optionKey: string;
         optionSetName: string;
       }>;
@@ -216,7 +216,7 @@ describe('Analytics over HTTP (e2e)', () => {
     const setId = await optionSet('Live set', 'engraving');
 
     try {
-      const dead = (await get()).body.data.deadOptions as Array<{ optionKey: string }>;
+      const dead = (await get()).body.data.deadOptions.rows as Array<{ optionKey: string }>;
 
       expect(dead.map((d) => d.optionKey)).not.toContain('engraving');
     } finally {
@@ -241,7 +241,7 @@ describe('Analytics over HTTP (e2e)', () => {
     );
 
     try {
-      const dead = (await get()).body.data.deadOptions as Array<{ optionKey: string }>;
+      const dead = (await get()).body.data.deadOptions.rows as Array<{ optionKey: string }>;
 
       expect(dead.map((d) => d.optionKey)).not.toContain('retired_option');
     } finally {
@@ -267,7 +267,7 @@ describe('Analytics over HTTP (e2e)', () => {
     const setId = await optionSet('Second shop set', 'engraving', secondStore);
 
     try {
-      const dead = (await get()).body.data.deadOptions as Array<{ optionKey: string }>;
+      const dead = (await get()).body.data.deadOptions.rows as Array<{ optionKey: string }>;
 
       /* `engraving` HAS sold — on the first store, never on this one. */
       expect(dead.map((d) => d.optionKey)).toContain('engraving');
@@ -288,9 +288,201 @@ describe('Analytics over HTTP (e2e)', () => {
       { optionKey: 'message', label: 'Message', valueKey: null, deltaMinor: 900 },
     ]);
 
-    const values = (await get()).body.data.topValues as Array<{ optionKey: string }>;
+    const values = (await get()).body.data.topValues.rows as Array<{ optionKey: string }>;
 
     expect(values.map((v) => v.optionKey)).not.toContain('message');
+  });
+
+  /**
+   * 🔴 **"Least selected" is its own list, not the tail of the top one** (F156).
+   *
+   * M25.3 asks for most **and** least selected values. The top list is capped,
+   * so its last row is the fiftieth best — never the worst. A merchant looking
+   * for what to retire would have been shown mid-table performers.
+   *
+   * ⚠️ **Ordered by ORDERS, not revenue.** A value chosen twice at a high price
+   * out-earns one chosen fifty times; calling the first "least selected" answers
+   * a question nobody asked.
+   */
+  it('lists the least-chosen values by how often they were chosen', async () => {
+    /*
+     * ✏️ **Built so ONLY a count ordering passes, after two attempts that were
+     * not.** The first gave `once` a high price and `often` a low one — under
+     * which "fewest orders first" and "highest revenue first" produce the SAME
+     * list, so a mutation swapping them survived. `once` now earns **less in
+     * total** than `often` while still being chosen fewer times, so the two
+     * orderings put it at opposite ends and only one of them can pass.
+     *
+     * `once`:  1 order,  400 minor  → first by count, LAST by revenue
+     * `often`: 3 orders, 900 minor  → last by count, FIRST by revenue
+     */
+    await order('a-7', 1_000, [
+      { optionKey: 'rare', label: 'Rare', valueKey: 'once', deltaMinor: 400 },
+    ]);
+
+    for (const id of ['a-8', 'a-9', 'a-10']) {
+      await order(id, 1_000, [
+        { optionKey: 'common', label: 'Common', valueKey: 'often', deltaMinor: 300 },
+      ]);
+    }
+
+    const least = (await get()).body.data.leastValues.rows as Array<{
+      valueKey: string;
+      orders: number;
+      revenueMinor: number;
+    }>;
+
+    const rare = least.find((v) => v.valueKey === 'once');
+    const often = least.find((v) => v.valueKey === 'often');
+
+    expect(rare).toBeDefined();
+    expect(often).toBeDefined();
+
+    /*
+     * The two orderings genuinely disagree on this data: `once` was chosen
+     * fewer times AND earned more. If the list were ordered by revenue, `once`
+     * would come LAST rather than first.
+     */
+    /* Chosen less often AND earning less in total: the orderings disagree. */
+    expect(rare?.orders).toBeLessThan(often?.orders as number);
+    expect(rare?.revenueMinor).toBeLessThan(often?.revenueMinor as number);
+
+    expect(least.findIndex((v) => v.valueKey === 'once')).toBeLessThan(
+      least.findIndex((v) => v.valueKey === 'often'),
+    );
+  });
+
+  /**
+   * 🔴 **A capped list says so, and says how much it left out** (F156).
+   *
+   * Fifty rows and "that is everything" are indistinguishable without a total,
+   * so a merchant with a large catalogue would read the top fifty as their
+   * whole set — the same silent-cap defect as the `GROUP_CONCAT` truncation
+   * this phase already caught once.
+   */
+  it('reports the true total beside a capped list', async () => {
+    const response = await get();
+
+    const values = response.body.data.topValues as {
+      rows: unknown[];
+      total: number;
+      truncated: boolean;
+    };
+
+    expect(values.total).toBeGreaterThanOrEqual(values.rows.length);
+    expect(values.truncated).toBe(values.total > values.rows.length);
+
+    /* This fixture is far under the cap, so nothing is hidden. */
+    expect(values.truncated).toBe(false);
+
+    /*
+     * 🔴 **The total is counted with the SAME predicates as the list.**
+     *
+     * ✏️ **A mutation dropping `valueKey IS NOT NULL` from the count alone
+     * survived**, because nothing compared the two. A looser count overstates
+     * the population, so `truncated` reads true on a complete list — telling a
+     * merchant rows are hidden when none are, which is worse than the silent
+     * cap this field exists to prevent.
+     *
+     * The fixtures include a free-text selection (`message`, null valueKey),
+     * so a count that forgot the filter would exceed the rows by exactly that.
+     */
+    expect(values.total).toBe(values.rows.length);
+  });
+
+  /**
+   * 🔴 **And a list that IS over the cap says so.**
+   *
+   * ✏️ **This test exists because a mutation survived.** Forcing `truncated`
+   * permanently false changed nothing, because every other assertion ran on
+   * data comfortably under the cap — so the flag was being read but never
+   * exercised, which is indistinguishable from not working.
+   *
+   * ⚠️ **The cap is 50 and this writes 60 distinct values**, in one order, so
+   * the cost is one insert loop rather than sixty round trips.
+   */
+  it('marks a list that exceeds the cap as truncated', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      optionKey: `bulk_${String(i).padStart(2, '0')}`,
+      label: `Bulk ${i}`,
+      valueKey: 'v',
+      deltaMinor: 100 + i,
+    }));
+
+    await order('a-bulk', 50_000, many);
+
+    try {
+      const values = (await get()).body.data.topValues as {
+        rows: unknown[];
+        total: number;
+        truncated: boolean;
+      };
+
+      expect(values.rows).toHaveLength(50);
+      expect(values.total).toBeGreaterThan(50);
+      expect(values.truncated).toBe(true);
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel
+           JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.storeId = ? AND e.externalOrderId = 'a-bulk'`,
+        [storeId],
+      );
+      await dataSource.query(
+        `DELETE FROM order_events WHERE storeId = ? AND externalOrderId = 'a-bulk'`,
+        [storeId],
+      );
+    }
+  });
+
+  /**
+   * 🔴 **Average order value with options against without** (F157).
+   *
+   * M25.3 names *"conversion with vs. without options"*, and that cannot be
+   * answered from anything this system records — conversion needs a denominator
+   * of visits, and nothing counts a view. This is the honest substitute from
+   * data already present, and the Phase 25 section records that the true
+   * conversion figure is owned by M25.1's deferred view events.
+   */
+  it('compares order value with options against without', async () => {
+    const attach = (await get()).body.data.attach as {
+      averageOrderValueWithOptionsMinor: number | null;
+      averageOrderValueWithoutOptionsMinor: number | null;
+    };
+
+    /* Fixtures above include both kinds of order, so both averages exist. */
+    expect(attach.averageOrderValueWithOptionsMinor).toBeGreaterThan(0);
+    expect(attach.averageOrderValueWithoutOptionsMinor).toBeGreaterThan(0);
+
+    /* And they are genuinely different populations, not one number twice. */
+    expect(attach.averageOrderValueWithOptionsMinor).not.toBe(
+      attach.averageOrderValueWithoutOptionsMinor,
+    );
+  });
+
+  /**
+   * ⚠️ **An average of no orders is `null`, never 0.** A merchant who has never
+   * sold without options must not read "0.00" as evidence that options are what
+   * earns — that is a claim their data does not support.
+   */
+  it('reports a missing average as null rather than zero', async () => {
+    const otherToken = await h.tenant('fresh');
+    const otherTenant = await h.tenantIdOf('fresh');
+
+    await dataSource.query(
+      `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'pro') WHERE id = ?`,
+      [otherTenant],
+    );
+
+    const response = await request(h.app.getHttpServer())
+      .get('/v1/analytics')
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.attach.averageOrderValueWithOptionsMinor).toBeNull();
+    expect(response.body.data.attach.averageOrderValueWithoutOptionsMinor).toBeNull();
+    /* And the rate is null too, for the same reason: nothing to divide by. */
+    expect(response.body.data.attach.rate).toBeNull();
   });
 
   /**
@@ -346,7 +538,7 @@ describe('Analytics over HTTP (e2e)', () => {
 
     expect(theirs.status).toBe(200);
     expect(theirs.body.data.attach.orders).toBe(1);
-    expect(theirs.body.data.topOptions).toEqual([]);
+    expect(theirs.body.data.topOptions.rows).toEqual([]);
 
     /* And mine is unchanged by their order existing. */
     expect((await get()).body.data.attach.totalRevenueMinor).not.toBe(99_000);

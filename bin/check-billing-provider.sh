@@ -1046,6 +1046,47 @@ else
   printf '        puts personal data into a rollup Phase 26b would have to erase.\n'
 fi
 
+# --- 42. The analytics endpoint's consumer is tracked, not forgotten (F158) --
+#
+# 🔴 **The tenth instance of this project's dominant defect is ALREADY HERE.**
+# `GET /v1/analytics` serves real data behind a paid feature gate and **nothing
+# in the dashboard calls it** — the same shape as F132 (backend shipped `usage[]`,
+# dashboard ignored it) and F137 (`plan.read_only` unread by the plugin).
+#
+# ⚠️ **This is not a defect in the sequencing.** The dashboard was never in
+# 25-1's scope and shipping the API first is a reasonable order. The defect in
+# every prior instance was that the debt was **invisible** — nothing recorded it,
+# so it was found by audit rather than by a check.
+#
+# 📌 **So this check permits the gap and refuses to let it be silent.** Either
+# the dashboard consumes the endpoint, or the nav still marks Analytics as
+# unbuilt. What it forbids is the state in between: a nav item presented to
+# merchants as ready, pointing at a screen that renders nothing.
+ANALYTICS_API="$SRC/analytics/analytics.controller.ts"
+FRONTEND="optioniaWooCommerceFrontend/src"
+NAV="$FRONTEND/components/layout/app-shell.tsx"
+
+if [ ! -f "$ANALYTICS_API" ]; then
+  : # Check 41 already failed; no second complaint.
+elif [ ! -f "$NAV" ]; then
+  fail "the dashboard navigation is missing — cannot tell if analytics is offered"
+else
+  DASH_CONSUMES=$(grep -rl "topOptions\|deadOptions\|leastValues" \
+    "$FRONTEND" 2>/dev/null | head -1)
+  NAV_MARKED=$(grep -c "href: '/analytics'.*phase:" "$NAV" || true)
+
+  if [ -n "$DASH_CONSUMES" ]; then
+    pass "the dashboard renders the analytics the API serves"
+  elif [ "$NAV_MARKED" -ge 1 ]; then
+    pass "analytics is served but still marked unbuilt in the nav (debt recorded)"
+  else
+    fail "the nav offers Analytics and nothing renders what the API returns"
+    printf '        The endpoint serves real data and no screen reads it. Either\n'
+    printf '        build the screen or mark the nav item unbuilt — F132 and F137\n'
+    printf '        were both exactly this, found by audit rather than by a check.\n'
+  fi
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then

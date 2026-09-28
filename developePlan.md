@@ -30399,6 +30399,71 @@ without it a busy store's orders would hide an unused option in a quiet one.
 them would let a merchant see revenue from one moment beside dead options from
 another — which reads as a contradiction rather than as a lag.
 
+#### Stage 25-1.2 — the gaps in 25-1.1, closed (2026-09-28)
+
+**M25.3 graded clause by clause, and my "four of five" was overstated.** The
+milestone names five things; the honest count on shipping 25-1.1 was two and a
+half.
+
+| M25.3 clause | Now |
+|---|---|
+| option revenue | ✅ |
+| most **and least** selected values | ✅ — `leastValues` is its own list (F156) |
+| attach rate | ✅ |
+| conversion with vs. without options | ⛔ **impossible** — AOV ships instead (F157) |
+| revenue per option set | ⬜ needs F150's migration (25-1.4) |
+
+🔴 **F156 — "least selected" was unreachable, and the cap was silent.** Every
+list was `ORDER BY revenue DESC LIMIT 50`, so the *tail* — which is what "least
+selected" means — was cut off entirely, and nothing said a cap had been applied.
+Fifty rows and "that is everything" were indistinguishable. Now every list
+returns `{ rows, total, truncated }`, and `leastValues` has its own ordering:
+**by ORDERS, not revenue**, because a value chosen twice at a high price
+out-earns one chosen fifty times and calling the first "least selected" answers
+a question nobody asked.
+
+🔴 **F157 — "conversion with vs. without options" cannot be answered by this
+system, and no amount of work on the order tables will change that.** Conversion
+needs a denominator of *visits*: of the customers who saw a product, what
+fraction bought. `order_events` holds only orders that completed, and nothing
+anywhere records a view. **Average order value with options against without**
+ships instead — a real, defensible sentence from data already present, answering
+the question the clause was reaching for.
+
+⚠️ **So deferring M25.1 is NOT free**, and the deferral note said it was. The
+true conversion figure is owned by those view events. That is recorded here
+rather than discovered when Phase 25 is graded.
+
+🟡 **F158 — the endpoint has no consumer, which is the TENTH instance.** Nothing
+in the dashboard calls `/v1/analytics`. The sequencing is fine — the dashboard
+was never in 25-1's scope — but in F132 and F137 the defect was that the debt was
+**invisible**, found by audit rather than by a check. **Gate 42** now permits the
+gap and forbids it being silent: either the dashboard renders it, or the nav
+still marks Analytics unbuilt. The state in between — a nav item offered to
+merchants pointing at a screen that renders nothing — fails.
+
+✅ **F159 — the reconciliation invariant is now asserted.**
+`order_events.optionRevenueMinor` must equal the sum of that event's
+`order_selections.priceDeltaMinor`; measured at 129100 = 129100 on seed data and
+now pinned across a **multi-selection** order including a discount. This is the
+standing guard on F146: that defect was exactly a per-unit amount meeting a line
+total, and the two agree at quantity one and nowhere else.
+
+✏️ **Three mutations survived before their tests were strong enough**, and the
+fixtures rather than the code were what changed:
+
+- **least-selected** survived twice. The first fixture gave the rare value a
+  high price, under which "fewest orders" and "highest revenue" produce the same
+  list; the second still did. It now earns *less in total* while being chosen
+  fewer times, so the two orderings put it at opposite ends.
+- **`truncated`** survived, because every assertion ran on data under the cap —
+  the flag was read and never exercised, which is indistinguishable from not
+  working. A 60-value order now proves it.
+- **Dropping `valueKey IS NOT NULL` from the count** survived and is an
+  **equivalent mutant**: `COUNT(DISTINCT a, b)` already skips rows where either
+  column is NULL. Measured rather than assumed, and the redundant filter is kept
+  so the count reads as the same population the list selected.
+
 #### Stage order
 
 ```text

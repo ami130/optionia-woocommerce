@@ -36,7 +36,27 @@ export interface DeadOption {
   readonly label: string;
 }
 
-/** How many orders carried options at all (M25.3). */
+/**
+ * How many orders carried options at all, and what they were worth (M25.3).
+ *
+ * ## What this is NOT
+ *
+ * 🔴 **This is not "conversion with vs. without options", and that clause of
+ * M25.3 cannot be answered from any data this system holds** (F157). Conversion
+ * needs a denominator of *visits* — of the customers who saw a product, what
+ * fraction bought — and nothing records a view. `order_events` contains only
+ * orders that completed.
+ *
+ * 📌 **`averageOrderValue…` is the honest substitute.** *"Orders using options
+ * are worth 47.00 on average against 31.00 without"* is a real, defensible
+ * sentence from data already present, and it answers the question the
+ * conversion clause was reaching for — is it worth offering options — without
+ * claiming a measurement nobody took.
+ *
+ * ⚠️ **The true conversion figure is owned by M25.1's view events**, which are
+ * deferred. That deferral is therefore not free, and the Phase 25 section says
+ * so rather than leaving it to be discovered at exit-criteria time.
+ */
 export interface AttachRate {
   readonly orders: number;
   readonly ordersWithOptions: number;
@@ -44,14 +64,49 @@ export interface AttachRate {
   readonly rate: number | null;
   readonly optionRevenueMinor: number;
   readonly totalRevenueMinor: number;
+  /**
+   * Mean order total for orders that used options, in minor units.
+   *
+   * `null` when there are none — an average of nothing is not zero, and showing
+   * 0.00 would read as "options earn nothing" rather than "no data yet".
+   */
+  readonly averageOrderValueWithOptionsMinor: number | null;
+  /** Mean order total for orders that used none. `null` when there are none. */
+  readonly averageOrderValueWithoutOptionsMinor: number | null;
+}
+
+/**
+ * A capped list, and how much of the truth it represents.
+ *
+ * 🔴 **A cap that is not reported is a wrong answer that looks right** (F156).
+ * Fifty rows and "that is everything" are indistinguishable without `total`, so
+ * a merchant with two hundred option values would read the top fifty as their
+ * whole catalogue — and "least selected" would be a list of things that are not
+ * least selected.
+ */
+export interface Capped<T> {
+  readonly rows: T[];
+  /** How many rows exist in total, before the cap. */
+  readonly total: number;
+  /** Whether `rows` is a subset. `total > rows.length`, stated rather than derived. */
+  readonly truncated: boolean;
 }
 
 /** Everything the analytics screen renders in one call. */
 export interface AnalyticsSummary {
   readonly attach: AttachRate;
-  readonly topOptions: OptionRevenue[];
-  readonly topValues: ValueRevenue[];
-  readonly deadOptions: DeadOption[];
+  readonly topOptions: Capped<OptionRevenue>;
+  /** Highest-earning values first. */
+  readonly topValues: Capped<ValueRevenue>;
+  /**
+   * The least-chosen values, fewest orders first (M25.3).
+   *
+   * 🔴 **Not the tail of `topValues`.** That list is capped at the top, so its
+   * last row is the fiftieth best — not the worst. M25.3 asks for *most AND
+   * least* selected, and the second needs its own ordering.
+   */
+  readonly leastValues: Capped<ValueRevenue>;
+  readonly deadOptions: Capped<DeadOption>;
 }
 
 /**
@@ -97,14 +152,15 @@ export class AnalyticsService {
 
   /** Everything the screen needs, in one round trip per section. */
   async summary(tenantId: string): Promise<AnalyticsSummary> {
-    const [attach, topOptions, topValues, deadOptions] = await Promise.all([
+    const [attach, topOptions, topValues, leastValues, deadOptions] = await Promise.all([
       this.attachRate(tenantId),
       this.optionRevenue(tenantId),
-      this.valueRevenue(tenantId),
+      this.valueRevenue(tenantId, 'most'),
+      this.valueRevenue(tenantId, 'least'),
       this.deadOptions(tenantId),
     ]);
 
-    return { attach, topOptions, topValues, deadOptions };
+    return { attach, topOptions, topValues, leastValues, deadOptions };
   }
 
   /**
@@ -123,7 +179,13 @@ export class AnalyticsService {
            SELECT 1 FROM order_selections sel WHERE sel.orderEventId = e.id
          ) THEN 1 ELSE 0 END) AS ordersWithOptions,
          COALESCE(SUM(e.optionRevenueMinor), 0) AS optionRevenueMinor,
-         COALESCE(SUM(e.orderTotalMinor), 0) AS totalRevenueMinor
+         COALESCE(SUM(e.orderTotalMinor), 0) AS totalRevenueMinor,
+         AVG(CASE WHEN EXISTS (
+           SELECT 1 FROM order_selections sel WHERE sel.orderEventId = e.id
+         ) THEN e.orderTotalMinor END) AS aovWith,
+         AVG(CASE WHEN NOT EXISTS (
+           SELECT 1 FROM order_selections sel WHERE sel.orderEventId = e.id
+         ) THEN e.orderTotalMinor END) AS aovWithout
        FROM order_events e
        JOIN stores s ON s.id = e.storeId
       WHERE s.tenantId = ?`,
@@ -133,6 +195,8 @@ export class AnalyticsService {
       ordersWithOptions: string | null;
       optionRevenueMinor: string | null;
       totalRevenueMinor: string | null;
+      aovWith: string | null;
+      aovWithout: string | null;
     }[];
 
     /*
@@ -151,7 +215,35 @@ export class AnalyticsService {
       rate: orders === 0 ? null : ordersWithOptions / orders,
       optionRevenueMinor: Number(row?.optionRevenueMinor ?? 0),
       totalRevenueMinor: Number(row?.totalRevenueMinor ?? 0),
+      /*
+       * 🔴 **`AVG` over a `CASE` with no `ELSE` skips the non-matching rows**
+       * rather than counting them as zero, which is what makes these two
+       * averages comparable. `SUM(...) / COUNT(*)` would divide each by the
+       * whole population and understate both.
+       *
+       * ⚠️ **`null` when there is nothing to average, never 0.** An average of
+       * no orders is not "these orders are worth nothing" — and a merchant who
+       * has never sold without options must not read 0.00 as evidence that
+       * options are what earns.
+       */
+      averageOrderValueWithOptionsMinor: this.averageOrNull(row?.aovWith),
+      averageOrderValueWithoutOptionsMinor: this.averageOrNull(row?.aovWithout),
     };
+  }
+
+  /**
+   * An average that is absent rather than zero when nothing matched.
+   *
+   * `AVG` returns SQL `NULL` over an empty set, which arrives here as `null`;
+   * `Number(null)` is **0**, so the conversion has to happen after the check
+   * and not before it.
+   */
+  private averageOrNull(raw: string | null | undefined): number | null {
+    if (raw === null || raw === undefined) {
+      return null;
+    }
+
+    return Math.round(Number(raw));
   }
 
   /**
@@ -171,7 +263,7 @@ export class AnalyticsService {
    * 200-character label — and then picks whatever survived the cut, with
    * nothing to indicate it happened. `FIRST_VALUE` has no such cap.
    */
-  async optionRevenue(tenantId: string): Promise<OptionRevenue[]> {
+  async optionRevenue(tenantId: string): Promise<Capped<OptionRevenue>> {
     const rows = (await this.dataSource.query(
       `SELECT optionKey, label, revenueMinor, orders FROM (
          SELECT
@@ -195,12 +287,24 @@ export class AnalyticsService {
       [tenantId],
     )) as { optionKey: string; label: string; revenueMinor: string; orders: number }[];
 
-    return rows.map((row) => ({
-      optionKey: row.optionKey,
-      label: row.label,
-      revenueMinor: Number(row.revenueMinor),
-      orders: Number(row.orders),
-    }));
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(DISTINCT sel.optionKey) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ?`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(
+      rows.map((row) => ({
+        optionKey: row.optionKey,
+        label: row.label,
+        revenueMinor: Number(row.revenueMinor),
+        orders: Number(row.orders),
+      })),
+      Number(count?.total ?? 0),
+    );
   }
 
   /**
@@ -213,7 +317,22 @@ export class AnalyticsService {
    * a customer typed" row — and the rule this phase is held to is that a rollup
    * carries `valueKey`, never `valueLabel`.
    */
-  async valueRevenue(tenantId: string): Promise<ValueRevenue[]> {
+  async valueRevenue(
+    tenantId: string,
+    direction: 'most' | 'least' = 'most',
+  ): Promise<Capped<ValueRevenue>> {
+    /*
+     * 🔴 **`least` is ordered by ORDERS, not by revenue.** M25.3 asks for
+     * most and least *selected*, which is a count — a value chosen twice at a
+     * high price out-earns one chosen fifty times, and listing it as "least
+     * selected" would answer a question nobody asked. The revenue travels with
+     * the row either way, so a merchant can see both.
+     */
+    const order =
+      direction === 'most'
+        ? 'revenueMinor DESC, orders DESC, optionKey ASC, valueKey ASC'
+        : 'orders ASC, revenueMinor ASC, optionKey ASC, valueKey ASC';
+
     const rows = (await this.dataSource.query(
       `SELECT optionKey, valueKey, label, revenueMinor, orders FROM (
          SELECT
@@ -233,7 +352,7 @@ export class AnalyticsService {
         WHERE s.tenantId = ? AND sel.valueKey IS NOT NULL
        ) ranked
        WHERE rn = 1
-       ORDER BY revenueMinor DESC, orders DESC, optionKey ASC, valueKey ASC
+       ORDER BY ${order}
        LIMIT ${MAX_ROWS}`,
       [tenantId],
     )) as {
@@ -244,13 +363,33 @@ export class AnalyticsService {
       orders: number;
     }[];
 
-    return rows.map((row) => ({
-      optionKey: row.optionKey,
-      valueKey: row.valueKey,
-      label: row.label,
-      revenueMinor: Number(row.revenueMinor),
-      orders: Number(row.orders),
-    }));
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(DISTINCT sel.optionKey, sel.valueKey) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ? AND sel.valueKey IS NOT NULL`,
+      /*
+       * 📌 **The filter is redundant here and kept deliberately.**
+       * `COUNT(DISTINCT a, b)` already skips any row where either column is
+       * NULL, so removing it is an *equivalent mutation* — measured, not
+       * assumed. It stays because the count must be readable as "the same
+       * population the list above selected", and a reader checking that should
+       * not have to know the NULL rule to confirm it.
+       */
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(
+      rows.map((row) => ({
+        optionKey: row.optionKey,
+        valueKey: row.valueKey,
+        label: row.label,
+        revenueMinor: Number(row.revenueMinor),
+        orders: Number(row.orders),
+      })),
+      Number(count?.total ?? 0),
+    );
   }
 
   /**
@@ -271,7 +410,7 @@ export class AnalyticsService {
    * within its group, not across a tenant's stores, so a tenant running two
    * shops could otherwise have one shop's sales mark the other's option alive.
    */
-  async deadOptions(tenantId: string): Promise<DeadOption[]> {
+  async deadOptions(tenantId: string): Promise<Capped<DeadOption>> {
     const rows = (await this.dataSource.query(
       `SELECT
          os.id AS optionSetId,
@@ -302,6 +441,41 @@ export class AnalyticsService {
       label: string;
     }[];
 
-    return rows;
+    /*
+     * ⚠️ **Counted with the same predicates, not estimated from the rows.** A
+     * total that came from a looser query would overstate the problem — telling
+     * a merchant they have ninety unused options when they have nine.
+     */
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(*) AS total
+         FROM option_sets os
+         JOIN option_groups g
+           ON g.optionSetId = os.id AND g.deletedAt = '${LIVE_SENTINEL_SQL}'
+         JOIN options o
+           ON o.optionGroupId = g.id AND o.deletedAt = '${LIVE_SENTINEL_SQL}'
+        WHERE os.tenantId = ?
+          AND os.deletedAt = '${LIVE_SENTINEL_SQL}'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM order_selections sel
+              JOIN order_events e ON e.id = sel.orderEventId
+             WHERE sel.optionKey = o.\`key\`
+               AND e.storeId = os.storeId
+          )`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(rows, Number(count?.total ?? 0));
+  }
+
+  /**
+   * Pair a capped list with the size of the population it came from.
+   *
+   * 🔴 **`truncated` is stated, not left for the caller to derive.** A client
+   * comparing `rows.length` to a cap it has to know about is a client that gets
+   * it wrong the first time `MAX_ROWS` changes — and the failure is silent.
+   */
+  private capped<T>(rows: T[], total: number): Capped<T> {
+    return { rows, total, truncated: total > rows.length };
   }
 }

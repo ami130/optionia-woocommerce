@@ -123,6 +123,27 @@ describe('order reporting (e2e)', () => {
       expect(selections[0].valueLabel).toBe('Luxury');
       expect(Number(selections[0].priceDeltaMinor)).toBe(9900);
       expect(Number(selections[0].configVersion)).toBe(7);
+
+      /*
+       * 🔴 **The invariant analytics is built on**, asserted here because this
+       * is where it is established (F159).
+       *
+       * `order_events.optionRevenueMinor` must equal the sum of that event's
+       * `order_selections.priceDeltaMinor` — the plugin computes the former as
+       * the sum of the latter, so they cannot disagree unless something has
+       * broken between them.
+       *
+       * ⚠️ **This is the standing guard on F146.** That defect was exactly a
+       * divergence between a per-unit amount and a line total; the quantity
+       * multiplier now applies to both sides, so a future change that applies
+       * it to one and not the other breaks this equality first, and breaks it
+       * loudly. M25.3 sums the selections while the dashboard's headline reads
+       * the event, so a drift would show a merchant two different revenues for
+       * the same orders.
+       */
+      expect(Number(events[0].optionRevenueMinor)).toBe(
+        selections.reduce((sum, row) => sum + Number(row.priceDeltaMinor), 0),
+      );
     });
 
     /**
@@ -139,6 +160,66 @@ describe('order reporting (e2e)', () => {
 
       const [event] = await eventsFor(store.id);
       expect(new Date(event.occurredAt as string).toISOString()).toBe('2026-08-01T09:30:00.000Z');
+    });
+
+    /**
+     * 🔴 **The reconciliation invariant, across SEVERAL selections** (F159).
+     *
+     * The single-selection case above is the sum of one number and would hold
+     * under almost any defect. A multi-option order is where the two totals can
+     * actually diverge — and where F146 did: a per-unit delta on one side and a
+     * line total on the other agree at quantity one and nowhere else.
+     *
+     * 📌 **M25.3 sums the selections; the dashboard's headline reads the
+     * event.** A drift between them shows a merchant two different revenues for
+     * the same orders, with nothing to say which is right.
+     */
+    it('records an option revenue equal to the sum of its selections', async () => {
+      const store = await connected();
+
+      const selections = [
+        {
+          option_key: 'finish',
+          option_label: 'Finish',
+          value_key: 'lux',
+          value_label: 'Luxury',
+          price_delta_minor: 9900,
+          config_version: 7,
+        },
+        {
+          option_key: 'engraving',
+          option_label: 'Engraving',
+          value_key: 'yes',
+          value_label: 'Yes',
+          price_delta_minor: 2500,
+          config_version: 7,
+        },
+        {
+          /* A discount, so the sum is not merely "all the positives". */
+          option_key: 'bundle',
+          option_label: 'Bundle',
+          value_key: 'yes',
+          value_label: 'Yes',
+          price_delta_minor: -400,
+          config_version: 7,
+        },
+      ];
+
+      await report(
+        store.token,
+        payload({ selections, option_revenue_minor: 12_000 }),
+      ).expect(200);
+
+      const [event] = await eventsFor(store.id);
+      const stored = await selectionsFor(event.id as string);
+
+      expect(stored).toHaveLength(3);
+      expect(Number(event.optionRevenueMinor)).toBe(
+        stored.reduce((sum, row) => sum + Number(row.priceDeltaMinor), 0),
+      );
+
+      /* And the figure itself, so a sum-of-zeroes cannot satisfy the equality. */
+      expect(Number(event.optionRevenueMinor)).toBe(12_000);
     });
 
     /** An order with no options is still revenue, and still reportable. */
