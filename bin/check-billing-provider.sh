@@ -915,24 +915,34 @@ fi
 # guard decides correctly, not that a creation path consults it — the exact
 # shape of F130, where the guard shipped with no caller and fifteen green
 # tests. This check reads the call sites instead.
+# ✏️ **The first version of this check counted per FILE and was blind.**
+# `option-sets.service.ts` held one guard in `create`, which satisfied it while
+# `duplicate` and `importDocument` created option sets with no guard at all — a
+# merchant refused on Create could press Duplicate. Counting **call sites
+# against known creation paths** is what catches a new door being added.
 UNGUARDED=""
 
-for pair in "option_sets:$SRC/option-sets/option-sets.service.ts" \
-  "team_seats:$SRC/tenants/team.service.ts" \
-  "stores:$SRC/stores/connect.service.ts" \
-  "products_assigned:$SRC/option-sets/assignments.service.ts"; do
-  metric="${pair%%:*}"
-  path="${pair#*:}"
+for spec in "option_sets:$SRC/option-sets/option-sets.service.ts:3" \
+  "team_seats:$SRC/tenants/team.service.ts:1" \
+  "stores:$SRC/stores/connect.service.ts:1" \
+  "products_assigned:$SRC/option-sets/assignments.service.ts:1"; do
+  metric="$(printf '%s' "$spec" | cut -d: -f1)"
+  path="$(printf '%s' "$spec" | cut -d: -f2)"
+  expected="$(printf '%s' "$spec" | cut -d: -f3)"
 
-  grep -q "assertWithinPlan(.*'$metric'" "$path" 2>/dev/null \
-    || UNGUARDED="$UNGUARDED $metric"
+  found=$(grep -c "assertWithinPlan(" "$path" 2>/dev/null || echo 0)
+
+  if [ "$found" -lt "$expected" ]; then
+    UNGUARDED="$UNGUARDED $metric($found/$expected)"
+  fi
 done
 
 if [ -z "$UNGUARDED" ]; then
   pass "every enforceable plan limit is guarded on its creation path"
 else
-  fail "these plan limits are metered but never enforced:$UNGUARDED"
-  printf '        A tenant can exceed them freely; the meter is not the guard.\n'
+  fail "fewer guards than creation paths:$UNGUARDED"
+  printf '        Every path that creates the resource must consult the limit.\n'
+  printf '        option_sets has THREE: create, duplicate, importDocument.\n'
 fi
 
 # 📌 `file_storage_mb` is deliberately absent above: the bytes are on the

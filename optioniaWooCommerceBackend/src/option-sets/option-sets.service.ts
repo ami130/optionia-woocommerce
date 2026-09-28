@@ -4,7 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { diff } from '../audit/audit-diff';
 import { AuditAction, AuditService } from '../audit/audit.service';
-import { getTenantId } from '../common/context/request-context';
+import { getTenantId, requireTenantId } from '../common/context/request-context';
 import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
 import {
   GroupDisplayType,
@@ -360,6 +360,18 @@ export class OptionSetsService {
         throw DomainException.notFound('Store');
       }
 
+      /*
+       * 🔴 **An imported document is a NEW option set, and counts like one.**
+       *
+       * ✏️ **This path was unguarded.** With `create` refused at the limit, a
+       * merchant could export a set and import it back to exceed the plan —
+       * the same bypass as `duplicate`, through a different door.
+       *
+       * 📌 **Inside the transaction**, so the count and the insert are one
+       * unit of work.
+       */
+      await this.planLimits.assertWithinPlan(tenantId, 'option_sets', manager);
+
       const set = await manager.save(
         manager.create(OptionSet, {
           tenantId,
@@ -622,6 +634,20 @@ export class OptionSetsService {
     const targetStoreId = storeId ?? source.storeId;
 
     const copy = await this.dataSource.transaction(async (manager) => {
+      /*
+       * 🔴 **A duplicate is a NEW option set, and counts like one.**
+       *
+       * ✏️ **This path was unguarded and bypassed the limit entirely.** A
+       * merchant refused on Create could press Duplicate and get their
+       * eleventh set — a guard with a window beside the door. Found
+       * re-auditing the phase after it had already been ticked twice.
+       *
+       * 📌 **Inside the transaction, unlike `create`**, so the count and the
+       * insert are one unit of work: two simultaneous duplicates cannot both
+       * read "9 of 10" and both proceed.
+       */
+      await this.planLimits.assertWithinPlan(requireTenantId(), 'option_sets', manager);
+
       const created = await manager.save(
         manager.create(OptionSet, {
           tenantId: source.tenantId,

@@ -148,6 +148,51 @@ describe('Plan limits over HTTP (e2e)', () => {
   });
 
   /**
+   * 🔴 **Duplicate cannot walk around the limit.**
+   *
+   * ✏️ **Phase 24 was ticked TWICE with this path unguarded.** `option_sets`
+   * has three creation paths — `create`, `duplicate`, `importDocument` — and
+   * only the first consulted the plan. A merchant refused on Create could
+   * press Duplicate and get their eleventh set: a guard with a window beside
+   * the door.
+   *
+   * ⚠️ **Gate 39 could not see it either**, because it counted one guard per
+   * *file*. It now counts call sites against known creation paths.
+   */
+  it('refuses a duplicate that would exceed the plan', async () => {
+    const [existing] = (await dataSource.query(
+      `SELECT id FROM option_sets
+        WHERE tenantId = ? AND deletedAt = '1970-01-01 00:00:00.000' LIMIT 1`,
+      [tenantId],
+    )) as { id: string }[];
+
+    const refused = await request(h.app.getHttpServer())
+      .post(`/v1/option-sets/${existing.id}/duplicate`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(refused.status).toBe(429);
+    expect(refused.body.error.message).toContain('Free plan allows 2 option sets');
+  });
+
+  /*
+   * 🔴 **`importDocument` is the third creation path, and it is guarded — but
+   * NOT asserted here, deliberately.**
+   *
+   * Over HTTP the route validates the document before the guard is reached, so
+   * a minimal fixture returns 400 for reasons unrelated to the limit. Called
+   * directly the service has no request context, so tenant scoping fails with
+   * *"Store not found"* before any plan is read. Building a full valid document
+   * would duplicate what `option-sets-http.e2e-spec` already owns.
+   *
+   * 📌 **Gate 39 holds this instead**, counting `assertWithinPlan` call sites
+   * against the three known creation paths and failing at 2/3 — mutation-proven
+   * against exactly this bypass. A test that cannot reach the guard is worth
+   * less than a check that can, and pretending otherwise is how the bypass
+   * survived two audits.
+   */
+
+  /**
    * 🔴 **`stores` is enforced too — 2 of 5 limits was not "limits enforced".**
    *
    * ✏️ **Phase 24 was ticked with only `option_sets` and `team_seats`

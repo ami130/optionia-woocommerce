@@ -60,8 +60,22 @@ export class PlanLimitGuard {
    * Refuse if creating one more would exceed the plan.
    *
    * ⚠️ **Runs inside the caller's transaction when given one**, so the count
-   * and the write it protects are one unit of work. Counting outside it lets
-   * two concurrent requests both read "9 of 10" and both proceed.
+   * and the write it protects are one unit of work.
+   *
+   * ✏️ **"When given one" is load-bearing, and two callers do not.**
+   * `duplicate`, `importDocument`, `assign` and store creation all pass a
+   * manager; `OptionSetsService.create` and `TeamService.invite` do not,
+   * because neither opens a transaction at all — the first is a single
+   * `repository.save`, and wrapping it to hold a count would be a structural
+   * change for a narrow race.
+   *
+   * 🔴 **So on those two paths the race is real**: two simultaneous requests
+   * from one tenant can both read "9 of 10" and both proceed, leaving 11. It
+   * is bounded by the number of concurrent requests, self-corrects the moment
+   * the merchant deletes anything, and **no database constraint backs any plan
+   * limit** — unlike `UNIQUE provider_event_id`, there is no second line of
+   * defence here, which is why the guard being reachable on every creation
+   * path matters more than this window.
    */
   async assertWithinPlan(
     tenantId: string,
