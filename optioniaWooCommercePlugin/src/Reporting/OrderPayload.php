@@ -439,11 +439,23 @@ final class OrderPayload {
 	/**
 	 * How many of a line the customer bought, as a usable multiplier.
 	 *
-	 * ⚠️ **Falls back to 1, never 0.** A refunded line can report a quantity of
-	 * zero and an item from an older WooCommerce may not answer at all -- and
-	 * multiplying by either would erase the line's revenue, reporting nothing
-	 * for an order that earned money. One unit is the conservative reading: it
-	 * can under-report a large line, never erase it.
+	 * ⚠️ **Anything not a positive whole number becomes 1.** Zero, a negative,
+	 * a non-numeric value and an item too old to answer all take that path, and
+	 * the reason is the same for each: the multiplier's job is to scale a
+	 * known-good per-unit amount, so a value it cannot scale by must leave that
+	 * amount alone rather than change it. Multiplying by 0 would erase the
+	 * line's revenue -- reporting nothing for an order that earned money, which
+	 * is unreadable from an order that earned nothing.
+	 *
+	 * ✏️ **The negative case is bounded by the CALLER, and is recorded here
+	 * because it is an assumption rather than a guarantee of this method.**
+	 * WooCommerce uses negative quantities on `WC_Order_Refund` line items, and
+	 * clamping one to 1 would report positive revenue for a refund. It is not
+	 * reachable today: `OrderReporter` fires only on the `processing` and
+	 * `completed` transitions of a `WC_Order`, and a refund object never takes
+	 * that path. **If order reporting is ever extended to refunds, this clamp is
+	 * wrong and must become a rejection** -- a refund's revenue is negative, not
+	 * absent, and the two must not be conflated.
 	 *
 	 * `WC_Order_Item_Product::get_quantity()` returns an int, but a decimal
 	 * quantity reaches this through third-party unit-of-measure plugins, so the

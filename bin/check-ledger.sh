@@ -81,6 +81,13 @@ fi
 # `#### Exit criteria` and Phases 20b and 26b write `**Exit criteria:**`, so the
 # block is located from the phase's own line range rather than by heading text.
 PHASES=$(grep -oE '^## Phase [0-9]+[a-z]?' "$PLAN" | sed 's/^## Phase //' | sort -u)
+
+# ⚠️ **Declared HERE, not only inside the loop that fills it.** The checks below
+# read it, and under `set -u` an unset variable aborts the script -- so a failing
+# phase-count floor would have taken the whole gate down with it rather than
+# reporting one failure. Shell has no block scope; this is the only thing that
+# makes the read safe.
+SEEN_PHASES=""
 COUNT=$(printf '%s\n' "$PHASES" | grep -c . || true)
 FLOOR=20
 
@@ -92,7 +99,6 @@ else
   UNTICKED=0
   GRADED=0
   DASH_SEEN=0
-  SEEN_PHASES=""
 
   for phase in $PHASES; do
     START=$(grep -nE "^## Phase ${phase} —" "$PLAN" | head -1 | cut -d: -f1)
@@ -203,8 +209,14 @@ else
     # nobody can act on and therefore a gate everybody silences. What is caught
     # is a phase the marker has moved PAST while its box stayed empty, which is
     # the drift that actually happened.
+    # ⚠️ **`[^][]*`, not `[A-Za-z]+`.** A phase name can be two words -- "Super
+    # admin", "Product sync", "Full builder" -- and a single-word pattern matched
+    # none of them, leaving this EMPTY and the check silently taking its
+    # "marker is on a gate" branch. A gate that fails open is worse than no gate,
+    # and this one did until a mutation with the marker on Phase 26 caught it.
+    # The class excludes brackets so the match cannot run into the next box.
     CURRENT=$(printf '%s\n' "$LEDGER" | grep '◀ HERE' \
-      | grep -oE '\[[x ~ ]\] [0-9]+[a-z]? [A-Za-z]+ ◀ HERE' \
+      | grep -oE '\[[x ~ ]\] [0-9]+[a-z]?[^][]*◀ HERE' \
       | grep -oE '[0-9]+[a-z]?' | head -1)
 
     REACHED=$(printf '%s\n' $REACHED | grep -vxF "${CURRENT:-__none__}" || true)
@@ -241,6 +253,116 @@ else
       printf '      checkbox criteria. Silence here is how 22-25 drifted.\n'
     fi
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# A ticked prose-exit phase must show its working (G1)
+#
+# 🔴 **The ungraded-phase check above catches UNDERSTATEMENT only.** It fails on
+# a phase left `[ ]` that should be ticked -- and says nothing about a phase
+# ticked `[x]` whose prose exit nobody ever graded. A mutation ticking Phase 25
+# without doing the work passed it cleanly.
+#
+# ⚠️ **Overstatement is the likelier failure here, not the rarer one.** Phase 20
+# was ticked grading the team's own usability from the inside; Phase 24 was
+# ticked TWICE with exit criteria unmet. Both were caught by a human re-reading
+# the plan, which is the thing this gate exists so nobody has to rely on.
+#
+# 📌 **What is required is a FOOTNOTE, not a judgement.** This gate cannot know
+# whether prose is satisfied. It can require that a phase which is ticked, and
+# whose criteria it cannot read, carries a dagger marker pointing at a written
+# grading -- so the tick is an argument someone made rather than a box someone
+# clicked. Phases 22-24 carry `††` and the footnote grades every clause against
+# named evidence.
+# ---------------------------------------------------------------------------
+
+UNJUSTIFIED=""
+
+for phase in $PHASES; do
+  # Only phases whose criteria the loop above could NOT read.
+  case " $SEEN_PHASES " in
+    *" $phase "*) continue ;;
+  esac
+
+  # The ledger box for this phase, with any trailing footnote markers.
+  ENTRY=$(printf '%s\n' "$LEDGER" \
+    | grep -oE "\[[x ~]\] ${phase} [A-Za-z][A-Za-z.]*[^][]*" | head -1)
+
+  [ -z "$ENTRY" ] && continue
+
+  # Not ticked: the ungraded-phase check above owns that case.
+  printf '%s' "$ENTRY" | grep -q '^\[x\]' || continue
+
+  # Ticked and ungradable: it must point at a written grading.
+  #
+  # ⚠️ **The marker must have a FOOTNOTE BODY, not merely be present.** A bare
+  # `††` in the ledger satisfied the first draft of this check -- the same
+  # "satisfied by the wrong thing" defect gate 37 had (its own render test) and
+  # gate 40 had (a comment). So the dagger the entry carries has to also open a
+  # line elsewhere in the plan, which is where a human states the grading.
+  MARK=$(printf '%s' "$ENTRY" | grep -oE '†+' | head -1)
+
+  if [ -n "$MARK" ] && grep -qF "$MARK **" "$PLAN"; then
+    continue
+  fi
+
+  UNJUSTIFIED="$UNJUSTIFIED $phase"
+done
+
+if [ -z "$UNJUSTIFIED" ]; then
+  pass "every ticked prose-exit phase points at a written grading"
+else
+  fail "ticked without a recorded grading:$UNJUSTIFIED"
+  printf '      These phases state their exit as prose, so this gate cannot check\n'
+  printf '      them. A tick therefore needs a dagger footnote grading each clause\n'
+  printf '      against named evidence -- as Phases 22-24 carry. Phase 20 and Phase\n'
+  printf '      24 were both ticked once without one, and both were wrong.\n'
+fi
+
+# ---------------------------------------------------------------------------
+# STATUS still describes reality (G2 / F145's other half)
+#
+# 🔴 **Seven recurrences, and none of them were gated.** The STATUS block sat at
+# 2026-09-10 naming *"Phase 19, stage 19-2"* while Phases 19, 20b, 21, 21b, 21c,
+# 22, 23 and 24 all shipped past it. Before that it named Gate 1 while 14-16 were
+# built. The plan records this failure seven times and says of it: *"a ledger
+# nobody updates is a ledger nobody can trust to say what is left."*
+#
+# ⚠️ **The ledger gate did NOT cover this.** It reads the phase ledger and the
+# gate sections; STATUS is a different block, and refreshing it stayed a thing a
+# human had to remember. Fixing the seventh instance by hand without gating the
+# class is how there came to be a seventh.
+#
+# 📌 **What is checked is AGREEMENT, not content.** Whether STATUS describes the
+# work well is a human judgement. Whether the phase it points at is the phase the
+# ledger's marker points at is arithmetic -- and disagreement between them is
+# exactly what every one of the seven instances looked like.
+# ---------------------------------------------------------------------------
+
+STATUS_PHASE=$(awk '/^## ▶ THE NEXT THING TO DO/{f=1;next} f&&/^## /{exit} f' "$PLAN" \
+  | grep -oE '\[Phase [0-9]+[a-z]?\]' | head -1 | grep -oE '[0-9]+[a-z]?')
+
+MARKER_PHASE=$(printf '%s\n' "$LEDGER" | grep '◀ HERE' \
+  | grep -oE '\[[x ~ ]\] [0-9]+[a-z]?[^][]*◀ HERE' \
+  | grep -oE '[0-9]+[a-z]?' | head -1)
+
+if [ -z "$STATUS_PHASE" ]; then
+  # A marker on a GATE rather than a phase is legitimate; so is STATUS naming
+  # that gate. Only a STATUS that names no phase at all is unreadable.
+  if printf '%s\n' "$LEDGER" | grep -q '🚩 GATE [0-9]* ◀ HERE'; then
+    pass "STATUS and the ledger marker both sit on a gate"
+  else
+    fail "STATUS names no phase — 'THE NEXT THING TO DO' must link one"
+    printf '      Seven stale-STATUS instances all began with it naming the wrong phase.\n'
+  fi
+elif [ -z "$MARKER_PHASE" ]; then
+  pass "the ledger marker sits on a gate; STATUS names Phase ${STATUS_PHASE}"
+elif [ "$STATUS_PHASE" = "$MARKER_PHASE" ]; then
+  pass "STATUS and the ledger agree the current phase is ${MARKER_PHASE}"
+else
+  fail "STATUS says Phase ${STATUS_PHASE}; the ledger marker says ${MARKER_PHASE}"
+  printf '      One of the two is stale. This disagreement is what all seven\n'
+  printf '      stale-STATUS instances looked like from the outside.\n'
 fi
 
 # ---------------------------------------------------------------------------

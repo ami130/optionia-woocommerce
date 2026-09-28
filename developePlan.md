@@ -566,6 +566,27 @@ fact that work had happened:
 | 24 | limits enforced with clear messaging | `plan-limit-http.e2e-spec` — refusal over HTTP naming allowance, usage and upgrade |
 | 24 | lapsed-then-recovered merchant loses nothing | `billing-webhook.e2e-spec:1062` — *"keeps a merchant's configuration through fail, lapse and recovery"* |
 
+🔴 **Three checks, because the first draft covered one direction of three.**
+Written 2026-09-28, then audited the same day and found wanting twice:
+
+| Check | Catches | Found by |
+|---|---|---|
+| ungraded and unticked | a reached phase left `[ ]` | the original F145 |
+| **ticked without a grading** | a phase ticked whose prose nobody graded | audit: a mutation ticking Phase 25 **passed cleanly** |
+| **STATUS agrees with the marker** | STATUS naming a different phase | audit: nothing gated STATUS at all, after seven recurrences |
+
+⚠️ **And the first draft FAILED OPEN.** Its marker regex read
+`[0-9]+[a-z]? [A-Za-z]+ ◀ HERE` — one word — so a two-word phase name like
+*"Super admin"* matched nothing, the variable came back empty, and the check
+silently took its *"the marker is on a gate"* branch. Caught only by a mutation
+that moved the marker to Phase 26. **A gate that fails open is worse than no
+gate**, because it reports a pass for a question it never asked.
+
+📌 **A bare dagger also satisfied the second check until it was tightened.** The
+marker now has to open a footnote line elsewhere in the plan — the same
+"satisfied by the wrong thing" defect gate 37 had (its own render test) and gate
+40 had (a comment), making three.
+
 🔴 **The gate now names what it cannot grade instead of skipping it.** A prose
 exit still needs a human, but a phase that has been *reached*, sits at `[ ]`,
 and cannot be graded is printed by name — because "all checks passed" must not

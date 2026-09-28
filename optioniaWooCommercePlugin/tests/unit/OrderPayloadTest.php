@@ -533,6 +533,69 @@ final class OrderPayloadTest extends TestCase {
 	}
 
 	/**
+	 * ⚠️ **A negative quantity does not become negative revenue.**
+	 *
+	 * WooCommerce uses negative quantities on refund line items, and this class
+	 * never sees one: `OrderReporter` fires on the `processing` and `completed`
+	 * transitions of a `WC_Order`, and a `WC_Order_Refund` never takes that
+	 * path. The clamp is pinned anyway so the assumption is visible -- if
+	 * reporting is ever extended to refunds, this test is what fails and says
+	 * the clamp must become a rejection.
+	 */
+	public function test_a_negative_quantity_is_clamped_rather_than_inverted(): void {
+		$order          = optionia_test_order( 1 );
+		$item           = $this->line( 'finish', 'lux', '7.00' );
+		$item->quantity = -3;
+		$order->items[] = $item;
+
+		$this->assertSame( 700, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
+	 * 📌 **An item too old to answer `get_quantity()` still reports its
+	 * revenue.** The multiplier is absent, not zero -- and treating a missing
+	 * answer as zero would erase the line.
+	 *
+	 * ✏️ **This is the only path that reaches the `method_exists` branch.** The
+	 * test double declares `public int $quantity`, so it can never hold a
+	 * non-numeric value; asserting that branch through it would pin nothing.
+	 * An object without the method is how a real pre-3.0 line item behaves.
+	 */
+	public function test_an_item_that_cannot_report_quantity_still_reports_revenue(): void {
+		$order = optionia_test_order( 1 );
+		$item  = $this->line( 'finish', 'lux', '7.00' );
+
+		// A line item exposing meta but no quantity, as older WooCommerce did.
+		$order->items[] = new class( $item ) {
+			/** @var object */
+			private $inner;
+
+			/** @param object $inner The item whose meta this exposes. */
+			public function __construct( object $inner ) {
+				$this->inner = $inner;
+			}
+
+			/**
+			 * @param string $key Meta key.
+			 * @return mixed
+			 */
+			public function get_meta( string $key ) {
+				return $this->inner->get_meta( $key );
+			}
+
+			/**
+			 * @param string $hideprefix Prefix marking a key as hidden.
+			 * @return array<int, object>
+			 */
+			public function get_formatted_meta_data( string $hideprefix = '_' ) {
+				return $this->inner->get_formatted_meta_data( $hideprefix );
+			}
+		};
+
+		$this->assertSame( 700, ( new OrderPayload() )->build( $order )['option_revenue_minor'] );
+	}
+
+	/**
 	 * ⚠️ **An amount that would overflow when scaled is refused, not rounded.**
 	 *
 	 * `MAX_MINOR` is `2^53 - 1` and `PHP_INT_MAX` is `2^63 - 1`, so a per-unit
