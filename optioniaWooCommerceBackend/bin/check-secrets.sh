@@ -114,10 +114,16 @@ fi
 
 # --- 1b. Credentials in env files ------------------------------------------
 # Check 1 requires a quoted value, because that is how a credential appears in
-# source. In a .env file values are bare — `SMTP_PASS=hooxpxetwpspbzwv` — so it
+# source. In a .env file values are bare — `SMTP_PASS=xxxxxxxxxxxxxxxx` — so it
 # matched nothing, while this script's own header claimed it caught "a credential
 # in a committed .env.example". It did not, and that was verified by pasting a
 # real app password into the file and watching the scan pass.
+#
+# 🔴 **That verification left the real password HERE, in this comment, and this
+# file is committed.** Found 2026-09-28 by scanning the repository for the value
+# after it was rotated: the guard against publishing a credential had published
+# one itself, in its own explanation of the defect. The example is a placeholder
+# now — an illustration never needs to be real.
 #
 # Any tracked env file must have empty values for credential-shaped keys. The
 # committed file is a template; the real values live in an untracked .env.
