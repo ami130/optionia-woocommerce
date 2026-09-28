@@ -128,6 +128,22 @@ export interface AnalyticsSummary {
   /** Revenue per option set — M25.3's last clause (F150). */
   readonly optionSets: Capped<OptionSetRevenue>;
   /**
+   * The currency every figure here is in, or `null` when it is not one currency.
+   *
+   * 🔴 **Minor units alone cannot be displayed.** `4700` is £47.00 or ¥4700
+   * depending on the currency, and a dashboard guessing would misstate a
+   * merchant's revenue by a factor of a hundred for a zero-decimal currency.
+   *
+   * ⚠️ **`null` when a tenant's orders span several currencies**, which two
+   * stores in different countries produce. The totals here are sums of minor
+   * units across those orders, so they are **not** a meaningful amount in any
+   * single currency — and the honest answer is to say so rather than to pick
+   * one and label the sum with it. A per-currency breakdown belongs with
+   * M25.4's comparisons; this field is what stops the number being presented as
+   * something it is not in the meantime.
+   */
+  readonly currency: string | null;
+  /**
    * Selections carrying no set attribution.
    *
    * 🔴 **Reported rather than hidden.** These are orders from a plugin older
@@ -180,8 +196,16 @@ export class AnalyticsService {
 
   /** Everything the screen needs, in one round trip per section. */
   async summary(tenantId: string): Promise<AnalyticsSummary> {
-    const [attach, topOptions, topValues, leastValues, deadOptions, optionSets, unattributed] =
-      await Promise.all([
+    const [
+      attach,
+      topOptions,
+      topValues,
+      leastValues,
+      deadOptions,
+      optionSets,
+      unattributed,
+      currency,
+    ] = await Promise.all([
         this.attachRate(tenantId),
         this.optionRevenue(tenantId),
         this.valueRevenue(tenantId, 'most'),
@@ -189,6 +213,7 @@ export class AnalyticsService {
         this.deadOptions(tenantId),
         this.optionSetRevenue(tenantId),
         this.unattributedSelections(tenantId),
+        this.currency(tenantId),
       ]);
 
     return {
@@ -199,6 +224,7 @@ export class AnalyticsService {
       deadOptions,
       optionSets,
       unattributedSelections: unattributed,
+      currency,
     };
   }
 
@@ -568,6 +594,34 @@ export class AnalyticsService {
       })),
       Number(count?.total ?? 0),
     );
+  }
+
+  /**
+   * The one currency this tenant's orders are in, or `null` if there are several.
+   *
+   * 🔴 **Every figure this service returns is a sum of minor units**, and minor
+   * units are meaningless without a currency: `4700` is £47.00 or ¥4700
+   * depending on it. A dashboard that guessed would misstate revenue by a factor
+   * of a hundred for a zero-decimal currency.
+   *
+   * ⚠️ **Several currencies yields `null`, not the most common one.** A tenant
+   * with stores in two countries has totals here that are sums across both — not
+   * an amount in either — so naming one would label a meaningless number with a
+   * currency that makes it look meaningful. The caller is expected to withhold
+   * the figures rather than mislabel them.
+   */
+  async currency(tenantId: string): Promise<string | null> {
+    const rows = (await this.dataSource.query(
+      `SELECT DISTINCT e.currency AS currency
+         FROM order_events e
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ?
+        LIMIT 2`,
+      [tenantId],
+    )) as { currency: string }[];
+
+    /* Exactly one, or nothing to say. Two is as informative as twenty here. */
+    return rows.length === 1 ? rows[0].currency : null;
   }
 
   /**

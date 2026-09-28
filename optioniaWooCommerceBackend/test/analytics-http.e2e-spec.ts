@@ -593,6 +593,40 @@ describe('Analytics over HTTP (e2e)', () => {
   });
 
   /**
+   * 🔴 **Minor units are meaningless without a currency.** `4700` is £47.00 or
+   * ¥4700 depending on it, so a dashboard guessing would misstate revenue by a
+   * factor of a hundred for a zero-decimal currency.
+   */
+  it('names the currency its figures are in', async () => {
+    expect((await get()).body.data.currency).toBe('USD');
+  });
+
+  /**
+   * ⚠️ **Several currencies yields null, not the most common one.** A tenant
+   * with stores in two countries has totals that are sums across both — not an
+   * amount in either — so naming one would label a meaningless number with a
+   * currency that makes it look meaningful.
+   */
+  it('reports no currency when the orders span more than one', async () => {
+    await dataSource.query(
+      `INSERT INTO order_events
+         (id, storeId, externalOrderId, orderTotalMinor, currency, optionRevenueMinor,
+          occurredAt, createdAt, updatedAt)
+       VALUES (UUID(), ?, 'a-eur', ?, 'EUR', 0, NOW(3), NOW(3), NOW(3))`,
+      [storeId, 1_000],
+    );
+
+    try {
+      expect((await get()).body.data.currency).toBeNull();
+    } finally {
+      await dataSource.query(
+        `DELETE FROM order_events WHERE storeId = ? AND externalOrderId = 'a-eur'`,
+        [storeId],
+      );
+    }
+  });
+
+  /**
    * 🔴 **A plan without analytics is REFUSED, over HTTP.** This is the assertion
    * `PlanFeatureGuard` was built for and had no caller to make.
    */

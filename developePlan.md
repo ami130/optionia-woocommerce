@@ -30556,6 +30556,41 @@ NULL` from the per-set query changes nothing, because the inner
 `JOIN option_sets` already drops a null row. Kept anyway — the exclusion is the
 point, and a reader should not have to derive it from join semantics.
 
+#### Stage 25-2 — the screen a merchant actually opens (2026-09-28)
+
+🔴 **Phase 25's exit criterion says "a MERCHANT can identify their
+highest-revenue options and their dead ones", and the subject is the merchant,
+not the API.** `GET /analytics` shipped with twenty e2e tests and **no screen** —
+`find` for an analytics route returned nothing. The tenth instance of this
+project's dominant defect, and one I had called "already met" while reading the
+criterion as a statement about the backend.
+
+`/analytics` now renders all four sections, and the nav item is un-marked.
+
+⚠️ **Two states that are deliberately not errors.** A plan without analytics
+renders the API's own upgrade sentence with a link to plans — a red error would
+tell a Free merchant their dashboard is broken. And no orders yet is an empty
+state pointing at option sets, because *"£0.00 earned"* invites the conclusion
+that options do not work.
+
+🔴 **F160 — the API returned money with no currency.** Every figure is a sum of
+**minor units**, and `4700` is £47.00 or ¥4700 depending on the currency; a
+dashboard guessing would misstate revenue by a factor of a hundred for a
+zero-decimal currency. `currency` now ships on the response — and is **null when
+a tenant's orders span several**, which two stores in different countries
+produce. The totals are then sums across currencies, not an amount in any one, so
+the page **withholds money and keeps counts** rather than mislabelling a
+meaningless number.
+
+✏️ **Two existing tests failed, and both were right to.** `screen-states.test.ts`
+requires a hand-branching screen to narrow `data` explicitly — my `!analytics.data`
+was correct behaviour in a shape the guard cannot see, and the guard exists
+because `/connect` once rendered a populated view over missing data. And
+`navigation.test.ts` asserted at least three *disabled* nav items; Analytics
+moved from disabled to enabled, so that floor was stale. **Lowered to 2 with the
+reason recorded** — a disabled count that only ever rises would mean the product
+never finishes anything.
+
 #### Stage order
 
 ```text

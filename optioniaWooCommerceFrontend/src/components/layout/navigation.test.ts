@@ -44,7 +44,15 @@ describe('navigation', () => {
   it('parses the navigation list', () => {
     // Guards the parser itself: an empty list would make every case below vacuous.
     expect(hrefs('enabled').length).toBeGreaterThanOrEqual(4);
-    expect(hrefs('disabled').length).toBeGreaterThanOrEqual(3);
+
+    /*
+     * ✏️ **Lowered from 3 to 2 when Analytics shipped (2026-09-28).** This is a
+     * floor on the PARSER, not a claim about how much is unbuilt — a disabled
+     * count that only ever rises would mean the product never finishes anything.
+     * Two keeps both branches of the `phase:` filter exercised, which is all
+     * this case is for.
+     */
+    expect(hrefs('disabled').length).toBeGreaterThanOrEqual(2);
   });
 
   it.each(hrefs('enabled'))('%s has a page', (href) => {

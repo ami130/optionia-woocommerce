@@ -41,7 +41,7 @@ const NAVIGATION: ReadonlyArray<{ href: string; label: string; phase?: string; i
   { href: '/products', label: 'Products', icon: Package },
   { href: '/stores', label: 'Stores', icon: Store },
   { href: '/rules', label: 'Rules', phase: 'Phase 17', icon: Workflow },
-  { href: '/analytics', label: 'Analytics', phase: 'Phase 25', icon: BarChart3 },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/subscription', label: 'Subscription', icon: CreditCard },
   /*
    * 🔴 A live link to a page that does not exist. Profile, team and
