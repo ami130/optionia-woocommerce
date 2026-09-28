@@ -78,6 +78,8 @@ freely. **Clients must not parse `message`.** The full set and its statuses:
 | `FORBIDDEN` | 403 | Authenticated, and not permitted |
 | `EMAIL_NOT_VERIFIED` | 403 | Credentials correct; the address is unverified |
 | `INSUFFICIENT_ROLE` | 403 | Authenticated in this tenant; role lacks the capability |
+| `PLAN_FEATURE_UNAVAILABLE` | 403 | The tenant's plan does not include this feature — **upgrade**, not wait |
+| `SUBSCRIPTION_LAPSED` | 403 | The grace period expired, so authoring is paused — **settle the payment** |
 | `NOT_FOUND` | 404 | Does not exist, **or belongs to another tenant** |
 | `CONFLICT` | 409 | Request conflicts with current state |
 | `ALREADY_EXISTS` | 409 | Uniqueness violation |
@@ -87,6 +89,23 @@ freely. **Clients must not parse `message`.** The full set and its statuses:
 | `PLAN_LIMIT_EXCEEDED` | 429 | Plan quota reached |
 | `INTERNAL_ERROR` | 500 | Unexpected; details are logged, never returned |
 | `SERVICE_UNAVAILABLE` | 503 | Dependency unavailable |
+
+🔴 **Four distinct 403s, because the remedies are four different actions.**
+`FORBIDDEN` means *ask someone with more permission*; `EMAIL_NOT_VERIFIED` means
+*open your email*; `PLAN_FEATURE_UNAVAILABLE` means *change the plan*; and
+`SUBSCRIPTION_LAPSED` means *settle an outstanding payment*. A dashboard showing
+one message for all four sends three-quarters of merchants somewhere useless.
+
+⚠️ **`PLAN_FEATURE_UNAVAILABLE` is 403 and `PLAN_LIMIT_EXCEEDED` is 429**, which
+looks inconsistent and is not. A limit says *you have used all of yours*, so
+waiting or deleting can resolve it and a retry may succeed. A feature gate says
+*your plan has none of these*: no amount of waiting helps, and a 429 would invite
+a retry that can never work.
+
+📌 **`SUBSCRIPTION_LAPSED` is not 402.** That status is effectively unused on the
+web and handled unpredictably by clients, proxies and error trackers; every
+refusal here already maps through `ERROR_STATUS`, so a code the ecosystem does
+not handle buys nothing over a 403 with a specific code.
 
 **The request body limit is 1 MB, and exceeding it is a `413`** (ADR-072). It is
 set explicitly rather than inherited: with nothing configured, Express applied
@@ -2478,6 +2497,82 @@ payload: a boolean is accepted, **anything else — strings, numbers, `null` —
 `400`**, and an omitted key still means "leave unchanged".
 
 ---
+
+## ANALYTICS — `/v1/analytics` (M25.3)
+
+| Route | Capability | Status |
+| --- | --- | --- |
+| `GET /analytics` | `analytics:view` | `[built]` |
+
+🔴 **Two gates, answering different questions.** `analytics:view` asks *may this
+person*; the tenant's `plan.features.analytics` asks *does this plan include it*.
+A viewer on Business passes both; an owner on Free passes the first and gets
+`PLAN_FEATURE_UNAVAILABLE`. Collapsing them would make an upgrade prompt
+indistinguishable from a permissions error.
+
+📌 **One endpoint rather than four.** Option revenue, chosen values, dead options
+and revenue per set answer one question — *which options make money and which are
+ignored* — and splitting them would let a merchant see revenue computed at one
+moment beside dead options computed at another.
+
+⚠️ **Every list is capped at 50 and says so**, via `{ rows, total, truncated }`:
+fifty rows with no total is indistinguishable from "that is everything".
+`currency` is `null` when a tenant's orders span several, and the dashboard then
+withholds money rather than labelling a cross-currency sum with one of them.
+
+## BILLING — `/v1/billing/*` (Phase 22, Phase 23)
+
+| Route | Capability | Status |
+| --- | --- | --- |
+| `POST /billing/webhook` | none — signature-authenticated | `[built]` |
+| `GET /billing/plans` | `billing:view` | `[built]` |
+| `GET /billing/subscription` | `billing:view` | `[built]` |
+| `GET /billing/invoices` | `billing:view` | `[built]` |
+| `POST /billing/checkout` | `billing:manage` | `[built]` |
+| `POST /billing/plan` | `billing:manage` | `[built]` |
+| `DELETE /billing/subscription` | `subscription:cancel` | `[built]` |
+| `POST /billing/portal` | `billing:manage` | `[built]` |
+
+🔴 **`POST /billing/webhook` is the opposite of every other route here.** It is
+`@Public()` and exempt from the throttler because Stripe carries no bearer token;
+its authentication is the signature over the **raw** body, which is why
+`main.ts` preserves it. Redelivery is a no-op by unique index, never by a check.
+
+🔴 **Subscription state is webhook-derived and never taken from a redirect.** A
+completed checkout links provider ids and deliberately does not set `active` —
+the real terms arrive on `customer.subscription.updated` moments later, and
+`GET /billing/subscription` reports `settling: true` in that window so a merchant
+who just paid is not shown the plan they left.
+
+⚠️ **The whole controller is `@WritableWhenLapsed()`** (ADR-116). Authoring
+pauses when a subscription lapses, and a read-only state that blocked the payment
+which would lift it is a trap rather than a policy.
+
+📌 **`GET /billing/subscription` also carries `usage[]`** — every metered metric,
+not only the breached ones, so a card reading "9 of 10 option sets" warns before
+it blocks (M24.4).
+
+## STAFF — `/v1/admin/*` (M22.1a)
+
+| Route | Capability | Status |
+| --- | --- | --- |
+| `GET /admin/plans` | staff realm — `super_admin`, `read_only` | `[built]` |
+| `POST /admin/plans/:code/price` | staff realm — `super_admin` | `[built]` |
+| `PATCH /admin/plans/:code/visibility` | staff realm — `super_admin` | `[built]` |
+| `GET /admin/billing/tax-report` | staff realm — `super_admin`, `read_only` | `[built]` |
+
+🔴 **A separate realm, not a higher tenant role.** *"A tenant admin editing what
+they pay is not a feature, it is a vulnerability."* These routes take
+`StaffGuard` — a `platform_staff` row keyed on `userId` — and deliberately **not**
+`TenantGuard`. A tenant owner, the highest role a merchant holds, is refused.
+
+⚠️ **`StaffGuard` fails closed.** A staff route that declares no required role is
+refused rather than admitted, because the cost of the opposite default here is
+someone editing prices.
+
+📌 **A price edit inserts and retires, never rewrites** (ADR-117). Prices are
+grandfathered indefinitely and a subscription pins `plan_price_id`, so existing
+subscribers are unaffected by construction rather than by policy.
 
 ## Connection state machine
 
