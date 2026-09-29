@@ -101,6 +101,28 @@ describe('Billing webhook (e2e)', () => {
          (SELECT id FROM tenants WHERE slug LIKE 'whook-%')`,
     );
 
+    /*
+     * 🔴 **The dunning owners and their memberships, which nothing removed.**
+     *
+     * `tenantWithOwner` creates a tenant slugged `whook-…` — deleted below — plus
+     * a user on `@dunning.test` and a membership joining them. Only the tenant
+     * was ever cleaned up, so every run left the user behind with its membership
+     * gone: an orphan that no namespace cleanup can find, because every helper
+     * here reaches a user THROUGH its tenant.
+     *
+     * ⚠️ **Memberships first, then users** — `tenant_members.userId` is a
+     * foreign key, and deleting the user while the row stands fails.
+     *
+     * 📌 **Matched on the address, not the slug.** These users are the one thing
+     * this suite creates that carries no `whook-` prefix, which is exactly why
+     * the slug-shaped teardown could not see them.
+     */
+    await dataSource.query(
+      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId
+        WHERE u.email LIKE '%@dunning.test'`,
+    );
+    await dataSource.query(`DELETE FROM users WHERE email LIKE '%@dunning.test'`);
+
     /* Invoices are RESTRICT on tenant, so they go before subscriptions and tenants. */
     await dataSource.query(
       `DELETE i FROM invoices i JOIN tenants t ON t.id = i.tenantId WHERE t.slug LIKE 'whook-%'`,

@@ -963,14 +963,48 @@ describe('option authoring (e2e)', () => {
       }
 
       const group = idOf(groupResponse, 'foreign group');
-      const option = idOf(
-        await post(tokenB, `/groups/${group}/options`, {
-          key: 'b_option',
-          label: 'B option',
-          presentation: 'radio',
-        }),
-        'foreign option',
-      );
+
+      const optionResponse = await post(tokenB, `/groups/${group}/options`, {
+        key: 'b_option',
+        label: 'B option',
+        presentation: 'radio',
+      });
+
+      /**
+       * The same diagnostic, one step later.
+       *
+       * ✏️ **The instrumentation above covers the GROUP create, and a run
+       * failed on the OPTION create instead** — with the group create having
+       * answered 201, so nothing printed and the failure was again a bare
+       * `404 {}`. The two steps fail the same way and for the same unknown
+       * reason, so they need the same evidence: whether the group is visible,
+       * whose tenant owns the set beneath it, and whether either is deleted.
+       *
+       * 📌 **This is a pre-existing intermittent, not a product defect under
+       * test.** It has never reproduced in isolation. Printing the state is
+       * what lets the next occurrence be diagnosed rather than re-theorised.
+       */
+      if (optionResponse.status !== 201) {
+        const [row] = await dataSource.query(
+          `SELECT g.deletedAt AS groupDeletedAt, os.id AS setId, os.tenantId AS setTenant,
+                  os.deletedAt AS setDeletedAt
+             FROM option_groups g JOIN option_sets os ON os.id = g.optionSetId
+            WHERE g.id = ?`,
+          [group],
+        );
+        const [member] = await dataSource.query(
+          `SELECT tm.tenantId FROM tenant_members tm JOIN users u ON u.id = tm.userId
+            WHERE u.email = ?`,
+          [`${NS}-b@example.com`],
+        );
+
+        console.log(
+          `FOREIGN OPTION FIXTURE FAILED status=${optionResponse.status} group=${group} ` +
+            `groupRow=${JSON.stringify(row ?? null)} memberTenant=${member?.tenantId}`,
+        );
+      }
+
+      const option = idOf(optionResponse, 'foreign option');
       const value = idOf(
         await post(tokenB, `/options/${option}/values`, { valueKey: 'b_value', label: 'B value' }),
         'foreign value',

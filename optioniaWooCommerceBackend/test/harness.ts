@@ -51,6 +51,26 @@ export interface Harness {
   /** Remove everything this namespace created. */
   cleanup(): Promise<void>;
 
+  /**
+   * Clean up, then shut the application down.
+   *
+   * 🔴 **`close()` used to be `app.close()` alone, and 23 of 32 suites called
+   * only it** — so every tenant, user, membership and subscription they made
+   * survived the run for good. The test database held 73 tenants and 126 users
+   * against 40 memberships; 86 of those users belonged to nothing, which is
+   * debris `deleteTenantsFor` can never find, because it reaches a tenant
+   * *through* its membership.
+   *
+   * ⚠️ **Cleaning up here rather than in 23 teardowns is deliberate.** This is
+   * the same defect `cleanup-tenants.ts` records being fixed one suite at a
+   * time, three times over — and the 24th suite, not yet written, would have
+   * leaked too. A suite may still call `cleanup()` itself mid-run; doing so
+   * twice is harmless, since every statement is a `DELETE … WHERE`.
+   *
+   * 📌 **A cleanup failure must not leave the app open.** It runs in a `try`
+   * whose `finally` closes regardless, or one teardown error would hold a
+   * connection pool and hang the whole run after the tests had passed.
+   */
   close(): Promise<void>;
 }
 
@@ -385,7 +405,13 @@ export async function createHarness(namespace: string): Promise<Harness> {
     tenantIdOf,
     store,
     cleanup,
-    close: () => app.close(),
+    close: async () => {
+      try {
+        await cleanup();
+      } finally {
+        await app.close();
+      }
+    },
   };
 }
 
@@ -448,9 +474,24 @@ export function idOf(response: request.Response, what: string): string {
     const req = (response as unknown as { req?: { method?: string; path?: string } }).req;
     const where = req?.path ? ` [${req.method ?? 'POST'} ${req.path}]` : '';
 
+    /*
+     * ✏️ **An empty `{}` is the one shape this message could not explain**, and
+     * it is what a full run produced: status 400 with neither `body.error` nor
+     * `body`. A validation refusal always carries a populated error — so an
+     * empty body means the response never carried one, which points at the
+     * transport rather than at the rule the status implies.
+     *
+     * 📌 **So the raw text and the content type go in too.** They cost nothing
+     * on a path that is already failing, and they distinguish "the API refused
+     * and said why" from "nothing came back", which the status alone cannot.
+     */
+    const raw = typeof response.text === 'string' ? response.text.slice(0, 400) : '(no text)';
+    const contentType = response.headers?.['content-type'] ?? '(none)';
+
     throw new Error(
       `Fixture failed to create a ${what}: ${response.status}${where} ` +
-        `${JSON.stringify(response.body?.error ?? response.body)}`,
+        `${JSON.stringify(response.body?.error ?? response.body)} ` +
+        `contentType=${contentType} text=${JSON.stringify(raw)}`,
     );
   }
 
