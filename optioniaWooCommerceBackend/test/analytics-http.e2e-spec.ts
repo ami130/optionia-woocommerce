@@ -674,6 +674,75 @@ describe('Analytics over HTTP (e2e)', () => {
   });
 
   /**
+   * 🔴 **A negative revenue stays a NUMBER, not guarded text** (F165).
+   *
+   * ✏️ **This is the test I should have written first.** The formula guard
+   * prefixes a tab to any cell starting `-`, because `-1+1` is a formula — and
+   * `revenue_minor` is legitimately negative whenever a merchant offers a
+   * discount option, which this codebase tests at both ends. `"\t-500"` is
+   * TEXT to Excel: `SUM()` skips it silently, and the merchant's total is wrong
+   * with nothing to indicate it.
+   *
+   * 📌 **The danger and the data point the same way here**, which is why one
+   * blanket rule could not serve both. Text columns are guarded; machine-made
+   * numbers are not.
+   */
+  it('exports a negative revenue as a number a spreadsheet can sum', async () => {
+    await order('a-csv-negative', 1_000, [
+      { optionKey: 'bundle_discount', label: 'Bundle discount', valueKey: 'y', deltaMinor: -500 },
+    ]);
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      const row = response.text
+        .split('\r\n')
+        .find((line) => line.startsWith('bundle_discount'));
+
+      expect(row).toBeDefined();
+
+      /* `-500` bare — never `\t-500`, and never quoted. */
+      expect(row).toContain(',-500,');
+      expect(row).not.toContain('\t-500');
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-csv-negative'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-csv-negative'`);
+    }
+  });
+
+  /**
+   * ⚠️ **And a TEXT column starting `-` is still guarded.** Narrowing the guard
+   * to spare numbers must not spare an option key or label a merchant chose —
+   * `-1+1` as an option name is as executable as `=1+1`.
+   */
+  it('still guards a text column that starts with a minus', async () => {
+    await order('a-csv-textminus', 1_000, [
+      { optionKey: 'minus_lead', label: '-1+1', valueKey: 'y', deltaMinor: 100 },
+    ]);
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      /* Present, and never at the start of its cell. */
+      expect(response.text).toContain('1+1');
+      expect(response.text).not.toMatch(/(^|,)-1\+1/m);
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-csv-textminus'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-csv-textminus'`);
+    }
+  });
+
+  /**
    * 🔴 **A comma or a quote in a label must not shift every later column.**
    * "Size, large" is an ordinary option name, and an unescaped one turns a
    * five-column row into six.

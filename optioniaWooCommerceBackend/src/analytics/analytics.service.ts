@@ -712,6 +712,18 @@ export class AnalyticsService {
         currency ?? '',
         String(Number(row.orders)),
       ]),
+      /*
+       * 🔴 **Columns 2 and 4 stay numeric** — `revenue_minor` and `orders`
+       * (F165). Both are `String(Number(…))` over an aggregate, so nothing a
+       * merchant typed can reach them, and a negative revenue must arrive in
+       * the spreadsheet as a number the merchant can sum.
+       *
+       * ⚠️ **`currency` at index 3 is NOT here.** It is a three-letter code
+       * today, but it comes from `order_events.currency`, which the plugin
+       * sends — so it is data from outside this system and is guarded like any
+       * other text.
+       */
+      new Set([2, 4]),
     );
   }
 }
@@ -736,17 +748,57 @@ export class AnalyticsService {
  * ⚠️ **CRLF, not LF.** RFC 4180 says so, and Excel on Windows is the reader that
  * cares.
  */
-export function toCsv(header: readonly string[], rows: readonly (readonly string[])[]): string {
-  const escape = (raw: string): string => {
+export function toCsv(
+  header: readonly string[],
+  rows: readonly (readonly string[])[],
+  numericColumns: ReadonlySet<number> = new Set(),
+): string {
+  const escape = (raw: string, column: number, isHeader: boolean): string => {
     /*
-     * The formula guard runs BEFORE quoting, so the tab is inside the quoted
-     * field rather than outside it — otherwise the quoting would be what a
-     * parser sees first and the tab would break the field.
+     * 🔴 **A numeric column is NEVER formula-guarded** (F165).
+     *
+     * The guard prefixes a tab, and `-` is in its character class because
+     * `-1+1` is a formula. But `revenue_minor` is legitimately negative — a
+     * discount option earns negative revenue, which this codebase tests at both
+     * ends — and `"\t-500"` is **text** to Excel, not a number. `SUM()` over
+     * that column silently skips it, so the merchant's total is wrong with no
+     * error shown: the exact failure a spreadsheet export exists to avoid.
+     *
+     * ⚠️ **Safe because these values never come from a merchant.** They are
+     * `String(Number(…))` over a database aggregate — digits and an optional
+     * leading minus, and nothing else can reach them. A column carrying
+     * anything a person typed is not numeric and does not belong here.
+     *
+     * ✏️ **Found auditing my own commit**: I tested the guard with `=1+1` and
+     * never with a negative number, in a repository that tests negative deltas
+     * twice elsewhere.
+     *
+     * 🔴 **The HEADER row is never exempt, whatever column it is in.** A header
+     * is a name, never a number, so the reason for the exemption does not apply
+     * to it — and without this an `=`-leading header in a numeric column passed
+     * through raw. Today's only caller passes five hardcoded literals, so
+     * nothing is exploitable; `toCsv` is exported, so the next caller would
+     * have inherited the trap with no way to see it.
      */
-    const guarded = /^[=+\-@\t\r]/.test(raw) ? `\t${raw}` : raw;
+    const exempt = !isHeader && numericColumns.has(column);
 
+    const guarded = !exempt && /^[=+\-@\t\r]/.test(raw) ? `\t${raw}` : raw;
+
+    /*
+     * Quoting runs after, so a guarded field carries its tab INSIDE the quotes.
+     * The other order would let a parser see the tab before the opening quote
+     * and break the field.
+     *
+     * 📌 **A leading newline is not in the guard's class and does not need to
+     * be.** `"\n=1+1"` is quoted for the newline, which puts the `=` off cell
+     * start — measured, rather than reasoned about.
+     */
     return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
   };
 
-  return [header, ...rows].map((row) => row.map(escape).join(',')).join('\r\n');
+  return [header, ...rows]
+    .map((row, index) =>
+      row.map((cell, column) => escape(cell, column, index === 0)).join(','),
+    )
+    .join('\r\n');
 }
