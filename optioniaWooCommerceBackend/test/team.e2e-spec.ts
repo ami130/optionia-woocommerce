@@ -62,6 +62,17 @@ describe('TeamService (integration)', () => {
     await dataSource.query(`DELETE FROM tenant_members WHERE tenantId LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM users WHERE id LIKE '${NS}-%'`);
     await dataSource.query(`DELETE FROM tenants WHERE id LIKE '${NS}-%'`);
+
+    /*
+     * ⚠️ **Free's seat allowance goes back to what the seed gives it.** This
+     * suite raises it so its own cases can invite a second member, and leaving
+     * it raised is exactly the aggressor pattern that made these fifteen tests
+     * pass locally and fail in CI. Restoring it here is the difference between
+     * being the victim of that and being its cause.
+     */
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.team_seats', 1) WHERE code = 'free'`,
+    );
   }
 
   async function memberId(userId: string, tenantId = TENANT): Promise<string> {
@@ -77,6 +88,28 @@ describe('TeamService (integration)', () => {
     await cleanup();
 
     const [plan] = await dataSource.query(`SELECT id FROM plans WHERE code = 'free'`);
+
+    /*
+     * 🔴 **The seat allowance is set explicitly, because inheriting it FAILED in
+     * CI.** This suite is about invitation logic — who may invite whom, what a
+     * token stores, what an expired one does — and every case needs more than
+     * one member. Free seeds `team_seats: 1`, so `PlanLimitGuard` refuses the
+     * second invite with *"The Free plan allows 1 team seats"* and fifteen tests
+     * fail for a reason none of them are about.
+     *
+     * ⚠️ **It passed locally only because another suite had raised it.**
+     * `bootstrapTestApp` lifts every public plan to 100000 and deliberately does
+     * not put them back, so a developer's test database carries that figure
+     * while CI starts from the seed. A test that depends on another suite's
+     * leftovers is not a test of its own subject; it is a test of the order the
+     * suites happened to run in.
+     *
+     * 📌 **Restored in `cleanup()`**, so this suite does not become the
+     * aggressor it was the victim of.
+     */
+    await dataSource.query(
+      `UPDATE plans SET limits = JSON_SET(limits, '$.team_seats', 100) WHERE code = 'free'`,
+    );
 
     for (const [id, slug] of [
       [TENANT, `${NS}-main`],
