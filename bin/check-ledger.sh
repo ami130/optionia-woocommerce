@@ -481,6 +481,38 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# A deferred milestone must not already be shipped.
+# ---------------------------------------------------------------------------
+# 🔴 **M25.5 sat in the deferral table reading "⏸️ Small and genuinely wanted,
+# so it follows GATE 2's remaining item" for a full day after it shipped.** The
+# phase marker was right, every criterion box was right, and the table beneath
+# them described work that was already done — so the one document that says
+# what is left was wrong about what is left.
+#
+# ⚠️ **A milestone can legitimately be deferred AND mentioned elsewhere**, so
+# prose is not the signal. What cannot both be true is a `⏸️` row for a
+# milestone that another row marks `✅ Shipped`. That contradiction is
+# mechanical, and it is the one a human reliably misses when ticking a phase.
+DEFERRED_SHIPPED=0
+
+while IFS= read -r line; do
+  MS=$(printf '%s' "$line" | grep -oE '\*\*M[0-9]+\.[0-9]+\*\*' | head -1 | tr -d '*')
+  [ -z "$MS" ] && continue
+
+  # Does any OTHER line mark this same milestone as shipped?
+  if grep -qE "\*\*${MS}\*\*.*✅ \*\*Shipped" "$PLAN"; then
+    fail "${MS} is listed as deferred (⏸️) and as shipped (✅) at the same time"
+    DEFERRED_SHIPPED=$((DEFERRED_SHIPPED + 1))
+  fi
+done <<EOF
+$(grep -E '^\| \*\*M[0-9]+\.[0-9]+\*\*.*⏸️' "$PLAN" || true)
+EOF
+
+if [ "$DEFERRED_SHIPPED" -eq 0 ]; then
+  pass "no milestone is both deferred and shipped"
+fi
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d ledger check(s) failed.\033[0m\n' "$FAILURES"

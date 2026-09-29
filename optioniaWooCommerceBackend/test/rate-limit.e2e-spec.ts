@@ -21,6 +21,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { deleteTenantsFor } from './cleanup-tenants';
 import { bootstrapTestApp } from './harness';
 
 /**
@@ -53,13 +54,44 @@ describe('auth rate limiting (e2e)', () => {
     await app?.close();
   });
 
+  /**
+   * Remove this suite's rows, tenants included.
+   *
+   * 🔴 **`DELETE FROM tenants WHERE name LIKE 'rl-%'` matched nothing for the
+   * registration test**, which passes `name: 'x'` and no `tenantName` — so
+   * provisioning names the tenant `x` and slugs it `x`, `x-gqfx`, and so on.
+   * Every run leaked one, and because the memberships were deleted first the
+   * tenant was left with no link to anything: an orphan that neither a name
+   * match nor a membership lookup can ever find again. Measured at two such
+   * rows in the test database.
+   *
+   * ⚠️ **`deleteTenantsFor` reads the memberships BEFORE deleting them**, which
+   * is the whole reason it exists — and is the step this did by hand, in the
+   * wrong order. The helper's own docblock records three suites having made
+   * this mistake; this was the fourth.
+   */
   async function cleanup(): Promise<void> {
-    await dataSource.query(
-      `DELETE tm FROM tenant_members tm JOIN users u ON u.id = tm.userId
-        WHERE u.email LIKE '${NS}-%'`,
-    );
+    await deleteTenantsFor(dataSource, NS);
+
     await dataSource.query(`DELETE FROM users WHERE email LIKE '${NS}-%'`);
-    await dataSource.query(`DELETE FROM tenants WHERE name LIKE '${NS}-%'`);
+
+    /*
+     * 📌 **The `x` tenants, which carry no namespace at all.** They are named
+     * by the register payload rather than by this suite, so nothing links them
+     * back here — the only safe handle is that they have no members left once
+     * the delete above has run.
+     */
+    await dataSource.query(
+      `DELETE sub FROM subscriptions sub
+         JOIN tenants t ON t.id = sub.tenantId
+        WHERE t.name = 'x'
+          AND NOT EXISTS (SELECT 1 FROM tenant_members tm WHERE tm.tenantId = t.id)`,
+    );
+    await dataSource.query(
+      `DELETE t FROM tenants t
+        WHERE t.name = 'x'
+          AND NOT EXISTS (SELECT 1 FROM tenant_members tm WHERE tm.tenantId = t.id)`,
+    );
   }
 
   /** Statuses from N sequential calls, so ordering is meaningful. */

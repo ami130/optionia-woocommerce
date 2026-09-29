@@ -96,9 +96,13 @@ happen.
 
 ### Then, in order
 
-1. **M25.5 CSV export** — small, genuinely wanted, and
-   `plugin-download.controller.ts` already has the `Content-Disposition`
-   precedent. A feature rather than a gate item, so it follows.
+1. ✅ **M25.5 CSV export — shipped 2026-09-28** (`8efe14b`), corrected
+   2026-09-29 (`db8ec76`). The correction is the part worth remembering: the
+   formula guard that neutralises `=`, `+`, `-` and `@` also neutralised a
+   legitimately **negative** revenue, and `"\t-500"` is text to Excel, so
+   `SUM()` skipped it silently. Numeric columns are now exempt — safe because
+   they are `String(Number(…))` over an aggregate, which turns any injected
+   formula into `NaN`.
 2. **Phase 26 — Super Admin**, which the marker points at.
 
 ### Explicitly NOT next, each with a reason
@@ -596,7 +600,7 @@ pointing at 16b, rather than "all" silently meaning "some":
 | **M25.1** event ingestion (views, add-to-cart) | ⏸️ **Deferred.** No transport is designed, and views are every product page load — a cron queue would mean a database write per pageview on the merchant's own server, which is what this phase's own exit criterion forbids. 🔴 **The cost is named, not hidden**: M25.3's *"conversion with vs. without options"* is unanswerable without it (F157), and average order value ships as the honest substitute |
 | **M25.2** rollup tables | ⏸️ **Deferred on measurement, not on guesswork.** On a 480k-row scratch copy the covering indexes are worth 3.5× (253ms → 72ms); at 60k they are worth **nothing** — 127ms against 130ms, because the optimizer scans and scanning is cheaper. Build them when a tenant approaches **100k selections**, not before |
 | **M25.4** comparisons over time and per product | ⏸️ Needs a product reference on `order_selections` (F151) and therefore a plugin release. Waiting for one that is needed anyway |
-| **M25.5** CSV export | ⏸️ Small and genuinely wanted; a feature rather than an exit criterion, so it follows GATE 2's remaining item |
+| **M25.5** CSV export | ✅ **Shipped 2026-09-28** (`8efe14b`). `GET /v1/analytics/export`, gated on `ANALYTICS_VIEW` and the plan's analytics feature, with a download button on the page — a route nothing calls is F132 again. Escaped against the spreadsheet that opens it, and corrected 2026-09-29 (`db8ec76`) after the formula guard turned a legitimately negative revenue into text `SUM()` skips |
 
 ✅ **M25.6 privacy is met structurally**, not by a promise: `OrderPayload` writes
 a `value_label` only for a merchant-defined choice, so free text — an engraving,
