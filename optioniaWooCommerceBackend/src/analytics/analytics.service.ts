@@ -657,4 +657,96 @@ export class AnalyticsService {
   private capped<T>(rows: T[], total: number): Capped<T> {
     return { rows, total, truncated: total > rows.length };
   }
+
+  /**
+   * Every option's revenue, as CSV rows (M25.5).
+   *
+   * ## Why this is not `optionRevenue()` with a bigger limit
+   *
+   * 🔴 **An export is for the whole dataset; the screen is for the top fifty.**
+   * A merchant exporting to a spreadsheet is doing the thing the cap exists to
+   * avoid — reading all of it — so capping the export would produce a file that
+   * silently disagrees with itself the moment they sum a column.
+   *
+   * ⚠️ **No `MAX_ROWS` here, and that is deliberate.** The bound is the tenant's
+   * own history, which is the honest one. A tenant large enough for this to
+   * matter is a tenant whose rollups (M25.2) exist.
+   *
+   * 📌 **Currency travels with every row, not in a header.** A spreadsheet
+   * column of minor units with the currency stated once at the top is a column
+   * somebody sorts, filters, or pastes elsewhere — and then the currency is
+   * gone. `null` becomes an empty cell rather than the word "null".
+   */
+  async exportOptionRevenue(tenantId: string): Promise<string> {
+    const [rows, currency] = await Promise.all([
+      this.dataSource.query(
+        `SELECT optionKey, label, revenueMinor, orders FROM (
+           SELECT
+             sel.optionKey AS optionKey,
+             FIRST_VALUE(sel.optionLabel) OVER (
+               PARTITION BY sel.optionKey ORDER BY e.occurredAt DESC, sel.id DESC
+             ) AS label,
+             SUM(sel.priceDeltaMinor) OVER (PARTITION BY sel.optionKey) AS revenueMinor,
+             COUNT(*) OVER (PARTITION BY sel.optionKey) AS orders,
+             ROW_NUMBER() OVER (
+               PARTITION BY sel.optionKey ORDER BY e.occurredAt DESC, sel.id DESC
+             ) AS rn
+           FROM order_selections sel
+           JOIN order_events e ON e.id = sel.orderEventId
+           JOIN stores s ON s.id = e.storeId
+          WHERE s.tenantId = ?
+         ) ranked
+         WHERE rn = 1
+         ORDER BY revenueMinor DESC, orders DESC, optionKey ASC`,
+        [tenantId],
+      ) as Promise<{ optionKey: string; label: string; revenueMinor: string; orders: number }[]>,
+      this.currency(tenantId),
+    ]);
+
+    return toCsv(
+      ['option_key', 'option_label', 'revenue_minor', 'currency', 'orders'],
+      rows.map((row) => [
+        row.optionKey,
+        row.label,
+        String(Number(row.revenueMinor)),
+        currency ?? '',
+        String(Number(row.orders)),
+      ]),
+    );
+  }
+}
+
+/**
+ * Rows to CSV, escaped so a spreadsheet reads what the database holds.
+ *
+ * ## Why this is hand-written rather than a dependency
+ *
+ * 📌 **The whole of CSV that matters here is one rule**, and it is RFC 4180's:
+ * a field containing a comma, a quote or a newline is wrapped in quotes, and an
+ * embedded quote is doubled. A merchant's option label is free text — *"Size,
+ * large"* and *"12\" model"* are both ordinary — so this is not a theoretical
+ * case.
+ *
+ * 🔴 **The leading-character guard is the one that matters for safety.** A cell
+ * beginning `=`, `+`, `-` or `@` is executed as a formula by Excel and Sheets,
+ * so a merchant who names an option `=1+1` ships a spreadsheet that computes —
+ * and one who is targeted can be made to ship one that fetches a URL. Prefixing
+ * a tab neutralises it while leaving the text readable.
+ *
+ * ⚠️ **CRLF, not LF.** RFC 4180 says so, and Excel on Windows is the reader that
+ * cares.
+ */
+export function toCsv(header: readonly string[], rows: readonly (readonly string[])[]): string {
+  const escape = (raw: string): string => {
+    /*
+     * The formula guard runs BEFORE quoting, so the tab is inside the quoted
+     * field rather than outside it — otherwise the quoting would be what a
+     * parser sees first and the tab would break the field.
+     */
+    const guarded = /^[=+\-@\t\r]/.test(raw) ? `\t${raw}` : raw;
+
+    return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
+  };
+
+  return [header, ...rows].map((row) => row.map(escape).join(',')).join('\r\n');
 }

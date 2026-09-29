@@ -1,4 +1,6 @@
-import { api } from '@/lib/api/client';
+import { getAccessToken } from '@/lib/auth/token-store';
+import { API_BASE_URL, api } from '@/lib/api/client';
+import { ApiError, NetworkError } from '@/lib/api/error';
 
 /**
  * A capped list, and how much of the truth it represents.
@@ -97,4 +99,63 @@ export async function getAnalytics(): Promise<AnalyticsSummary> {
   const { data } = await api.get<AnalyticsSummary>('/analytics');
 
   return data;
+}
+
+/**
+ * Download the option-revenue export as a file (M25.5).
+ *
+ * ## Why this bypasses `api`
+ *
+ * 📌 **`api.get` unwraps a `{data, meta}` envelope**, and this route returns raw
+ * CSV — there is no envelope to unwrap. Passing it through would either parse
+ * the file as JSON and throw, or need the client to grow a second return shape
+ * that only one caller uses.
+ *
+ * ⚠️ **It still sends the same bearer token from the same store**, so a signed
+ * out merchant is refused here exactly as everywhere else. What it does not
+ * inherit is the refresh-on-401 retry, which is deliberate: a download that
+ * silently re-authenticated mid-click would save the file after the browser had
+ * already given up on it.
+ *
+ * 🔴 **The filename comes from the server**, not from here. It carries the date
+ * so a merchant exporting twice in a month can tell the two apart, and
+ * duplicating that string on this side is how the two drift.
+ */
+export async function downloadAnalyticsCsv(): Promise<{ blob: Blob; filename: string }> {
+  const token = getAccessToken();
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/analytics/export`, {
+      headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+    });
+  } catch (cause) {
+    throw new NetworkError(cause);
+  }
+
+  if (!response.ok) {
+    /*
+     * The body is JSON on an error even though success is CSV — the exception
+     * filter answers in the envelope whatever the route would have returned.
+     * A plan refusal has to reach the caller as `PLAN_FEATURE_UNAVAILABLE`, or
+     * the page cannot tell "upgrade" from "something broke".
+     */
+    const body = (await response.json().catch(() => null)) as {
+      error?: { code: string; message: string };
+    } | null;
+
+    throw new ApiError(
+      response.status,
+      body?.error ?? { code: 'INTERNAL_ERROR', message: 'The export could not be produced.' },
+    );
+  }
+
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const named = /filename="([^"]+)"/.exec(disposition);
+
+  return {
+    blob: await response.blob(),
+    filename: named?.[1] ?? 'optionia-option-revenue.csv',
+  };
 }

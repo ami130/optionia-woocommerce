@@ -1,4 +1,5 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiOkResponse } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -80,5 +81,58 @@ export class AnalyticsController {
     await this.planFeatures.assertHasFeature(tenantId, 'analytics');
 
     return this.service.summary(tenantId);
+  }
+
+  /**
+   * The same figures, as a spreadsheet (M25.5).
+   *
+   * ## Why a second route rather than a format parameter
+   *
+   * 📌 **A `?format=csv` on the summary would have to answer both shapes**, and
+   * the two are not the same query: the screen is capped at fifty rows and this
+   * is deliberately uncapped, because an export is for the whole dataset. One
+   * route returning two different populations under one name is the kind of
+   * thing that reads as a bug the first time somebody sums a column.
+   *
+   * ⚠️ **Gated identically to the summary**, on `ANALYTICS_VIEW` and on the
+   * plan's `analytics` feature — and checked **before** the query runs. An
+   * export is the most valuable read this service offers; a route that
+   * refused only after building the file would have already done the work the
+   * plan withholds.
+   */
+  @Get('export')
+  @RequireCapability(Capability.ANALYTICS_VIEW)
+  @ApiOkResponse({ description: 'Option revenue as CSV.' })
+  @ApiErrors(200, 401, 403, 429)
+  async exportCsv(@Res() response: Response): Promise<void> {
+    const tenantId = getContext()?.tenantId;
+
+    if (!tenantId) {
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    await this.planFeatures.assertHasFeature(tenantId, 'analytics');
+
+    const csv = await this.service.exportOptionRevenue(tenantId);
+
+    /*
+     * 🔴 **`attachment`, and the date is in the filename.** A merchant exporting
+     * twice in a month needs to tell the two apart, and a browser rendering CSV
+     * inline shows them a wall of text rather than offering a download.
+     *
+     * 📌 **`text/csv; charset=utf-8` with a BOM.** Excel on Windows reads a
+     * BOM-less UTF-8 file as the system codepage, which turns a merchant's
+     * non-ASCII option label into mojibake in the one tool most of them open it
+     * with.
+     */
+    const day = new Date().toISOString().slice(0, 10);
+
+    response.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="optionia-option-revenue-${day}.csv"`,
+    );
+
+    response.send(`\uFEFF${csv}`);
   }
 }

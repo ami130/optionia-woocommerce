@@ -213,6 +213,44 @@ describe('Analytics summary', () => {
   });
 
   /**
+   * 🔴 **The export is reachable from the screen** (M25.5).
+   *
+   * The route, the CSV escaping and the plan gate are all proven server-side —
+   * and none of that matters if a merchant has no way to ask for the file. This
+   * is the F132 lesson applied before it becomes a finding.
+   */
+  it('offers the export on a populated screen', () => {
+    const { container } = render(<Summary data={summary()} />);
+
+    expect(container.textContent).toContain('Export CSV');
+  });
+
+  /**
+   * 📌 **And withholds it before the first order.** A merchant with nothing sold
+   * would download a file containing a header row, which reads as a broken
+   * feature rather than as an empty shop.
+   */
+  it('does not offer the export before there are any orders', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          attach: {
+            orders: 0,
+            ordersWithOptions: 0,
+            rate: null,
+            optionRevenueMinor: 0,
+            totalRevenueMinor: 0,
+            averageOrderValueWithOptionsMinor: null,
+            averageOrderValueWithoutOptionsMinor: null,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).not.toContain('Export CSV');
+  });
+
+  /**
    * 📌 **No orders is an empty state, not zero.** A shop that has sold nothing
    * has no analytics, and "£0.00 earned" invites the conclusion that the
    * options do not work.

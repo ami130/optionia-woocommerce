@@ -2503,6 +2503,7 @@ payload: a boolean is accepted, **anything else — strings, numbers, `null` —
 | Route | Capability | Status |
 | --- | --- | --- |
 | `GET /analytics` | `analytics:view` | `[built]` |
+| `GET /analytics/export` | `analytics:view` | `[built]` |
 
 🔴 **Two gates, answering different questions.** `analytics:view` asks *may this
 person*; the tenant's `plan.features.analytics` asks *does this plan include it*.
@@ -2514,6 +2515,17 @@ indistinguishable from a permissions error.
 and revenue per set answer one question — *which options make money and which are
 ignored* — and splitting them would let a merchant see revenue computed at one
 moment beside dead options computed at another.
+
+📌 **`/analytics/export` is a second route rather than a `?format=` parameter**
+(M25.5), because the two answer different populations: the screen is capped at
+fifty rows and the export deliberately is not. One route returning two sizes
+under one name reads as a bug the first time a merchant sums a column.
+
+🔴 **Its cells are escaped against spreadsheet formula execution.** A label
+beginning `=`, `+`, `-` or `@` is executed by Excel and Sheets, so a merchant who
+names an option `=1+1` would ship a spreadsheet that computes. Every such cell is
+prefixed with a tab, and every field containing a comma, quote or newline is
+quoted per RFC 4180.
 
 ⚠️ **Every list is capped at 50 and says so**, via `{ rows, total, truncated }`:
 fifty rows with no total is indistinguishable from "that is everything".

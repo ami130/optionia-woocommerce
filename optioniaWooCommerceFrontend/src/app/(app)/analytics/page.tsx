@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import Link from 'next/link';
 
 import { EmptyState, ErrorState, LoadingRows } from '@/components/layout/states';
@@ -9,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ApiError } from '@/lib/api/error';
 import {
+  downloadAnalyticsCsv,
   getAnalytics,
   type AnalyticsSummary,
   type Capped,
@@ -106,13 +108,70 @@ export default function AnalyticsPage() {
   return <Summary data={analytics.data} />;
 }
 
-function Heading() {
+function Heading({ children }: { children?: React.ReactNode }) {
   return (
-    <div>
-      <h1 className="text-2xl font-semibold">Analytics</h1>
-      <p className="text-muted-foreground text-sm">
-        Which of your options earn, and which are being ignored.
-      </p>
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-semibold">Analytics</h1>
+        <p className="text-muted-foreground text-sm">
+          Which of your options earn, and which are being ignored.
+        </p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Download the export (M25.5).
+ *
+ * 🔴 **The file is built client-side from a Blob, not linked with an `href`.**
+ * The route needs a bearer token, and a plain `<a href>` sends none — so the
+ * merchant would get a 401 page instead of a file. Fetching, then clicking a
+ * temporary object URL, is what makes an authenticated download possible at all.
+ *
+ * ⚠️ **`revokeObjectURL` in a `finally`.** An object URL holds the whole blob in
+ * memory until it is released, and a merchant exporting repeatedly on a large
+ * catalogue would accumulate every copy for the life of the tab.
+ */
+function ExportButton() {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setFailed(null);
+
+    let url: string | null = null;
+
+    try {
+      const { blob, filename } = await downloadAnalyticsCsv();
+
+      url = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+
+      link.href = url;
+      link.download = filename;
+      link.click();
+    } catch (error) {
+      /* The API's own sentence when it has one — it names the plan on a refusal. */
+      setFailed(error instanceof Error ? error.message : 'The export could not be produced.');
+    } finally {
+      if (url !== null) {
+        URL.revokeObjectURL(url);
+      }
+
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="shrink-0 text-right">
+      <Button variant="outline" onClick={() => void run()} disabled={busy}>
+        {busy ? 'Preparing…' : 'Export CSV'}
+      </Button>
+      {failed !== null && <p className="text-destructive mt-2 max-w-xs text-xs">{failed}</p>}
     </div>
   );
 }
@@ -161,7 +220,14 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
 
   return (
     <div className="space-y-6">
-      <Heading />
+      {/*
+        📌 **Only the populated screen offers the export.** A merchant with no
+        orders would download a file containing a header row, which reads as a
+        broken feature rather than as an empty shop.
+      */}
+      <Heading>
+        <ExportButton />
+      </Heading>
 
       {currency === null && (
         <Alert>

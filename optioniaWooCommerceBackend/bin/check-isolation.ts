@@ -101,6 +101,20 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'GET /v1/analytics',
 
   /**
+   * The CSV export, added for M25.5.
+   *
+   * Names no id, like the summary it exports — but proven with its **own**
+   * cross-tenant test rather than resting on that one, because the stakes
+   * differ: the screen shows fifty rows a merchant reads, and a CSV is the whole
+   * dataset, downloaded, kept and often forwarded. This is the one analytics
+   * route where a leak leaves the building.
+   *
+   * `analytics-http.e2e-spec` asserts it in both directions — mine does not
+   * contain theirs, and theirs does not contain mine.
+   */
+  'GET /v1/analytics/export',
+
+  /**
    * The public plan catalogue, added for Phase 22.
    *
    * 🔴 **There is no tenant data here to leak.** It returns the same public

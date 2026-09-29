@@ -627,6 +627,193 @@ describe('Analytics over HTTP (e2e)', () => {
   });
 
   /**
+   * 🔴 **M25.5 — the export a merchant opens in a spreadsheet.**
+   */
+  it('exports option revenue as CSV', async () => {
+    const response = await request(h.app.getHttpServer())
+      .get('/v1/analytics/export')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('text/csv');
+    expect(response.headers['content-disposition']).toContain('attachment');
+
+    /* The header row, and at least one option this suite created. */
+    expect(response.text).toContain('option_key,option_label,revenue_minor,currency,orders');
+    expect(response.text).toContain('engraving');
+  });
+
+  /**
+   * 🔴 **A label starting `=` must not execute in Excel or Sheets** (CSV
+   * injection).
+   *
+   * A merchant naming an option `=1+1` ships a spreadsheet that computes; one
+   * who is targeted can be made to ship a cell that fetches a URL. The leading
+   * tab neutralises it while leaving the text readable.
+   */
+  it('neutralises a label a spreadsheet would execute', async () => {
+    await order('a-csv-formula', 1_000, [
+      { optionKey: 'danger', label: '=1+1', valueKey: 'y', deltaMinor: 100 },
+    ]);
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      /* Present, and prefixed — never a bare `=1+1` at the start of a cell. */
+      expect(response.text).toContain('1+1');
+      expect(response.text).not.toMatch(/(^|,)=1\+1/m);
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-csv-formula'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-csv-formula'`);
+    }
+  });
+
+  /**
+   * 🔴 **A comma or a quote in a label must not shift every later column.**
+   * "Size, large" is an ordinary option name, and an unescaped one turns a
+   * five-column row into six.
+   */
+  it('escapes a label containing a comma and a quote', async () => {
+    await order('a-csv-escape', 1_000, [
+      { optionKey: 'tricky', label: 'Size, 12" model', valueKey: 'y', deltaMinor: 100 },
+    ]);
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      /* Quoted field, with the inner quote doubled — RFC 4180. */
+      expect(response.text).toContain('"Size, 12"" model"');
+
+      /* And every row still has exactly five columns. */
+      const rows = response.text.replace(/^\uFEFF/, '').split('\r\n').filter(Boolean);
+      const parsed = rows.map((row) => row.match(/("([^"]|"")*"|[^,]*)/g)?.filter((_, i) => i % 2 === 0));
+
+      parsed.forEach((columns) => expect(columns?.length).toBe(5));
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-csv-escape'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-csv-escape'`);
+    }
+  });
+
+  /**
+   * 🔴 **The export is NOT capped at fifty**, unlike the screen.
+   *
+   * A merchant exporting to a spreadsheet is doing the thing the cap exists to
+   * avoid — reading all of it — so a capped export produces a file that
+   * disagrees with itself the moment they sum a column.
+   */
+  it('exports every option, not the capped fifty', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      optionKey: `csvbulk_${String(i).padStart(2, '0')}`,
+      label: `Bulk ${i}`,
+      valueKey: 'v',
+      deltaMinor: 100 + i,
+    }));
+
+    await order('a-csv-bulk', 50_000, many);
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      const rows = response.text.replace(/^\uFEFF/, '').split('\r\n').filter(Boolean);
+
+      /* 60 bulk options plus the header plus whatever else this suite made. */
+      expect(rows.length).toBeGreaterThan(60);
+      expect(response.text).toContain('csvbulk_59');
+    } finally {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.externalOrderId = 'a-csv-bulk'`,
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE externalOrderId = 'a-csv-bulk'`);
+    }
+  });
+
+  /**
+   * 🔴 **The export never carries another tenant's options.**
+   *
+   * ⚠️ **Worse than the summary leaking, if it did.** The screen shows fifty
+   * rows a merchant reads; a CSV is the whole dataset, downloaded, kept, and
+   * often forwarded. Proven directly rather than exempted, because this is the
+   * one analytics route where a leak leaves the building.
+   */
+  it('never exports another tenant’s options', async () => {
+    const otherToken = await h.tenant('exporter');
+    const otherStore = await h.store('exporter');
+    const otherTenant = await h.tenantIdOf('exporter');
+
+    await dataSource.query(
+      `UPDATE tenants SET planId = (SELECT id FROM plans WHERE code = 'pro') WHERE id = ?`,
+      [otherTenant],
+    );
+
+    const eventId = randomUUID();
+
+    await dataSource.query(
+      `INSERT INTO order_events
+         (id, storeId, externalOrderId, orderTotalMinor, currency, optionRevenueMinor,
+          occurredAt, createdAt, updatedAt)
+       VALUES (?, ?, 'x-1', ?, 'USD', ?, NOW(3), NOW(3), NOW(3))`,
+      [eventId, otherStore, 7_000, 7_000],
+    );
+
+    await dataSource.query(
+      `INSERT INTO order_selections
+         (id, orderEventId, optionKey, optionLabel, valueKey, valueLabel,
+          optionSetId, priceDeltaMinor, configVersion, createdAt, updatedAt)
+       VALUES (UUID(), ?, 'their_secret_option', 'Their option', 'y', 'y', NULL, ?, 1, NOW(3), NOW(3))`,
+      [eventId, 7_000],
+    );
+
+    /* Mine must not contain theirs… */
+    const mine = await request(h.app.getHttpServer())
+      .get('/v1/analytics/export')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(mine.text).not.toContain('their_secret_option');
+
+    /* …and theirs must not contain mine. */
+    const theirs = await request(h.app.getHttpServer())
+      .get('/v1/analytics/export')
+      .set('Authorization', `Bearer ${otherToken}`);
+
+    expect(theirs.text).toContain('their_secret_option');
+    expect(theirs.text).not.toContain('engraving');
+  });
+
+  /**
+   * 🔴 **The export obeys the plan gate too.** It is the most valuable read this
+   * service offers, so a route that refused only the summary would be a paid
+   * feature given away through a second door.
+   */
+  it('refuses the export on a plan without analytics', async () => {
+    await onPlan('free');
+
+    try {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics/export')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('PLAN_FEATURE_UNAVAILABLE');
+    } finally {
+      await onPlan('pro');
+    }
+  });
+
+  /**
    * 🔴 **A plan without analytics is REFUSED, over HTTP.** This is the assertion
    * `PlanFeatureGuard` was built for and had no caller to make.
    */
