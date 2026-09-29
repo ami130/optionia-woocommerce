@@ -448,7 +448,7 @@ one place this plan's ordering works against you.
 | B5 | **D3 — positioning** ("why pay monthly when a competitor is $59 once?") | [Phase 22](#phase-22--billing-integration) pricing, [Phase 33](#phase-33--closed-beta) recruiting | **You** |
 | ~~B6~~ | ~~**Tax handling under ADR-114**~~ ✅ **DECIDED 2026-09-24 (ADR-115): Stripe Tax, prices displayed tax-EXCLUSIVE.** 📌 **Exclusive because the buyers are businesses** who reclaim VAT — a tax-inclusive figure makes a merchant do arithmetic to compare against competitors quoting exclusive, and every serious B2B SaaS quotes exclusive. 🔴 **Display is not the obligation.** ADR-114 makes ParseLab merchant of record, and selling digital services to EU consumers creates a VAT liability **from the first sale, with no threshold** — so the duty exists however the price is shown. Stripe Tax (~0.5%) calculates and collects it and produces the reports a return is filed from, and applies the EU B2B reverse charge automatically when a valid VAT number is present. ✏️ **Corrected 2026-09-24: an earlier draft of this row said Stripe Tax *files* it.** It does not, outside a separate product in limited jurisdictions — filing remains ParseLab's, and a decision record that overstates a vendor's scope is how an obligation gets missed. ⚠️ **The rejected alternative, recorded so it is not re-proposed as new**: a merchant-of-record service (Paddle, Lemon Squeezy) removes the liability entirely at a higher fee — and reopens ADR-114, which is why it was not chosen rather than not considered | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 | ~~B7~~ | ~~**The lapse policy (M24.3)**~~ ✅ **DECIDED 2026-09-24 (ADR-116): 14-day grace, then read-only authoring — the storefront NEVER goes dark.** Grace: everything works, with a dashboard banner and dunning mail. After 14 days the storefront keeps serving its last published configuration while authoring goes read-only — view and export, not edit or publish. 🔴 **A payment failure must not damage the merchant's business.** Most failures are expired cards, not refusals to pay; a merchant who loses a day of sales to a failed renewal will churn **and** dispute the charge. Read-only applies pressure exactly where it converts — they cannot ship changes, which is what a growing merchant needs. 📌 **It is also the smaller build**: the plugin is deliberately built to survive the cloud being unreachable, so *going dark means ADDING a kill path* to something designed not to have one. ⚠️ **Enforced by one guard, not 56 edits**: authentication is already global with routes opting out, so a `SubscriptionGuard` follows the same shape and a new endpoint is refused by default rather than silently unguarded | [M24.3](#phase-24--production-readiness) | ✅ decided |
-| ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24 (ADR-117): prices grandfathered indefinitely; limit RAISES apply at once, limit CUTS at the next renewal.** 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
+| ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24, AMENDED 2026-09-29 (ADR-117): prices grandfathered indefinitely; limit changes — raises AND cuts — apply at once.** ⚠️ **The amendment changed the cut half deliberately.** The original said cuts wait for renewal and `PlanLimitGuard` never implemented it, so document and software disagreed from the day both existed — unreachable until an admin screen could lower a limit. Decided on the concrete case rather than in the abstract, with the cost named: a mid-term merchant can lose headroom they paid for, blunted but not erased by nothing being deleted, the storefront being untouched, and M24.4 already reporting what they are over. 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
 | ~~B9~~ | ~~**What billing identity is collected, and when**~~ ✅ **DECIDED 2026-09-24 (ADR-118): at first paid checkout, never at registration.** Stripe Checkout collects and validates the address and tax id; `tenants.country`, `vatNumber` and `billingCurrency` are populated from the completed session. 📌 **Every field on a signup form costs conversion**, and M22.6 requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency **before** they pay — a tax form on signup works directly against that. ⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax location, which is correct because it is not billable; the columns are nullable for exactly this reason (F84) | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 
 | B10 | **Dynamic plan administration — an admin panel for pricing, limits, features and plan lifecycle** | after Phase 25 closes | **Mine to build, once asked** |
@@ -462,34 +462,17 @@ is missing is any **screen**: `POST /admin/plans/:code/price` and
 `PATCH /:code/visibility` exist and **nothing calls them**, which is this
 project's mechanism-with-no-caller defect for the tenth-plus time.
 
-⚠️ **B10 collides with B8/ADR-117 and must not be built until that is resolved.**
-Verified in code 2026-09-29: `PlanLimitGuard` has **no renewal boundary at all** —
-`grep` for `renewal|periodEnd|currentPeriod` in it matches nothing — so a lowered
-limit binds every tenant on the next request. ADR-117 says the opposite in as many
-words: *"A limit **decrease** applies at the next renewal."*
+✅ **B10's blocking decision was resolved 2026-09-29** — see ADR-117's amendment.
+Limit changes, raises and cuts alike, apply at once, which is what
+`PlanLimitGuard` has always done. The document now matches the software rather
+than contradicting it, and the contradiction was reachable only through the very
+screen B10 adds.
 
-🔴 **The two answers are about different tenants, and that is what makes this
-resolvable rather than a straight conflict.**
-
-| Tenant | ADR-117's reasoning | What the code does |
-|---|---|---|
-| **Paying, mid-term** | Keeps what they paid for until renewal — a mid-term cut is a retroactive change to a purchased term, the same class of harm as a retroactive price rise | Cut binds at once |
-| **Free, or already over** | ADR-117 is silent; there is no purchased term to protect | Cut binds at once, which is correct |
-
-📌 **So the code is right for the case ADR-117 does not cover, and wrong for the
-one it does.** The 2026-09-29 confirmation — *"keep everything, block new work"* —
-answers what happens to **existing rows** (nothing is deleted, which both agree
-on) and not **when the new ceiling starts applying**, which is the actual
-disagreement. The two questions read alike and are not the same.
-
-⚠️ **The cost of leaving it is a billing dispute, not a bug report.** Nothing fails
-today because no admin screen exists to lower a limit; the moment B10 ships one,
-a mid-term cut silently breaks a promise the plan document makes in writing.
-
-📌 **Resolving it is a decision, not a build**, and it needs one answer from the
-owner: does a paying subscriber's limit cut wait for renewal (honour ADR-117, and
-`PlanLimitGuard` needs a period check), or does ADR-117 change (and the reasoning
-about purchased terms be withdrawn deliberately rather than by omission)?
+⚠️ **One safeguard is carried into B10 as a requirement, not a nicety.** The
+amendment trades a written protection for predictability, and the thing that
+blunts the trade is that an admin can see who a cut affects **before** saving it.
+B10's screen shows the number of tenants a change would put over limit, and by how
+much, as information rather than a block — the decision stays the admin's.
 
 **Nothing blocks Phase 25.** ⚠️ **This line said "Phase 17" until 2026-09-28**, eight
 phases after Phase 17 closed — the exact staleness the paragraph below warns about,
@@ -1089,13 +1072,48 @@ via `@Public()`, and the module records why: *"applying the guard per controller
 forgetting it a silent hole rather than a 401."* A `SubscriptionGuard` follows the same
 shape, so a new write endpoint is refused by default rather than silently unguarded.
 
-##### ADR-117 — B8 is decided: grandfather prices, raise limits now, cut at renewal
+##### ADR-117 — B8 is decided: grandfather prices, apply limit changes at once
 
 **Decided 2026-09-24**, completing
 [M22.1a](#m221a--plans-are-data-editable-by-platform-staff).
+**Amended 2026-09-29** — see the amendment below, which changes the limit half.
 
-**An existing subscriber keeps the price they bought, indefinitely. A limit *increase*
-applies at once; a limit *decrease* applies at the next renewal.**
+**An existing subscriber keeps the price they bought, indefinitely. Limit changes —
+both increases and decreases — apply at once.**
+
+---
+
+###### Amendment, 2026-09-29: cuts apply at once, not at renewal
+
+🔴 **The original decision said a limit *decrease* applies at the next renewal, and
+the code never did that.** `PlanLimitGuard` has no renewal boundary at all — `grep`
+for `renewal|periodEnd|currentPeriod` in it matches nothing — so every limit change
+has always bound on the next request. The document and the software have disagreed
+since the day both existed, and nothing surfaced it because **no screen exists that
+lowers a limit**: the contradiction is unreachable until B10 ships one.
+
+⚠️ **Decided deliberately rather than by omission.** The owner was asked with the
+concrete case — Pro cut from 50 option sets to 20, a merchant mid-term holding 35 —
+and chose *blocked now*: the 35 keep working, the storefront is untouched, and the
+36th is refused from the moment the admin saves. The alternative, waiting for
+renewal, was stated with its cost and declined.
+
+📌 **What the original reasoning still protects, and what it no longer claims.**
+Price grandfathering is untouched and remains **structural**: a subscription is
+pinned to the `plan_prices` row it bought, so an edit cannot reach it even by
+mistake. What is withdrawn is the *limit* half — the argument that a mid-term cut
+is a retroactive change to a purchased term. That argument was sound and it is
+being set aside knowingly, in exchange for one rule a merchant and an admin can
+both predict: **a plan's limits are what the plan says today.**
+
+🔴 **The cost is named rather than hidden.** A merchant mid-term can lose headroom
+they were entitled to for the rest of a period they paid for. Three things blunt it
+and none of them erases it: nothing is ever deleted, the storefront is never
+affected, and the dashboard already reports exactly which limits a tenant is over
+and by how much (M24.4). ⚠️ **If a cut is ever applied to a large paying cohort,
+that is a commercial decision and belongs with a notice**, not with a silent save
+— B10's screen shows the affected count before the change is written, which is the
+one safeguard that survives this amendment.
 
 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract
 chargebacks**, which is why grandfathering is near-universal. `plan_prices` already
