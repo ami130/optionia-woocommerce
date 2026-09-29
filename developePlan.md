@@ -451,6 +451,27 @@ one place this plan's ordering works against you.
 | ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24 (ADR-117): prices grandfathered indefinitely; limit RAISES apply at once, limit CUTS at the next renewal.** 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
 | ~~B9~~ | ~~**What billing identity is collected, and when**~~ ✅ **DECIDED 2026-09-24 (ADR-118): at first paid checkout, never at registration.** Stripe Checkout collects and validates the address and tax id; `tenants.country`, `vatNumber` and `billingCurrency` are populated from the completed session. 📌 **Every field on a signup form costs conversion**, and M22.6 requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency **before** they pay — a tax form on signup works directly against that. ⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax location, which is correct because it is not billable; the columns are nullable for exactly this reason (F84) | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 
+| B10 | **Dynamic plan administration — an admin panel for pricing, limits, features and plan lifecycle** | after Phase 25 closes | **Mine to build, once asked** |
+
+🔴 **B10 is recorded, NOT started.** Scope confirmed 2026-09-29: limits, features,
+create/retire plans, and marketing copy, all editable without a deploy. Verified
+before recording, so the estimate is not guesswork: `plans.limits` and
+`plans.features` already exist as JSON columns, and **both guards read them live
+per request** — so an edit applies immediately with no cache to invalidate. What
+is missing is any **screen**: `POST /admin/plans/:code/price` and
+`PATCH /:code/visibility` exist and **nothing calls them**, which is this
+project's mechanism-with-no-caller defect for the tenth-plus time.
+
+⚠️ **B10 partially collides with B8/ADR-117 and must not be built until that is
+resolved.** ADR-117 says limit **cuts apply at the next renewal**, so a tenant
+keeps what they paid for during the term they paid for. A confirmation taken
+2026-09-29 answered the same question differently — *"keep everything, block new
+work immediately"* — which is what `PlanLimitGuard` does **today**, at once,
+with no renewal boundary. 📌 **The code currently implements the 2026-09-29
+answer and the ledger records ADR-117**, so one of the two is wrong and the
+difference is invisible until an admin actually lowers a limit. Resolving it is a
+decision, not a build, and it belongs in B10 rather than in Phase 25.
+
 **Nothing blocks Phase 25.** ⚠️ **This line said "Phase 17" until 2026-09-28**, eight
 phases after Phase 17 closed — the exact staleness the paragraph below warns about,
 sitting directly above its own warning. **B4 (D7) and B5 (D3) are the only live
@@ -30703,9 +30724,99 @@ reach the code it is about is not a test.
 25-0  ✅ decisions + the two revenue defects + the ledger gate   (no schema)
 25-1  ✅ M25.3 complete — read service, plan gate, revenue per option set
 25-2     M25.2 rollups, obeying the valueKey rule
-25-3     M25.4 comparisons, M25.5 CSV export
+25-3  🟡 M25.4 comparisons, M25.5 CSV export
 25-4     M25.1 non-order events — see the deferral below
 ```
+
+⚠️ **The numbering below drifted and is corrected here.** The merchant screen
+shipped 2026-09-28 is written up above as *"Stage 25-2"*, while this order
+reserves 25-2 for rollups. The screen belongs to **25-1** — it is the last part
+of M25.3, which is not met until a *merchant* can see the numbers, and 25-1 is
+the stage that owns M25.3. Two stages with the same number is the ledger
+contradicting itself, which is the defect `check-ledger.sh` exists to catch and
+did not: it compares milestone rows, not stage headings.
+
+---
+
+### ▶ Phase 25 — the execution plan to close it fully (written 2026-09-29)
+
+**Why this exists.** Phase 25 is ticked against its exit criterion and **two of
+five stages are unbuilt**. The exit line is met — a merchant can identify their
+highest-revenue options and their dead ones — so the tick is not wrong. But
+"Phase 25 is complete" and "Phase 25's exit criterion is met" are different
+claims, and only the second is true today.
+
+📌 **No admin-panel work belongs here.** Dynamic plan administration is real and
+wanted, and it is **not Phase 25** — it is a separate thread that must not be
+started while this phase has open stages. Recorded in the backlog, not here.
+
+#### What is actually left
+
+| Stage | Milestone | Blocker, verified in code |
+|---|---|---|
+| 25-3 | **M25.4 "per product"** | `order_selections` has no product column; `OrderPayload` sends none (F151). **Needs a plugin release.** |
+| 25-2 | **M25.2 rollups** | Nothing. Deferred **on measurement**: 3.5× at 480k selections, **nothing** at 60k. |
+| 25-4 | **M25.1 view events** | No transport designed. Views are every page load. |
+
+#### Order of work, and why
+
+**1. M25.4 "per product" — first, because it is smaller than its deferral note
+claims.**
+
+🔴 **The deferral said "needs a plugin release" and stopped there**, which read as
+though the work were large. It is not: `OrderPayload::selections()` already loops
+**inside a line-item context**, and F150 added `option_set_id` at that exact
+point for exactly this reason. A product id comes from the same `$item`. The
+backend side has a precedent too — `1789900000000-OrderSelectionSet.ts` is the
+migration that added F150's nullable column and its index.
+
+So the shape is known end to end: one nullable column, one DTO field, one plugin
+meta read, one index, and the analytics query grouping by it.
+
+⚠️ **The discontinuity must be said in merchant-facing copy, not discovered.**
+Both F150's and F151's columns only populate for orders placed **after** the
+plugin update — the same shape as F146's quantity fix, on a second axis. A
+per-product report that silently omits older orders is worse than one that says
+it does.
+
+📌 **The plugin cannot be run on this machine** (no PHP binary), so plugin
+changes are CI-verified only. That is a stated constraint, not a reason to defer.
+
+**2. M25.2 rollups — only when the trigger fires, and the trigger is recorded.**
+
+🔴 **This stays deferred, and deferring it is the correct engineering answer.**
+The measurement is above: below ~100k selections the covering indexes are worth
+**nothing** (127ms against 130ms) because the optimizer scans and scanning is
+cheaper. Building rollups now pays write cost on every order for a read that is
+already fast.
+
+⚠️ **What closes this stage is a check, not a table.** A deferral with no trigger
+is an intention; a deferral with an automated trigger is a decision. The work is
+to make the threshold **observable** — so that when a tenant approaches 100k
+selections somebody is told, rather than someone noticing a slow dashboard.
+
+**3. M25.1 view events — the one that needs a design, not just a build.**
+
+🔴 **This is the only item here with a genuine unknown.** Orders can ride a cron
+drain because checkout is rare and the customer has already left. **Views are
+every product page load**, so the same mechanism means a database write per
+pageview on the merchant's own server — which is precisely what this phase's exit
+criterion forbids. A browser beacon keeps the write off the render path and is
+the agreed shape, but it is undesigned: `grep` for
+`beacon|sendBeacon|impression|pageview` still matches nothing in any repository.
+
+📌 **The cost of the deferral is named rather than hidden**: M25.3's *"conversion
+with vs. without options"* is unanswerable without view events (F157), and
+average order value ships as the honest substitute — which is why the screen
+never uses the word *conversion*.
+
+#### The honest summary
+
+**Closing 25-3 finishes the last stage that is blocked only by work.** After it,
+Phase 25's remaining two stages are a **recorded threshold** (25-2) and a
+**design decision** (25-4) — neither of which is closed by writing more analytics
+code, and both of which are better left open with a stated trigger than built
+speculatively.
 
 ⏸️ **M25.1's view/add-to-cart events are recommended for deferral.** Revenue and
 dead options need no view events; attach rate and conversion-with-vs-without do.
