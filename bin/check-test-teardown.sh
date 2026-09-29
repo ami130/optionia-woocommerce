@@ -132,6 +132,35 @@ else
   fail "deleteTenantsFor must SELECT the memberships before it DELETEs them"
 fi
 
+# ---------------------------------------------------------------------------
+# 5. The test server actually listens.
+# ---------------------------------------------------------------------------
+# 🔴 **This was the wandering cross-suite intermittent, and it survived three
+# wrong theories across two audits.** `app.init()` alone does not bind a port,
+# so `getHttpServer()` hands supertest a server it must bind itself — one
+# ephemeral listener per request. Under concurrency those collide and the
+# kernel resets connections: `read ECONNRESET`, or a status line with no body
+# at all, which presented as `404 {} contentType=(none) text=""`.
+#
+# Measured at 20 concurrent GETs: 12 of 20 rejected without the listen, 0 of 20
+# with it. It moved between option-authoring, publish, cascade,
+# connect-handshake and concurrency because it follows whichever suite issues
+# concurrent requests on a busy machine, never a particular piece of code.
+#
+# ⚠️ **A revert here is silent.** Nothing fails immediately; the suite simply
+# starts failing somewhere else, occasionally, for a reason that looks like a
+# product defect.
+HARNESS="$TESTS/harness.ts"
+
+if grep -q "server.listen(0" "$HARNESS" 2>/dev/null \
+  && grep -q "await app.init()" "$HARNESS" 2>/dev/null; then
+  pass "the test server listens, so concurrent requests are not reset"
+else
+  fail "bootstrapTestApp must call server.listen(0) after app.init()"
+  printf '        without it supertest binds one ephemeral server per request\n'
+  printf '        and concurrent requests are reset — the wandering intermittent\n'
+fi
+
 printf '\n'
 
 if [ "$FAILURES" -gt 0 ]; then

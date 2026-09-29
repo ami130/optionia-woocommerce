@@ -177,6 +177,53 @@ export async function bootstrapTestApp(
   await app.init();
 
   /*
+   * 🔴 **The server must LISTEN, and `init()` alone does not make it.**
+   *
+   * `getHttpServer()` on an un-listened app hands supertest a server it has to
+   * bind itself — one ephemeral listener **per request**. Under concurrency
+   * those collide and the kernel resets connections, which arrives at the test
+   * as `read ECONNRESET`, or, when the reset lands after the status line, as a
+   * response with a status and **no body at all**.
+   *
+   * ✏️ **Measured, after three wrong theories across two audits** — the last of
+   * them mine, blaming the global throttler an hour before this was found:
+   *
+   * | concurrent GETs | not listening | listening |
+   * |---|---|---|
+   * | 5  | 0 rejected | 0 rejected |
+   * | 10 | 3 rejected | 0 rejected |
+   * | 20 | 12 rejected | **0 rejected** |
+   * | 40 | 32 rejected | 0 rejected |
+   *
+   * 📌 **This is the wandering cross-suite intermittent.** It presented as
+   * `404 {}` with `contentType=(none) text=""` — an empty response, which every
+   * error path in this API is incapable of producing, since all of them carry
+   * `{error, meta}`. It moved between `option-authoring`, `publish`,
+   * `cascade`, `connect-handshake` and `concurrency` because it follows
+   * whichever suite happens to issue concurrent requests while the machine is
+   * busy, never a particular piece of product code.
+   *
+   * ⚠️ **Port 0**, so the OS assigns a free one and parallel jest workers
+   * cannot collide on a fixed number. `close()` shuts it down.
+   */
+  await new Promise<void>((resolve, reject) => {
+    const server = app.getHttpServer() as {
+      listening?: boolean;
+      listen: (port: number, cb: () => void) => unknown;
+      once: (event: string, cb: (error: Error) => void) => unknown;
+    };
+
+    if (server.listening) {
+      resolve();
+
+      return;
+    }
+
+    server.once('error', reject);
+    server.listen(0, () => resolve());
+  });
+
+  /*
    * 🔴 **Free's limits are raised for the e2e run, and ONLY for it.**
    *
    * ✏️ **Every public plan, not only Free.** The first version raised Free
