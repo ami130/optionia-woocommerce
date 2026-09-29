@@ -10,12 +10,27 @@ import { LIVE_SENTINEL_SQL } from '../common/database/base.entity';
  * *recorded* into `usage_records`; this names what can be *compared* to a plan.
  * The two differ because most of these are counted live — see below.
  */
-export type CountableMetric =
-  | 'option_sets'
-  | 'stores'
-  | 'team_seats'
-  | 'products_assigned'
-  | 'file_storage_mb';
+export const COUNTABLE_METRICS = [
+  'option_sets',
+  'stores',
+  'team_seats',
+  'products_assigned',
+  'file_storage_mb',
+] as const;
+
+/**
+ * 🔴 **The type is DERIVED from the runtime list, not written beside it.**
+ *
+ * Plan administration validates an admin's input against the metrics this
+ * system can actually enforce, and that check needs the names **at runtime** —
+ * a type-only union cannot be iterated. Declaring the array separately and
+ * keeping the union by hand is how the two drift: a metric added to one and
+ * forgotten in the other produces either a limit nothing enforces, or an
+ * enforceable metric an admin cannot set, and neither fails loudly.
+ *
+ * `typeof … [number]` makes drift impossible rather than unlikely.
+ */
+export type CountableMetric = (typeof COUNTABLE_METRICS)[number];
 
 /**
  * What a tenant is using right now (M24.1).

@@ -2571,6 +2571,9 @@ it blocks (M24.4).
 | `GET /admin/plans` | staff realm — `super_admin`, `read_only` | `[built]` |
 | `POST /admin/plans/:code/price` | staff realm — `super_admin` | `[built]` |
 | `PATCH /admin/plans/:code/visibility` | staff realm — `super_admin` | `[built]` |
+| `POST /admin/plans/:code/limits/preview` | staff realm — `super_admin`, `billing_ops`, `read_only` | `[built]` |
+| `PUT /admin/plans/:code/limits` | staff realm — `super_admin`, `billing_ops` | `[built]` |
+| `PUT /admin/plans/:code/features` | staff realm — `super_admin`, `billing_ops` | `[built]` |
 | `GET /admin/billing/tax-report` | staff realm — `super_admin`, `read_only` | `[built]` |
 
 🔴 **A separate realm, not a higher tenant role.** *"A tenant admin editing what

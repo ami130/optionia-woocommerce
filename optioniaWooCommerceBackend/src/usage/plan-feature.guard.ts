@@ -12,7 +12,17 @@ import { ErrorCode } from '../common/errors/error-codes';
  * column, and an absent key reads as *off* — so a misspelt feature would
  * silently refuse every tenant on every plan.
  */
-export type PlanFeature = 'analytics' | 'conditional_rules' | 'rich_text_html';
+export const PLAN_FEATURES = ['analytics', 'conditional_rules', 'rich_text_html'] as const;
+
+/**
+ * 🔴 **Derived from the runtime list, for the same reason `CountableMetric` is.**
+ * Plan administration validates an admin's input against the features something
+ * actually gates, and that needs the names at runtime. A union kept by hand
+ * beside an array drifts silently: `features` is a JSON column and an absent key
+ * reads as *off*, so a feature an admin can set but nothing reads would appear to
+ * work and gate nothing.
+ */
+export type PlanFeature = (typeof PLAN_FEATURES)[number];
 
 /** What a feature is called when a merchant reads about it. */
 const FEATURE_LABEL: Record<PlanFeature, string> = {

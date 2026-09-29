@@ -243,6 +243,30 @@ export const AuditAction = {
    * only what a new signup may choose changes.
    */
   PLAN_VISIBILITY_CHANGED: 'plan.visibility_changed',
+
+  /**
+   * A plan's enforceable allowances were changed (B10).
+   *
+   * 🔴 **This one reaches existing subscribers immediately**, unlike a price.
+   * ADR-117's 2026-09-29 amendment applies limit changes — raises and cuts
+   * alike — at once, so a merchant mid-term can lose headroom they were
+   * entitled to. The audit row is how *"who reduced this, and when?"* has an
+   * answer when a merchant asks, which is the first question after a cut.
+   *
+   * ⚠️ **The `changes` payload records the metric, the old value and the new
+   * one.** A row saying only *"limits changed"* would be attributable and
+   * useless.
+   */
+  PLAN_LIMITS_CHANGED: 'plan.limits_changed',
+
+  /**
+   * A plan's capability flags were changed (B10).
+   *
+   * ⚠️ **Turning a feature OFF can take a screen away from every tenant on the
+   * plan at once** — `PlanFeatureGuard` reads `plans.features` live, so there is
+   * no renewal boundary here either.
+   */
+  PLAN_FEATURES_CHANGED: 'plan.features_changed',
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

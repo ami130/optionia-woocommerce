@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
@@ -6,7 +6,12 @@ import { RequireStaffRole, StaffGuard } from '../admin/staff.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { StaffRole } from '../common/database/enums';
 import { ApiErrors } from '../common/openapi/api-errors.decorator';
-import { SetPlanPriceDto, SetPlanVisibilityDto } from './dto/plans-admin.dto';
+import {
+  SetPlanFeaturesDto,
+  SetPlanLimitsDto,
+  SetPlanPriceDto,
+  SetPlanVisibilityDto,
+} from './dto/plans-admin.dto';
 import { PlansAdminService, type PlanAdminView } from './plans-admin.service';
 
 /**
@@ -87,5 +92,76 @@ export class PlansAdminController {
     @Body() body: SetPlanVisibilityDto,
   ): Promise<PlanAdminView> {
     return this.plans.setVisibility(code, body.isPublic);
+  }
+
+  /**
+   * Who a proposed limit change would put over (B10).
+   *
+   * 🔴 **A read, not a write, and it must be called before the PUT.** ADR-117's
+   * 2026-09-29 amendment applies limit cuts **at once**, so a merchant mid-term
+   * can lose headroom they paid for. The amendment trades that protection for
+   * predictability on the condition that an admin can see who a cut affects
+   * before saving it — this route is that condition.
+   *
+   * ⚠️ **It never blocks.** Refusing a change while any tenant is over would
+   * let one large merchant make a plan unchangeable for everyone. The decision
+   * stays the admin's; this only removes the excuse of not knowing.
+   *
+   * 📌 **`READ_ONLY` may call it.** It changes nothing, and someone answering a
+   * merchant's question about their allowance needs the same view.
+   */
+  @Post(':code/limits/preview')
+  @RequireStaffRole(StaffRole.SUPER_ADMIN, StaffRole.BILLING_OPS, StaffRole.READ_ONLY)
+  @Throttle({ default: { limit: 120, ttl: 3_600_000 } })
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async previewLimits(
+    @Param('code') code: string,
+    @Body() body: SetPlanLimitsDto,
+  ): Promise<ReadonlyArray<{ metric: string; affected: number; worstExcess: number }>> {
+    return this.plans.previewLimitChange(code, body.limits);
+  }
+
+  /**
+   * Replace a plan's enforceable allowances (B10).
+   *
+   * 🔴 **Unlike a price, this reaches existing subscribers immediately.**
+   * `plan_prices` protects a buyer structurally — a subscription is pinned to
+   * the row it bought — and `plans.limits` has no such pin: `PlanLimitGuard`
+   * reads it live on every request. ADR-117 was amended on 2026-09-29 to say so
+   * rather than to promise a renewal boundary the code never had.
+   *
+   * ⚠️ **PUT, because it REPLACES.** An absent key is how a plan stops metering
+   * a metric at all, and a PATCH-shaped merge could never express that.
+   */
+  @Put(':code/limits')
+  @RequireStaffRole(StaffRole.SUPER_ADMIN, StaffRole.BILLING_OPS)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @ApiErrors(200, 400, 401, 403, 404, 429)
+  async setLimits(
+    @Param('code') code: string,
+    @Body() body: SetPlanLimitsDto,
+  ): Promise<PlanAdminView> {
+    return this.plans.setLimits(code, body.limits);
+  }
+
+  /**
+   * Replace a plan's capability flags (B10).
+   *
+   * ⚠️ **Turning one off takes the screen away from every tenant on the plan at
+   * once**, because `PlanFeatureGuard` reads `plans.features` live — the same
+   * absence of a renewal boundary as limits above.
+   *
+   * 📌 **PUT for the same reason as limits**: an omitted key is how a plan stops
+   * including a feature, since an absent key reads as off.
+   */
+  @Put(':code/features')
+  @RequireStaffRole(StaffRole.SUPER_ADMIN, StaffRole.BILLING_OPS)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @ApiErrors(200, 400, 401, 403, 404, 429)
+  async setFeatures(
+    @Param('code') code: string,
+    @Body() body: SetPlanFeaturesDto,
+  ): Promise<PlanAdminView> {
+    return this.plans.setFeatures(code, body.features);
   }
 }

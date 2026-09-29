@@ -145,7 +145,21 @@ function documentedRoutes(markdown: string): {
      */
     const hasMarker = isBuilt || /\[\d+[a-z]\]|\[phase \d+\]/i.test(line);
 
-    for (const match of line.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
+    /*
+     * 🔴 **`PUT` was missing here while `DOCUMENTED_METHODS` above accepted it**,
+     * so a PUT route could never be documented: the router reported it, this
+     * regex could not match it in the contract, and the gate failed with no
+     * wording that would have satisfied it. Found building B10's
+     * `PUT /admin/plans/:code/limits` — the first PUT this API has registered.
+     *
+     * ⚠️ **Derived from `DOCUMENTED_METHODS` rather than written twice.** Two
+     * lists of HTTP methods twelve lines apart is exactly how this happened.
+     */
+    const methodPattern = [...DOCUMENTED_METHODS].join('|');
+
+    for (const match of line.matchAll(
+      new RegExp(String.raw`\b(${methodPattern})\s+(/[a-z0-9/:_.-]+)`, 'gi'),
+    )) {
       const method = match[1].toUpperCase();
       // The contract writes paths with and without the /v1 prefix; normalise.
       const routePath = match[2].startsWith('/v1') ? match[2] : `/v1${match[2]}`;

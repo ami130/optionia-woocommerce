@@ -31,6 +31,14 @@ import { AppModule } from '../src/app.module';
 import { IS_PUBLIC } from '../src/auth/guards/public.decorator';
 import { buildOpenApiDocument } from '../src/common/openapi/openapi';
 
+/**
+ * The HTTP methods the contract may describe.
+ *
+ * ⚠️ **One list, used to build the regex**, because two lists of HTTP methods
+ * is precisely how `PUT` went missing here and in `check-api-contract.ts`.
+ */
+const HTTP_METHODS = 'GET|POST|PATCH|PUT|DELETE';
+
 /** Below this, the spec is empty enough that the comparison proves nothing. */
 const MINIMUM_PATHS = 20;
 
@@ -88,7 +96,17 @@ function contractRoutes(markdown: string): Set<string> {
       continue;
     }
 
-    for (const match of rawLine.matchAll(/\b(GET|POST|PATCH|DELETE)\s+(\/[a-z0-9/:_.-]+)/gi)) {
+    /*
+     * 🔴 **`PUT` was missing from this list, and from the identical one in
+     * `check-api-contract.ts`.** Both were written before this API registered a
+     * PUT, so a PUT route could not be recognised in the contract at all: the
+     * spec reported it, the parser could not see the `[built]` row describing
+     * it, and the gate failed with no wording that would have satisfied it.
+     * Found twice in one change — the same defect copied into a second script.
+     */
+    for (const match of rawLine.matchAll(
+      new RegExp(String.raw`\b(${HTTP_METHODS})\s+(/[a-z0-9/:_.-]+)`, 'gi'),
+    )) {
       const routePath = match[2].startsWith('/v1') ? match[2] : `/v1${match[2]}`;
 
       routes.add(`${match[1].toUpperCase()} ${routePath.replace(/\?.*$/, '')}`);

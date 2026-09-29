@@ -437,6 +437,279 @@ describe('Plan administration (e2e)', () => {
    * answer. A compliance table with no way to query it is a table whose
    * correctness nobody checks.
    */
+  /**
+   * B10 — a plan's allowances and capabilities, editable without a deploy.
+   *
+   * 🔴 **`plans.limits` and `plans.features` were seeded in Phase 22 and no
+   * route ever changed them.** Pricing was dynamic and what the price *bought*
+   * was not, so restructuring a plan meant a code change — the same
+   * captured-at-one-end defect as F132 and F150, at the plan level.
+   *
+   * ⚠️ **Unlike a price, these reach existing subscribers at once.**
+   * `plan_prices` protects a buyer structurally: a subscription is pinned to the
+   * row it bought. `plans.limits` has no such pin — `PlanLimitGuard` reads it
+   * live — which is why ADR-117 was amended on 2026-09-29 to say so rather than
+   * promise a renewal boundary the code never had.
+   */
+  describe('plan limits and features', () => {
+    /** Restore whatever this block changed, so later suites inherit nothing. */
+    async function restore(): Promise<void> {
+      await dataSource.query(
+        `UPDATE plans SET limits = JSON_SET(limits, '$.option_sets', 10) WHERE code = 'free'`,
+      );
+      await dataSource.query(
+        `UPDATE plans SET features = JSON_SET(features, '$.analytics', FALSE) WHERE code = 'free'`,
+      );
+    }
+
+    afterEach(restore);
+
+    /** 🔴 The whole point: an allowance changes with no deploy. */
+    it('replaces a plan’s enforceable allowances', async () => {
+      const staff = await makeStaff('limits-setter', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_sets: 3, stores: 1, team_seats: 2 },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.limits).toMatchObject({ option_sets: 3, stores: 1 });
+    });
+
+    /**
+     * 🔴 **It REPLACES rather than merges**, and that is what makes removing a
+     * limit expressible. `PlanLimitGuard` reads an absent key as "this plan does
+     * not meter that metric", so a merge could never say it.
+     */
+    it('removes a limit the new payload omits', async () => {
+      const staff = await makeStaff('limits-remover', StaffRole.BILLING_OPS);
+
+      await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_sets: 5, stores: 1 },
+      });
+
+      const response = await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_sets: 5 },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.limits.stores).toBeUndefined();
+    });
+
+    /**
+     * 🔴 **A limit nothing enforces is a promise nothing keeps.** `limits` is a
+     * JSON column, so without this check a typo — or a metric this system cannot
+     * count — would be stored happily and appear on a pricing page.
+     */
+    it('refuses a limit this system cannot enforce', async () => {
+      const staff = await makeStaff('limits-typo', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_setz: 5 },
+      });
+
+      expect(response.status).toBe(400);
+      expect(JSON.stringify(response.body.error)).toContain('option_setz');
+    });
+
+    /** ⚠️ And a negative or fractional allowance is not an allowance. */
+    it('refuses a limit that is not a whole number of zero or more', async () => {
+      const staff = await makeStaff('limits-negative', StaffRole.BILLING_OPS);
+
+      expect(
+        (
+          await client(h.app, staff).put('/admin/plans/free/limits', {
+            limits: { option_sets: -1 },
+          })
+        ).status,
+      ).toBe(400);
+
+      expect(
+        (
+          await client(h.app, staff).put('/admin/plans/free/limits', {
+            limits: { option_sets: 2.5 },
+          })
+        ).status,
+      ).toBe(400);
+    });
+
+    /** 📌 `null` is unlimited, which is different from absent and must be accepted. */
+    it('accepts null as unlimited', async () => {
+      const staff = await makeStaff('limits-unlimited', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_sets: null },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.limits.option_sets).toBeNull();
+    });
+
+    /**
+     * 🔴 **The safeguard ADR-117's amendment leaves standing.** Cuts apply at
+     * once, so an admin must be able to see who a cut affects **before** saving.
+     */
+    it('previews how many tenants a cut would put over limit', async () => {
+      const staff = await makeStaff('limits-preview', StaffRole.BILLING_OPS);
+
+      await h.tenant('over-limit-tenant');
+      const tenantId = await h.tenantIdOf('over-limit-tenant');
+      const storeId = await h.store('over-limit-tenant');
+
+      const free = await dataSource.getRepository(Plan).findOneByOrFail({ code: 'free' });
+      await dataSource.query(`UPDATE tenants SET planId = ? WHERE id = ?`, [free.id, tenantId]);
+
+      for (const name of ['One', 'Two', 'Three']) {
+        await dataSource.query(
+          `INSERT INTO option_sets (id, tenantId, storeId, name, createdAt, updatedAt)
+           VALUES (UUID(), ?, ?, ?, NOW(3), NOW(3))`,
+          [tenantId, storeId, name],
+        );
+      }
+
+      try {
+        const response = await client(h.app, staff).post('/admin/plans/free/limits/preview', {
+          limits: { option_sets: 1 },
+        });
+
+        expect(response.status).toBe(201);
+
+        const row = (response.body.data as Array<{ metric: string; affected: number; worstExcess: number }>)
+          .find((entry) => entry.metric === 'option_sets');
+
+        expect(row?.affected).toBeGreaterThanOrEqual(1);
+        /* Three held against an allowance of one is two over. */
+        expect(row?.worstExcess).toBeGreaterThanOrEqual(2);
+      } finally {
+        await dataSource.query(
+          `DELETE FROM option_sets WHERE tenantId = ?`,
+          [tenantId],
+        );
+      }
+    });
+
+    /**
+     * ⚠️ **The preview never blocks and never names a tenant.** Refusing would
+     * let one large merchant make a plan unchangeable for everyone; naming would
+     * tell a staff member about a merchant's business rather than the size of a
+     * decision.
+     */
+    it('reports a count, never which tenants', async () => {
+      const staff = await makeStaff('limits-nonames', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).post('/admin/plans/free/limits/preview', {
+        limits: { option_sets: 0 },
+      });
+
+      expect(response.status).toBe(201);
+      expect(JSON.stringify(response.body.data)).not.toContain('tenantId');
+    });
+
+    /** 🔴 A capability flag changes without a deploy, like an allowance. */
+    it('replaces a plan’s capability flags', async () => {
+      const staff = await makeStaff('features-setter', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).put('/admin/plans/free/features', {
+        features: { analytics: true },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.features).toMatchObject({ analytics: true });
+    });
+
+    /**
+     * 🔴 **A feature nothing gates would appear on a pricing page and do
+     * nothing.** `features` is a JSON column and an absent key reads as *off*,
+     * so a misspelt flag is stored happily and silently gates nothing.
+     */
+    it('refuses a feature this system does not gate', async () => {
+      const staff = await makeStaff('features-typo', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staff).put('/admin/plans/free/features', {
+        features: { analitics: true },
+      });
+
+      expect(response.status).toBe(400);
+      expect(JSON.stringify(response.body.error)).toContain('analitics');
+    });
+
+    /**
+     * 🔴 **Cross-realm, which is the boundary `check-isolation` defers to this
+     * suite for.** A tenant owner is the highest role a merchant holds, and
+     * editing what a plan includes must be beyond it — *"a tenant admin editing
+     * what they pay is not a feature, it is a vulnerability"*.
+     */
+    it('refuses a tenant owner on every one of the three routes', async () => {
+      const owner = await h.tenant('merchant-probing-limits');
+
+      expect(
+        (await client(h.app, owner).put('/admin/plans/free/limits', { limits: {} })).status,
+      ).toBe(403);
+
+      expect(
+        (await client(h.app, owner).put('/admin/plans/free/features', { features: {} })).status,
+      ).toBe(403);
+
+      expect(
+        (await client(h.app, owner).post('/admin/plans/free/limits/preview', { limits: {} }))
+          .status,
+      ).toBe(403);
+    });
+
+    /**
+     * ⚠️ **READ_ONLY may preview and may not write.** Someone answering a
+     * merchant's question needs the same view; changing what every tenant on a
+     * plan receives is a different permission.
+     */
+    it('lets READ_ONLY preview but not change', async () => {
+      const readOnly = await makeStaff('limits-readonly', StaffRole.READ_ONLY);
+
+      expect(
+        (await client(h.app, readOnly).post('/admin/plans/free/limits/preview', {
+          limits: { option_sets: 1 },
+        })).status,
+      ).toBe(201);
+
+      expect(
+        (await client(h.app, readOnly).put('/admin/plans/free/limits', {
+          limits: { option_sets: 1 },
+        })).status,
+      ).toBe(403);
+    });
+
+    /** 📌 A plan code that does not exist is a 404, not a silent no-op. */
+    it('answers 404 for a plan that does not exist', async () => {
+      const staff = await makeStaff('limits-missing', StaffRole.BILLING_OPS);
+
+      expect(
+        (await client(h.app, staff).put('/admin/plans/no-such-plan/limits', {
+          limits: { option_sets: 1 },
+        })).status,
+      ).toBe(404);
+    });
+
+    /**
+     * 🔴 **Every change is attributable** — M22.1a's exit criterion, and the
+     * first question after a merchant loses headroom is who reduced it and when.
+     */
+    it('records who changed the limits', async () => {
+      const staff = await makeStaff('limits-audited', StaffRole.BILLING_OPS);
+
+      await client(h.app, staff).put('/admin/plans/free/limits', {
+        limits: { option_sets: 7 },
+      });
+
+      const [row] = (await dataSource.query(
+        `SELECT userId, changes FROM audit_logs
+          WHERE action = 'plan.limits_changed' ORDER BY createdAt DESC LIMIT 1`,
+      )) as { userId: string | null; changes: string }[];
+
+      expect(row).toBeDefined();
+      expect(row.userId).not.toBeNull();
+      expect(JSON.stringify(row.changes)).toContain('option_sets');
+    });
+  });
+
   describe('the tax report', () => {
     /** An invoice for a tenant this suite owns, so teardown can find it. */
     async function invoiceFor(

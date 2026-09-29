@@ -338,6 +338,16 @@ describe('audit coverage (e2e)', () => {
         [AuditAction.PLAN_PRICE_SUPERSEDED]: 'plans-admin.e2e-spec',
         [AuditAction.PLAN_PRICE_CREATED]: 'plans-admin.e2e-spec',
         [AuditAction.PLAN_VISIBILITY_CHANGED]: 'plans-admin.e2e-spec',
+        /*
+         * B10's two, on the same boundary and for the same reason. ⚠️ **These
+         * differ from the price actions in one way that matters**: a price
+         * change cannot reach an existing subscriber, because the subscription
+         * is pinned to the `plan_prices` row it bought. A LIMIT change reaches
+         * every tenant on the plan at once (ADR-117, amended 2026-09-29), so the
+         * audit row is the only record of who reduced what and when.
+         */
+        [AuditAction.PLAN_LIMITS_CHANGED]: 'plans-admin.e2e-spec',
+        [AuditAction.PLAN_FEATURES_CHANGED]: 'plans-admin.e2e-spec',
         // Needs a rule targeting the value; the cascade suite creates one.
         [AuditAction.OPTION_VALUE_DELETE_REFUSED]: 'cascade.e2e-spec',
         // Team lifecycle: a second user, an invitation and its acceptance.
@@ -488,13 +498,28 @@ describe('audit coverage (e2e)', () => {
         AuditAction.STORE_DISCONNECTED,
         AuditAction.STORE_CREDENTIAL_ROTATED,
         AuditAction.STORE_STATE_MISMATCH,
+
+        /*
+         * 🔴 **The five plan actions were claimed and never verified.** Three
+         * of them — the price and visibility actions — have sat in
+         * `coveredElsewhere` since M22.1a while this list omitted them and
+         * `plans-admin.service.ts` went unread, so the claim *"plans-admin
+         * asserts all three"* was taken on trust by the very test written to
+         * stop that. Found adding B10's two beside them.
+         */
+        AuditAction.PLAN_PRICE_CREATED,
+        AuditAction.PLAN_PRICE_SUPERSEDED,
+        AuditAction.PLAN_VISIBILITY_CHANGED,
+        AuditAction.PLAN_LIMITS_CHANGED,
+        AuditAction.PLAN_FEATURES_CHANGED,
       ];
 
       const source = readFileSync('src/tenants/team.service.ts', 'utf8');
       const values = readFileSync('src/option-sets/option-values.service.ts', 'utf8');
       const connect = readFileSync('src/stores/connect.service.ts', 'utf8');
       const stores = readFileSync('src/stores/stores.service.ts', 'utf8');
-      const both = source + values + connect + stores;
+      const plans = readFileSync('src/plans/plans-admin.service.ts', 'utf8');
+      const both = source + values + connect + stores + plans;
 
       claimed.forEach((action) => {
         const constant = Object.entries(AuditAction).find(([, value]) => value === action)?.[0];

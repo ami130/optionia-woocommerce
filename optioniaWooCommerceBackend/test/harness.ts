@@ -555,6 +555,9 @@ export function client(app: INestApplication, token: string) {
       auth(request(app.getHttpServer()).post(`/v1${path}`)).send(body),
     patch: (path: string, body: object = {}) =>
       auth(request(app.getHttpServer()).patch(`/v1${path}`)).send(body),
+    /* Added for B10's replace-semantics routes — the API's first PUTs. */
+    put: (path: string, body: object = {}) =>
+      auth(request(app.getHttpServer()).put(`/v1${path}`)).send(body),
     delete: (path: string) => auth(request(app.getHttpServer()).delete(`/v1${path}`)),
   };
 }

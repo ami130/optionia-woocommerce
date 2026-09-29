@@ -175,6 +175,17 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'GET /v1/admin/plans',
   'POST /v1/admin/plans/:code/price',
   'PATCH /v1/admin/plans/:code/visibility',
+
+  /*
+   * B10's three, on the same reasoning and with the same obligation: each is
+   * proven cross-realm in `plans-admin.e2e-spec` rather than merely listed here.
+   * ⚠️ **The preview is a READ that names no tenant.** It reports how many
+   * tenants a change would affect as a count, never which ones — a staff member
+   * learns the size of a decision, not a merchant's business.
+   */
+  'POST /v1/admin/plans/:code/limits/preview',
+  'PUT /v1/admin/plans/:code/limits',
+  'PUT /v1/admin/plans/:code/features',
   'GET /v1/admin/billing/tax-report',
 
   /**
