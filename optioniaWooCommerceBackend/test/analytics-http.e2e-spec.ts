@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { AnalyticsService } from '../src/analytics/analytics.service';
 import { createHarness, type Harness } from './harness';
 
 /**
@@ -977,6 +978,203 @@ describe('Analytics over HTTP (e2e)', () => {
 
     return setId;
   }
+
+  /**
+   * M25.4 — is option revenue better than it was?
+   *
+   * 🔴 **Every other figure on this screen is all-time**, and a merchant who
+   * changed a price last month cannot see the effect of it in a number that
+   * blends every month together. This is the only thing on the page that
+   * answers a question about *change*.
+   *
+   * ⚠️ **Every fixture here pins its date relative to `NOW()`, never to the
+   * helper's default.** That default is `2026-09-01`, which is 28 days ago
+   * today and inside a 30-day window — and outside it three days from now. A
+   * test resting on it would pass today and fail in April for a reason that has
+   * nothing to do with the code.
+   */
+  describe('revenue trend (M25.4)', () => {
+    /** `n` days before now, in the format the fixture helper expects. */
+    function daysAgo(n: number): string {
+      const when = new Date(Date.now() - n * 86_400_000);
+
+      return when.toISOString().slice(0, 19).replace('T', ' ') + '.000';
+    }
+
+    async function clear(): Promise<void> {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.storeId = ?`,
+        [storeId],
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE storeId = ?`, [storeId]);
+    }
+
+    beforeEach(clear);
+    afterEach(clear);
+
+    async function trend() {
+      const response = await request(h.app.getHttpServer())
+        .get('/v1/analytics')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(200);
+
+      return response.body.data.trend as {
+        windowDays: number;
+        currentMinor: number;
+        previousMinor: number | null;
+        currentOrders: number;
+        previousOrders: number | null;
+        changeFraction: number | null;
+      };
+    }
+
+    /** 🔴 The whole point: growth is reported as growth. */
+    it('reports the rise when this window earned more than the last', async () => {
+      await order('t-prev', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ], daysAgo(45));
+
+      await order('t-now', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 150 },
+      ], daysAgo(5));
+
+      const t = await trend();
+
+      expect(t.currentMinor).toBe(150);
+      expect(t.previousMinor).toBe(100);
+      expect(t.changeFraction).toBeCloseTo(0.5, 5);
+    });
+
+    /** 📌 And a fall is reported as a fall, with a negative fraction. */
+    it('reports a fall as a negative change', async () => {
+      await order('t-prev2', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 200 },
+      ], daysAgo(40));
+
+      await order('t-now2', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 50 },
+      ], daysAgo(2));
+
+      const t = await trend();
+
+      expect(t.changeFraction).toBeCloseTo(-0.75, 5);
+    });
+
+    /**
+     * 🔴 **No history is NOT a 100% fall.** A merchant whose first order was
+     * last week has no window to compare against, and showing them a change at
+     * all would be a statement about their tenure rather than their options.
+     */
+    it('reports no previous window when the shop has no history that far back', async () => {
+      await order('t-only', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 300 },
+      ], daysAgo(3));
+
+      const t = await trend();
+
+      expect(t.currentMinor).toBe(300);
+      expect(t.previousMinor).toBeNull();
+      expect(t.previousOrders).toBeNull();
+      expect(t.changeFraction).toBeNull();
+    });
+
+    /**
+     * 🔴 **Earning nothing is different from having no history**, and the two
+     * must not collapse into the same answer. Here the previous window HAS an
+     * order — it simply carried no revenue — so `previousMinor` is 0, not null.
+     */
+    it('distinguishes a previous window that earned zero from one that is absent', async () => {
+      await order('t-zero', 5_000, [
+        { optionKey: 'free', label: 'Free choice', valueKey: 'a', deltaMinor: 0 },
+      ], daysAgo(45));
+
+      await order('t-earn', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ], daysAgo(5));
+
+      const t = await trend();
+
+      expect(t.previousMinor).toBe(0);
+      expect(t.previousOrders).toBe(1);
+
+      /* ⚠️ Growth from zero is not a percentage — it is division by zero. */
+      expect(t.changeFraction).toBeNull();
+    });
+
+    /**
+     * 🔴 **The zero guard, asserted at the SERVICE and not over HTTP** — because
+     * over HTTP it cannot be asserted at all.
+     *
+     * ✏️ **A mutation proved the test above is blind to this.** Removing
+     * `previousMinor !== 0` lets the expression evaluate to `Infinity`, and
+     * `JSON.stringify(Infinity)` is **`null`** — so the bug and the guard send
+     * byte-identical responses. The suite stayed green with the guard deleted.
+     *
+     * ⚠️ **It still matters.** `Infinity` reaching the object is a landmine for
+     * every consumer that is not `JSON.stringify`: the CSV writer would print
+     * "Infinity", and a rollup reading this in-process would store it. The
+     * guard is real; only the HTTP boundary hides it.
+     */
+    it('never produces Infinity when the previous window earned zero', async () => {
+      await order('t-zero-svc', 5_000, [
+        { optionKey: 'free', label: 'Free choice', valueKey: 'a', deltaMinor: 0 },
+      ], daysAgo(45));
+
+      await order('t-earn-svc', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ], daysAgo(5));
+
+      const service = h.app.get(AnalyticsService, { strict: false });
+      const computed = await service.revenueTrend(tenantId);
+
+      expect(computed.previousMinor).toBe(0);
+      expect(computed.changeFraction).toBeNull();
+      expect(Number.isFinite(computed.changeFraction ?? 0)).toBe(true);
+    });
+
+    /**
+     * ⚠️ **An order older than both windows belongs to neither.** Without the
+     * lower bound on the previous window every historical order would pile into
+     * it, and the comparison would drift further from the truth the longer a
+     * merchant had been trading.
+     */
+    it('ignores an order older than both windows', async () => {
+      await order('t-ancient', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 9_999 },
+      ], daysAgo(200));
+
+      await order('t-recent', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ], daysAgo(5));
+
+      const t = await trend();
+
+      expect(t.currentMinor).toBe(100);
+      /* The 200-day-old order is in neither window, so there is no history. */
+      expect(t.previousMinor).toBeNull();
+    });
+
+    /**
+     * 📌 **An order with no options is not counted.** It contributes nothing to
+     * option revenue, and counting it would make the revenue and the order
+     * count disagree about their own denominator.
+     */
+    it('counts only orders that carried options', async () => {
+      await order('t-plain', 5_000, [], daysAgo(5));
+
+      const t = await trend();
+
+      expect(t.currentOrders).toBe(0);
+      expect(t.currentMinor).toBe(0);
+    });
+
+    /** 📌 The window length travels with the figures, so the screen can name it. */
+    it('states the window it measured', async () => {
+      expect((await trend()).windowDays).toBe(30);
+    });
+  });
 
   /** Children first: the foreign keys are RESTRICT, not CASCADE. */
   async function removeOptionSet(setId: string): Promise<void> {

@@ -15,6 +15,7 @@ import {
   type AnalyticsSummary,
   type Capped,
   type OptionRevenue,
+  type RevenueTrend,
   type ValueRevenue,
 } from '@/lib/analytics/api';
 import { formatMoney } from '@/lib/billing/format';
@@ -239,6 +240,14 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
         </Alert>
       )}
 
+      {/*
+        📌 **Above the all-time figures, deliberately.** This is the only number
+        on the page about *change*, and a merchant who has just adjusted a price
+        is looking for it — putting it below four all-time totals buries the one
+        answer they came for.
+      */}
+      <TrendSection trend={data.trend} money={money} />
+
       <AttachSection attach={attach} money={money} />
 
       <RankedSection
@@ -266,6 +275,94 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
       <SetSection data={data} money={money} />
     </div>
   );
+}
+
+/**
+ * Whether option revenue is rising or falling (M25.4).
+ *
+ * 🔴 **The rest of this page is all-time**, so a merchant who raised a price
+ * last month sees the months before and after blended into one number — the
+ * change they made is invisible in the report built to show it.
+ *
+ * ⚠️ **Three different absences, three different sentences.** No history that
+ * far back, a previous window that earned nothing, and no single currency are
+ * distinct situations, and collapsing them into one dash would tell a merchant
+ * something false about their shop in at least two of the three.
+ */
+function TrendSection({
+  trend,
+  money,
+}: {
+  trend: RevenueTrend;
+  money: (minor: number) => string | null;
+}) {
+  const current = money(trend.currentMinor);
+  const rising = trend.changeFraction !== null && trend.changeFraction > 0;
+
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <div className="mb-3">
+          <h2 className="font-medium">Option revenue, last {trend.windowDays} days</h2>
+          <p className="text-muted-foreground text-sm">
+            Compared with the {trend.windowDays} days before that.
+          </p>
+        </div>
+
+        <div className="flex items-baseline gap-3">
+          <span className="text-2xl font-semibold">{current ?? '—'}</span>
+
+          {trend.changeFraction !== null && (
+            <span
+              className={rising ? 'text-sm font-medium' : 'text-muted-foreground text-sm'}
+            >
+              {/*
+                📌 **The sign is explicit.** "25%" beside a figure is ambiguous
+                about direction; "+25%" and "−25%" are not. The minus is a real
+                minus sign (U+2212), not a hyphen, because a hyphen at this size
+                reads as punctuation.
+              */}
+              {trend.changeFraction > 0 ? '+' : '−'}
+              {Math.abs(Math.round(trend.changeFraction * 100))}%
+            </span>
+          )}
+        </div>
+
+        <p className="text-muted-foreground mt-2 text-xs">{explain(trend, money)}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The sentence under the figure, naming which absence this is.
+ *
+ * 🔴 **"No history" and "earned nothing" must not share a sentence.** A merchant
+ * whose first order was last week has nothing to compare against; one whose
+ * options earned nothing last month has a real and actionable zero. Telling the
+ * first they fell 100% would be a statement about their tenure, not their shop.
+ */
+function explain(
+  trend: RevenueTrend,
+  money: (minor: number) => string | null,
+): string {
+  if (trend.previousMinor === null) {
+    return 'No orders before this period yet, so there is nothing to compare against.';
+  }
+
+  const previous = money(trend.previousMinor);
+
+  if (previous === null) {
+    /* The currency is not one currency — the counts are still true. */
+    return `${trend.currentOrders} orders with options, against ${trend.previousOrders} before.`;
+  }
+
+  if (trend.changeFraction === null) {
+    /* previousMinor is 0: a real zero, not a missing one. */
+    return `Options earned nothing in the previous ${trend.windowDays} days, so there is no percentage to show.`;
+  }
+
+  return `${previous} in the previous ${trend.windowDays} days, from ${trend.previousOrders} orders.`;
 }
 
 function AttachSection({

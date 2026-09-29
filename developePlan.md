@@ -112,7 +112,9 @@ happen.
 - **M25.1 view events** — no transport designed, and it risks the one property
   Phase 25's exit criterion protects.
 - **M25.4 per-product** — needs a plugin release; wait for one that is needed
-  anyway.
+  anyway. ⚠️ **Its "over time" half was NOT blocked and shipped 2026-09-29** —
+  I had bundled the two halves and deferred both on the constraint that applies
+  to only one of them.
 
 ⚠️ **B4 and B5 are still yours and now sit on the critical path.** B5
 (positioning) gates Phase 33's recruiting, which is what closes Gate 2's
@@ -599,7 +601,7 @@ pointing at 16b, rather than "all" silently meaning "some":
 |---|---|
 | **M25.1** event ingestion (views, add-to-cart) | ⏸️ **Deferred.** No transport is designed, and views are every product page load — a cron queue would mean a database write per pageview on the merchant's own server, which is what this phase's own exit criterion forbids. 🔴 **The cost is named, not hidden**: M25.3's *"conversion with vs. without options"* is unanswerable without it (F157), and average order value ships as the honest substitute |
 | **M25.2** rollup tables | ⏸️ **Deferred on measurement, not on guesswork.** On a 480k-row scratch copy the covering indexes are worth 3.5× (253ms → 72ms); at 60k they are worth **nothing** — 127ms against 130ms, because the optimizer scans and scanning is cheaper. Build them when a tenant approaches **100k selections**, not before |
-| **M25.4** comparisons over time and per product | ⏸️ Needs a product reference on `order_selections` (F151) and therefore a plugin release. Waiting for one that is needed anyway |
+| **M25.4** comparisons over time and per product | 🟡 **Half shipped 2026-09-29.** *Over time* needed nothing that was missing: `order_events.occurredAt` already existed and was used only for **ordering** labels, never for **filtering** — so every figure on the page was all-time, and a merchant who changed a price could not see the effect anywhere. `revenueTrend` compares the last 30 days against the 30 before, and the page leads with it. *Per product* remains deferred: `order_selections` carries no product reference and `OrderPayload` sends none (F151), so it needs a plugin release — still waiting for one that is needed anyway |
 | **M25.5** CSV export | ✅ **Shipped 2026-09-28** (`8efe14b`). `GET /v1/analytics/export`, gated on `ANALYTICS_VIEW` and the plan's analytics feature, with a download button on the page — a route nothing calls is F132 again. Escaped against the spreadsheet that opens it, and corrected 2026-09-29 (`db8ec76`) after the formula guard turned a legitimately negative revenue into text `SUM()` skips |
 
 ✅ **M25.6 privacy is met structurally**, not by a promise: `OrderPayload` writes

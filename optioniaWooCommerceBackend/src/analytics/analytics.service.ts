@@ -102,6 +102,52 @@ export interface AttachRate {
  * whole catalogue — and "least selected" would be a list of things that are not
  * least selected.
  */
+/**
+ * The same figures over two equal, adjacent windows (M25.4).
+ *
+ * ## Why a fixed comparison rather than a date picker
+ *
+ * 🔴 **M25.4 says "comparisons over time", and the roadmap's rule for this phase
+ * is *"answer real merchant decisions … not vanity charts"*.** A date picker is a
+ * tool for exploring; a merchant still has to choose two ranges and do the
+ * subtraction themselves. The decision they actually face is *"is this working
+ * better than it was?"*, and that is one number.
+ *
+ * ⚠️ **The windows are equal in LENGTH and adjacent in time**, because anything
+ * else compares quantities that are not comparable: thirty days against seven
+ * would show a fall that is an artefact of the window, not of the shop.
+ *
+ * 📌 **`previous` is `null` when the shop has no history that far back**, and
+ * that is different from a previous window that earned nothing. A merchant
+ * whose first order was last week has no "before" to compare against, and
+ * showing them −100% would be a fact about their tenure, not their options.
+ */
+export interface RevenueTrend {
+  /** How many days each window covers. */
+  readonly windowDays: number;
+  /** Option revenue in the window ending now, in minor units. */
+  readonly currentMinor: number;
+  /**
+   * Option revenue in the window immediately before it, or `null` when no
+   * order exists that early — "no history" is not "earned nothing".
+   */
+  readonly previousMinor: number | null;
+  /** Orders carrying options in the current window. */
+  readonly currentOrders: number;
+  /** The same for the previous window, `null` under the same rule as above. */
+  readonly previousOrders: number | null;
+  /**
+   * The change as a fraction (`0.25` is +25%), or `null` when it cannot be
+   * stated.
+   *
+   * 🔴 **`null` when the previous window earned ZERO, not just when it is
+   * absent.** Growth from nothing is division by zero; reporting it as
+   * "+100%" or "+∞%" would be a number the data does not contain. The screen
+   * says "no earnings to compare against" instead.
+   */
+  readonly changeFraction: number | null;
+}
+
 export interface Capped<T> {
   readonly rows: T[];
   /** How many rows exist in total, before the cap. */
@@ -125,6 +171,13 @@ export interface AnalyticsSummary {
    */
   readonly leastValues: Capped<ValueRevenue>;
   readonly deadOptions: Capped<DeadOption>;
+  /**
+   * Option revenue now against the window before it (M25.4).
+   *
+   * 🔴 **Every other figure here is all-time**, which cannot answer *"is this
+   * better than it was?"* — the question a merchant asks after changing a price.
+   */
+  readonly trend: RevenueTrend;
   /** Revenue per option set — M25.3's last clause (F150). */
   readonly optionSets: Capped<OptionSetRevenue>;
   /**
@@ -202,6 +255,7 @@ export class AnalyticsService {
       topValues,
       leastValues,
       deadOptions,
+      trend,
       optionSets,
       unattributed,
       currency,
@@ -211,6 +265,7 @@ export class AnalyticsService {
         this.valueRevenue(tenantId, 'most'),
         this.valueRevenue(tenantId, 'least'),
         this.deadOptions(tenantId),
+        this.revenueTrend(tenantId),
         this.optionSetRevenue(tenantId),
         this.unattributedSelections(tenantId),
         this.currency(tenantId),
@@ -222,6 +277,7 @@ export class AnalyticsService {
       topValues,
       leastValues,
       deadOptions,
+      trend,
       optionSets,
       unattributedSelections: unattributed,
       currency,
@@ -309,6 +365,100 @@ export class AnalyticsService {
     }
 
     return Math.round(Number(raw));
+  }
+
+  /**
+   * Option revenue now against the window before it (M25.4).
+   *
+   * ## What this answers that nothing else does
+   *
+   * 🔴 **Every other figure on this screen is all-time**, and all-time cannot
+   * answer *"is this better than it was?"*. A merchant who raised a price last
+   * month sees the months before and after blended into one number, so the
+   * change they made is invisible in the report built to show it.
+   *
+   * ## Why the previous window is read with its own COUNT
+   *
+   * ⚠️ **`SUM` over no rows is `NULL`, and so is `SUM` over rows that happen to
+   * total zero** — the two are indistinguishable from the sum alone. A merchant
+   * with no orders that far back and a merchant whose options earned nothing
+   * are different situations with different advice, so the count decides which
+   * it is and the sum only supplies the amount.
+   *
+   * ⚠️ **The boundary is `>= start AND < end`**, half-open at both ends, so an
+   * order landing exactly on the boundary instant is counted once and not
+   * twice. `BETWEEN` is inclusive at both ends and would double-count it.
+   *
+   * 📌 **Only orders carrying options are counted.** An order with no options
+   * contributes nothing to option revenue, and including it in the order count
+   * would make the two halves of this figure disagree about their own
+   * denominator.
+   */
+  async revenueTrend(tenantId: string, windowDays = 30): Promise<RevenueTrend> {
+    /*
+     * 🔴 **The window length is interpolated, never parameterised — so it is
+     * validated here.** `INTERVAL ? DAY` is not a placeholder MySQL accepts in
+     * this position, and an unchecked number in a SQL string is an injection
+     * even when every caller today passes a constant. Integer, positive, and
+     * bounded at two years.
+     */
+    if (!Number.isInteger(windowDays) || windowDays < 1 || windowDays > 730) {
+      throw new Error(`revenueTrend: windowDays must be an integer in 1..730, got ${windowDays}`);
+    }
+
+    const [row] = (await this.dataSource.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN e.occurredAt >= NOW() - INTERVAL ${windowDays} DAY
+                           THEN e.optionRevenueMinor END), 0) AS currentMinor,
+         SUM(CASE WHEN e.occurredAt >= NOW() - INTERVAL ${windowDays} DAY
+                  THEN 1 ELSE 0 END) AS currentOrders,
+         COALESCE(SUM(CASE WHEN e.occurredAt >= NOW() - INTERVAL ${windowDays * 2} DAY
+                            AND e.occurredAt <  NOW() - INTERVAL ${windowDays} DAY
+                           THEN e.optionRevenueMinor END), 0) AS previousMinor,
+         SUM(CASE WHEN e.occurredAt >= NOW() - INTERVAL ${windowDays * 2} DAY
+                   AND e.occurredAt <  NOW() - INTERVAL ${windowDays} DAY
+                  THEN 1 ELSE 0 END) AS previousOrders
+       FROM order_events e
+       JOIN stores s ON s.id = e.storeId
+      WHERE s.tenantId = ?
+        AND EXISTS (SELECT 1 FROM order_selections sel WHERE sel.orderEventId = e.id)`,
+      [tenantId],
+    )) as {
+      currentMinor: string | null;
+      currentOrders: string | number | null;
+      previousMinor: string | null;
+      previousOrders: string | number | null;
+    }[];
+
+    /*
+     * ⚠️ **`SUM()` arrives as a string and `COUNT()` as a number** — mysql2 is
+     * not uniform about this, and `CASE WHEN … THEN 1 ELSE 0 END` inside a
+     * `SUM` is a sum, so it is a string here. `Number()` over both is the only
+     * safe reading.
+     */
+    const currentOrders = Number(row?.currentOrders ?? 0);
+    const previousOrders = Number(row?.previousOrders ?? 0);
+    const currentMinor = Number(row?.currentMinor ?? 0);
+
+    /* No order that far back at all: there is no "before" to compare against. */
+    const hasPrevious = previousOrders > 0;
+    const previousMinor = hasPrevious ? Number(row?.previousMinor ?? 0) : null;
+
+    return {
+      windowDays,
+      currentMinor,
+      previousMinor,
+      currentOrders,
+      previousOrders: hasPrevious ? previousOrders : null,
+      /*
+       * 🔴 **Division by zero is `null`, not `Infinity`.** Growth from nothing
+       * is not a percentage, and `+∞%` or `+100%` would both be inventions.
+       */
+      changeFraction:
+        previousMinor !== null && previousMinor !== 0
+          ? (currentMinor - previousMinor) / previousMinor
+          : null,
+    };
   }
 
   /**

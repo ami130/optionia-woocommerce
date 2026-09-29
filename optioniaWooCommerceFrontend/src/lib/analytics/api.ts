@@ -70,12 +70,35 @@ export interface AttachRate {
 }
 
 /** Everything `GET /analytics` returns. */
+/**
+ * Option revenue now against the window before it (M25.4).
+ *
+ * 🔴 **Every other figure on this screen is all-time**, which cannot answer
+ * *"is this better than it was?"* — the question a merchant asks right after
+ * changing a price.
+ *
+ * ⚠️ **`previousMinor` is `null` when there is no history that far back**, which
+ * is not the same as a window that earned nothing. The first has no comparison
+ * to make; the second compared to zero.
+ */
+export interface RevenueTrend {
+  windowDays: number;
+  currentMinor: number;
+  previousMinor: number | null;
+  currentOrders: number;
+  previousOrders: number | null;
+  /** `0.25` is +25%. `null` when the previous window is absent or earned zero. */
+  changeFraction: number | null;
+}
+
 export interface AnalyticsSummary {
   attach: AttachRate;
   topOptions: Capped<OptionRevenue>;
   topValues: Capped<ValueRevenue>;
   leastValues: Capped<ValueRevenue>;
   deadOptions: Capped<DeadOption>;
+  /** The only figure here about change rather than totals (M25.4). */
+  trend: RevenueTrend;
   optionSets: Capped<OptionSetRevenue>;
   /**
    * Selections placed before the plugin sent a set id, and unattributable

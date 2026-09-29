@@ -42,6 +42,14 @@ describe('Analytics summary', () => {
         truncated: false,
       },
       deadOptions: { rows: [], total: 0, truncated: false },
+      trend: {
+        windowDays: 30,
+        currentMinor: 9_900,
+        previousMinor: 6_600,
+        currentOrders: 4,
+        previousOrders: 3,
+        changeFraction: 0.5,
+      },
       optionSets: {
         rows: [{ optionSetId: 'set-1', name: 'Mug options', revenueMinor: 9_900, orders: 4 }],
         total: 1,
@@ -210,6 +218,102 @@ describe('Analytics summary', () => {
     /* The currency is known here, so the other figure still shows money. */
     expect(container.textContent).toContain('£90.00');
     expect(container.textContent).not.toContain('single currency');
+  });
+
+  /**
+   * 🔴 **M25.4 — the only figure here about change.** Everything else on this
+   * page is all-time, so a merchant who raised a price last month cannot see
+   * the effect of it anywhere but here.
+   */
+  it('shows whether option revenue is rising', () => {
+    const { container } = render(<Summary data={summary()} />);
+
+    /* £99.00 this window, £66.00 before it: +50%. */
+    expect(container.textContent).toContain('+50%');
+    expect(container.textContent).toContain('last 30 days');
+  });
+
+  /** 📌 A fall carries a real minus sign, not a hyphen. */
+  it('shows a fall with an explicit sign', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          trend: {
+            windowDays: 30,
+            currentMinor: 3_300,
+            previousMinor: 6_600,
+            currentOrders: 2,
+            previousOrders: 4,
+            changeFraction: -0.5,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('−50%');
+  });
+
+  /**
+   * 🔴 **No history is not a 100% fall.** A merchant whose first order was last
+   * week has nothing to compare against, and a percentage here would describe
+   * how long they have been trading rather than how their options perform.
+   */
+  it('says there is nothing to compare against when the shop is new', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          trend: {
+            windowDays: 30,
+            currentMinor: 9_900,
+            previousMinor: null,
+            currentOrders: 4,
+            previousOrders: null,
+            changeFraction: null,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('nothing to compare against');
+    expect(container.textContent).not.toContain('−100%');
+    expect(container.textContent).not.toContain('+100%');
+  });
+
+  /**
+   * 🔴 **And a previous window that earned ZERO is a different sentence.**
+   * That merchant has real history and a real zero — telling them there is
+   * nothing to compare against would be false.
+   */
+  it('distinguishes a previous window that earned nothing from one that is absent', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          trend: {
+            windowDays: 30,
+            currentMinor: 9_900,
+            previousMinor: 0,
+            currentOrders: 4,
+            previousOrders: 2,
+            changeFraction: null,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('earned nothing in the previous');
+    expect(container.textContent).not.toContain('nothing to compare against');
+  });
+
+  /**
+   * ⚠️ **Across several currencies the amounts are withheld and the COUNTS
+   * survive** — the same rule the rest of this page follows. An option chosen
+   * four times was chosen four times whatever it was priced in.
+   */
+  it('withholds trend amounts but keeps the counts across currencies', () => {
+    const { container } = render(<Summary data={summary({ currency: null })} />);
+
+    expect(container.textContent).toContain('4 orders with options');
+    expect(container.textContent).not.toContain('£66.00');
   });
 
   /**
