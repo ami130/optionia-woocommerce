@@ -1783,6 +1783,7 @@ mutation-proven by dropping the join.
 | `POST /store/disconnect` | `[built]` |
 | `GET /store/config` | `[built]` |
 | `POST /store/orders` | `[built]` |
+| `POST /store/views` | `[built]` |
 | `POST /store/products` | `[built]` |
 | `DELETE /store/products/:externalId` | `[built]` |
 | `POST /store/products/reconcile` | `[built]` |
@@ -2003,6 +2004,36 @@ where it would actually happen.
 
 **Order ids are scoped to the store.** WooCommerce ids restart at 1 on every
 install, so two stores reporting order `1` are two different orders.
+
+### `POST /v1/store/views` **[built]**
+
+How many customers saw each option, aggregated by the plugin (M25.1).
+
+**Auth:** store credential, as `POST /store/orders`. 🔴 **A customer's browser
+must never call this.** The beacon goes to the merchant's own WordPress, which
+aggregates and drains here on cron with the credential it already holds — a
+browser posting directly would need the store secret in page source, or no
+authentication at all, which is a free tool for poisoning any merchant's
+analytics.
+
+**Body:** `{ "views": [ { "option_set_id", "option_key", "day", "views" } ] }`,
+at most 500 rows.
+
+⚠️ **`views` is a DELTA since the last successful report, not a running total.**
+The cloud adds it to what it holds, and the plugin clears its counter only after
+a 2xx — so a failed drain resends and a successful one has nothing left to send.
+A plugin sending totals instead would multiply every figure by the number of
+drains.
+
+📌 **`day` is the STORE's date**, not UTC's: a shop in Auckland splits its
+evening across two UTC dates, and a merchant comparing today against yesterday
+would otherwise compare the wrong halves.
+
+**Rate limit:** 60/hour per credential — a fifth of the order route's, because
+views are aggregated before they are sent. Nothing is lost to a 429; the
+plugin's counter survives until a drain succeeds.
+
+**Returns** `200 { "recorded": <rows touched> }`.
 
 ### `POST /v1/store/products` **[built]**
 

@@ -169,6 +169,34 @@ export interface ProductRevenue {
   readonly orders: number;
 }
 
+/**
+ * Of the customers who SAW an option, how many bought (M25.1, M25.3).
+ *
+ * 🔴 **The clause F157 recorded as unanswerable, now answerable.** Conversion
+ * needs a denominator of views, and until M25.1 nothing recorded one — so the
+ * screen shipped average order value as the honest substitute and never used the
+ * word *conversion*. Views exist now, and this is the figure the milestone asked
+ * for.
+ *
+ * ⚠️ **`rate` is null until views accumulate, and that is NOT zero.** A store
+ * whose plugin predates M25.1 has orders and no views; dividing by nothing would
+ * report either infinity or a silent zero, and both would read as a fact about
+ * the shop rather than about the measurement.
+ *
+ * 📌 **Counted per option, not per order.** A page shows several options and a
+ * customer may buy having chosen one — so "views" is how many times an option was
+ * displayed, and "orders" is how many carried it. The two are commensurable
+ * because both are per option.
+ */
+export interface OptionConversion {
+  readonly optionKey: string;
+  readonly label: string;
+  readonly views: number;
+  readonly orders: number;
+  /** 0–1, or `null` when this option has no recorded views to divide by. */
+  readonly rate: number | null;
+}
+
 export interface Capped<T> {
   readonly rows: T[];
   /** How many rows exist in total, before the cap. */
@@ -207,6 +235,14 @@ export interface AnalyticsSummary {
    * boundary date — `unattributedProductSelections` is what stops it reading as
    * complete.
    */
+  /**
+   * Of the customers who saw each option, how many bought (M25.1, M25.3).
+   *
+   * ⚠️ **Empty until a store runs the plugin release that sends views**, and an
+   * entry with `rate: null` has orders and no views — a measurement gap rather
+   * than a shop that never sells.
+   */
+  readonly conversion: Capped<OptionConversion>;
   readonly products: Capped<ProductRevenue>;
   /** Selections with no product reference, so the table above is not misread. */
   readonly unattributedProductSelections: number;
@@ -288,6 +324,7 @@ export class AnalyticsService {
       leastValues,
       deadOptions,
       trend,
+      conversion,
       products,
       unattributedProducts,
       optionSets,
@@ -300,6 +337,7 @@ export class AnalyticsService {
         this.valueRevenue(tenantId, 'least'),
         this.deadOptions(tenantId),
         this.revenueTrend(tenantId),
+        this.optionConversion(tenantId),
         this.productRevenue(tenantId),
         this.unattributedProducts(tenantId),
         this.optionSetRevenue(tenantId),
@@ -314,6 +352,7 @@ export class AnalyticsService {
       leastValues,
       deadOptions,
       trend,
+      conversion,
       products,
       unattributedProductSelections: unattributedProducts,
       optionSets,
@@ -830,6 +869,90 @@ export class AnalyticsService {
     )) as { total: number }[];
 
     return Number(row?.total ?? 0);
+  }
+
+  /**
+   * Of the customers who saw each option, how many bought it (M25.1, M25.3).
+   *
+   * ## Why this is a LEFT JOIN from views, not from orders
+   *
+   * 🔴 **The denominator is the thing that must not go missing.** Joining from
+   * orders would list only options somebody bought — and an option seen two
+   * thousand times and never chosen is precisely the row a merchant needs most.
+   * It is the dead option M25.3 asks about, with a number attached.
+   *
+   * ⚠️ **An option with views and no orders converts at zero; an option with
+   * orders and no views converts at NULL.** The first is a finding. The second
+   * is a measurement gap — a store whose plugin predates M25.1 — and reporting
+   * it as zero would tell a merchant their best option never sells.
+   *
+   * 📌 **Views are summed across days**, because the question is lifetime
+   * conversion. A per-period figure belongs with `revenueTrend`, which already
+   * owns the comparison over time.
+   */
+  async optionConversion(tenantId: string): Promise<Capped<OptionConversion>> {
+    const rows = (await this.dataSource.query(
+      /*
+       * 🔴 **Two aggregates, never one join — a LEFT JOIN FANS OUT.** The first
+       * version joined views to selections and summed both: a view row of 10
+       * matched by two orders was counted twice, reporting 20 views and halving
+       * the conversion rate. Measured, not reasoned about — a test asserting 10
+       * received 20.
+       *
+       * ⚠️ **Each side is aggregated to one row per option BEFORE they meet**,
+       * so neither can multiply the other however many rows it holds.
+       */
+      `SELECT
+         v.optionKey AS optionKey,
+         COALESCE(o.label, v.optionKey) AS label,
+         v.views AS views,
+         COALESCE(o.orders, 0) AS orders
+       FROM (
+         SELECT vc.optionKey AS optionKey, SUM(vc.views) AS views
+           FROM option_view_counts vc
+           JOIN stores s ON s.id = vc.storeId
+          WHERE s.tenantId = ?
+          GROUP BY vc.optionKey
+       ) v
+       LEFT JOIN (
+         SELECT sel.optionKey AS optionKey,
+                MAX(sel.optionLabel) AS label,
+                COUNT(DISTINCT sel.orderEventId) AS orders
+           FROM order_selections sel
+           JOIN order_events e ON e.id = sel.orderEventId
+           JOIN stores s2 ON s2.id = e.storeId
+          WHERE s2.tenantId = ?
+          GROUP BY sel.optionKey
+       ) o ON o.optionKey = v.optionKey
+      ORDER BY views DESC, v.optionKey ASC
+      LIMIT ${MAX_ROWS}`,
+      [tenantId, tenantId],
+    )) as { optionKey: string; label: string; views: string; orders: number }[];
+
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(DISTINCT v.optionKey) AS total
+         FROM option_view_counts v
+         JOIN stores s ON s.id = v.storeId
+        WHERE s.tenantId = ?`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(
+      rows.map((row) => {
+        const views = Number(row.views);
+        const orders = Number(row.orders);
+
+        return {
+          optionKey: row.optionKey,
+          label: row.label,
+          views,
+          orders,
+          /* Division by zero is null, never Infinity — the F165 lesson. */
+          rate: views > 0 ? orders / views : null,
+        };
+      }),
+      Number(count?.total ?? 0),
+    );
   }
 
   async optionSetRevenue(tenantId: string): Promise<Capped<OptionSetRevenue>> {

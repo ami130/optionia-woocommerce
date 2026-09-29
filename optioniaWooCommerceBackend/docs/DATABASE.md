@@ -426,6 +426,49 @@ never rewrites what a customer saw on their receipt.
 
 ---
 
+### `option_view_counts` — M25.1
+
+`id`, `store_id` FK, `option_set_id` CHAR(36), `option_key`, `day` DATE,
+`views` INT UNSIGNED.
+
+**A count, never an event.** A view is every product page load and an order is
+roughly one per fifty of them, so a row per view would make this the busiest
+table in the system — driven by a merchant's traffic rather than their sales. The
+plugin aggregates before sending: one store's day is one row per option, however
+many customers looked.
+
+**`(store_id, option_set_id, option_key, day)` is UNIQUE, and that is the whole
+design.** The write is `ON DUPLICATE KEY UPDATE views = views + VALUES(views)`,
+so a batch adds to what is already there. The plugin sends a **delta** and clears
+its counter only after a 2xx — a failed drain resends, a succeeded one has
+nothing left to send. That is at-least-once delivery with the plugin owning the
+other half, and it is the assumption to distrust first.
+
+**`day` is the STORE's date, not UTC's.** A shop in Auckland splits its evening
+across two UTC dates, and a merchant comparing today against yesterday would
+otherwise compare the wrong halves. It is also the smallest grain that cannot
+identify a person: one visit is indistinguishable from another inside it.
+
+**`store_id` has a foreign key and `option_set_id` does not.** `option_set_id`
+follows ADR-016 like `order_selections`: a view is a historical fact and must not
+vanish because a merchant later deleted the option.
+
+**`option_view_counts.store_id` is `RESTRICT`, for the same reason
+`order_events.store_id` is** — and the first draft had it `CASCADE` until writing
+this section exposed the mismatch. Views are not revenue, but they are the
+denominator of a conversion rate, so losing them is worse than losing a number:
+a merchant who disconnects and reconnects a store would keep their orders and
+lose their views, and conversion would read as *infinite* on a shop that plainly
+has traffic. Disconnect-and-reconnect is the ordinary case — a migration, a
+staging swap, a support fix — not a rare one.
+
+🔒 **Contains no personal data, by construction.** No customer, no session, no
+address, no time of day — there is nowhere to put an identifier even if a later
+payload offered one. This is why views need no consent gate and add nothing to
+M25.6's retention question.
+
+---
+
 ## 7. Billing (M5.8)
 
 ### `plans`
@@ -757,6 +800,8 @@ option_set_versions.published_by  → users(id)       ON DELETE SET NULL
 order_events.store_id      → stores(id)             ON DELETE RESTRICT
 order_selections.order_event_id → order_events(id)  ON DELETE CASCADE
 order_selections.option_key     → (no FK — ADR-016)
+option_view_counts.store_id     → stores(id)        ON DELETE RESTRICT
+option_view_counts.option_set_id → (no FK — ADR-016)
 
 -- Billing ------------------------------------------------------------------
 subscriptions.tenant_id       → tenants(id)         ON DELETE RESTRICT

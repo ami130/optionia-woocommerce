@@ -1007,6 +1007,179 @@ describe('Analytics over HTTP (e2e)', () => {
    * what is proven here is that the backend reads, groups, scopes and discloses
    * correctly given the data the plugin will send.
    */
+  /**
+   * M25.1 + M25.3 — of the customers who saw an option, how many bought.
+   *
+   * 🔴 **The clause F157 recorded as unanswerable.** Conversion needs a
+   * denominator of views, and until M25.1 nothing recorded one — the screen
+   * shipped average order value instead and deliberately never used the word
+   * *conversion*. This is the figure the milestone actually asked for.
+   */
+  describe('option conversion (M25.1)', () => {
+    async function clear(): Promise<void> {
+      await dataSource.query(`DELETE FROM option_view_counts WHERE storeId = ?`, [storeId]);
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.storeId = ?`,
+        [storeId],
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE storeId = ?`, [storeId]);
+    }
+
+    beforeEach(clear);
+    afterEach(clear);
+
+    async function seenTimes(optionKey: string, views: number, day = '2026-09-20'): Promise<void> {
+      await dataSource.query(
+        `INSERT INTO option_view_counts
+           (id, storeId, optionSetId, optionKey, day, views, createdAt, updatedAt)
+         VALUES (UUID(), ?, '11111111-1111-4111-8111-111111111111', ?, ?, ?, NOW(3), NOW(3))
+         ON DUPLICATE KEY UPDATE views = views + VALUES(views)`,
+        [storeId, optionKey, day, views],
+      );
+    }
+
+    async function conversion() {
+      const response = await get();
+
+      expect(response.status).toBe(200);
+
+      return response.body.data.conversion as {
+        rows: Array<{ optionKey: string; views: number; orders: number; rate: number | null }>;
+        total: number;
+      };
+    }
+
+    /** 🔴 The figure itself: seen ten times, bought twice, converts at 0.2. */
+    it('reports what fraction of viewers bought the option', async () => {
+      await seenTimes('engraving', 10);
+
+      await order('c-1', 5_000, [
+        { optionKey: 'engraving', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ]);
+      await order('c-2', 5_000, [
+        { optionKey: 'engraving', label: 'Engraving', valueKey: 'a', deltaMinor: 100 },
+      ]);
+
+      const { rows } = await conversion();
+      const row = rows.find((entry) => entry.optionKey === 'engraving');
+
+      expect(row).toMatchObject({ views: 10, orders: 2 });
+      expect(row?.rate).toBeCloseTo(0.2, 5);
+    });
+
+    /**
+     * 🔴 **An option seen many times and never bought converts at ZERO, and is
+     * listed.** That is the row a merchant needs most — a dead option with a
+     * number attached — and joining from orders instead of views would have
+     * dropped it entirely.
+     */
+    it('lists an option nobody bought, at a rate of zero', async () => {
+      await seenTimes('gold_rim', 500);
+
+      const { rows } = await conversion();
+      const row = rows.find((entry) => entry.optionKey === 'gold_rim');
+
+      expect(row).toMatchObject({ views: 500, orders: 0, rate: 0 });
+    });
+
+    /**
+     * 🔴 **Orders with no views report NULL, never zero.** A store whose plugin
+     * predates M25.1 has orders and no view counts; reporting zero would tell a
+     * merchant their best-selling option never sells.
+     */
+    it('reports null rather than zero when an option has no recorded views', async () => {
+      await order('c-noviews', 5_000, [
+        { optionKey: 'unseen', label: 'Unseen', valueKey: 'a', deltaMinor: 100 },
+      ]);
+
+      const { rows } = await conversion();
+
+      /* No view row exists, so the option is absent from a views-led join. */
+      expect(rows.find((entry) => entry.optionKey === 'unseen')).toBeUndefined();
+    });
+
+    /**
+     * 🔴 **A zero-view row yields `null`, never `Infinity` or `NaN`.**
+     *
+     * ✏️ **A mutation survived until this existed.** Replacing the guard with a
+     * bare `orders / views` broke nothing, because the "no views" case above
+     * asserts the option is ABSENT and so never divides at all. The path is
+     * reachable regardless: `option_view_counts.views` is `NOT NULL DEFAULT 0`,
+     * so a direct insert, a backfill or a future migration can produce one — and
+     * `0/0` is `NaN`, which `JSON.stringify` writes as `null` while `1/0` is
+     * `Infinity`, also written as `null`. Both would reach the screen looking
+     * like the honest answer.
+     */
+    it('reports null rather than Infinity for a row with zero views', async () => {
+      await dataSource.query(
+        `INSERT INTO option_view_counts
+           (id, storeId, optionSetId, optionKey, day, views, createdAt, updatedAt)
+         VALUES (UUID(), ?, '11111111-1111-4111-8111-111111111111', 'zeroed', '2026-09-22', 0,
+                 NOW(3), NOW(3))`,
+        [storeId],
+      );
+
+      await order('c-zero', 5_000, [
+        { optionKey: 'zeroed', label: 'Zeroed', valueKey: 'a', deltaMinor: 100 },
+      ]);
+
+      const { rows } = await conversion();
+      const row = rows.find((entry) => entry.optionKey === 'zeroed');
+
+      expect(row).toBeDefined();
+      expect(row?.views).toBe(0);
+      expect(row?.rate).toBeNull();
+
+      /*
+       * 🔴 **Asserted at the SERVICE too, because over HTTP it cannot be.**
+       *
+       * ✏️ **The e2e assertion above is an equivalent mutant** — exactly the
+       * F165 situation. `JSON.stringify(NaN)` and `JSON.stringify(Infinity)`
+       * are both `null`, so removing the guard sends a byte-identical response
+       * and the suite stays green with the bug in place. Measured: the mutation
+       * survived this test until the service call below was added.
+       *
+       * ⚠️ **It still matters.** `NaN` reaching the object is a landmine for
+       * every consumer that is not `JSON.stringify`: the CSV writer would print
+       * "NaN", and a rollup reading it in-process would store it.
+       */
+      const service = h.app.get(AnalyticsService, { strict: false });
+      const computed = await service.optionConversion(tenantId);
+      const direct = computed.rows.find((entry) => entry.optionKey === 'zeroed');
+
+      expect(direct?.rate).toBeNull();
+      expect(Number.isFinite(direct?.rate ?? 0)).toBe(true);
+    });
+
+    /** 📌 Views accumulate across days, because the question is lifetime. */
+    it('sums views across days', async () => {
+      await seenTimes('finish', 4, '2026-09-20');
+      await seenTimes('finish', 6, '2026-09-21');
+
+      const { rows } = await conversion();
+
+      expect(rows.find((entry) => entry.optionKey === 'finish')?.views).toBe(10);
+    });
+
+    /**
+     * 🔴 **Conversion is per tenant.** A leaked denominator would not read as a
+     * bug — it would read as a collapse in performance.
+     */
+    it('never counts another tenant’s views', async () => {
+      await seenTimes('engraving', 50);
+
+      const otherToken = await h.tenant('conv-stranger');
+
+      const theirs = await request(h.app.getHttpServer())
+        .get('/v1/analytics')
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(theirs.status).toBe(200);
+      expect(theirs.body.data.conversion.rows).toHaveLength(0);
+    });
+  });
+
   describe('revenue per product (M25.4)', () => {
     async function clear(): Promise<void> {
       await dataSource.query(
