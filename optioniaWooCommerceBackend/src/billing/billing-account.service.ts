@@ -206,7 +206,20 @@ export class BillingAccountService {
    * mid-term upgrade is one more than a billing system can afford."*
    */
   async changePlan(planPriceId: string): Promise<{ accepted: true }> {
-    const provider = requireBillingProvider(this.provider);
+    /*
+     * 🔴 **The account's state is checked BEFORE the provider is demanded.**
+     *
+     * A tenant with no paid subscription is refused for a reason that has
+     * nothing to do with Stripe, so asking for the provider first turns a clean
+     * 400 into a 500 on any deployment without keys — which is every CI run and
+     * every developer who has not configured billing. Found 2026-09-28 on the
+     * first push in 57 commits; it passes locally only because a real key sits
+     * in `.env`.
+     *
+     * 📌 **`requireBillingProvider` still runs before any provider call**, which
+     * is the property it exists for. What changed is that it no longer runs
+     * before a refusal that needs no provider at all.
+     */
     const subscription = await this.load({ withPrice: false });
 
     if (subscription.providerSubscriptionId === null) {
@@ -214,6 +227,8 @@ export class BillingAccountService {
         'This account has no paid subscription to change. Start a checkout instead.',
       );
     }
+
+    const provider = requireBillingProvider(this.provider);
 
     const price = await this.prices.findOne({ where: { id: planPriceId } });
 
@@ -271,7 +286,7 @@ export class BillingAccountService {
    * exists for the case where they ask for it explicitly.
    */
   async cancel(input: { atPeriodEnd: boolean; reason: string | null }): Promise<{ accepted: true }> {
-    const provider = requireBillingProvider(this.provider);
+    /* State first, provider second — see `changePlan` for why. */
     const subscription = await this.load({ withPrice: false });
 
     if (subscription.providerSubscriptionId === null) {
@@ -281,6 +296,8 @@ export class BillingAccountService {
     if (subscription.status === SubscriptionStatus.CANCELLED) {
       throw new BadRequestException('This subscription is already cancelled.');
     }
+
+    const provider = requireBillingProvider(this.provider);
 
     await provider.cancelSubscription({
       providerSubscriptionId: subscription.providerSubscriptionId,

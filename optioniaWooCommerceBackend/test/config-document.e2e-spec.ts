@@ -200,7 +200,14 @@ describe('config document (e2e)', () => {
   });
 
   describe('the envelope', () => {
-    it('carries exactly the five documented fields', async () => {
+    /**
+     * ✏️ **Five became six when M24.5 added `plan`**, and this test is what
+     * caught the contract document still describing five — CI, four days later.
+     * The envelope is the reference for **two implementations**, so a field
+     * added on one side and absent from the document is drift the plugin
+     * discovers at a storefront.
+     */
+    it('carries exactly the six documented fields', async () => {
       await publishedSet('Enveloped');
 
       const document = await build();
@@ -209,6 +216,7 @@ describe('config document (e2e)', () => {
         'config_version',
         'generated_at',
         'option_sets',
+        'plan',
         'schema_version',
         'store_id',
       ]);

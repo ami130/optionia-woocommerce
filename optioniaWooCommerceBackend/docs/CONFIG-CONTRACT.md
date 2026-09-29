@@ -52,6 +52,12 @@ breaking change.
   "config_version": 42,
   "store_id": "01a03f9e-…",
   "generated_at": "2026-08-27T10:00:00.000Z",
+  "plan": {
+    "code": "pro",
+    "name": "Pro",
+    "read_only": false,
+    "grace_ends_at": null
+  },
   "option_sets": [
     {
       "id": "01a03f9e-…",
@@ -129,6 +135,34 @@ breaking change.
 | `store_id` | string | UUID of the store this document is for. |
 | `generated_at` | string | ISO 8601 UTC, when the document was **assembled** — not when anything was published. The same content fetched twice differs only here. |
 | `option_sets` | array | Published sets, oldest first. Empty is legal: a store with nothing published. |
+| `plan` | object | The tenant's subscription state, so the plugin can show an accurate notice (M24.5). Always present. |
+
+### `plan` (M24.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `code` | string | `free`, `pro`, `business` — stable, for logic the plugin keys on. |
+| `name` | string | The merchant-facing name, for the notice itself. |
+| `read_only` | bool | True once the **grace period has expired** (ADR-116) — not when it starts. |
+| `grace_ends_at` | string \| null | When authoring goes read-only, ISO 8601, or null when nothing is owed. |
+
+🔴 **`read_only` says AUTHORING is paused. The storefront still renders — that is
+the whole policy.** A plugin that stopped showing options on this would break the
+merchant's shop over a failed card, which is precisely what ADR-116 exists to
+prevent. It is carried so the plugin can *explain* why the dashboard refuses an
+edit, never so it can refuse one itself.
+
+⚠️ **Grace STARTED is not grace EXPIRED.** ADR-116 gives fourteen days of full
+function after a failed payment; a plugin told `read_only` on day one would
+explain a restriction the merchant does not yet have.
+
+📌 **A document written before this field existed has no `plan` key**, and a shop
+that has not synced since upgrading is exactly that case. Absent means *nothing
+to say* — never *assume the worst* — because guessing the pessimistic answer
+would show every such merchant a warning they have not earned.
+
+⚠️ **The plan comes from `store.tenantId`, not the request's tenant.** The two
+can diverge, and the document belongs to the store.
 
 `config_version` is `BIGINT` on both sides — `stores.config_version` here, and
 `config_version bigint(20) unsigned` in the plugin's own table. It is a counter,

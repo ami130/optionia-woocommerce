@@ -1238,6 +1238,54 @@ else
   printf '        no figure: the merchant concludes their sets earn less.\n'
 fi
 
+# --- 45. A refusal that needs no provider does not demand one --------------
+#
+# 🔴 **A free tenant got a 500 instead of a 400 on any deployment without keys.**
+# `changePlan` and `cancel` called `requireBillingProvider` as their FIRST
+# statement, before checking whether the account even has a paid subscription —
+# so the refusal "this account has no paid subscription" threw
+# `No billing provider is configured` instead.
+#
+# ⚠️ **It passed locally and failed in CI**, because a real Stripe key sits in a
+# developer's `.env` and CI sets none. Found on the first push in 57 commits.
+#
+# 📌 **Checked as "the state check comes first"**, by line number. The provider
+# is still required before any provider CALL — which is what
+# `requireBillingProvider` exists for — it just no longer gates a refusal that
+# has nothing to do with Stripe.
+ACCOUNT_SVC="$SRC/billing/billing-account.service.ts"
+
+if [ ! -f "$ACCOUNT_SVC" ]; then
+  fail "billing-account.service.ts is missing"
+else
+  ORDERING_BAD=""
+
+  for method in changePlan cancel; do
+    START=$(grep -n "async ${method}(" "$ACCOUNT_SVC" | head -1 | cut -d: -f1)
+    [ -z "$START" ] && continue
+
+    BODY=$(sed -n "${START},$((START + 40))p" "$ACCOUNT_SVC")
+
+    STATE_AT=$(printf '%s\n' "$BODY" | grep -n "providerSubscriptionId === null" | head -1 | cut -d: -f1)
+    PROVIDER_AT=$(printf '%s\n' "$BODY" | grep -n "requireBillingProvider(" | head -1 | cut -d: -f1)
+
+    # A method that never demands the provider is fine; one that does must do it
+    # after the state check.
+    if [ -n "$PROVIDER_AT" ] && [ -n "$STATE_AT" ] && [ "$PROVIDER_AT" -lt "$STATE_AT" ]; then
+      ORDERING_BAD="$ORDERING_BAD $method"
+    fi
+  done
+
+  if [ -z "$ORDERING_BAD" ]; then
+    pass "a refusal needing no provider does not demand one (500 vs 400)"
+  else
+    fail "requireBillingProvider runs before the state check in:$ORDERING_BAD"
+    printf '        A tenant with no paid subscription is refused for a reason\n'
+    printf '        unrelated to Stripe. Demanding the provider first turns that\n'
+    printf '        400 into a 500 wherever keys are absent — every CI run.\n'
+  fi
+fi
+
 echo
 
 if [ "$FAILURES" -gt 0 ]; then
