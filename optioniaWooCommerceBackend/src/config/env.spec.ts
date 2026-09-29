@@ -327,4 +327,38 @@ describe('loadConfig', () => {
       expect(loadConfig().database.ssl).toBe(expected);
     });
   });
+
+  /**
+   * The rollup-threshold monitor's flag (M25.2).
+   *
+   * 🔴 **Default OFF is the part that matters.** `@nestjs/schedule` starts its
+   * timers when the module loads, so a monitor defaulting to on would query the
+   * shared test database from every suite that boots the app — from a process
+   * the test neither controls nor waits for.
+   */
+  describe('the rollup monitor flag', () => {
+    it('is off unless a deployment asks for it', () => {
+      withEnv({});
+
+      expect(loadConfig().analytics.rollupMonitorEnabled).toBe(false);
+    });
+
+    it('turns on when set', () => {
+      withEnv({ ANALYTICS_ROLLUP_MONITOR_ENABLED: 'true' });
+
+      expect(loadConfig().analytics.rollupMonitorEnabled).toBe(true);
+    });
+
+    /**
+     * ⚠️ **A misspelt value must THROW, not silently disable the monitor.**
+     * `BILLING_RETRY_ENABLE=true` — one missing letter — once disabled that
+     * worker with nothing said, which is why every flag here goes through
+     * `bool()`. The same trap, one flag later.
+     */
+    it('refuses a value it cannot parse rather than defaulting to off', () => {
+      withEnv({ ANALYTICS_ROLLUP_MONITOR_ENABLED: 'maybe' });
+
+      expect(() => loadConfig()).toThrow();
+    });
+  });
 });

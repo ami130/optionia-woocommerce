@@ -214,6 +214,23 @@ export interface AppConfig {
     readonly retryEnabled: boolean;
   };
 
+  readonly analytics: {
+    /**
+     * Whether the rollup-threshold monitor runs (M25.2).
+     *
+     * 🔴 **Off by default, like every scheduled worker here.**
+     * `@nestjs/schedule` starts its timers the moment the module loads, so a
+     * default-on monitor would query the shared test database from every suite
+     * that boots the app — a process the test neither controls nor waits for.
+     *
+     * 📌 **And turning it on is a deployment decision.** An in-process monitor
+     * that every instance runs means N instances log the same warning; which
+     * instance owns it is a question about how the service is deployed, not a
+     * default to inherit.
+     */
+    readonly rollupMonitorEnabled: boolean;
+  };
+
   /**
    * Where the dashboard lives.
    *
@@ -363,6 +380,11 @@ export function loadConfig(): AppConfig {
 
       /* 📌 Off by default: turning it on is a deployment decision (M23.4). */
       retryEnabled: bool('BILLING_RETRY_ENABLED', false),
+    },
+
+    analytics: {
+      /* 📌 Off by default, for the reasons on the interface member (M25.2). */
+      rollupMonitorEnabled: bool('ANALYTICS_ROLLUP_MONITOR_ENABLED', false),
     },
 
     mail: loadMailConfig(isProduction),

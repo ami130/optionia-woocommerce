@@ -30755,7 +30755,7 @@ started while this phase has open stages. Recorded in the backlog, not here.
 | Stage | Milestone | Blocker, verified in code |
 |---|---|---|
 | ~~25-3~~ | ~~**M25.4 "per product"**~~ | ✅ **Closed 2026-09-29.** The column, the DTO field, the plugin read and the analytics query all shipped together. It was indeed smaller than its deferral note implied — one migration modelled on `OrderSelectionSet`, one guarded accessor, one `GROUP BY`. ⚠️ **The plugin half is CI-verified only** (no PHP on this machine), so its six new tests are proven by CI rather than locally. |
-| 25-2 | **M25.2 rollups** | Nothing. Deferred **on measurement**: 3.5× at 480k selections, **nothing** at 60k. |
+| 25-2 | **M25.2 rollups** | Still deferred **on measurement** — 3.5× at 480k selections, **nothing** at 60k — but the deferral now has a **trigger** rather than an intention. `RollupThresholdService` warns, daily, when a tenant reaches 80% of the measured 100k, and again when it crosses. ⚠️ **It watches; it never aggregates.** A monitor that quietly started building rollups would make the deferred decision by itself. |
 | 25-4 | **M25.1 view events** | No transport designed. Views are every page load. |
 
 #### Order of work, and why
@@ -30782,7 +30782,7 @@ it does.
 📌 **The plugin cannot be run on this machine** (no PHP binary), so plugin
 changes are CI-verified only. That is a stated constraint, not a reason to defer.
 
-**2. M25.2 rollups — only when the trigger fires, and the trigger is recorded.**
+**2. ✅ M25.2's trigger shipped 2026-09-29 — the rollups themselves stay deferred.**
 
 🔴 **This stays deferred, and deferring it is the correct engineering answer.**
 The measurement is above: below ~100k selections the covering indexes are worth
@@ -30790,10 +30790,19 @@ The measurement is above: below ~100k selections the covering indexes are worth
 cheaper. Building rollups now pays write cost on every order for a read that is
 already fast.
 
-⚠️ **What closes this stage is a check, not a table.** A deferral with no trigger
-is an intention; a deferral with an automated trigger is a decision. The work is
-to make the threshold **observable** — so that when a tenant approaches 100k
-selections somebody is told, rather than someone noticing a slow dashboard.
+⚠️ **What closed this was a check, not a table.** A deferral with no trigger is
+an intention; a deferral with an automated trigger is a decision.
+`RollupThresholdService` is that check — it warns at 80% of the threshold and
+again at it, naming the tenant, and does nothing else.
+
+📌 **Off by default, like every scheduled worker here**
+(`ANALYTICS_ROLLUP_MONITOR_ENABLED`). `@nestjs/schedule` starts its timers when
+the module loads, so a default-on monitor would query the shared test database
+from every suite that boots the app — and an in-process monitor every instance
+runs means N instances logging one warning.
+
+🔴 **The stage is NOT closed.** The rollup tables remain unbuilt and correctly
+so; what shipped is the mechanism that says when to build them.
 
 **3. M25.1 view events — the one that needs a design, not just a build.**
 
