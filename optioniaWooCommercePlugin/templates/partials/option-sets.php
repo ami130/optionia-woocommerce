@@ -43,6 +43,7 @@ if ( array() === $optionia_groups ) {
 			class="optionia-group optionia-group--<?php echo esc_attr( $optionia_type ); ?>"
 			data-optionia="group"
 			data-optionia-group="<?php echo esc_attr( (string) ( $optionia_group['id'] ?? '' ) ); ?>"
+			data-optionia-set="<?php echo esc_attr( (string) ( $optionia_group['set_id'] ?? '' ) ); ?>"
 			data-optionia-display="<?php echo esc_attr( $optionia_type ); ?>"
 		>
 			<?php

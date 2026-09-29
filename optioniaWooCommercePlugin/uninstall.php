@@ -51,6 +51,8 @@ function optionia_uninstall_site( string $prefix ): void {
 		'optionia_last_heartbeat',
 		'optionia_last_sync',
 		'optionia_last_push',
+		'optionia_view_counts',
+		'optionia_last_view_report',
 		'optionia_schema_refused',
 		'optionia_unpriced_types',
 		'optionia_order_queue',
@@ -69,6 +71,7 @@ function optionia_uninstall_site( string $prefix ): void {
 	$hooks = array(
 		'optionia_cron_sync_config',
 		'optionia_cron_report_orders',
+		'optionia_cron_report_views',
 		'optionia_cron_heartbeat',
 		'optionia_cron_push_catalogue',
 		'optionia_cron_reconcile_catalogue',

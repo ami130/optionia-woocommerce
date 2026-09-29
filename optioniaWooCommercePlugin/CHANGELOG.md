@@ -34,6 +34,25 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Architecture guards enforced in CI: engine purity, single-owner rules, no
   float money, direct-access guards, version consistency (M3.0).
 
+## [0.4.0] — 2026-09-29
+
+### Added
+- **Option view counts (M25.1).** The storefront now reports which options a
+  customer saw, so the dashboard can show *conversion* — of the people who saw
+  an option, how many bought it. Until this release that figure could not be
+  computed at all, and the dashboard showed average order value instead.
+
+### How it works, and what it does not do
+- **Nothing is sent while a page is loading.** The browser hands one small
+  message to the operating system as the customer leaves, and WordPress counts
+  it. The counts travel to Optionia on the existing quarter-hourly schedule,
+  alongside orders — no extra cron, no extra wake-up.
+- **Nothing about a customer is recorded.** No session, no address, no time of
+  day: a day's looking is one number per option, and one visitor is
+  indistinguishable from another inside it.
+- **Conversion starts from this release.** Options viewed before it were never
+  counted and cannot be, so the figure covers traffic from the upgrade onward.
+
 ## [0.3.0] — 2026-09-29
 
 ### Added

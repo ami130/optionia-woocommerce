@@ -278,6 +278,21 @@ final class Renderer {
 					'sort'           => $this->sort_order( $group ),
 					'seq'            => $seq++,
 					'id'             => isset( $group['id'] ) && is_scalar( $group['id'] ) ? (string) $group['id'] : '',
+
+					/*
+					 * 🔴 **Which SET this group came from (M25.1).** The sets are
+					 * flattened into one list here and the set id was dropped,
+					 * so the page could not say which set an option belonged to
+					 * — and view counts are keyed by set, exactly as
+					 * `order_selections.optionSetId` is (F150), so that a
+					 * multi-set page does not attribute one set's views to
+					 * another.
+					 *
+					 * ⚠️ **Empty when the document predates set ids**, and the
+					 * beacon skips a group without one rather than inventing a
+					 * set: a wrong attribution is worse than a missing count.
+					 */
+					'set_id'         => isset( $set['id'] ) && is_scalar( $set['id'] ) ? (string) $set['id'] : '',
 					'label'          => isset( $group['label'] ) ? (string) $group['label'] : '',
 					'description'    => isset( $group['description'] ) ? (string) $group['description'] : '',
 					'display_type'   => self::display_type_of( $group ),

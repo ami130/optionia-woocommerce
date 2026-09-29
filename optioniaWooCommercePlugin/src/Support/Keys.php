@@ -350,8 +350,29 @@ final class Keys {
 	/** Outcome of the last push received from the cloud (M9.4). */
 	public const OPTION_LAST_PUSH = 'optionia_last_push';
 
+	/**
+	 * Option views accumulated since the last successful report (M25.1).
+	 *
+	 * 🔴 **`autoload = false`, and that is not a detail.** This is written by
+	 * customer traffic rather than by a merchant, so it changes far more often than
+	 * anything else here -- an autoloaded copy would be read on **every** request
+	 * to the site, including ones that have nothing to do with Optionia.
+	 *
+	 * ⚠️ **A DELTA, cleared only after the cloud accepts it.** A failed drain
+	 * resends; a successful one has nothing left to send. The cloud adds what
+	 * arrives, so sending a running total instead would multiply every figure by
+	 * the number of drains.
+	 */
+	public const OPTION_VIEW_COUNTS = 'optionia_view_counts';
+
+	/** Outcome of the last view report, for System Status (M25.1). */
+	public const OPTION_LAST_VIEW_REPORT = 'optionia_last_view_report';
+
 	/** Drains the queue of unreported orders (M12.7). */
 	public const CRON_REPORT_ORDERS = 'optionia_cron_report_orders';
+
+	/** Sends accumulated option view counts to the cloud (M25.1). */
+	public const CRON_REPORT_VIEWS = 'optionia_cron_report_views';
 
 	/** Pushes one batch of the catalogue to the cloud (M19.1). */
 	public const CRON_PUSH_CATALOGUE = 'optionia_cron_push_catalogue';
@@ -430,6 +451,17 @@ final class Keys {
 	 */
 	public const REST_ROUTE_UPLOAD = '/upload';
 
+	/**
+	 * Where the storefront beacon reports which options a customer saw (M25.1).
+	 *
+	 * 🔴 **The browser talks to the SITE, never to the cloud.** The store
+	 * credential authenticates plugin to cloud and must never reach a page a
+	 * customer can read; a beacon posted straight to the cloud would need it in
+	 * page source, or no authentication at all -- a free tool for poisoning any
+	 * merchant's analytics. This route is the hop that keeps the secret server-side.
+	 */
+	public const REST_ROUTE_VIEWS = '/views';
+
 	// Nonce actions.
 
 	public const NONCE_SETTINGS   = 'optionia_settings';
@@ -459,6 +491,17 @@ final class Keys {
 	 * question.
 	 */
 	public const NONCE_UPLOAD = 'optionia_upload';
+
+	/**
+	 * The storefront beacon's nonce (M25.1).
+	 *
+	 * ⚠️ **A filter, not a credential -- the same honest limit as `NONCE_UPLOAD`.**
+	 * Every guest on the site holds the same value for 24 hours, so this refuses a
+	 * request that never loaded a page and nothing more. What actually bounds abuse
+	 * is the per-option ceiling in `ViewCollector`: a forged beacon can add to a
+	 * count it could have earned by reloading the page anyway.
+	 */
+	public const NONCE_VIEWS = 'optionia_views';
 
 	/**
 	 * Nonce action for a merchant downloading a customer's file (M15.5).

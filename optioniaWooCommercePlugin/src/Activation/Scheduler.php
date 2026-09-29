@@ -45,6 +45,7 @@ final class Scheduler {
 		// already exists -- never schedules it, self-heal included.
 		self::schedule_heartbeat();
 		self::schedule_order_reports();
+		self::schedule_view_reports();
 		self::schedule_catalogue_push();
 		self::schedule_catalogue_reconcile();
 
@@ -120,6 +121,40 @@ final class Scheduler {
 	 * quarter-hourly wake-up. A separate schedule would double the cron traffic
 	 * to say the same thing.
 	 */
+	/**
+	 * Send accumulated option view counts every fifteen minutes (M25.1).
+	 *
+	 * Shares the interval the sync, the order drain and the catalogue push
+	 * already use, for the reason recorded above: a store pays for one
+	 * quarter-hourly wake-up, and a fourth schedule would quadruple the cron
+	 * traffic to say the same thing.
+	 *
+	 * ⚠️ **Views tolerate delay better than anything else here.** A count that
+	 * arrives fifteen minutes late is identical to one that arrives at once --
+	 * the day is computed when the customer looked, not when the drain runs -- so
+	 * there is no argument for a tighter schedule even if one were free.
+	 */
+	private static function schedule_view_reports(): void {
+		if ( wp_next_scheduled( Keys::CRON_REPORT_VIEWS ) ) {
+			return;
+		}
+
+		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- 15-minute interval is intentional and documented.
+
+		$scheduled = wp_schedule_event(
+			time() + self::INTERVAL,
+			Keys::CRON_SCHEDULE_QUARTER_HOUR,
+			Keys::CRON_REPORT_VIEWS
+		);
+
+		remove_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) );
+
+		if ( is_wp_error( $scheduled ) ) {
+			// Hourly is worse than quarter-hourly and far better than never.
+			wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', Keys::CRON_REPORT_VIEWS );
+		}
+	}
+
 	private static function schedule_order_reports(): void {
 		if ( wp_next_scheduled( Keys::CRON_REPORT_ORDERS ) ) {
 			return;
@@ -207,6 +242,7 @@ final class Scheduler {
 		wp_clear_scheduled_hook( Keys::CRON_SYNC_CONFIG );
 		wp_clear_scheduled_hook( Keys::CRON_HEARTBEAT );
 		wp_clear_scheduled_hook( Keys::CRON_REPORT_ORDERS );
+		wp_clear_scheduled_hook( Keys::CRON_REPORT_VIEWS );
 		wp_clear_scheduled_hook( Keys::CRON_PUSH_CATALOGUE );
 		wp_clear_scheduled_hook( Keys::CRON_RECONCILE_CATALOGUE );
 	}

@@ -30780,7 +30780,8 @@ reach the code it is about is not a test.
 25-1  ✅ M25.3 complete — read service, plan gate, revenue per option set
 25-2     M25.2 rollups, obeying the valueKey rule
 25-3  ✅ M25.4 comparisons (over time AND per product), M25.5 CSV export
-25-4     M25.1 non-order events — see the deferral below
+25-4  ✅ M25.1 view events — beacon, aggregation, cron drain, and the conversion
+        figure F157 recorded as unanswerable
 ```
 
 ⚠️ **The numbering below drifted and is corrected here.** The merchant screen
@@ -30811,7 +30812,7 @@ started while this phase has open stages. Recorded in the backlog, not here.
 |---|---|---|
 | ~~25-3~~ | ~~**M25.4 "per product"**~~ | ✅ **Closed 2026-09-29, and RELEASED as plugin 0.3.0 the same day.** ⚠️ **The release is the part that nearly did not happen**: the column, the query and the dashboard all shipped while `optionia.php` stayed at 0.2.0 — so per-product revenue existed in the database and no merchant could ever have seen it. `check-plugin-release-parity.sh` now fails when a shipped version has no changelog entry, mutation-proven. Detail follows: ✅ **Closed 2026-09-29.** The column, the DTO field, the plugin read and the analytics query all shipped together. It was indeed smaller than its deferral note implied — one migration modelled on `OrderSelectionSet`, one guarded accessor, one `GROUP BY`. ⚠️ **The plugin half is CI-verified only** (no PHP on this machine), so its six new tests are proven by CI rather than locally. |
 | 25-2 | **M25.2 rollups** | Still deferred **on measurement** — 3.5× at 480k selections, **nothing** at 60k — but the deferral now has a **trigger** rather than an intention. `RollupThresholdService` warns, daily, when a tenant reaches 80% of the measured 100k, and again when it crosses. ⚠️ **It watches; it never aggregates.** A monitor that quietly started building rollups would make the deferred decision by itself. |
-| 25-4 | **M25.1 view events** | No transport designed. Views are every page load. |
+| ~~25-4~~ | ~~**M25.1 view events**~~ | ✅ **Closed 2026-09-29.** A browser beacon to the merchant's own WordPress on `visibilitychange`, aggregated in the plugin, drained on the **existing** quarter-hourly cron. The PHP render path is untouched, so AC3 holds by construction; the store credential never reaches the browser; and the cloud receives counts rather than events. ✅ **F157 closed with it** — `optionConversion()` answers M25.3's *"conversion with vs. without options"*. ⚠️ **Add-to-cart declined**, with the reason recorded: it is a server-side hook on a path the customer waits on, and it unlocks cart-abandonment analysis no milestone asks for. |
 
 #### Order of work, and why
 

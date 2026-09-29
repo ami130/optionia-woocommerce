@@ -105,6 +105,7 @@ final class Assets {
 			array(
 				'currency' => $this->currency_settings(),
 				'upload'   => $this->upload_settings(),
+				'views'    => $this->view_settings(),
 
 				/*
 				 * What a rule did, for a screen reader (M17.5).
@@ -243,6 +244,33 @@ final class Assets {
 	 *
 	 * @return array<string, string|int>
 	 */
+	/**
+	 * Where the view beacon posts, and with what (M25.1).
+	 *
+	 * 🔴 **The site's own REST route, never the cloud.** The store credential
+	 * authenticates plugin to cloud and must never appear in a page a customer can
+	 * read; a beacon aimed at the cloud would need it in page source, or no
+	 * authentication at all.
+	 *
+	 * ⚠️ **The nonce is a filter, not a credential** -- the same honest limit
+	 * `upload_settings()` records above. Every guest holds the same value for 24
+	 * hours; what bounds abuse is the per-option ceiling in `ViewCollector`.
+	 *
+	 * 📌 **`day` is computed HERE, in the store's timezone, not in the browser.**
+	 * A customer in another country would otherwise file their view under their own
+	 * date, and a merchant comparing today against yesterday would be comparing
+	 * whichever halves their visitors happened to be in.
+	 *
+	 * @return array<string, string>
+	 */
+	private function view_settings(): array {
+		return array(
+			'url'   => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_VIEWS ) ),
+			'nonce' => wp_create_nonce( Keys::NONCE_VIEWS ),
+			'day'   => wp_date( 'Y-m-d' ),
+		);
+	}
+
 	private function upload_settings(): array {
 		return array(
 			'url'      => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_UPLOAD ) ),

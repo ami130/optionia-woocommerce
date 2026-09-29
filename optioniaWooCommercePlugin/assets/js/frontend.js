@@ -1252,6 +1252,121 @@
 	 * unscheduled; the second is Phase 21's server-quoted preview. The guard in
 	 * `bind` stays ready for whichever arrives.
 	 */
+	/**
+	 * Tell the site which options this customer saw (M25.1).
+	 *
+	 * ## Why a beacon, and why on visibilitychange
+	 *
+	 * 🔴 **`sendBeacon` is the only transport that survives the page going
+	 * away.** A `fetch` issued while the customer is leaving is cancelled by the
+	 * browser; a synchronous request would hold up the navigation they asked
+	 * for. `sendBeacon` hands the payload to the browser and returns immediately,
+	 * and the browser delivers it whether or not the page is still there.
+	 *
+	 * 🔴 **`visibilitychange`, NOT `unload`.** Safari has never fired `unload`
+	 * reliably and mobile browsers freeze pages rather than unloading them, so
+	 * an `unload` beacon silently loses most mobile traffic — which is most
+	 * traffic. `hidden` fires on tab switch, app switch and close alike.
+	 *
+	 * ⚠️ **Sent once.** `visibilitychange` fires every time the customer
+	 * switches tabs, and a beacon per switch would count one view several times.
+	 *
+	 * 📌 **The day comes from the SERVER, in the store's timezone.** A customer
+	 * in another country would otherwise file their view under their own date,
+	 * and a merchant comparing today against yesterday would be comparing
+	 * whichever halves their visitors were in.
+	 */
+	function reportViews() {
+		var settings = window.optioniaSettings && window.optioniaSettings.views;
+
+		if ( ! settings || ! settings.url || ! settings.day || ! navigator.sendBeacon ) {
+			return;
+		}
+
+		var sent = false;
+
+		function send() {
+			if ( sent ) {
+				return;
+			}
+
+			sent = true;
+
+			/*
+			 * Grouped by set, because a page may show options from several and
+			 * the cloud keys counts by set — attributing one set's views to
+			 * another would be worse than not counting them.
+			 */
+			var bySet = {};
+			var groups = document.querySelectorAll( '[data-optionia-group]' );
+			var i;
+			var j;
+
+			for ( i = 0; i < groups.length; i++ ) {
+				var setId = groups[ i ].getAttribute( 'data-optionia-set' );
+
+				if ( ! setId ) {
+					// A document older than set ids. Skipping is better than
+					// inventing a set to file the count under.
+					continue;
+				}
+
+				var options = groups[ i ].querySelectorAll( '[data-optionia-option]' );
+
+				for ( j = 0; j < options.length; j++ ) {
+					var key = options[ j ].getAttribute( 'data-optionia-option' );
+
+					if ( ! key ) {
+						continue;
+					}
+
+					if ( ! bySet[ setId ] ) {
+						bySet[ setId ] = [];
+					}
+
+					if ( bySet[ setId ].indexOf( key ) === -1 ) {
+						bySet[ setId ].push( key );
+					}
+				}
+			}
+
+			for ( var set in bySet ) {
+				if ( ! Object.prototype.hasOwnProperty.call( bySet, set ) ) {
+					continue;
+				}
+
+				/*
+				 * ⚠️ **A Blob with an explicit type**, because `sendBeacon` with
+				 * a plain string sends `text/plain` and the REST API would
+				 * refuse to parse it as JSON.
+				 */
+				try {
+					navigator.sendBeacon(
+						settings.url + '?_wpnonce=' + encodeURIComponent( settings.nonce || '' ),
+						new Blob(
+							[ JSON.stringify( { set: set, options: bySet[ set ], day: settings.day } ) ],
+							{ type: 'application/json' }
+						)
+					);
+				} catch ( error ) {
+					/*
+					 * 🔴 **A failed beacon must never affect the storefront.**
+					 * Analytics is the least important thing on this page, and a
+					 * throw here would break the runtime that shows a customer
+					 * their price.
+					 */
+					return;
+				}
+			}
+		}
+
+		document.addEventListener( 'visibilitychange', function () {
+			if ( 'hidden' === document.visibilityState ) {
+				send();
+			}
+		} );
+	}
+
 	function init() {
 		var blocks = document.querySelectorAll( '[data-optionia="options"]' );
 		var i;
@@ -1259,6 +1374,13 @@
 		for ( i = 0; i < blocks.length; i++ ) {
 			bind( blocks[ i ] );
 		}
+
+		/*
+		 * 📌 **After binding, and never blocking it.** `reportViews` only
+		 * registers a listener — nothing is sent until the customer leaves — so
+		 * a page with options is interactive exactly as soon as it was before.
+		 */
+		reportViews();
 	}
 
 	if ( 'loading' === document.readyState ) {

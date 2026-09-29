@@ -3,7 +3,7 @@
  * Plugin Name:       Optionia
  * Plugin URI:        https://optionia.com/
  * Description:       Advanced product options for WooCommerce, managed from your Optionia dashboard.
- * Version:           0.3.0
+ * Version:           0.4.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            ParseLab
@@ -56,7 +56,7 @@ define( 'OPTIONIA_PLUGIN_FILE', __FILE__ );
  * option on each admin request and re-runs `dbDelta` plus cron setup when they
  * differ, so a bump is safe to make and cheap on the happy path.
  */
-define( 'OPTIONIA_VERSION', '0.3.0' );
+define( 'OPTIONIA_VERSION', '0.4.0' );
 
 /**
  * Minimum supported environment. Checked on activation (hard failure) and on

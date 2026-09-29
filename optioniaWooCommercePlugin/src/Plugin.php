@@ -33,6 +33,9 @@ use Optionia\Connection\Handshake;
 use Optionia\Connection\Heartbeat;
 use Optionia\Reporting\OrderPayload;
 use Optionia\Reporting\OrderQueue;
+use Optionia\Analytics\ViewCollector;
+use Optionia\Analytics\ViewEndpoint;
+use Optionia\Analytics\ViewReporter;
 use Optionia\Reporting\OrderReporter;
 use Optionia\Connection\PushEndpoint;
 use Optionia\Upload\UploadEndpoint;
@@ -467,6 +470,28 @@ final class Plugin {
 			)
 		);
 
+		// --- Option view counts (M25.1) --------------------------------------
+		$this->container->set(
+			ViewCollector::class,
+			static fn (): ViewCollector => new ViewCollector()
+		);
+
+		$this->container->set(
+			ViewEndpoint::class,
+			static fn ( Container $c ): ViewEndpoint => new ViewEndpoint(
+				$c->get( ViewCollector::class )
+			)
+		);
+
+		$this->container->set(
+			ViewReporter::class,
+			static fn ( Container $c ): ViewReporter => new ViewReporter(
+				$c->get( ViewCollector::class ),
+				$c->get( Client::class ),
+				$c->get( Logger::class )
+			)
+		);
+
 		// --- Catalogue push (M19.1) ------------------------------------------
 		$this->container->set(
 			CatalogueCursor::class,
@@ -643,6 +668,15 @@ final class Plugin {
 		// on cron. An admin-only registration would queue nothing and drain
 		// nothing -- the feature would be silently absent in production.
 		$this->container->get( OrderReporter::class )->register();
+		/*
+		 * Registered outside `is_admin()` for the same reason, twice over: the
+		 * beacon posts to a REST route from a storefront page, and the drain
+		 * runs on cron. Either one behind an admin check would leave view counts
+		 * silently absent in production while every test that boots the plugin
+		 * passed.
+		 */
+		$this->container->get( ViewEndpoint::class )->register();
+		$this->container->get( ViewReporter::class )->register();
 		// Registered outside `is_admin()`: the push runs on cron, which is
 		// neither an admin request nor a front-end one. An admin-only
 		// registration would leave the catalogue never syncing, with the cron
