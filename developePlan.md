@@ -451,7 +451,7 @@ one place this plan's ordering works against you.
 | ~~B8~~ | ~~**Do limit changes reach existing subscribers?**~~ ✅ **DECIDED 2026-09-24, AMENDED 2026-09-29 (ADR-117): prices grandfathered indefinitely; limit changes — raises AND cuts — apply at once.** ⚠️ **The amendment changed the cut half deliberately.** The original said cuts wait for renewal and `PlanLimitGuard` never implemented it, so document and software disagreed from the day both existed — unreachable until an admin screen could lower a limit. Decided on the concrete case rather than in the abstract, with the cost named: a mid-term merchant can lose headroom they paid for, blunted but not erased by nothing being deleted, the storefront being untouched, and M24.4 already reporting what they are over. 🔴 **A retroactive price rise is the fastest way to lose a cohort and attract chargebacks**, which is why grandfathering is near-universal — and `plan_prices` already enforces it structurally rather than by policy. ⚠️ **The rejected answer was my own first one**: *"cuts never reach existing subscribers"* sounds kinder and creates a **permanent fork** — every cut leaves tenants on terms no current plan describes, with no expiry, until *"what is this tenant entitled to?"* has no single answer. Applying a cut at renewal means the merchant keeps what they paid for during the term they paid for, and the fork closes itself | [M22.1a](#m221a--plans-are-data-editable-by-platform-staff) | ✅ decided |
 | ~~B9~~ | ~~**What billing identity is collected, and when**~~ ✅ **DECIDED 2026-09-24 (ADR-118): at first paid checkout, never at registration.** Stripe Checkout collects and validates the address and tax id; `tenants.country`, `vatNumber` and `billingCurrency` are populated from the completed session. 📌 **Every field on a signup form costs conversion**, and M22.6 requires the free tier to be *"genuinely useful"* so merchants trust the cloud dependency **before** they pay — a tax form on signup works directly against that. ⚠️ **The consequence, stated rather than discovered later**: a free-tier tenant has no tax location, which is correct because it is not billable; the columns are nullable for exactly this reason (F84) | [Phase 22](#phase-22--billing-integration) | ✅ decided |
 
-| B10 | **Dynamic plan administration — an admin panel for pricing, limits, features and plan lifecycle** | after Phase 25 closes | **Mine to build, once asked** |
+| B10 | **Dynamic plan administration** — ✅ **backend shipped 2026-09-29** (`86f6286`): limits, features and a cut preview, all editable without a deploy. 🔴 **The SCREEN is M26.5**, not B10 — see below | Phase 26 | **Backend mine, done. Screen belongs to Phase 26** |
 
 🔴 **B10 is recorded, NOT started.** Scope confirmed 2026-09-29: limits, features,
 create/retire plans, and marketing copy, all editable without a deploy. Verified
@@ -471,8 +471,26 @@ screen B10 adds.
 ⚠️ **One safeguard is carried into B10 as a requirement, not a nicety.** The
 amendment trades a written protection for predictability, and the thing that
 blunts the trade is that an admin can see who a cut affects **before** saving it.
-B10's screen shows the number of tenants a change would put over limit, and by how
+`POST /admin/plans/:code/limits/preview` is that safeguard, shipped with the
+backend: it reports the number of tenants a change would put over limit and by how
 much, as information rather than a block — the decision stays the admin's.
+
+🔴 **The screen is M26.5 and was NOT built here, deliberately.** Phase 26 lists
+*"plan and feature-flag management"* as its own milestone, and the dashboard is
+built for that: `src/app/(admin)/` exists with `RequirePlatformStaff` guarding it,
+and that guard **redirects every caller to `/dashboard`** with the comment
+*"deliberately unreachable until Phase 26"*.
+
+⚠️ **The blocker is identity, not layout.** The session carries no staff role, no
+endpoint tells a caller they are staff, and the JWT has no such claim — so a page
+placed under `(admin)` today would be unreachable, and making it reachable means
+building the staff-session surface that M26.1–M26.4 also need. Doing that here
+would open Phase 26 through its smallest milestone rather than its first.
+
+📌 **So B10 is the backend half and says so.** The routes are proven over HTTP,
+including the cross-realm refusal a merchant gets, and they wait for M26.5 to call
+them. That is the mechanism-with-no-caller shape this project keeps meeting — and
+it is recorded here rather than ticked, which is the difference that matters.
 
 **Nothing blocks Phase 25.** ⚠️ **This line said "Phase 17" until 2026-09-28**, eight
 phases after Phase 17 closed — the exact staleness the paragraph below warns about,
