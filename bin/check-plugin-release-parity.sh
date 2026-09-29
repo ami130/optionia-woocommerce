@@ -72,6 +72,38 @@ else
   fail "the dashboard no longer strips /v1 from downloadUrl — the link will 404"
 fi
 
+# ---------------------------------------------------------------------------
+# The shipped version must appear in the changelog.
+# ---------------------------------------------------------------------------
+# 🔴 **F151 changed `OrderPayload` and the version stayed at 0.2.0**, which meant
+# per-product revenue existed in the database and no merchant could ever see it:
+# the backend reads, the column and the dashboard all shipped, and the one
+# artefact a merchant installs did not. That is the mechanism-with-no-caller
+# defect in its deployment form, and nothing caught it — this gate compared
+# download metadata, never whether a code change had been released.
+#
+# ⚠️ **What is checked is the pairing, not the number.** Deciding whether a
+# change is a patch or a minor is a judgement; shipping source that no changelog
+# entry describes is not.
+PLUGIN_PHP="$ROOT/optioniaWooCommercePlugin/optionia.php"
+CHANGELOG="$ROOT/optioniaWooCommercePlugin/CHANGELOG.md"
+
+if [ ! -f "$PLUGIN_PHP" ] || [ ! -f "$CHANGELOG" ]; then
+  fail "missing optionia.php or CHANGELOG.md"
+else
+  PLUGIN_VERSION=$(grep -oE "define\( 'OPTIONIA_VERSION', '[0-9]+\.[0-9]+\.[0-9]+' \)" "$PLUGIN_PHP" \
+    | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+
+  if [ -z "$PLUGIN_VERSION" ]; then
+    fail "could not read OPTIONIA_VERSION from optionia.php — the parser is wrong, not the code"
+  elif grep -qE "^## \[$PLUGIN_VERSION\]" "$CHANGELOG"; then
+    pass "the shipped version ($PLUGIN_VERSION) has a changelog entry"
+  else
+    fail "plugin is at $PLUGIN_VERSION and CHANGELOG.md has no '## [$PLUGIN_VERSION]' entry"
+    printf '        a released version nothing describes is a release no merchant can assess\n'
+  fi
+fi
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d plugin release parity check(s) failed.\033[0m\n' "$FAILURES"

@@ -462,15 +462,34 @@ is missing is any **screen**: `POST /admin/plans/:code/price` and
 `PATCH /:code/visibility` exist and **nothing calls them**, which is this
 project's mechanism-with-no-caller defect for the tenth-plus time.
 
-⚠️ **B10 partially collides with B8/ADR-117 and must not be built until that is
-resolved.** ADR-117 says limit **cuts apply at the next renewal**, so a tenant
-keeps what they paid for during the term they paid for. A confirmation taken
-2026-09-29 answered the same question differently — *"keep everything, block new
-work immediately"* — which is what `PlanLimitGuard` does **today**, at once,
-with no renewal boundary. 📌 **The code currently implements the 2026-09-29
-answer and the ledger records ADR-117**, so one of the two is wrong and the
-difference is invisible until an admin actually lowers a limit. Resolving it is a
-decision, not a build, and it belongs in B10 rather than in Phase 25.
+⚠️ **B10 collides with B8/ADR-117 and must not be built until that is resolved.**
+Verified in code 2026-09-29: `PlanLimitGuard` has **no renewal boundary at all** —
+`grep` for `renewal|periodEnd|currentPeriod` in it matches nothing — so a lowered
+limit binds every tenant on the next request. ADR-117 says the opposite in as many
+words: *"A limit **decrease** applies at the next renewal."*
+
+🔴 **The two answers are about different tenants, and that is what makes this
+resolvable rather than a straight conflict.**
+
+| Tenant | ADR-117's reasoning | What the code does |
+|---|---|---|
+| **Paying, mid-term** | Keeps what they paid for until renewal — a mid-term cut is a retroactive change to a purchased term, the same class of harm as a retroactive price rise | Cut binds at once |
+| **Free, or already over** | ADR-117 is silent; there is no purchased term to protect | Cut binds at once, which is correct |
+
+📌 **So the code is right for the case ADR-117 does not cover, and wrong for the
+one it does.** The 2026-09-29 confirmation — *"keep everything, block new work"* —
+answers what happens to **existing rows** (nothing is deleted, which both agree
+on) and not **when the new ceiling starts applying**, which is the actual
+disagreement. The two questions read alike and are not the same.
+
+⚠️ **The cost of leaving it is a billing dispute, not a bug report.** Nothing fails
+today because no admin screen exists to lower a limit; the moment B10 ships one,
+a mid-term cut silently breaks a promise the plan document makes in writing.
+
+📌 **Resolving it is a decision, not a build**, and it needs one answer from the
+owner: does a paying subscriber's limit cut wait for renewal (honour ADR-117, and
+`PlanLimitGuard` needs a period check), or does ADR-117 change (and the reasoning
+about purchased terms be withdrawn deliberately rather than by omission)?
 
 **Nothing blocks Phase 25.** ⚠️ **This line said "Phase 17" until 2026-09-28**, eight
 phases after Phase 17 closed — the exact staleness the paragraph below warns about,
@@ -30754,7 +30773,7 @@ started while this phase has open stages. Recorded in the backlog, not here.
 
 | Stage | Milestone | Blocker, verified in code |
 |---|---|---|
-| ~~25-3~~ | ~~**M25.4 "per product"**~~ | ✅ **Closed 2026-09-29.** The column, the DTO field, the plugin read and the analytics query all shipped together. It was indeed smaller than its deferral note implied — one migration modelled on `OrderSelectionSet`, one guarded accessor, one `GROUP BY`. ⚠️ **The plugin half is CI-verified only** (no PHP on this machine), so its six new tests are proven by CI rather than locally. |
+| ~~25-3~~ | ~~**M25.4 "per product"**~~ | ✅ **Closed 2026-09-29, and RELEASED as plugin 0.3.0 the same day.** ⚠️ **The release is the part that nearly did not happen**: the column, the query and the dashboard all shipped while `optionia.php` stayed at 0.2.0 — so per-product revenue existed in the database and no merchant could ever have seen it. `check-plugin-release-parity.sh` now fails when a shipped version has no changelog entry, mutation-proven. Detail follows: ✅ **Closed 2026-09-29.** The column, the DTO field, the plugin read and the analytics query all shipped together. It was indeed smaller than its deferral note implied — one migration modelled on `OrderSelectionSet`, one guarded accessor, one `GROUP BY`. ⚠️ **The plugin half is CI-verified only** (no PHP on this machine), so its six new tests are proven by CI rather than locally. |
 | 25-2 | **M25.2 rollups** | Still deferred **on measurement** — 3.5× at 480k selections, **nothing** at 60k — but the deferral now has a **trigger** rather than an intention. `RollupThresholdService` warns, daily, when a tenant reaches 80% of the measured 100k, and again when it crosses. ⚠️ **It watches; it never aggregates.** A monitor that quietly started building rollups would make the deferred decision by itself. |
 | 25-4 | **M25.1 view events** | No transport designed. Views are every page load. |
 

@@ -33,3 +33,19 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   diagnosis (M3.6).
 - Architecture guards enforced in CI: engine purity, single-owner rules, no
   float money, direct-access guards, version consistency (M3.0).
+
+## [0.3.0] — 2026-09-29
+
+### Added
+- Order reports now carry the **product** each option was chosen against
+  (F151, M25.4), so the dashboard can answer "which of my products sell better
+  with options?". A variable product reports its **variation** id rather than
+  the parent's, because that is what the customer bought and what a merchant
+  prices differently.
+
+### Note for merchants upgrading
+- **Per-product revenue starts from this release.** Orders placed before it
+  carry no product reference and nothing can infer one, so the dashboard shows
+  how many earlier selections sit outside the comparison rather than reporting
+  them as belonging to no product. The same applies to revenue per option set,
+  which began one release earlier.

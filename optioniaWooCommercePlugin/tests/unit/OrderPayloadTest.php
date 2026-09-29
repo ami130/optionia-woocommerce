@@ -799,10 +799,10 @@ final class OrderPayloadTest extends TestCase {
 	 * were.
 	 */
 	public function test_it_reports_the_product_each_selection_was_for(): void {
-		$order              = optionia_test_order( 1 );
-		$item               = $this->line();
-		$item->product_id   = 42;
-		$order->items[]     = $item;
+		$order            = optionia_test_order( 1 );
+		$item             = $this->line();
+		$item->product_id = 42;
+		$order->items[]   = $item;
 
 		$payload = ( new OrderPayload() )->build( $order );
 
