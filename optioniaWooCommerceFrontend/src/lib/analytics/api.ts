@@ -91,6 +91,21 @@ export interface RevenueTrend {
   changeFraction: number | null;
 }
 
+/**
+ * What options earned on one product (M25.4, F151).
+ *
+ * ⚠️ **`name` is null when this store has never synced its catalogue**, or when
+ * the product was deleted after the order. The id is shown regardless, because
+ * a row that vanished with the product would understate what the merchant
+ * earned.
+ */
+export interface ProductRevenue {
+  productRef: string;
+  name: string | null;
+  revenueMinor: number;
+  orders: number;
+}
+
 export interface AnalyticsSummary {
   attach: AttachRate;
   topOptions: Capped<OptionRevenue>;
@@ -99,6 +114,10 @@ export interface AnalyticsSummary {
   deadOptions: Capped<DeadOption>;
   /** The only figure here about change rather than totals (M25.4). */
   trend: RevenueTrend;
+  /** What options earned on each product (M25.4, F151). */
+  products: Capped<ProductRevenue>;
+  /** Selections with no product reference, so the table above is not misread. */
+  unattributedProductSelections: number;
   optionSets: Capped<OptionSetRevenue>;
   /**
    * Selections placed before the plugin sent a set id, and unattributable

@@ -96,6 +96,31 @@ export class ReportOrderSelectionDto {
   option_set_id?: string | null;
 
   /**
+   * Which product this choice was bought against (F151, M25.4).
+   *
+   * 🔴 **Optional, and null for every order placed before the plugin update**,
+   * on exactly the same terms as `option_set_id`. An order already reported
+   * carries no record of which line item each selection came from, so there is
+   * nothing to infer it from and nothing to backfill.
+   *
+   * ⚠️ **A string, though WooCommerce's ids are integers.** It identifies a row
+   * in a database this system does not own; arithmetic on it would be
+   * meaningless, and a variable product reports a *variation* id rather than
+   * the parent's. Accepting it as text means a merchant migrating stores cannot
+   * produce a value this rejects.
+   *
+   * 64 characters, mirrored in `OrderPayload::MAX_PRODUCT_REF`. Generous
+   * because the cost of being wrong is a 400 for the **whole order**, which
+   * `OrderPayload` treats as permanent — so an over-tight bound here silently
+   * drops a merchant's revenue rather than truncating one field.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @ApiPropertyOptional({ maxLength: 64, nullable: true })
+  product_ref?: string | null;
+
+  /**
    * What this option added, in integer minor units.
    *
    * Signed: a negative delta is a legitimate discount option, so this is not

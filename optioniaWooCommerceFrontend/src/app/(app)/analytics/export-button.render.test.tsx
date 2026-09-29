@@ -77,6 +77,12 @@ describe('Analytics export button', () => {
       previousOrders: 3,
       changeFraction: 0.5,
     },
+    products: {
+      rows: [{ productRef: '42', name: 'Engraved Mug', revenueMinor: 9_900, orders: 4 }],
+      total: 1,
+      truncated: false,
+    },
+    unattributedProductSelections: 0,
     optionSets: { rows: [], total: 0, truncated: false },
     unattributedSelections: 0,
     currency: 'GBP',

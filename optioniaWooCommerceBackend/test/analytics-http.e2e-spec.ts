@@ -71,6 +71,7 @@ describe('Analytics over HTTP (e2e)', () => {
       valueKey: string | null;
       deltaMinor: number;
       optionSetId?: string | null;
+      productRef?: string | null;
     }>,
     occurredAt = '2026-09-01 12:00:00.000',
   ): Promise<void> {
@@ -95,8 +96,8 @@ describe('Analytics over HTTP (e2e)', () => {
       await dataSource.query(
         `INSERT INTO order_selections
            (id, orderEventId, optionKey, optionLabel, valueKey, valueLabel,
-            optionSetId, priceDeltaMinor, configVersion, createdAt, updatedAt)
-         VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, 1, NOW(3), NOW(3))`,
+            optionSetId, productRef, priceDeltaMinor, configVersion, createdAt, updatedAt)
+         VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(3), NOW(3))`,
         [
           eventId,
           selection.optionKey,
@@ -104,6 +105,7 @@ describe('Analytics over HTTP (e2e)', () => {
           selection.valueKey,
           selection.valueKey,
           selection.optionSetId ?? null,
+          selection.productRef ?? null,
           selection.deltaMinor,
         ],
       );
@@ -993,6 +995,185 @@ describe('Analytics over HTTP (e2e)', () => {
    * test resting on it would pass today and fail in April for a reason that has
    * nothing to do with the code.
    */
+  /**
+   * M25.4 — what options earned on each product (F151).
+   *
+   * 🔴 **The other half of M25.4, and the half that needed a schema change.**
+   * `order_selections` carried no product reference and `OrderPayload` sent
+   * none, so "comparisons per product" could not be answered at all.
+   *
+   * ⚠️ **Every assertion here uses a `productRef` the fixture sets directly.**
+   * The plugin half is CI-verified only — there is no PHP on this machine — so
+   * what is proven here is that the backend reads, groups, scopes and discloses
+   * correctly given the data the plugin will send.
+   */
+  describe('revenue per product (M25.4)', () => {
+    async function clear(): Promise<void> {
+      await dataSource.query(
+        `DELETE sel FROM order_selections sel JOIN order_events e ON e.id = sel.orderEventId
+          WHERE e.storeId = ?`,
+        [storeId],
+      );
+      await dataSource.query(`DELETE FROM order_events WHERE storeId = ?`, [storeId]);
+      await dataSource.query(`DELETE FROM store_products WHERE storeId = ?`, [storeId]);
+    }
+
+    beforeEach(clear);
+    afterEach(clear);
+
+    async function named(externalId: string, name: string): Promise<void> {
+      await dataSource.query(
+        /* ⚠️ `syncedAt` is NOT NULL with no default — a catalogue row records
+           when it was last read from the shop, and a fixture omitting it fails
+           on the column rather than on anything this suite is about. */
+        `INSERT INTO store_products
+           (id, storeId, externalId, name, type, status, syncedAt, createdAt, updatedAt)
+         VALUES (UUID(), ?, ?, ?, 'simple', 'publish', NOW(3), NOW(3), NOW(3))`,
+        [storeId, externalId, name],
+      );
+    }
+
+    async function products() {
+      const response = await get();
+
+      expect(response.status).toBe(200);
+
+      return response.body.data as {
+        products: { rows: Array<{ productRef: string; name: string | null; revenueMinor: number; orders: number }>; total: number; truncated: boolean };
+        unattributedProductSelections: number;
+      };
+    }
+
+    /** 🔴 The whole point: revenue is attributed to the product it was sold on. */
+    it('reports what options earned on each product', async () => {
+      await named('42', 'Engraved Mug');
+      await named('77', 'Gift Box');
+
+      await order('p-1', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 500, productRef: '42' },
+      ]);
+      await order('p-2', 5_000, [
+        { optionKey: 'wrap', label: 'Wrapping', valueKey: 'b', deltaMinor: 200, productRef: '77' },
+      ]);
+
+      const { products: capped } = await products();
+
+      expect(capped.rows).toHaveLength(2);
+      expect(capped.rows[0]).toMatchObject({ productRef: '42', name: 'Engraved Mug', revenueMinor: 500 });
+      expect(capped.rows[1]).toMatchObject({ productRef: '77', name: 'Gift Box', revenueMinor: 200 });
+    });
+
+    /**
+     * 🔴 **One order with two products does not attribute both to one.** This is
+     * why the column is on the selection and not on the order: `get_items()` is
+     * a loop, and a product on `order_events` could name only the first line.
+     */
+    it('splits one order across the products its lines were for', async () => {
+      await named('42', 'Engraved Mug');
+      await named('77', 'Gift Box');
+
+      await order('p-multi', 9_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 500, productRef: '42' },
+        { optionKey: 'wrap', label: 'Wrapping', valueKey: 'b', deltaMinor: 300, productRef: '77' },
+      ]);
+
+      const { products: capped } = await products();
+
+      expect(capped.rows).toHaveLength(2);
+      expect(capped.rows.find((r) => r.productRef === '42')?.revenueMinor).toBe(500);
+      expect(capped.rows.find((r) => r.productRef === '77')?.revenueMinor).toBe(300);
+    });
+
+    /**
+     * 🔴 **A product the catalogue has never seen still reports its revenue.**
+     * `store_products` is a cache, not the truth — a shop that has not synced,
+     * or a product deleted after the order, must not make the money disappear.
+     */
+    it('keeps the revenue when the product name is unknown', async () => {
+      await order('p-unknown', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 400, productRef: '999' },
+      ]);
+
+      const { products: capped } = await products();
+
+      expect(capped.rows).toHaveLength(1);
+      expect(capped.rows[0]).toMatchObject({ productRef: '999', name: null, revenueMinor: 400 });
+    });
+
+    /**
+     * 🔴 **Selections from before the plugin sent a product are DISCLOSED, not
+     * silently dropped.** Without the count beside it the table reads as the
+     * merchant's whole catalogue when it is only the part placed after the
+     * plugin update — the third such boundary date, after F146 and F150.
+     */
+    it('discloses selections that predate product attribution', async () => {
+      await order('p-old', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 700, productRef: null },
+      ]);
+
+      const data = await products();
+
+      expect(data.products.rows).toHaveLength(0);
+      expect(data.unattributedProductSelections).toBe(1);
+    });
+
+    /**
+     * 🔴 **A product id is unique within ONE store, not across a tenant's
+     * stores.** Both shops can have a product 42; joining on the id alone would
+     * show one store's name against the other's revenue.
+     */
+    it('never shows one store’s product name against another store’s revenue', async () => {
+      /* ⚠️ A SECOND store on the SAME tenant — that is the collision this test
+         is about. `store()` takes the tenant's name and may be called again;
+         the URL carries the store id so `uq_stores_tenant_url` permits it. */
+      const otherStore = await h.store('owner');
+
+      await named('42', 'Mine');
+
+      await dataSource.query(
+        `INSERT INTO store_products
+           (id, storeId, externalId, name, type, status, syncedAt, createdAt, updatedAt)
+         VALUES (UUID(), ?, '42', 'Theirs', 'simple', 'publish', NOW(3), NOW(3), NOW(3))`,
+        [otherStore],
+      );
+
+      await order('p-scope', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 600, productRef: '42' },
+      ]);
+
+      try {
+        const { products: capped } = await products();
+
+        expect(capped.rows).toHaveLength(1);
+        expect(capped.rows[0].name).toBe('Mine');
+      } finally {
+        await dataSource.query(`DELETE FROM store_products WHERE storeId = ?`, [otherStore]);
+      }
+    });
+
+    /**
+     * 🔴 **Per-product revenue is per tenant.** A leak would tell one merchant
+     * their options earned on a product they do not sell, and it is what a
+     * missing `WHERE` produces.
+     */
+    it('never reports another tenant’s products', async () => {
+      await named('42', 'Mine');
+
+      await order('p-mine', 5_000, [
+        { optionKey: 'engrave', label: 'Engraving', valueKey: 'a', deltaMinor: 600, productRef: '42' },
+      ]);
+
+      const otherToken = await h.tenant('stranger');
+
+      const theirs = await request(h.app.getHttpServer())
+        .get('/v1/analytics')
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(theirs.status).toBe(200);
+      expect(theirs.body.data.products.rows).toHaveLength(0);
+    });
+  });
+
   describe('revenue trend (M25.4)', () => {
     /** `n` days before now, in the format the fixture helper expects. */
     function daysAgo(n: number): string {

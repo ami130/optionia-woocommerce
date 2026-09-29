@@ -50,6 +50,12 @@ describe('Analytics summary', () => {
         previousOrders: 3,
         changeFraction: 0.5,
       },
+      products: {
+        rows: [{ productRef: '42', name: 'Engraved Mug', revenueMinor: 9_900, orders: 4 }],
+        total: 1,
+        truncated: false,
+      },
+      unattributedProductSelections: 0,
       optionSets: {
         rows: [{ optionSetId: 'set-1', name: 'Mug options', revenueMinor: 9_900, orders: 4 }],
         total: 1,
@@ -314,6 +320,66 @@ describe('Analytics summary', () => {
 
     expect(container.textContent).toContain('4 orders with options');
     expect(container.textContent).not.toContain('£66.00');
+  });
+
+  /**
+   * 🔴 **M25.4's per-product half, on the screen.** A merchant asks "which of my
+   * products sell better with options?" before almost anything else, and until
+   * this existed the data could not answer it at all.
+   */
+  it('names the product its options earned on', () => {
+    const { container } = render(<Summary data={summary()} />);
+
+    expect(container.textContent).toContain('Engraved Mug');
+    expect(container.textContent).toContain('Revenue by product');
+  });
+
+  /**
+   * ⚠️ **An unsynced or deleted product shows its id, not "Unknown".** The
+   * merchant still earned that money, and an id they can search for in
+   * WooCommerce is actionable where a placeholder is not.
+   */
+  it('falls back to the product id when the catalogue has no name', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          products: {
+            rows: [{ productRef: '999', name: null, revenueMinor: 400, orders: 2 }],
+            total: 1,
+            truncated: false,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('Product 999');
+    expect(container.textContent).not.toContain('Unknown');
+  });
+
+  /**
+   * 🔴 **Selections predating product attribution are disclosed.** Without the
+   * count the table reads as the merchant's whole catalogue when it is only the
+   * part placed after the plugin update.
+   */
+  it('discloses selections that predate product attribution', () => {
+    const { container } = render(
+      <Summary data={summary({ unattributedProductSelections: 17 })} />,
+    );
+
+    expect(container.textContent).toContain('17 earlier selections');
+    expect(container.textContent).toContain('which product they were for');
+  });
+
+  /**
+   * 📌 **Before the plugin release this table is empty, and says why.** An empty
+   * box would read as a broken feature rather than as a boundary date.
+   */
+  it('explains an empty product table rather than leaving it blank', () => {
+    const { container } = render(
+      <Summary data={summary({ products: { rows: [], total: 0, truncated: false } })} />,
+    );
+
+    expect(container.textContent).toContain('attribute revenue to a product');
   });
 
   /**

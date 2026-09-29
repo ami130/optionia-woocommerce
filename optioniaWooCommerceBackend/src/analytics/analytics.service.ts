@@ -148,6 +148,27 @@ export interface RevenueTrend {
   readonly changeFraction: number | null;
 }
 
+/**
+ * What options earned on one product (M25.4, F151).
+ *
+ * 🔴 **`productRef` is the merchant's own WordPress id**, not ours — an
+ * auto-increment integer, or a *variation* id for a variable product. It is
+ * unique only **within a store**, which is why the name join is scoped by
+ * `storeId` and not by `externalId` alone.
+ *
+ * ⚠️ **`name` is null when the catalogue has never been synced**, or when the
+ * merchant deleted the product after the order. The id is still shown, because
+ * a row that vanishes when a product is deleted would quietly understate what
+ * the merchant earned.
+ */
+export interface ProductRevenue {
+  readonly productRef: string;
+  /** The product's name, or `null` when this store has no record of it. */
+  readonly name: string | null;
+  readonly revenueMinor: number;
+  readonly orders: number;
+}
+
 export interface Capped<T> {
   readonly rows: T[];
   /** How many rows exist in total, before the cap. */
@@ -178,6 +199,17 @@ export interface AnalyticsSummary {
    * better than it was?"* — the question a merchant asks after changing a price.
    */
   readonly trend: RevenueTrend;
+  /**
+   * What options earned on each product (M25.4, F151).
+   *
+   * ⚠️ **Empty until the plugin release that sends a product reference.** Older
+   * orders carry a null and nothing can backfill them, so this table has its own
+   * boundary date — `unattributedProductSelections` is what stops it reading as
+   * complete.
+   */
+  readonly products: Capped<ProductRevenue>;
+  /** Selections with no product reference, so the table above is not misread. */
+  readonly unattributedProductSelections: number;
   /** Revenue per option set — M25.3's last clause (F150). */
   readonly optionSets: Capped<OptionSetRevenue>;
   /**
@@ -256,6 +288,8 @@ export class AnalyticsService {
       leastValues,
       deadOptions,
       trend,
+      products,
+      unattributedProducts,
       optionSets,
       unattributed,
       currency,
@@ -266,6 +300,8 @@ export class AnalyticsService {
         this.valueRevenue(tenantId, 'least'),
         this.deadOptions(tenantId),
         this.revenueTrend(tenantId),
+        this.productRevenue(tenantId),
+        this.unattributedProducts(tenantId),
         this.optionSetRevenue(tenantId),
         this.unattributedSelections(tenantId),
         this.currency(tenantId),
@@ -278,6 +314,8 @@ export class AnalyticsService {
       leastValues,
       deadOptions,
       trend,
+      products,
+      unattributedProductSelections: unattributedProducts,
       optionSets,
       unattributedSelections: unattributed,
       currency,
@@ -705,6 +743,95 @@ export class AnalyticsService {
    * invent a set that never existed and dropping them silently would make the
    * per-set total read as complete.
    */
+  /**
+   * What options earned on each product (M25.4, F151).
+   *
+   * ## Why the name is a LEFT JOIN and the id is always shown
+   *
+   * 🔴 **`store_products` is a cache of the merchant's catalogue, not the truth
+   * about it.** A shop that has never synced has no rows at all, and a product
+   * deleted after an order was placed has none either — so an inner join would
+   * drop exactly the revenue a merchant most wants explained, and drop it
+   * silently. The id survives with a null name instead.
+   *
+   * ⚠️ **Joined on `storeId` as well as `externalId`.** A WooCommerce product
+   * id is unique within one shop, and a tenant may connect several — so
+   * matching on the id alone would show one store's product name against
+   * another store's revenue the moment two shops both have a product 42.
+   *
+   * ## The boundary date
+   *
+   * ⚠️ **Rows from before the plugin sent a product are excluded, not counted
+   * as one product.** `productRef IS NOT NULL` is what does it, and the
+   * unattributed count beside this figure is what stops the exclusion reading
+   * as "these products are all there is".
+   */
+  async productRevenue(tenantId: string): Promise<Capped<ProductRevenue>> {
+    const rows = (await this.dataSource.query(
+      `SELECT
+         sel.productRef AS productRef,
+         MAX(p.name) AS name,
+         SUM(sel.priceDeltaMinor) AS revenueMinor,
+         COUNT(*) AS orders
+       FROM order_selections sel
+       JOIN order_events e ON e.id = sel.orderEventId
+       JOIN stores s ON s.id = e.storeId
+       LEFT JOIN store_products p
+         ON p.externalId = sel.productRef AND p.storeId = e.storeId
+      WHERE s.tenantId = ? AND sel.productRef IS NOT NULL
+      GROUP BY sel.productRef
+      ORDER BY revenueMinor DESC, orders DESC, sel.productRef ASC
+      LIMIT ${MAX_ROWS}`,
+      [tenantId],
+    )) as {
+      productRef: string;
+      name: string | null;
+      revenueMinor: string;
+      orders: number;
+    }[];
+
+    const [count] = (await this.dataSource.query(
+      `SELECT COUNT(DISTINCT sel.productRef) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ? AND sel.productRef IS NOT NULL`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return this.capped(
+      rows.map((row) => ({
+        productRef: row.productRef,
+        name: row.name ?? null,
+        revenueMinor: Number(row.revenueMinor),
+        orders: Number(row.orders),
+      })),
+      Number(count?.total ?? 0),
+    );
+  }
+
+  /**
+   * Selections placed before the plugin sent a product reference (F151).
+   *
+   * 🔴 **Without this the per-product table reads as complete when it is not.**
+   * Every order placed before the plugin update carries a null `productRef`
+   * and nothing can backfill it, so a merchant comparing two products needs to
+   * know how much sits outside the comparison entirely — the same disclosure
+   * `unattributedSelections` makes for option sets.
+   */
+  async unattributedProducts(tenantId: string): Promise<number> {
+    const [row] = (await this.dataSource.query(
+      `SELECT COUNT(*) AS total
+         FROM order_selections sel
+         JOIN order_events e ON e.id = sel.orderEventId
+         JOIN stores s ON s.id = e.storeId
+        WHERE s.tenantId = ? AND sel.productRef IS NULL`,
+      [tenantId],
+    )) as { total: number }[];
+
+    return Number(row?.total ?? 0);
+  }
+
   async optionSetRevenue(tenantId: string): Promise<Capped<OptionSetRevenue>> {
     const rows = (await this.dataSource.query(
       `SELECT

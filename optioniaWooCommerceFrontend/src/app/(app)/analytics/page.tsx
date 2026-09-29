@@ -15,6 +15,7 @@ import {
   type AnalyticsSummary,
   type Capped,
   type OptionRevenue,
+  type ProductRevenue,
   type RevenueTrend,
   type ValueRevenue,
 } from '@/lib/analytics/api';
@@ -273,6 +274,8 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
       <DeadSection capped={data.deadOptions} />
 
       <SetSection data={data} money={money} />
+
+      <ProductSection data={data} money={money} />
     </div>
   );
 }
@@ -523,6 +526,80 @@ function DeadSection({ capped }: { capped: Capped<AnalyticsSummary['deadOptions'
       )}
     </Section>
   );
+}
+
+/**
+ * What options earned on each product (M25.4, F151).
+ *
+ * 🔴 **The half of M25.4 that needed a schema change**, and the one a merchant
+ * asks first: *"which of my products actually sell better with options?"* It is
+ * empty until the plugin release that sends a product reference, which is why
+ * the disclosure below is not optional.
+ */
+function ProductSection({
+  data,
+  money,
+}: {
+  data: AnalyticsSummary;
+  money: (minor: number) => string | null;
+}) {
+  return (
+    <Section
+      title="Revenue by product"
+      description="What your options earned on each product you sell."
+      capped={data.products}
+    >
+      {data.products.rows.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          {/*
+            📌 **Two different emptinesses, one honest sentence.** A shop with no
+            orders and a shop whose orders all predate product attribution both
+            land here, and the disclosure below distinguishes them — so this line
+            must not claim there is nothing to report.
+          */}
+          No orders yet carry the information needed to attribute revenue to a
+          product.
+        </p>
+      ) : (
+        <ul className="divide-y">
+          {data.products.rows.map((row) => (
+            <li key={row.productRef} className="flex items-baseline justify-between py-2">
+              <span className="truncate pr-4 text-sm">{productName(row)}</span>
+              <span className="text-muted-foreground shrink-0 text-sm tabular-nums">
+                {money(row.revenueMinor) ?? `${row.orders} orders`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/*
+        🔴 **Said out loud, because the figures above are otherwise read as the
+        merchant's whole catalogue.** Orders placed before the plugin update
+        carry no product and nothing can backfill them — the third such boundary
+        date, after F146's quantity fix and F150's set attribution.
+      */}
+      {data.unattributedProductSelections > 0 && (
+        <p className="text-muted-foreground mt-3 text-xs">
+          {data.unattributedProductSelections} earlier selections were placed
+          before Optionia recorded which product they were for, so they are not
+          counted above.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * What to call a product the catalogue may not know.
+ *
+ * ⚠️ **The id is shown when the name is missing, never "Unknown".** A merchant
+ * who has not synced, or who deleted the product after the order, still earned
+ * that money — and an id they can search for in WooCommerce is actionable where
+ * a placeholder is not.
+ */
+function productName(row: ProductRevenue): string {
+  return row.name ?? `Product ${row.productRef}`;
 }
 
 function SetSection({

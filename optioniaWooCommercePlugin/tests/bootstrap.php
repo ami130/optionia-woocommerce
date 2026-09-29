@@ -954,6 +954,50 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 			public int $quantity = 1;
 
 			/**
+			 * Which product this line is for.
+			 *
+			 * 🔴 **Absent until F151, exactly as `$quantity` was absent until
+			 * F146** -- and for the same reason the defect was invisible:
+			 * `OrderPayload` never asked, so nothing here needed to answer, and
+			 * a fake that cannot be asked a question makes the question look
+			 * answered.
+			 *
+			 * ⚠️ **Defaults to 0, not to an id.** WooCommerce returns `0` for a
+			 * line with no variation, and defaulting to a plausible id would
+			 * make every existing test assert a product reference none of them
+			 * were written to be about. Zero means "not set", which is what the
+			 * production code must treat as absent.
+			 *
+			 * @var int
+			 */
+			public int $product_id = 0;
+
+			/**
+			 * The variation bought, when this line is a variable product.
+			 *
+			 * @var int
+			 */
+			public int $variation_id = 0;
+
+			/**
+			 * Which product this line is for.
+			 *
+			 * @return int
+			 */
+			public function get_product_id(): int {
+				return $this->product_id;
+			}
+
+			/**
+			 * The variation bought, or 0 when the line is a simple product.
+			 *
+			 * @return int
+			 */
+			public function get_variation_id(): int {
+				return $this->variation_id;
+			}
+
+			/**
 			 * The order in which keys were added, so display order is testable.
 			 *
 			 * @var array<int, string>

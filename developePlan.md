@@ -622,7 +622,7 @@ pointing at 16b, rather than "all" silently meaning "some":
 |---|---|
 | **M25.1** event ingestion (views, add-to-cart) | ⏸️ **Deferred.** No transport is designed, and views are every product page load — a cron queue would mean a database write per pageview on the merchant's own server, which is what this phase's own exit criterion forbids. 🔴 **The cost is named, not hidden**: M25.3's *"conversion with vs. without options"* is unanswerable without it (F157), and average order value ships as the honest substitute |
 | **M25.2** rollup tables | ⏸️ **Deferred on measurement, not on guesswork.** On a 480k-row scratch copy the covering indexes are worth 3.5× (253ms → 72ms); at 60k they are worth **nothing** — 127ms against 130ms, because the optimizer scans and scanning is cheaper. Build them when a tenant approaches **100k selections**, not before |
-| **M25.4** comparisons over time and per product | 🟡 **Half shipped 2026-09-29.** *Over time* needed nothing that was missing: `order_events.occurredAt` already existed and was used only for **ordering** labels, never for **filtering** — so every figure on the page was all-time, and a merchant who changed a price could not see the effect anywhere. `revenueTrend` compares the last 30 days against the 30 before, and the page leads with it. *Per product* remains deferred: `order_selections` carries no product reference and `OrderPayload` sends none (F151), so it needs a plugin release — still waiting for one that is needed anyway |
+| **M25.4** comparisons over time and per product | ✅ **Shipped 2026-09-29, both halves.** *Over time* needed nothing that was missing: `order_events.occurredAt` already existed and was used only for **ordering** labels, never for **filtering**. *Per product* took the schema change F151 named — `order_selections.productRef`, nullable and unconstrained per ADR-016, with `OrderPayload::product_reference()` preferring a **variation** id over its parent because that is what the customer bought. ⚠️ **Its boundary date is disclosed, not discovered**: orders placed before the plugin release carry a null and nothing can backfill them, so `unattributedProductSelections` sits under the table. Older text follows for the record: 🟡 **Half shipped 2026-09-29.** *Over time* needed nothing that was missing: `order_events.occurredAt` already existed and was used only for **ordering** labels, never for **filtering** — so every figure on the page was all-time, and a merchant who changed a price could not see the effect anywhere. `revenueTrend` compares the last 30 days against the 30 before, and the page leads with it. *Per product* remains deferred: `order_selections` carries no product reference and `OrderPayload` sends none (F151), so it needs a plugin release — still waiting for one that is needed anyway |
 | **M25.5** CSV export | ✅ **Shipped 2026-09-28** (`8efe14b`). `GET /v1/analytics/export`, gated on `ANALYTICS_VIEW` and the plan's analytics feature, with a download button on the page — a route nothing calls is F132 again. Escaped against the spreadsheet that opens it, and corrected 2026-09-29 (`db8ec76`) after the formula guard turned a legitimately negative revenue into text `SUM()` skips |
 
 ✅ **M25.6 privacy is met structurally**, not by a promise: `OrderPayload` writes
@@ -30724,7 +30724,7 @@ reach the code it is about is not a test.
 25-0  ✅ decisions + the two revenue defects + the ledger gate   (no schema)
 25-1  ✅ M25.3 complete — read service, plan gate, revenue per option set
 25-2     M25.2 rollups, obeying the valueKey rule
-25-3  🟡 M25.4 comparisons, M25.5 CSV export
+25-3  ✅ M25.4 comparisons (over time AND per product), M25.5 CSV export
 25-4     M25.1 non-order events — see the deferral below
 ```
 
@@ -30754,7 +30754,7 @@ started while this phase has open stages. Recorded in the backlog, not here.
 
 | Stage | Milestone | Blocker, verified in code |
 |---|---|---|
-| 25-3 | **M25.4 "per product"** | `order_selections` has no product column; `OrderPayload` sends none (F151). **Needs a plugin release.** |
+| ~~25-3~~ | ~~**M25.4 "per product"**~~ | ✅ **Closed 2026-09-29.** The column, the DTO field, the plugin read and the analytics query all shipped together. It was indeed smaller than its deferral note implied — one migration modelled on `OrderSelectionSet`, one guarded accessor, one `GROUP BY`. ⚠️ **The plugin half is CI-verified only** (no PHP on this machine), so its six new tests are proven by CI rather than locally. |
 | 25-2 | **M25.2 rollups** | Nothing. Deferred **on measurement**: 3.5× at 480k selections, **nothing** at 60k. |
 | 25-4 | **M25.1 view events** | No transport designed. Views are every page load. |
 

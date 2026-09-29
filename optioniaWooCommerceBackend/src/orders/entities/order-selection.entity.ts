@@ -24,6 +24,7 @@ import { OrderEvent } from './order-event.entity';
 @Index('ix_order_selections_event', ['orderEventId'])
 @Index('ix_order_selections_analytics', ['optionKey', 'valueKey'])
 @Index('ix_order_selections_set', ['optionSetId', 'optionKey'])
+@Index('ix_order_selections_product', ['productRef', 'optionKey'])
 export class OrderSelection extends BaseEntity {
   @Column({ type: 'char', length: 36 })
   orderEventId: string;
@@ -63,6 +64,29 @@ export class OrderSelection extends BaseEntity {
    */
   @Column({ type: 'char', length: 36, nullable: true })
   optionSetId: string | null;
+
+  /**
+   * Which product this choice was bought against (F151, M25.4).
+   *
+   * 🔴 **On the selection, not on the order.** One order has many line items,
+   * each a different product, and `line_selections()` runs per item — so a
+   * product on `order_events` could name only one of them and would attribute a
+   * three-product order's whole option revenue to whichever came first.
+   *
+   * ⚠️ **Text, not a number.** A WooCommerce product id is an auto-increment
+   * integer in a database this system does not own, and a variable product
+   * reports a *variation* id instead. Arithmetic on it would be meaningless,
+   * and a merchant migrating stores can produce ids outside any range assumed
+   * here.
+   *
+   * ⚠️ **Null for every order placed before the plugin sent it**, permanently:
+   * an order already reported carries no record of which line each selection
+   * came from, so there is nothing to backfill from. Analytics presents a
+   * boundary date rather than reporting those orders as belonging to no
+   * product — the third such discontinuity, after F146 and F150.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  productRef: string | null;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
   valueLabel: string | null;

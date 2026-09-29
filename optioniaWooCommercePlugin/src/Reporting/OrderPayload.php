@@ -65,6 +65,16 @@ final class OrderPayload {
 	private const MAX_SET_ID = 36;
 
 	/**
+	 * How long a product reference may be (F151, M25.4).
+	 *
+	 * ⚠️ **Mirrors the API's `product_ref` at 64 characters.** A WooCommerce id is
+	 * a short integer today, but the bound exists because exceeding it earns a 400
+	 * for the **whole order**, which this class treats as permanent -- so a tight
+	 * bound would silently drop a merchant's revenue rather than truncate a field.
+	 */
+	private const MAX_PRODUCT_REF = 64;
+
+	/**
 	 * The most selections one report may carry, matching the API's cap.
 	 */
 	private const MAX_SELECTIONS = 200;
@@ -192,6 +202,25 @@ final class OrderPayload {
 		 */
 		$option_sets = $this->decode_map( $item, Keys::META_OPTION_SETS );
 
+		/*
+		 * 🔴 **Which product this line was for** (F151), so M25.4 can report what
+		 * options earned per product. Read once per line rather than per option,
+		 * for the same reason the set map above is.
+		 *
+		 * ⚠️ **A VARIATION id when there is one.** A variable product's line
+		 * reports both, and the variation is what the customer actually bought --
+		 * "Large / Blue" and "Small / Red" are different products to a merchant
+		 * deciding what to price differently, which is the decision M25.4 exists
+		 * to inform.
+		 *
+		 * ⚠️ **`method_exists` on both**, because this class is called with line
+		 * items that expose meta and nothing else -- an older WooCommerce, and the
+		 * test double `test_an_item_that_cannot_report_quantity_still_reports_revenue`
+		 * builds exactly that. A missing method must leave the reference null, not
+		 * fatal the report.
+		 */
+		$product_ref = $this->product_reference( $item );
+
 		$raw = $item->get_meta( Keys::META_SELECTIONS );
 
 		if ( ! is_string( $raw ) || '' === $raw ) {
@@ -282,6 +311,7 @@ final class OrderPayload {
 				'option_set_id'     => is_scalar( $set_id )
 					? $this->clamp( (string) $set_id, self::MAX_SET_ID )
 					: null,
+				'product_ref'       => $product_ref,
 				'price_delta_minor' => 0,
 				'config_version'    => $config_version,
 			);
@@ -473,6 +503,55 @@ final class OrderPayload {
 	 * @param string $key  The meta key holding the map.
 	 * @return array<string, mixed>
 	 */
+	/**
+	 * Which product a line item was for (F151, M25.4).
+	 *
+	 * 🔴 **The variation wins when there is one.** A variable product's line
+	 * carries both a parent product id and a variation id, and the variation is
+	 * what the customer bought. "Large / Blue" and "Small / Red" are different
+	 * things to a merchant deciding what to price differently -- which is the
+	 * decision M25.4 exists to inform -- so collapsing them to the parent would
+	 * answer a question nobody asked.
+	 *
+	 * ⚠️ **Every access is guarded, and a missing method yields null.** This
+	 * class is called with objects that expose meta and nothing else: an older
+	 * WooCommerce line item, and the test double in
+	 * `test_an_item_that_cannot_report_quantity_still_reports_revenue`. A fatal
+	 * here would cost the merchant the whole order report, and a null costs them
+	 * one column on one row -- the same trade `attribute_delta()` makes.
+	 *
+	 * ⚠️ **Zero is not an id.** WooCommerce returns `0` for a line with no
+	 * variation, and `(string) 0` is `"0"` -- a truthy-looking reference that
+	 * would group every simple product's revenue under one fictional product.
+	 *
+	 * @param object $item The order line item.
+	 * @return string|null The variation id, else the product id, else null.
+	 */
+	private function product_reference( object $item ): ?string {
+		foreach ( array( 'get_variation_id', 'get_product_id' ) as $method ) {
+			if ( ! method_exists( $item, $method ) ) {
+				continue;
+			}
+
+			$id = $item->{$method}();
+
+			if ( ! is_scalar( $id ) ) {
+				continue;
+			}
+
+			$id = (string) $id;
+
+			/* `0` means "no variation on this line", not a product called zero. */
+			if ( '' === $id || '0' === $id ) {
+				continue;
+			}
+
+			return $this->clamp( $id, self::MAX_PRODUCT_REF );
+		}
+
+		return null;
+	}
+
 	private function decode_map( object $item, string $key ): array {
 		$raw = $item->get_meta( $key );
 

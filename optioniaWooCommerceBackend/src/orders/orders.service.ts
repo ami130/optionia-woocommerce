@@ -117,7 +117,13 @@ export class OrdersService {
 
       if (dto.selections.length > 0) {
         const values = dto.selections
-          .map(() => `(UUID(), ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`)
+          /*
+           * 🔴 **Nine placeholders, not eight** — the count, the parameter list
+           * below and the column list must change together or the insert writes
+           * each value into the wrong column with no error. Counted against the
+           * column list every time this is edited.
+           */
+          .map(() => `(UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))`)
           .join(', ');
 
         const parameters = dto.selections.flatMap((selection) => [
@@ -133,6 +139,13 @@ export class OrdersService {
            * "Revenue per option set" therefore carries a boundary date.
            */
           selection.option_set_id ?? null,
+          /*
+           * ⚠️ **Null for an order from a plugin older than F151** (M25.4), on
+           * the same terms: an order already reported carries no record of
+           * which line item each selection came from, so "revenue per product"
+           * carries its own boundary date.
+           */
+          selection.product_ref ?? null,
           selection.price_delta_minor,
           selection.config_version ?? 0,
         ]);
@@ -140,7 +153,7 @@ export class OrdersService {
         await manager.query(
           `INSERT INTO order_selections
              (id, orderEventId, optionKey, optionLabel, valueKey, valueLabel,
-              optionSetId, priceDeltaMinor, configVersion, createdAt, updatedAt)
+              optionSetId, productRef, priceDeltaMinor, configVersion, createdAt, updatedAt)
            VALUES ${values}`,
           parameters,
         );

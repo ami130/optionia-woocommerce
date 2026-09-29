@@ -791,4 +791,151 @@ final class OrderPayloadTest extends TestCase {
 	public function test_an_order_without_an_id_yields_null(): void {
 		$this->assertNull( ( new OrderPayload() )->build( optionia_test_order( 0 ) ) );
 	}
+
+	/**
+	 * 🔴 **Which product the option was sold on** (F151, M25.4). Without this
+	 * the backend column exists and nothing ever fills it -- the
+	 * captured-at-one-end, dropped-before-the-other defect F150 and F132 both
+	 * were.
+	 */
+	public function test_it_reports_the_product_each_selection_was_for(): void {
+		$order              = optionia_test_order( 1 );
+		$item               = $this->line();
+		$item->product_id   = 42;
+		$order->items[]     = $item;
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( '42', $payload['selections'][0]['product_ref'] );
+	}
+
+	/**
+	 * 🔴 **A variable product reports its VARIATION**, because that is what the
+	 * customer bought. "Large / Blue" and "Small / Red" are different products
+	 * to a merchant deciding what to price differently, which is the decision
+	 * M25.4 exists to inform.
+	 */
+	public function test_it_prefers_the_variation_over_the_parent_product(): void {
+		$order              = optionia_test_order( 1 );
+		$item               = $this->line();
+		$item->product_id   = 42;
+		$item->variation_id = 77;
+		$order->items[]     = $item;
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( '77', $payload['selections'][0]['product_ref'] );
+	}
+
+	/**
+	 * ⚠️ **Zero is not an id.** WooCommerce returns 0 for a line with no
+	 * variation, and `(string) 0` is `"0"` -- a reference that looks real and
+	 * would group every simple product's revenue under one fictional product.
+	 */
+	public function test_a_line_with_no_variation_reports_the_product_not_zero(): void {
+		$order              = optionia_test_order( 1 );
+		$item               = $this->line();
+		$item->product_id   = 42;
+		$item->variation_id = 0;
+		$order->items[]     = $item;
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( '42', $payload['selections'][0]['product_ref'] );
+	}
+
+	/**
+	 * ⚠️ **No product at all is null, never `"0"`.** An order placed against a
+	 * line item that cannot report one carries a null, which the backend column
+	 * is nullable for -- and analytics discloses as unattributed rather than
+	 * inventing a product.
+	 */
+	public function test_a_line_with_no_product_reports_null(): void {
+		$order          = optionia_test_order( 1 );
+		$order->items[] = $this->line();
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$this->assertNull( $payload['selections'][0]['product_ref'] );
+	}
+
+	/**
+	 * 🔴 **One order, two products, two references.** This is why the reference
+	 * is per selection rather than per order: `get_items()` is a loop, and one
+	 * value could only ever name the first line.
+	 */
+	public function test_one_order_carries_a_reference_per_line(): void {
+		$order = optionia_test_order( 1 );
+
+		$first             = $this->line( 'finish', 'lux', '5.00' );
+		$first->product_id = 42;
+
+		$second             = $this->line( 'wrap', 'gift', '3.00' );
+		$second->product_id = 77;
+
+		$order->items[] = $first;
+		$order->items[] = $second;
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$refs = array_column( $payload['selections'], 'product_ref' );
+
+		$this->assertContains( '42', $refs );
+		$this->assertContains( '77', $refs );
+	}
+
+	/**
+	 * 🔴 **A line item that cannot report a product must not fatal the order.**
+	 * An older WooCommerce line item exposes meta and nothing else, and losing
+	 * the whole report over one missing column would cost the merchant every
+	 * figure on the page rather than one.
+	 */
+	public function test_an_item_that_cannot_report_a_product_still_reports_revenue(): void {
+		$order = optionia_test_order( 1 );
+		$item  = $this->line( 'finish', 'lux', '7.00' );
+
+		// Meta only: no get_product_id, no get_variation_id, as older WooCommerce.
+		$order->items[] = new class( $item ) {
+			/**
+			 * The item whose meta this exposes.
+			 *
+			 * @var object
+			 */
+			private $inner;
+
+			/**
+			 * Wrap an item, exposing its meta but no product accessors.
+			 *
+			 * @param object $inner The item whose meta this exposes.
+			 */
+			public function __construct( object $inner ) {
+				$this->inner = $inner;
+			}
+
+			/**
+			 * One meta value, delegated to the wrapped item.
+			 *
+			 * @param string $key Meta key.
+			 * @return mixed
+			 */
+			public function get_meta( string $key ) {
+				return $this->inner->get_meta( $key );
+			}
+
+			/**
+			 * Visible meta, delegated to the wrapped item.
+			 *
+			 * @param string $hideprefix Prefix marking a key as hidden.
+			 * @return array<int, object>
+			 */
+			public function get_formatted_meta_data( string $hideprefix = '_' ) {
+				return $this->inner->get_formatted_meta_data( $hideprefix );
+			}
+		};
+
+		$payload = ( new OrderPayload() )->build( $order );
+
+		$this->assertSame( 700, $payload['option_revenue_minor'] );
+		$this->assertNull( $payload['selections'][0]['product_ref'] );
+	}
 }
