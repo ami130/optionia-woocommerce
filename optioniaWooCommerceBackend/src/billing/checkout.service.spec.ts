@@ -88,7 +88,7 @@ describe('CheckoutService', () => {
             id: 'price_row_1',
             planId: 'plan_pro',
             currency: 'EUR',
-            interval: 'month',
+            interval: 'year',
             amountMinor: 2900,
             providerPriceId: 'price_stripe_1',
             isCurrent: true,
@@ -111,6 +111,42 @@ describe('CheckoutService', () => {
       createCheckout,
     };
   }
+
+  /**
+   * 🔴 **WooCommerce sells yearly only.** Before this guard, `isCurrent` was the
+   * ONLY gate on a price row — so a monthly row left by an earlier seed was
+   * purchasable and a merchant could be billed monthly forever, with nothing
+   * failing and no test noticing.
+   */
+  it('refuses a monthly price, which this product does not sell', async () => {
+    const { service } = build({ price: { interval: 'month' } });
+
+    await expect(service.start({ planPriceId: 'price_row_1' })).rejects.toThrow(
+      /billed yearly/i,
+    );
+  });
+
+  it('refuses a monthly price even when it is current and fully provisioned', async () => {
+    // ⚠️ Nothing else is wrong with this row: it is current, has a provider id
+    // and matches the tenant's currency. The interval alone is the refusal.
+    const { service, createCheckout } = build({
+      price: { interval: 'month', isCurrent: true, providerPriceId: 'price_stripe_1' },
+    });
+
+    await expect(service.start({ planPriceId: 'price_row_1' })).rejects.toThrow(
+      /billed yearly/i,
+    );
+    expect(createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unrecognised interval rather than passing it to the provider', async () => {
+    const { service, createCheckout } = build({ price: { interval: 'week' } });
+
+    await expect(service.start({ planPriceId: 'price_row_1' })).rejects.toThrow(
+      /billed yearly/i,
+    );
+    expect(createCheckout).not.toHaveBeenCalled();
+  });
 
   it('returns the provider’s checkout URL and its reference', async () => {
     const { service } = build();

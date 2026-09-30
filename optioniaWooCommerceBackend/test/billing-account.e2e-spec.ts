@@ -102,11 +102,20 @@ describe('Billing account (e2e)', () => {
 
       const response = await api.get('/billing/subscription');
 
-      /* The free plan is $0/month, pinned at provisioning. */
+      /*
+       * The free plan is $0, pinned at provisioning.
+       *
+       * 🔴 **`year`, not `month`** — WooCommerce sells yearly only, and this
+       * asserts the PIN a new tenant actually receives. Provisioning looked up
+       * `interval: 'month'` by hand before; if that had been left while the seed
+       * stopped writing monthly rows, the lookup would have found nothing and
+       * every new signup would have registered with a null price pin — tolerated
+       * by design, so silent.
+       */
       expect(response.body.data).toMatchObject({
         currency: 'USD',
         amountMinor: 0,
-        interval: 'month',
+        interval: 'year',
       });
     }, 60_000);
 

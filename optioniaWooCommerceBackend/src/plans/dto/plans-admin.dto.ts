@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsInt, IsObject, IsString, Length, Min } from 'class-validator';
+import { SELLABLE_INTERVALS } from '../billing-interval';
 
 /**
  * Setting a plan's price (M22.1a).
@@ -14,8 +15,17 @@ export class SetPlanPriceDto {
   @Length(3, 3)
   currency: string;
 
-  @ApiProperty({ enum: ['month', 'year'] })
-  @IsIn(['month', 'year'])
+  /**
+   * 🔴 **Sellable intervals only — WooCommerce is yearly.** Staff may not create
+   * a price at an interval no merchant can buy: it would appear on a pricing
+   * page, be refused at checkout, and read as a bug rather than a decision.
+   *
+   * ⚠️ The enum and the validator both read {@link SELLABLE_INTERVALS}, so the
+   * documented contract and the enforced one cannot drift apart — they were two
+   * hand-written copies of `['month', 'year']` before.
+   */
+  @ApiProperty({ enum: SELLABLE_INTERVALS })
+  @IsIn(SELLABLE_INTERVALS)
   interval: string;
 
   /**

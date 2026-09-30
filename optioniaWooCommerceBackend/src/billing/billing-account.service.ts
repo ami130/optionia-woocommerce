@@ -14,6 +14,7 @@ import {
   requireBillingProvider,
 } from './billing-provider';
 import { Invoice } from './entities/invoice.entity';
+import { SELLABLE_INTERVALS, isSellableInterval } from '../plans/billing-interval';
 
 /** What a merchant is currently on, and what state it is in. */
 export interface SubscriptionSummary {
@@ -238,6 +239,18 @@ export class BillingAccountService {
 
     if (!price.isCurrent) {
       throw new BadRequestException('That price is no longer offered');
+    }
+
+    /*
+     * 🔴 **The same yearly-only gate as checkout, for the same reason.** A plan
+     * CHANGE is a purchase — it moves the merchant onto new terms — so guarding
+     * only the first checkout would leave the rule enforced on the way in and
+     * abandoned on every move afterwards.
+     */
+    if (!isSellableInterval(price.interval)) {
+      throw new BadRequestException(
+        `This plan is billed ${SELLABLE_INTERVALS.join(' or ')}ly`,
+      );
     }
 
     if (price.providerPriceId === null) {

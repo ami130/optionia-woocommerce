@@ -9,6 +9,7 @@ import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { SubscriptionStatus } from '../common/database/enums';
 import { Tenant } from './entities/tenant.entity';
 import { TenantMember } from './entities/tenant-member.entity';
+import { DEFAULT_SELLABLE_INTERVAL } from '../plans/billing-interval';
 
 /**
  * Creating a tenant for a new merchant.
@@ -70,8 +71,26 @@ export class TenantProvisioningService {
      * `(provider, providerSubscriptionId)` index meaningless. It becomes a real
      * provider when the merchant first pays.
      */
+    /*
+     * 🔴 **Pinned to the SELLABLE interval, not a hardcoded `'month'`.**
+     *
+     * ⚠️ This line read `interval: 'month'` and was the quiet hazard in making
+     * WooCommerce yearly-only: retiring the monthly rows first would have made
+     * this lookup return nothing, and the `?? null` below tolerates that BY
+     * DESIGN — so every new signup would have registered with no price pin, no
+     * error, and no failing test. The plan would still govern limits, so nothing
+     * visible would break until someone asked what a merchant was charged.
+     *
+     * 📌 Reading {@link DEFAULT_SELLABLE_INTERVAL} means this follows the
+     * product decision automatically instead of restating it.
+     */
     const freePrice = await manager.findOne(PlanPrice, {
-      where: { planId: plan.id, currency: plan.currency, interval: 'month', isCurrent: true },
+      where: {
+        planId: plan.id,
+        currency: plan.currency,
+        interval: DEFAULT_SELLABLE_INTERVAL,
+        isCurrent: true,
+      },
     });
 
     await manager.save(

@@ -45,8 +45,11 @@ describe('Plan administration (e2e)', () => {
      * is how a billing history loses its meaning. Those rows are left retired,
      * which is exactly what they should be.
      */
+    /*
+     * 🔴 **Yearly only** — the seed no longer writes a monthly row, so the state
+     * this teardown restores is one current price per plan, not two.
+     */
     const SEEDED: ReadonlyArray<{ interval: string; amountMinor: number }> = [
-      { interval: 'month', amountMinor: 2900 },
       { interval: 'year', amountMinor: 29_000 },
     ];
 
@@ -62,8 +65,7 @@ describe('Plan administration (e2e)', () => {
          LEFT JOIN subscriptions s ON s.planPriceId = pp.id
         WHERE p.code = 'pro' AND s.id IS NULL
           AND NOT (pp.currency = 'USD'
-                   AND ((pp.interval = 'month' AND pp.amountMinor = 2900)
-                     OR (pp.interval = 'year' AND pp.amountMinor = 29000)))`,
+                   AND pp.interval = 'year' AND pp.amountMinor = 29000)`,
     );
 
     /* Make exactly one row per interval current again, at the seeded amount. */
@@ -163,7 +165,7 @@ describe('Plan administration (e2e)', () => {
 
       const response = await client(h.app, token).post('/admin/plans/pro/price', {
         currency: 'USD',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 9900,
       });
 
@@ -179,7 +181,7 @@ describe('Plan administration (e2e)', () => {
         (
           await api.post('/admin/plans/pro/price', {
             currency: 'USD',
-            interval: 'month',
+            interval: 'year',
             amountMinor: 9900,
           })
         ).status,
@@ -197,14 +199,14 @@ describe('Plan administration (e2e)', () => {
     it('supersedes without re-pricing an existing subscriber', async () => {
       const staffToken = await makeStaff('billing-ops', StaffRole.BILLING_OPS);
 
-      /* A merchant who "bought" the current pro monthly price. */
+      /* A merchant who "bought" the current pro yearly price. */
       await h.tenant('subscriber');
       const tenantId = await h.tenantIdOf('subscriber');
 
       const plan = await dataSource.getRepository(Plan).findOneByOrFail({ code: 'pro' });
       const before = await dataSource.getRepository(PlanPrice).findOneByOrFail({
         planId: plan.id,
-        interval: 'month',
+        interval: 'year',
         isCurrent: true,
       });
 
@@ -216,7 +218,7 @@ describe('Plan administration (e2e)', () => {
 
       const response = await client(h.app, staffToken).post('/admin/plans/pro/price', {
         currency: 'USD',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 3900,
       });
 
@@ -230,14 +232,14 @@ describe('Plan administration (e2e)', () => {
       const oldPrice = await dataSource
         .getRepository(PlanPrice)
         .findOneByOrFail({ id: before.id });
-      expect(oldPrice.amountMinor).toBe(2900);
+      expect(oldPrice.amountMinor).toBe(29_000);
       expect(oldPrice.isCurrent).toBe(false);
       expect(oldPrice.retiredAt).not.toBeNull();
 
       /* And a new signup would take the new figure. */
       const current = await dataSource.getRepository(PlanPrice).findOneByOrFail({
         planId: plan.id,
-        interval: 'month',
+        interval: 'year',
         isCurrent: true,
       });
       expect(current.amountMinor).toBe(3900);
@@ -280,7 +282,7 @@ describe('Plan administration (e2e)', () => {
 
       await client(h.app, token).post('/admin/plans/pro/price', {
         currency: 'USD',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 4900,
       });
 
@@ -312,7 +314,7 @@ describe('Plan administration (e2e)', () => {
 
       const response = await client(h.app, token).post('/admin/plans/pro/price', {
         currency: 'EUR',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 2700,
       });
 
@@ -340,13 +342,13 @@ describe('Plan administration (e2e)', () => {
       const plan = await dataSource.getRepository(Plan).findOneByOrFail({ code: 'business' });
       const current = await dataSource.getRepository(PlanPrice).findOneByOrFail({
         planId: plan.id,
-        interval: 'month',
+        interval: 'year',
         isCurrent: true,
       });
 
       const response = await client(h.app, token).post('/admin/plans/business/price', {
         currency: 'USD',
-        interval: 'month',
+        interval: 'year',
         amountMinor: current.amountMinor,
       });
 
@@ -354,10 +356,10 @@ describe('Plan administration (e2e)', () => {
     }, 60_000);
 
     it.each([
-      ['a negative amount', { currency: 'USD', interval: 'month', amountMinor: -100 }],
-      ['a fractional amount', { currency: 'USD', interval: 'month', amountMinor: 29.5 }],
+      ['a negative amount', { currency: 'USD', interval: 'year', amountMinor: -100 }],
+      ['a fractional amount', { currency: 'USD', interval: 'year', amountMinor: 29.5 }],
       ['an unknown interval', { currency: 'USD', interval: 'weekly', amountMinor: 100 }],
-      ['a malformed currency', { currency: 'DOLLARS', interval: 'month', amountMinor: 100 }],
+      ['a malformed currency', { currency: 'DOLLARS', interval: 'year', amountMinor: 100 }],
     ])('refuses %s', async (_label, body) => {
       const token = await makeStaff(`invalid-${_label.replace(/\s/g, '')}`, StaffRole.BILLING_OPS);
 
@@ -371,7 +373,7 @@ describe('Plan administration (e2e)', () => {
 
       const response = await client(h.app, token).post('/admin/plans/enterprise/price', {
         currency: 'USD',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 9900,
       });
 
@@ -908,8 +910,8 @@ describe('Plan administration (e2e)', () => {
       const staff = await makeStaff('hide-for-buyers', StaffRole.BILLING_OPS);
       const buyer = await h.tenant('buyer-sees-hidden');
 
-      await linkPrice('pro', 'month');
-      await linkPrice('business', 'month');
+      await linkPrice('pro', 'year');
+      await linkPrice('business', 'year');
 
       await client(h.app, staff).patch('/admin/plans/business/visibility', {
         isPublic: false,
@@ -936,12 +938,12 @@ describe('Plan administration (e2e)', () => {
       const staff = await makeStaff('unlinked-price', StaffRole.BILLING_OPS);
       const buyer = await h.tenant('buyer-sees-unlinked');
 
-      await linkPrice('pro', 'month');
+      await linkPrice('pro', 'year');
 
       /* A new currency, deliberately left unlinked — as F108 leaves every new price. */
       await client(h.app, staff).post('/admin/plans/pro/price', {
         currency: 'GBP',
-        interval: 'month',
+        interval: 'year',
         amountMinor: 2400,
       });
 

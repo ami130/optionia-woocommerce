@@ -35,7 +35,7 @@ describe('BillingAccountService', () => {
     id: 'price_row_pro',
     planId: plan.id,
     currency: 'USD',
-    interval: 'month',
+    interval: 'year',
     amountMinor: 2900,
     providerPriceId: 'price_stripe_pro',
     isCurrent: true,
@@ -144,7 +144,7 @@ describe('BillingAccountService', () => {
         status: SubscriptionStatus.ACTIVE,
         currency: 'USD',
         amountMinor: 2900,
-        interval: 'month',
+        interval: 'year',
         currentPeriodEnd: '2026-10-25T00:00:00.000Z',
         cancelAt: null,
         trialEndsAt: null,
@@ -251,7 +251,7 @@ describe('BillingAccountService', () => {
     const target = {
       id: 'price_row_business',
       currency: 'USD',
-      interval: 'month',
+      interval: 'year',
       providerPriceId: 'price_stripe_business',
       isCurrent: true,
     } as PlanPrice;
@@ -283,6 +283,16 @@ describe('BillingAccountService', () => {
     it.each([
       ['an unknown price', null, NotFoundException],
       ['a superseded price', { ...target, isCurrent: false } as PlanPrice, BadRequestException],
+      /*
+       * 🔴 **A plan CHANGE is a purchase.** Guarding only the first checkout
+       * would enforce yearly-only on the way in and abandon it on every move
+       * afterwards — a merchant could upgrade themselves onto monthly.
+       */
+      [
+        'a monthly price, which this product does not sell',
+        { ...target, interval: 'month' } as PlanPrice,
+        BadRequestException,
+      ],
       [
         'a price with no provider id',
         { ...target, providerPriceId: null } as PlanPrice,

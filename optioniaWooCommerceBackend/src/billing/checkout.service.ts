@@ -7,6 +7,7 @@ import { loadConfig } from '../config/env';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { SELLABLE_INTERVALS, isSellableInterval } from '../plans/billing-interval';
 import {
   BILLING_PROVIDER,
   type BillingProviderOrNull,
@@ -65,6 +66,28 @@ export class CheckoutService {
      */
     if (!price.isCurrent) {
       throw new BadRequestException('That price is no longer offered');
+    }
+
+    /*
+     * 🔴 **WooCommerce sells yearly only, and this is where that is enforced.**
+     * Before this check, `isCurrent` was the ONLY gate — so a monthly row left
+     * by an earlier seed was purchasable, and a merchant could subscribe to an
+     * interval this product does not sell. Nothing failed; they were simply
+     * billed monthly forever.
+     *
+     * ⚠️ **Refused here rather than filtered upstream.** Hiding monthly prices
+     * from the pricing page would make the common path right and leave a direct
+     * `POST /billing/checkout` with a known price id still able to buy one.
+     * The rule belongs where the money moves.
+     *
+     * 📌 The interval remains READABLE — a subscription already pinned to a
+     * monthly price keeps resolving, invoices keep rendering, and history is not
+     * rewritten by a change in what we sell today.
+     */
+    if (!isSellableInterval(price.interval)) {
+      throw new BadRequestException(
+        `This plan is billed ${SELLABLE_INTERVALS.join(' or ')}ly`,
+      );
     }
 
     if (price.providerPriceId === null) {

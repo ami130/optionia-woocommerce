@@ -11,6 +11,7 @@ import {
 } from '../usage/usage-counter.service';
 import { Plan } from './entities/plan.entity';
 import { PlanPrice } from './entities/plan-price.entity';
+import { SELLABLE_INTERVALS, isSellableInterval } from './billing-interval';
 
 /** A plan, with its current prices, as staff need to see it. */
 export interface PlanAdminView {
@@ -141,8 +142,16 @@ export class PlansAdminService {
       throw new BadRequestException('amountMinor must be a non-negative whole number of minor units');
     }
 
-    if (input.interval !== 'month' && input.interval !== 'year') {
-      throw new BadRequestException("interval must be 'month' or 'year'");
+    /*
+     * 🔴 **Checked here as well as in the DTO, and that is not redundant.** The
+     * DTO guards the HTTP boundary; this guards the SERVICE, which the seed and
+     * any future internal caller reach without passing a validator. A rule
+     * enforced only at the edge is a rule the inside of the system does not have.
+     */
+    if (!isSellableInterval(input.interval)) {
+      throw new BadRequestException(
+        `interval must be one of: ${SELLABLE_INTERVALS.join(', ')}`,
+      );
     }
 
     const currency = input.currency.toUpperCase();

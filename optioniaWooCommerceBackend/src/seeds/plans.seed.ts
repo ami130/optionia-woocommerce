@@ -4,6 +4,7 @@ import { AuditLog } from '../audit/entities/audit-log.entity';
 import { Plan } from '../plans/entities/plan.entity';
 import { PlanPrice } from '../plans/entities/plan-price.entity';
 import { report } from './seed-context';
+import { SELLABLE_INTERVALS, isSellableInterval } from '../plans/billing-interval';
 
 /**
  * Subscription plans.
@@ -174,10 +175,38 @@ export async function seedPlans(dataSource: DataSource): Promise<void> {
 async function seedPricesFor(dataSource: DataSource, plan: Plan): Promise<void> {
   const prices = dataSource.getRepository(PlanPrice);
 
-  const intervals: ReadonlyArray<{ interval: string; amountMinor: number }> = [
-    { interval: 'month', amountMinor: plan.priceMonthlyMinor },
-    { interval: 'year', amountMinor: plan.priceYearlyMinor },
-  ];
+  /*
+   * 🔴 **Yearly only — WooCommerce does not sell monthly.** Seeding a monthly
+   * row would create something no merchant may buy: it would be refused at
+   * checkout, which reads as a bug rather than a decision, and it would sit in
+   * the table as a purchasable-looking price forever.
+   *
+   * 📌 `plans.priceMonthlyMinor` is NOT removed. It is the seed's declaration
+   * of intent and a pricing page may still display a "per month, billed
+   * annually" figure from it — which is a presentation, not a billable row.
+   */
+  const intervals: ReadonlyArray<{ interval: string; amountMinor: number }> =
+    SELLABLE_INTERVALS.map((interval) => ({
+      interval,
+      amountMinor: plan.priceYearlyMinor,
+    }));
+
+  /*
+   * ⚠️ **Retire any monthly row a previous seed created**, rather than leaving
+   * it current. A database seeded before this decision carries a monthly row
+   * marked `isCurrent` — unbuyable, but indistinguishable from a live price when
+   * reading the table. Retiring it is the same operation a real price withdrawal
+   * performs, so a subscription already pinned to it keeps resolving.
+   */
+  const unsellable = await prices.find({
+    where: { planId: plan.id, currency: plan.currency, isCurrent: true },
+  });
+
+  for (const row of unsellable) {
+    if (!isSellableInterval(row.interval)) {
+      await prices.update(row.id, { isCurrent: false, retiredAt: new Date() });
+    }
+  }
 
   for (const { interval, amountMinor } of intervals) {
     const current = await prices.findOne({
