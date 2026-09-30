@@ -15,7 +15,33 @@ import { describe, expect, it } from 'vitest';
  * This reads the route directory rather than the component's own list, so it
  * fails when a page is deleted as well as when a link is added.
  */
-const APP_DIR = join(process.cwd(), 'src/app/(app)');
+/**
+ * ⚠️ **Route GROUPS, not one directory.** This read `src/app/(app)` alone, which
+ * assumed every navigation item lives in the merchant group. It stopped being
+ * true when the Platform section arrived in `(admin)`: the page existed and this
+ * test reported it missing, because it was looking in one place.
+ *
+ * 📌 Parenthesised directories do not appear in the URL, so a href resolves
+ * under whichever group owns it — which is exactly why the path cannot be
+ * derived from the href alone.
+ */
+const APP_ROOT = join(process.cwd(), 'src/app');
+const ROUTE_GROUPS = ['(app)', '(admin)'] as const;
+
+/** Where a nav href's page lives, or null when nothing serves it. */
+function pageFor(href: string): string | null {
+  const relative = href.replace(/^\//, '');
+
+  for (const group of ROUTE_GROUPS) {
+    const candidate = join(APP_ROOT, group, relative, 'page.tsx');
+
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
 
 const SHELL = join(process.cwd(), 'src/components/layout/app-shell.tsx');
 
@@ -33,11 +59,17 @@ function hrefs(kind: 'enabled' | 'disabled'): string[] {
     source.indexOf('export function AppShell'),
   );
 
+  /*
+   * 🔴 **Every href on a line, not the first.** `split("href: '")[1]` returned
+   * one match per line, so two entries written on one line made the second
+   * INVISIBLE — a nav item pointing at a page that does not exist would have
+   * passed this test silently. Found by probing the test itself: adding a
+   * deliberate ghost route did not fail it.
+   */
   return block
     .split('\n')
-    .filter((line) => line.includes("href: '"))
     .filter((line) => (kind === 'disabled' ? line.includes('phase:') : !line.includes('phase:')))
-    .map((line) => line.split("href: '")[1].split("'")[0]);
+    .flatMap((line) => [...line.matchAll(/href: '([^']+)'/g)].map((m) => m[1]));
 }
 
 describe('navigation', () => {
@@ -56,15 +88,13 @@ describe('navigation', () => {
   });
 
   it.each(hrefs('enabled'))('%s has a page', (href) => {
-    const dir = join(APP_DIR, href.replace(/^\//, ''));
-
-    expect(existsSync(join(dir, 'page.tsx'))).toBe(true);
+    expect(pageFor(href)).not.toBeNull();
   });
 
   /** A disabled item must NOT have a page — otherwise it is needlessly unreachable. */
   it('does not disable an item that is already built', () => {
     for (const href of hrefs('disabled')) {
-      expect(existsSync(join(APP_DIR, href.replace(/^\//, ''), 'page.tsx'))).toBe(false);
+      expect(pageFor(href)).toBeNull();
     }
   });
 });

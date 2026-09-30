@@ -12,6 +12,7 @@ import {
   Settings,
   SlidersHorizontal,
   Store,
+  Tags,
   Workflow,
 } from 'lucide-react';
 
@@ -50,6 +51,29 @@ const NAVIGATION: ReadonlyArray<{ href: string; label: string; phase?: string; i
    * never used it, and the difference is Next's not-found page.
    */
   { href: '/settings', label: 'Settings', phase: 'a later phase', icon: Settings },
+];
+
+/**
+ * Platform staff only (M26.5).
+ *
+ * 🔴 **Hidden rather than disabled, which is the opposite of the rule above.**
+ * Unbuilt items are disabled so a merchant can see the shape of the product;
+ * this one is not unbuilt, it is *not theirs*. Showing a merchant a greyed
+ * "Platform" entry would advertise a room they may never enter, and clicking it
+ * sends them straight back out — a control whose only outcome is a redirect.
+ *
+ * ⚠️ **Rendering, not authorisation.** `StaffGuard` refuses every `/admin`
+ * request server-side, so a merchant who types the URL reaches a shell and a
+ * string of 403s rather than platform data.
+ */
+const STAFF_NAVIGATION: ReadonlyArray<{
+  href: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+}> = [
+  // ⚠️ One entry per line, like NAVIGATION above: the parser in
+  // `navigation.test.ts` reads this block line by line.
+  { href: '/admin/plans', label: 'Plans', icon: Tags },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -158,6 +182,46 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Tooltip>
             ),
           )}
+
+          {/*
+            📌 **A separated block, not another row in the list.** The platform
+            realm is a different thing from a merchant's own workspace, and a
+            staff member who also owns a tenant needs to see which one they are
+            acting in. The heading says so; the separator makes it visible at a
+            glance on a phone, where the nav is a horizontal strip.
+          */}
+          {me?.staff != null ? (
+            <div className="flex gap-1 sm:mt-4 sm:flex-col sm:border-t sm:pt-4">
+              <span className="text-muted-foreground hidden px-3 pb-1 text-xs font-medium sm:block">
+                Platform
+              </span>
+
+              {STAFF_NAVIGATION.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={pathname.startsWith(item.href) ? 'page' : undefined}
+                  className={cn(
+                    'group flex items-center gap-2.5 border-l-2 px-3 py-2 text-sm whitespace-nowrap transition-colors',
+                    pathname.startsWith(item.href)
+                      ? 'border-l-primary bg-accent text-accent-foreground rounded-r-md font-medium'
+                      : 'hover:bg-accent/50 rounded-md border-l-transparent',
+                  )}
+                >
+                  <item.icon
+                    className={cn(
+                      'size-4 shrink-0 transition-colors',
+                      pathname.startsWith(item.href)
+                        ? 'text-primary'
+                        : 'text-muted-foreground group-hover:text-foreground',
+                    )}
+                    aria-hidden="true"
+                  />
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </nav>
 
         <main className="flex-1 p-4 sm:p-6">{children}</main>

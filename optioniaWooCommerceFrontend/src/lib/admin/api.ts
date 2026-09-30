@@ -40,6 +40,21 @@ export async function fetchAdminPlans(): Promise<AdminPlan[]> {
   return data;
 }
 
+/**
+ * The largest discount the API accepts, in basis points — 99.99%.
+ *
+ * 🔴 **Mirrors `MAX_DISCOUNT_BASIS_POINTS` in the backend**, which refuses a
+ * full 100% because free access already has a home (the Free plan, provisioned
+ * with no provider subscription) and because it is the likeliest typo to be
+ * catastrophic.
+ *
+ * ⚠️ **The form validated `< 100` percent and the server caps at 9999 bp**, so
+ * 99.995% passed the client, rounded to 10000 and was refused — a form saying
+ * yes where the server says no, which reads as a bug to whoever meets it.
+ * Checked by `check-staff-identity.sh` so the two cannot drift apart again.
+ */
+export const MAX_DISCOUNT_BASIS_POINTS = 9_999;
+
 export interface DiscountResult {
   priceId: string;
   superseded: string | null;

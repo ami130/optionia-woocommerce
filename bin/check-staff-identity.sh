@@ -81,6 +81,26 @@ else
   fail "route-guards does not test me.staff for presence — the admin group may never render"
 fi
 
+# 5. The dashboard's discount ceiling matches the API's.
+#
+# 🔴 **Two numbers, two languages, one rule.** The backend refuses a discount
+# above 9999 basis points; the form validated `< 100` PERCENT, so 99.995% passed
+# the client, rounded to 10000 and was refused by the server — a form saying yes
+# where the server says no. Both now express the ceiling in basis points, and
+# this asserts they still agree.
+BACKEND_MAX=$(strip_comments "$SRC/plans/plan-discount.ts" \
+  | grep -oE 'FULL_DISCOUNT_BASIS_POINTS = 10_000' | head -1)
+FRONT_MAX=$(strip_comments "$ROOT/optioniaWooCommerceFrontend/src/lib/admin/api.ts" \
+  | grep -oE 'MAX_DISCOUNT_BASIS_POINTS = 9_999' | head -1)
+
+if [ -n "$BACKEND_MAX" ] && [ -n "$FRONT_MAX" ]; then
+  pass "the dashboard's discount ceiling matches the API's (9999 bp)"
+else
+  fail "the discount ceiling disagrees between the API and the dashboard"
+  printf '        backend: %s\n' "${BACKEND_MAX:-<not found>}"
+  printf '        dashboard: %s\n' "${FRONT_MAX:-<not found>}"
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d staff-identity check(s) failed.\033[0m\n' "$FAILURES"

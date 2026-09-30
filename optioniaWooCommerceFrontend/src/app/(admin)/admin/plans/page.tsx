@@ -9,7 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ErrorState, LoadingRows } from '@/components/layout/states';
-import { type AdminPlan, discountPlan, fetchAdminPlans } from '@/lib/admin/api';
+import {
+  MAX_DISCOUNT_BASIS_POINTS,
+  type AdminPlan,
+  discountPlan,
+  fetchAdminPlans,
+} from '@/lib/admin/api';
 import { formatMoney } from '@/lib/billing/format';
 
 /**
@@ -116,9 +121,65 @@ function PlanCard({ plan, onChanged }: { plan: AdminPlan; onChanged: () => void 
           </ul>
         )}
 
+        {/*
+          🔴 **Limits and features are shown, not merely fetched.** `GET
+          /admin/plans` returns both and this screen displayed neither — the
+          half-built shape this project keeps meeting, where a field crosses the
+          wire and no screen reads it. B10 made them editable without a deploy;
+          seeing them is the first half of that being useful.
+        */}
+        <PlanAllowances plan={plan} />
+
         <DiscountForm plan={plan} onChanged={onChanged} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * What a plan allows, and which capabilities it unlocks.
+ *
+ * 📌 **Read-only here.** `PUT /admin/plans/:code/limits` and `.../features`
+ * exist and are gated; editing them is a larger screen than this milestone
+ * needs, and showing the current values is what staff answering a merchant's
+ * question actually require.
+ */
+function PlanAllowances({ plan }: { plan: AdminPlan }) {
+  const limits = Object.entries(plan.limits);
+  const features = Object.entries(plan.features).filter(([, on]) => on);
+
+  if (limits.length === 0 && features.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-4">
+      {limits.length > 0 ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          {limits.map(([key, value]) => (
+            <div key={key} className="contents">
+              <dt className="text-muted-foreground">{key}</dt>
+              {/*
+                ⚠️ **`null` means UNLIMITED, not missing.** Rendering it as an
+                empty cell would read as "no allowance recorded", which is the
+                opposite of what it means.
+              */}
+              <dd>{value === null ? 'Unlimited' : String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+
+      {features.length > 0 ? (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {features.map(([key]) => (
+            <Badge key={key} variant="secondary" className="font-normal">
+              {key}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -146,7 +207,7 @@ function DiscountForm({ plan, onChanged }: { plan: AdminPlan; onChanged: () => v
          * API takes basis points because money arithmetic is integer throughout.
          * `Math.round` keeps 12.5% exact (1250) rather than truncating to 1200.
          */
-        basisPoints: Math.round(Number(percent) * 100),
+        basisPoints,
       }),
     onSuccess: () => {
       setPercent('');
@@ -154,10 +215,28 @@ function DiscountForm({ plan, onChanged }: { plan: AdminPlan; onChanged: () => v
     },
   });
 
+  /*
+   * 🔴 **Validated in BASIS POINTS, the unit the API takes.** Checking the
+   * percent against `< 100` let 99.995% through, which rounds to 10000 and is
+   * refused by the server — the form said yes where the server said no.
+   * Converting first, then bounding, makes the client and server agree by
+   * construction rather than by two numbers that happen to match.
+   */
   const value = Number(percent);
-  const valid = percent !== '' && Number.isFinite(value) && value >= 0 && value < 100;
+  const basisPoints = Math.round(value * 100);
+  const valid =
+    percent !== '' &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    basisPoints <= MAX_DISCOUNT_BASIS_POINTS;
 
-  if (!yearly) {
+  /*
+   * ⚠️ **No form on a free plan.** The Free plan has a yearly price of £0, so
+   * the row exists and the control rendered — offering staff a discount that
+   * cannot do anything, since 20% off nothing is nothing. Hidden rather than
+   * disabled: there is no state in which it becomes useful.
+   */
+  if (!yearly || yearly.amountMinor === 0) {
     return null;
   }
 

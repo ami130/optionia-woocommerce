@@ -119,6 +119,81 @@ else
   pass "all $CHECKED analytics field(s) reach the screen"
 fi
 
+
+# --- The ADMIN screen, on the same principle ---------------------------------
+#
+# 🔴 **This gate was hardcoded to analytics**, and the defect class it exists for
+# reappeared the moment a second screen arrived: `GET /admin/plans` returns
+# `limits` and `features`, and the plans screen displayed neither — a field
+# crossing the wire that no screen reads, which is precisely what this checks.
+#
+# ⚠️ **A second assertion rather than a rewrite.** Generalising the whole gate
+# would mean restructuring a check whose every line records a specific way it was
+# once wrong; naming the second screen costs less and fails just as loudly. A
+# third screen should prompt the generalisation.
+ADMIN_API="$ROOT/optioniaWooCommerceFrontend/src/lib/admin/api.ts"
+ADMIN_PAGE="$ROOT/optioniaWooCommerceFrontend/src/app/(admin)/admin/plans/page.tsx"
+
+if [ ! -f "$ADMIN_API" ] || [ ! -f "$ADMIN_PAGE" ]; then
+  fail "missing the admin API type or plans page"
+else
+  ADMIN_FIELDS=$(awk '/^export interface AdminPlan \{/,/^\}/' "$ADMIN_API" \
+    | grep -oE '^  (readonly )?[a-zA-Z][a-zA-Z0-9]*:' \
+    | sed 's/^  //;s/readonly //;s/://')
+
+  if [ -z "$ADMIN_FIELDS" ]; then
+    fail "parsed no fields from AdminPlan — the parser is wrong, not the code"
+  else
+    ADMIN_UNREAD=""
+    ADMIN_CHECKED=0
+
+    for field in $ADMIN_FIELDS; do
+      case "$field" in
+        # ⚠️ `id` is a React key and `sortOrder` decides the order the API
+        # already returns rows in — read by the list, not displayed as text.
+        id|sortOrder) continue ;;
+      esac
+
+      ADMIN_CHECKED=$((ADMIN_CHECKED + 1))
+
+      # Comments stripped first, for the reason recorded above.
+      if ! sed 's|//.*||' "$ADMIN_PAGE" \
+        | grep -v '^\s*\*' \
+        | grep -qE "plan\.$field\b"; then
+        ADMIN_UNREAD="$ADMIN_UNREAD  $field\n"
+      fi
+    done
+
+    if [ -n "$ADMIN_UNREAD" ]; then
+      fail "admin plan field(s) the screen never reads:"
+      printf "%b" "$ADMIN_UNREAD" | sed 's|^|      |'
+      printf '        a field that crosses the wire and reaches no screen is not built\n'
+    else
+      pass "all $ADMIN_CHECKED admin plan field(s) reach the screen"
+    fi
+
+    # 🔴 **Defined is not rendered, and the first version of this check could
+    # not tell the difference.** `plan.limits` is read inside `PlanAllowances`,
+    # in this same file — so deleting the `<PlanAllowances />` call left the
+    # component and its field reads intact, and a file-wide grep still found
+    # them. The probe that was meant to prove this check passed instead.
+    #
+    # ⚠️ Every sub-component that reads a field must also be MOUNTED.
+    for component in PlanAllowances DiscountForm; do
+      defined=$(grep -cE "^function $component\(" "$ADMIN_PAGE" || true)
+      mounted=$(sed 's|//.*||' "$ADMIN_PAGE" | grep -cE "<$component[ /]" || true)
+
+      if [ "$defined" -gt 0 ] && [ "$mounted" -eq 0 ]; then
+        fail "$component is defined but never rendered — its fields reach no screen"
+      fi
+    done
+
+    if [ "$FAILURES" -eq 0 ]; then
+      pass "every admin sub-component that reads a field is rendered"
+    fi
+  fi
+fi
+
 printf '\n'
 
 if [ "$FAILURES" -gt 0 ]; then
