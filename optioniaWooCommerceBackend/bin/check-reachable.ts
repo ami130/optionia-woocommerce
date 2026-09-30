@@ -71,6 +71,29 @@ const EXEMPT = new Map<string, string>([
    */
   ['common/money/line-total.ts', 'Phase 21 — live preview is its caller'],
   ['common/money/price-config-delta.ts', 'Phase 21 — live preview is its caller'],
+
+  /*
+   * 🔴 **A guard written before the thing it guards, deliberately.**
+   *
+   * M26's Stage 0 spike measured a 50000×50000 SVG rendering successfully in
+   * `@resvg/resvg-js` — 46 seconds, ~10 GB of RGBA — and the OS killed the
+   * process at exit 137. ⚠️ **Succeeding is worse than failing here**: a kernel
+   * kill is not an exception, so nothing catches it, nothing logs it, and the
+   * merchant waiting on a print file learns only that it never arrived.
+   *
+   * ⚠️ **`optionia-app` has no such bound**, so porting its render path
+   * faithfully would port the hole. Writing the guard first is what stops that.
+   *
+   * 📌 **The absence of a caller is enforced rather than trusted.**
+   * `check-render-bounds.sh` fails the moment any file imports a rasteriser
+   * without importing this beside it — so this exemption cannot outlive the
+   * renderer's arrival unnoticed.
+   *
+   * ⚠️ **DELETE WHEN M26e.4 LANDS.** The order-image renderer is its caller. If
+   * that milestone ships without importing this, the guard is dead rather than
+   * pending — and the 50000×50000 case is live again.
+   */
+  ['common/render/render-bounds.ts', 'M26e.4 — the order-image renderer is its caller'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');
