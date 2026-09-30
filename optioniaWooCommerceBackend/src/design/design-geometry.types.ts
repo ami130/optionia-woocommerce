@@ -83,6 +83,64 @@ export interface DesignLayer {
   visible: boolean;
 }
 
+/**
+ * The product photo a design is composed on top of.
+ *
+ * 📌 **One per option set, stored separately from any choice's design.** The
+ * background is what every layer and text box is positioned against, so it
+ * cannot live inside one choice's data — a second choice would have no canvas.
+ *
+ * 🔴 **`natW` and `natH` are where `AuthoringCanvas` comes from.** They are the
+ * image's natural dimensions, which is the aspect the merchant actually composed
+ * against — and Decision 5 turns on recording it. ⚠️ **Not the displayed size**:
+ * an editor canvas is a fixed height and a storefront `<img>` is whatever the
+ * theme makes it, and neither describes the artwork.
+ */
+export interface DesignImage {
+  src: string;
+  name: string;
+  /** The image's natural width in pixels, as loaded. */
+  natW: number;
+  /** The image's natural height in pixels, as loaded. */
+  natH: number;
+}
+
+/**
+ * The fonts a merchant may compose with.
+ *
+ * 🔴 **A runtime array with the type DERIVED from it**, not a union written
+ * beside one. That is the same `typeof […][number]` pattern `CountableMetric`
+ * and `PlanFeature` use, and for the same reason: the renderer needs these names
+ * at runtime to load the files, and a hand-kept union drifts from the list
+ * silently.
+ *
+ * ⚠️ **`optionia-app` records what drift costs there**: its font list is fetched
+ * from Google at request time, and *"a combined CSS2 request that asks for an
+ * unavailable axis makes Google return HTTP 400 for the WHOLE stylesheet, so
+ * none of the fonts load."* One wrong entry killed every font on the storefront.
+ *
+ * 📌 **That failure mode does not exist here**, because Decision 4 ships the TTFs
+ * in the image — but a misspelt family still means a print file rendered in the
+ * wrong face or not at all, and a compile error is cheaper than either.
+ *
+ * ⚠️ **Latin-plus only at launch** (Decision 4). These cover Greek, Cyrillic,
+ * Hebrew and Arabic; CJK is a separate font pack, and an unsupported glyph is
+ * detected at authoring time rather than discovered in a print file.
+ */
+export const TEXT_FONTS = [
+  'Roboto',
+  'Open Sans',
+  'Montserrat',
+  'Lato',
+  'Oswald',
+  'Playfair Display',
+  'Dancing Script',
+  'Pacifico',
+] as const;
+
+/** A font a design may name. Derived, so the list and the type cannot diverge. */
+export type TextFont = (typeof TEXT_FONTS)[number];
+
 export type TextAlign = 'left' | 'center' | 'right';
 
 /** Vertical placement of text within its fixed box. */
@@ -95,7 +153,13 @@ export type TextVAlign = 'top' | 'middle' | 'bottom';
  */
 export interface TextDesign {
   text: string;
-  font: string;
+  /**
+   * 🔴 **`TextFont`, not `string`.** A widened type was the first spelling here,
+   * and it discards the only compile-time protection against a misspelt family —
+   * which renders in the wrong face, or not at all, in a file a customer paid
+   * for.
+   */
+  font: TextFont;
   /** Font size as a fraction of the canvas HEIGHT. */
   sizePct: number;
   bold: boolean;
@@ -155,4 +219,16 @@ export interface AuthoringCanvas {
   readonly width: number;
   /** Height of the same canvas, in the same unit. */
   readonly height: number;
+}
+
+/**
+ * The authoring canvas a background implies.
+ *
+ * 📌 **Only the ratio is used**, so the units do not matter — which is why this
+ * is the natural size rather than anything displayed. An editor canvas has a
+ * fixed height and a storefront `<img>` is whatever the theme makes it; neither
+ * describes what the merchant composed against.
+ */
+export function authoringCanvasOf(background: DesignImage): AuthoringCanvas {
+  return { width: background.natW, height: background.natH };
 }
