@@ -106,6 +106,26 @@ export interface ProductRevenue {
   orders: number;
 }
 
+/**
+ * Of the customers who SAW an option, how many bought it (M25.1, M25.3).
+ *
+ * 🔴 **The clause F157 recorded as unanswerable.** Conversion needs a denominator
+ * of views, and until M25.1 nothing recorded one — so the screen shipped average
+ * order value instead and deliberately never used the word *conversion*.
+ *
+ * ⚠️ **`rate` is null until views accumulate, and that is NOT zero.** A store
+ * whose plugin predates M25.1 has orders and no views; reporting zero would tell
+ * a merchant their best-selling option never sells.
+ */
+export interface OptionConversion {
+  optionKey: string;
+  label: string;
+  views: number;
+  orders: number;
+  /** 0–1, or `null` when this option has no recorded views to divide by. */
+  rate: number | null;
+}
+
 export interface AnalyticsSummary {
   attach: AttachRate;
   topOptions: Capped<OptionRevenue>;
@@ -114,6 +134,12 @@ export interface AnalyticsSummary {
   deadOptions: Capped<DeadOption>;
   /** The only figure here about change rather than totals (M25.4). */
   trend: RevenueTrend;
+  /**
+   * Of the customers who saw each option, how many bought (M25.1).
+   *
+   * ⚠️ **Empty until a store runs the plugin release that sends views.**
+   */
+  conversion: Capped<OptionConversion>;
   /** What options earned on each product (M25.4, F151). */
   products: Capped<ProductRevenue>;
   /** Selections with no product reference, so the table above is not misread. */

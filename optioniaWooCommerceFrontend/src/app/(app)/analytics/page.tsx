@@ -14,6 +14,7 @@ import {
   getAnalytics,
   type AnalyticsSummary,
   type Capped,
+  type OptionConversion,
   type OptionRevenue,
   type ProductRevenue,
   type RevenueTrend,
@@ -249,6 +250,8 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
       */}
       <TrendSection trend={data.trend} money={money} />
 
+      <ConversionSection capped={data.conversion} />
+
       <AttachSection attach={attach} money={money} />
 
       <RankedSection
@@ -368,6 +371,66 @@ function explain(
   return `${previous} in the previous ${trend.windowDays} days, from ${trend.previousOrders} orders.`;
 }
 
+/**
+ * Of the customers who saw each option, how many bought it (M25.1, M25.3).
+ *
+ * 🔴 **The clause F157 recorded as unanswerable, and the reason M25.1 was built.**
+ * Conversion needs a denominator of views, and until the plugin release that
+ * sends them, nothing recorded one — so this screen shipped average order value
+ * as the honest substitute and deliberately never used the word.
+ *
+ * ⚠️ **An option seen many times and never bought is the most useful row here.**
+ * It converts at zero, and it is listed — a dead option with a number attached,
+ * which is what a merchant acts on.
+ */
+function ConversionSection({ capped }: { capped: Capped<OptionConversion> }) {
+  return (
+    <Section
+      title="Conversion by option"
+      description="Of the customers who saw each option, how many bought it."
+      capped={capped}
+    >
+      {capped.rows.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          {/*
+            📌 **Says WHY it is empty, and what closes it.** An empty box would
+            read as a broken feature rather than as a plugin release a merchant
+            has not installed yet.
+          */}
+          No views recorded yet. Conversion appears once your store is running a
+          plugin version that reports which options customers see.
+        </p>
+      ) : (
+        <ul className="divide-y">
+          {capped.rows.map((row) => (
+            <li key={row.optionKey} className="flex items-baseline justify-between py-2">
+              <span className="truncate pr-4 text-sm">{row.label}</span>
+              <span className="text-muted-foreground shrink-0 text-sm tabular-nums">
+                {rateText(row)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * One option's conversion, or why there is not one.
+ *
+ * 🔴 **`null` is NOT zero.** An option with orders and no recorded views has a
+ * measurement gap; printing 0% would tell a merchant their best-selling option
+ * never sells. The two are said differently because they mean different things.
+ */
+function rateText(row: OptionConversion): string {
+  if (row.rate === null) {
+    return `${row.orders} orders, views not recorded`;
+  }
+
+  return `${Math.round(row.rate * 100)}% — ${row.orders} of ${row.views}`;
+}
+
 function AttachSection({
   attach,
   money,
@@ -390,10 +453,11 @@ function AttachSection({
         />
 
         {/*
-          ⚠️ **This is deliberately NOT called conversion.** M25.3 names
-          "conversion with vs. without options", which needs a denominator of
-          visits — and nothing records a view. Calling an order-value comparison
-          "conversion" would be a claim the data does not support.
+          ⚠️ **Still not called conversion, and the reason has changed.** This is
+          average order value — a comparison of what orders are worth. The true
+          conversion figure now exists (M25.1 records views) and has its own
+          section below; naming this one conversion would make two different
+          measurements share a word.
         */}
         <Figure
           label="Average order, with options"

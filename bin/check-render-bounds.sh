@@ -47,6 +47,8 @@ if [ ! -f "$BOUNDS" ]; then
 elif ! grep -q "MAX_RENDER_MEGAPIXELS = 36" "$BOUNDS"; then
   fail "MAX_RENDER_MEGAPIXELS is no longer the measured 36 (≈6000×6000, ~229 MB)"
   printf '        raising it silently removes the headroom a 1 GB instance needs\n'
+elif ! grep -q "MAX_RENDER_MS = 30_000" "$BOUNDS"; then
+  fail "MAX_RENDER_MS is no longer 30s; a runaway render holds a worker indefinitely"
 else
   pass "the bounds guard exists, at its measured limits"
 fi
@@ -70,7 +72,11 @@ while IFS= read -r file; do
     *.spec.ts) continue ;;
   esac
 
-  if ! grep -q "checkRenderBounds" "$file"; then
+  # 🔴 **BOTH halves, because an audit found only one was enforced.**
+  # `MAX_RENDER_MEGAPIXELS` was force-wired by this gate and `MAX_RENDER_MS` was
+  # not — so a 46-second render stayed reachable with nothing making anyone cap
+  # it. Half a guard reads as a whole one, which is worse than none.
+  if ! grep -q "checkRenderBounds" "$file" || ! grep -q "MAX_RENDER_MS" "$file"; then
     UNGUARDED="$UNGUARDED  ${file#"$SRC/"}\n"
   fi
 done <<EOF
@@ -78,7 +84,7 @@ $(grep -rlE "$RASTERISERS" "$SRC" --include='*.ts' 2>/dev/null || true)
 EOF
 
 if [ -n "$UNGUARDED" ]; then
-  fail "a rasteriser is reached without checkRenderBounds:"
+  fail "a rasteriser is reached without checkRenderBounds AND MAX_RENDER_MS:"
   printf "%b" "$UNGUARDED" | sed 's|^|      |'
   printf '        an unbounded canvas is an OOM kill, and a kernel kill reports nothing\n'
 else

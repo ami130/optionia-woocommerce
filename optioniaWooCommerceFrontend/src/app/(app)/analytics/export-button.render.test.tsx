@@ -83,6 +83,11 @@ describe('Analytics export button', () => {
       truncated: false,
     },
     unattributedProductSelections: 0,
+    conversion: {
+      rows: [{ optionKey: 'engraving', label: 'Engraving', views: 40, orders: 4, rate: 0.1 }],
+      total: 1,
+      truncated: false,
+    },
     optionSets: { rows: [], total: 0, truncated: false },
     unattributedSelections: 0,
     currency: 'GBP',

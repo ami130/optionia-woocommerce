@@ -56,6 +56,11 @@ describe('Analytics summary', () => {
         truncated: false,
       },
       unattributedProductSelections: 0,
+      conversion: {
+        rows: [{ optionKey: 'engraving', label: 'Engraving', views: 40, orders: 4, rate: 0.1 }],
+        total: 1,
+        truncated: false,
+      },
       optionSets: {
         rows: [{ optionSetId: 'set-1', name: 'Mug options', revenueMinor: 9_900, orders: 4 }],
         total: 1,
@@ -123,7 +128,29 @@ describe('Analytics summary', () => {
 
     expect(container.textContent).toContain('£90.00');
     expect(container.textContent).toContain('£40.00');
-    expect(container.textContent?.toLowerCase()).not.toContain('conversion');
+
+    /*
+     * ✏️ **This asserted the word "conversion" was ABSENT, and that was right
+     * until M25.1.** Nothing recorded a view, so no conversion rate existed and
+     * using the word anywhere would have claimed a measurement nobody took.
+     *
+     * 🔴 **Views exist now, and the real figure has its own section** — so the
+     * assertion changes from "the word never appears" to "these two are not the
+     * same thing". The order-value comparison must still not be labelled
+     * conversion; what it must not do is pretend the real one is absent.
+     */
+    const averageOrderHeading = container.textContent ?? '';
+
+    expect(averageOrderHeading).toContain('Average order, with options');
+    expect(averageOrderHeading).toContain('Conversion by option');
+
+    /* The order-value figures are not inside the conversion section. */
+    const conversionAt = averageOrderHeading.indexOf('Conversion by option');
+    const averageAt = averageOrderHeading.indexOf('Average order, with options');
+
+    expect(conversionAt).toBeGreaterThanOrEqual(0);
+    expect(averageAt).toBeGreaterThanOrEqual(0);
+    expect(conversionAt).not.toBe(averageAt);
   });
 
   /**
@@ -320,6 +347,65 @@ describe('Analytics summary', () => {
 
     expect(container.textContent).toContain('4 orders with options');
     expect(container.textContent).not.toContain('£66.00');
+  });
+
+  /**
+   * 🔴 **M25.1 + M25.3 — the conversion figure, on the screen at last.**
+   *
+   * ✏️ **The backend shipped this and nothing rendered it.** An audit found the
+   * only three mentions of "conversion" in this file were inside a comment
+   * explaining why it could not be shown — stale the moment views existed. The
+   * defect this project has met eleven times, committed in the feature built to
+   * close it.
+   */
+  it('shows what fraction of viewers bought each option', () => {
+    const { container } = render(<Summary data={summary()} />);
+
+    expect(container.textContent).toContain('Conversion by option');
+    /* 4 of 40 is 10%. */
+    expect(container.textContent).toContain('10%');
+    expect(container.textContent).toContain('4 of 40');
+  });
+
+  /**
+   * 🔴 **No views is NOT zero percent.** An option with orders and no recorded
+   * views has a measurement gap — a store whose plugin predates M25.1 — and
+   * printing 0% would tell a merchant their best-selling option never sells.
+   */
+  it('distinguishes an unmeasured option from one nobody buys', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          conversion: {
+            rows: [
+              { optionKey: 'unseen', label: 'Unseen', views: 0, orders: 7, rate: null },
+              { optionKey: 'ignored', label: 'Ignored', views: 500, orders: 0, rate: 0 },
+            ],
+            total: 2,
+            truncated: false,
+          },
+        })}
+      />,
+    );
+
+    /* The unmeasured one says so; it must not read as 0%. */
+    expect(container.textContent).toContain('views not recorded');
+    /* And the genuinely-unwanted one does show zero — that is a finding. */
+    expect(container.textContent).toContain('0% — 0 of 500');
+  });
+
+  /**
+   * 📌 **Empty says why, and what closes it.** Before the plugin release that
+   * sends views, an empty box would read as a broken feature rather than as an
+   * upgrade a merchant has not installed.
+   */
+  it('explains an empty conversion table rather than leaving it blank', () => {
+    const { container } = render(
+      <Summary data={summary({ conversion: { rows: [], total: 0, truncated: false } })} />,
+    );
+
+    expect(container.textContent).toContain('No views recorded yet');
+    expect(container.textContent).toContain('plugin version');
   });
 
   /**
