@@ -501,10 +501,20 @@ function InvoiceTable({ rows }: { rows: InvoiceSummary[] }) {
 /**
  * What a merchant may move to (M22.5).
  *
- * 🔴 **One card per plan, one button per interval.** Monthly and yearly are
- * different `plan_prices` rows, and checkout takes a price — collapsing them to
- * a single "Choose" would make the UI pick a billing period on the merchant's
- * behalf, which is a decision about their money.
+ * 🔴 **One card per plan, one button per PRICE.** Each `plan_prices` row is a
+ * separate thing to buy and checkout takes a price, never a plan — collapsing
+ * them to a single "Choose" would make the UI pick on the merchant's behalf,
+ * which is a decision about their money.
+ *
+ * ⚠️ **WooCommerce sells yearly only**, so in practice that is one button per
+ * plan today. This still loops rather than assuming it: `listPublic` returns
+ * whatever rows are current, and a UI that hard-coded "the yearly one" would
+ * silently show the wrong figure the day a second currency is offered — which
+ * `plan_prices` already models as rows.
+ *
+ * ✏️ This comment previously read "one button per interval… monthly and yearly",
+ * which was true of the Shopify app and stopped being true here when the product
+ * became yearly-only. The code did not change; its explanation had.
  */
 function PlanPicker({
   plans,
