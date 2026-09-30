@@ -3,6 +3,7 @@ import {
   SHAPE_CLIP_PATHS,
   clampInside,
   effectiveShape,
+  frameClipId,
   frameImageRect,
   layerRect,
 } from './layer-geometry';
@@ -179,6 +180,43 @@ describe('layerRect', () => {
 
     expect(Number.isFinite(rect.w)).toBe(true);
     expect(Number.isFinite(rect.h)).toBe(true);
+  });
+});
+
+describe('frameClipId', () => {
+  /**
+   * 🔴 **Unique across the DOCUMENT, not the scene.** Several designs can render
+   * on one page, and `url(#id)` resolves document-wide — two scenes sharing an
+   * id means one clips through the other's path, and the symptom is artwork
+   * cropped to a shape the merchant never chose.
+   */
+  it('gives every frame in every scene a distinct id', () => {
+    const ids = new Set([
+      frameClipId('a', 0, 0),
+      frameClipId('a', 0, 1),
+      frameClipId('a', 1, 0),
+      frameClipId('b', 0, 0),
+    ]);
+
+    expect(ids.size).toBe(4);
+  });
+
+  /**
+   * 🔴 **The colon strip is the part that fails SILENTLY.** React's `useId()`
+   * returns values containing `:`, which is not valid inside a `url(#…)`
+   * reference — so a prefix taken straight from it produces a clip that does
+   * nothing and a frame that shows its whole image, with no error anywhere.
+   */
+  it('strips colons, which a url(#…) reference cannot carry', () => {
+    const id = frameClipId(':r1:', 0, 0);
+
+    expect(id).not.toContain(':');
+    expect(id).toBe('r1-dlf-0-0');
+  });
+
+  /** 📌 The format is shared with the storefront and order renderers. */
+  it('keeps the shared id format', () => {
+    expect(frameClipId('dl', 2, 3)).toBe('dl-dlf-2-3');
   });
 });
 

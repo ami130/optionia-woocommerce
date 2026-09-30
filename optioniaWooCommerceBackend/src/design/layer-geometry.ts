@@ -93,6 +93,28 @@ export function effectiveShape(layer: {
 }
 
 /**
+ * A document-unique id for one frame's clip path.
+ *
+ * 🔴 **Unique across the whole DOCUMENT, not the scene.** Several designs can
+ * render on one page — a grid of choices, a preview beside an editor — and
+ * `url(#id)` resolves against the document. Two scenes sharing an id means one
+ * clips through the other's path, and the symptom is artwork cropped to a shape
+ * the merchant never chose.
+ *
+ * ⚠️ **The colon strip is not cosmetic.** React's `useId()` returns values
+ * containing `:`, which is not valid inside a `url(#…)` reference — so a
+ * prefix taken straight from it produces a clip that silently does nothing and
+ * a frame that shows its whole image.
+ *
+ * 📌 **Shared with the storefront and the order renderer**, which pass their own
+ * prefixes. The id format has to agree across all three or a clip defined by one
+ * surface is unreferenced by another.
+ */
+export function frameClipId(prefix: string, groupIndex: number, imageIndex: number): string {
+  return `${prefix.replaceAll(':', '')}-dlf-${groupIndex}-${imageIndex}`;
+}
+
+/**
  * Where the image sits INSIDE a shape frame.
  *
  * 📌 **The frame is the image's canvas**, one level down: the crop's `style`
