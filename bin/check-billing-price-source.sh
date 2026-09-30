@@ -39,18 +39,41 @@ printf 'Checking the billing price source…\n'
 
 # --- 1. Only the seed and the entity may name the plan's own price columns ----
 #
-# `plan-price.entity.ts` names them in prose, explaining why a row per interval
-# beats two columns on one row. Prose is allowed; a read is not.
-READERS=$(grep -rln "priceMonthlyMinor\|priceYearlyMinor" "$SRC" --include="*.ts" \
-  | grep -v "/migrations/" \
-  | grep -v "\.spec\.ts$" \
-  | grep -v "^$SRC/seeds/plans.seed.ts$" \
-  | grep -v "^$SRC/plans/entities/plan.entity.ts$" \
-  | grep -v "^$SRC/plans/entities/plan-price.entity.ts$" \
-  | grep -v "^$SRC/plans/plan-discount.ts$" \
-  | grep -v "^$SRC/plans/plans-admin.service.ts$" || true)
+# 🔴 **"Prose is allowed; a read is not" — now actually true.**
+#
+# ⚠️ This gate said exactly that and could not tell the two apart: it was a plain
+# `grep -rln`, so `plan-price.entity.ts` needed a file exemption purely for a
+# comment explaining why a row per interval beats two columns. Its stated intent
+# and its behaviour disagreed, which is how a reader comes to trust the wrong
+# one — and it is this project's most repeated gate defect, reading documentation
+# instead of code.
+#
+# 📌 Stripping comments first REMOVES exemptions rather than adding them: the
+# entity and `plan-discount.ts` both name these columns only in prose.
+strip_comments() {
+  perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g;' "$1"
+}
 
-# 🔴 **Two AUTHORING readers, allowed deliberately — and the distinction is the
+READERS=""
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    */migrations/*) continue ;;
+    *.spec.ts) continue ;;
+    "$SRC/seeds/plans.seed.ts") continue ;;
+    "$SRC/plans/entities/plan.entity.ts") continue ;;
+    "$SRC/plans/plans-admin.service.ts") continue ;;
+  esac
+  if strip_comments "$f" | grep -q "priceMonthlyMinor\|priceYearlyMinor"; then
+    READERS="$READERS$f
+"
+  fi
+done <<EOF
+$(find "$SRC" -name '*.ts' -type f)
+EOF
+READERS=$(printf '%s' "$READERS")
+
+# 🔴 **One AUTHORING reader, allowed deliberately — and the distinction is the
 # one this gate exists to draw.**
 #
 # `plans.priceYearlyMinor` is, in this gate's own words, "the seed's declaration

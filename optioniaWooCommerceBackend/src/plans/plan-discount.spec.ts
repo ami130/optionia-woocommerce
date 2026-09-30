@@ -21,10 +21,17 @@ describe('applyDiscount', () => {
     expect(d.savingMinor).toBe(0);
   });
 
-  it('charges nothing at a full 100% discount', () => {
+  it('refuses to discount a paid plan to nothing', () => {
+    // 🔴 Free access has a home — the Free plan, which provisions with no
+    // provider subscription. A £0 Pro price would be a SECOND way to be free,
+    // one that still renews and still reads as a paying customer worth nothing.
+    expect(() => applyDiscount(29_000, 10_000)).toThrow(/Free plan/);
+  });
+
+  it('allows the largest discount short of free', () => {
     const d = applyDiscount(29_000, MAX_DISCOUNT_BASIS_POINTS);
-    expect(d.amountMinor).toBe(0);
-    expect(d.savingMinor).toBe(29_000);
+    expect(d.amountMinor).toBeGreaterThan(0);
+    expect(d.savingMinor).toBeLessThan(29_000);
   });
 
   it('keeps the three figures consistent, whatever the rounding', () => {
@@ -40,7 +47,7 @@ describe('applyDiscount', () => {
 
   it('never charges more than the list price, or less than nothing', () => {
     for (let list = 0; list <= 2_000; list += 13) {
-      for (const bp of [0, 1, 500, 5_000, 9_999, 10_000]) {
+      for (const bp of [0, 1, 500, 5_000, 9_998, 9_999]) {
         const d = applyDiscount(list, bp);
         expect(d.amountMinor).toBeGreaterThanOrEqual(0);
         expect(d.amountMinor).toBeLessThanOrEqual(list);

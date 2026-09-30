@@ -483,6 +483,18 @@ describe('Plan administration (e2e)', () => {
       expect(restored.body.data.savingMinor).toBe(0);
     });
 
+    it('refuses discounting a paid plan to nothing, naming the Free plan', async () => {
+      const staffToken = await makeStaff('discount-full', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staffToken).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 10_000,
+      });
+
+      expect(response.status).toBe(400);
+    });
+
     it('refuses a discount above 100% with a 400, not a 500', async () => {
       const staffToken = await makeStaff('discount-bad', StaffRole.BILLING_OPS);
 

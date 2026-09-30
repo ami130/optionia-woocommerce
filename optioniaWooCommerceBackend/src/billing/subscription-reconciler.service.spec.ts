@@ -48,7 +48,12 @@ describe('SubscriptionReconcilerService', () => {
     const prices = {
       findOne: jest.fn(async () =>
         options.price === undefined
-          ? ({ id: 'price_row_1', planId: 'plan_pro' } as PlanPrice)
+          ? /*
+             * ⚠️ **`interval` is not optional on a real row.** Without it the
+             * default fixture described a price that cannot exist, and the
+             * unsellable-interval check correctly reported every one of them.
+             */
+            ({ id: 'price_row_1', planId: 'plan_pro', interval: 'year' } as PlanPrice)
           : (options.price as PlanPrice | null),
       ),
     } as unknown as Repository<PlanPrice>;
@@ -176,7 +181,7 @@ describe('SubscriptionReconcilerService', () => {
    */
   it('reports a plan price that no longer matches', async () => {
     const { service } = build({
-      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+      price: { id: 'price_row_2', planId: 'plan_business', interval: 'year' } as PlanPrice,
     });
 
     const outcome = await service.reconcile();
@@ -192,7 +197,7 @@ describe('SubscriptionReconcilerService', () => {
   /** 📌 And repairing it moves the PLAN too, or limits stay wrong. */
   it('moves the plan with the price when repairing', async () => {
     const { service, rows } = build({
-      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+      price: { id: 'price_row_2', planId: 'plan_business', interval: 'year' } as PlanPrice,
     });
 
     await service.reconcile({ dryRun: false });
@@ -209,7 +214,7 @@ describe('SubscriptionReconcilerService', () => {
    */
   it('invalidates cached config when a repair moves the plan', async () => {
     const { service, invalidate } = build({
-      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+      price: { id: 'price_row_2', planId: 'plan_business', interval: 'year' } as PlanPrice,
     });
 
     await service.reconcile({ dryRun: false });
@@ -223,7 +228,7 @@ describe('SubscriptionReconcilerService', () => {
    */
   it('does not invalidate on a dry run', async () => {
     const { service, invalidate } = build({
-      price: { id: 'price_row_2', planId: 'plan_business' } as PlanPrice,
+      price: { id: 'price_row_2', planId: 'plan_business', interval: 'year' } as PlanPrice,
     });
 
     await service.reconcile();
@@ -380,5 +385,65 @@ describe('SubscriptionReconcilerService', () => {
     const outcome = await service.reconcile();
 
     expect(outcome.findings.map((f) => f.field).sort()).toEqual(['currentPeriodEnd', 'status']);
+  });
+
+  describe('an interval this product does not sell', () => {
+    /**
+     * 🔴 **Checkout and changePlan are not the only way onto a price.** A
+     * subscription created directly in Stripe's dashboard is adopted by the
+     * webhook, which records what a merchant is ACTUALLY billed. Until this
+     * check, nothing anywhere would ever have said it happened.
+     */
+    it('reports a subscription billing monthly', async () => {
+      const { service } = build({
+        price: { id: 'price_row_1', planId: 'plan_pro', interval: 'month' },
+      });
+
+      const outcome = await service.reconcile({ dryRun: true });
+
+      expect(outcome.findings).toContainEqual(
+        expect.objectContaining({ field: 'interval', local: 'month' }),
+      );
+    });
+
+    it('says nothing about a yearly subscription', async () => {
+      const { service } = build({
+        price: { id: 'price_row_1', planId: 'plan_pro', interval: 'year' },
+      });
+
+      const outcome = await service.reconcile({ dryRun: true });
+
+      expect(outcome.findings.filter((f) => f.field === 'interval')).toHaveLength(0);
+    });
+
+    /**
+     * 🔴 **Reported, never repaired — even with `dryRun` false.** Every other
+     * finding has an obviously right repair; this one does not. Moving the
+     * merchant to a yearly price would change what they are charged without
+     * their consent, and cancelling takes away a service they are paying for.
+     */
+    it('does not repair it, even when repairs are enabled', async () => {
+      const { service, save } = build({
+        price: { id: 'price_row_1', planId: 'plan_pro', interval: 'month' },
+      });
+
+      const outcome = await service.reconcile({ dryRun: false });
+
+      expect(outcome.findings).toContainEqual(
+        expect.objectContaining({ field: 'interval', repaired: false }),
+      );
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('names what IS sellable, so the reader knows the intended state', async () => {
+      const { service } = build({
+        price: { id: 'price_row_1', planId: 'plan_pro', interval: 'month' },
+      });
+
+      const outcome = await service.reconcile({ dryRun: true });
+      const finding = outcome.findings.find((f) => f.field === 'interval');
+
+      expect(finding?.remote).toContain('year');
+    });
   });
 });

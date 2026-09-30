@@ -25,8 +25,28 @@
 
 import { percentageOf } from '../common/money/percentage';
 
-/** 100% in basis points — a full discount, and the maximum this accepts. */
-export const MAX_DISCOUNT_BASIS_POINTS = 10_000;
+/** 100% in basis points. Not reachable — see {@link MAX_DISCOUNT_BASIS_POINTS}. */
+const FULL_DISCOUNT_BASIS_POINTS = 10_000;
+
+/**
+ * The largest discount staff may apply: 99.99%, one basis point short of free.
+ *
+ * 🔴 **A full discount on a PAID plan is refused, and that is a product
+ * decision rather than a technical limit.** Free access already has a home —
+ * the Free plan, which provisions with `provider: 'none'` and no provider
+ * subscription at all. A £0 Pro price would create a SECOND way to be free: one
+ * that still holds a live subscription, still renews, and still appears in
+ * billing reports as a paying customer worth nothing.
+ *
+ * ⚠️ **It is also the likeliest typo to be catastrophic.** Someone meaning 10%
+ * who types basis points wrong lands on 10000, and the difference between "90%
+ * off" and "free forever" is one keystroke. Every other wrong figure costs
+ * revenue proportionally; this one costs all of it.
+ *
+ * 📌 Whoever genuinely wants a merchant on free moves them to the Free plan,
+ * which is the supported path and leaves an audit trail saying so.
+ */
+export const MAX_DISCOUNT_BASIS_POINTS = FULL_DISCOUNT_BASIS_POINTS - 1;
 
 /**
  * The outcome of applying a discount to a list price.
@@ -76,13 +96,15 @@ export function applyDiscount(
   }
 
   /*
-   * ⚠️ **Refused rather than clamped.** Clamping 15000 to 10000 would silently
-   * charge zero for a figure someone typed by mistake — a staff member meaning
-   * 15% and reaching for basis points is the likely author of that number.
+   * ⚠️ **Refused rather than clamped.** Clamping would silently charge a figure
+   * nobody chose for a number someone typed by mistake — and a staff member
+   * meaning 15% who reaches for basis points is the likely author of `15000`.
    */
   if (basisPoints > MAX_DISCOUNT_BASIS_POINTS) {
     throw new RangeError(
-      `A discount cannot exceed ${MAX_DISCOUNT_BASIS_POINTS} basis points (100%).`,
+      basisPoints >= FULL_DISCOUNT_BASIS_POINTS
+        ? 'A paid plan cannot be discounted to nothing. Move the merchant to the Free plan instead.'
+        : `A discount cannot exceed ${MAX_DISCOUNT_BASIS_POINTS} basis points.`,
     );
   }
 

@@ -11,6 +11,7 @@ import {
   type BillingProviderOrNull,
 } from './billing-provider';
 import { PlanChangeInvalidatorService } from './plan-change-invalidator.service';
+import { SELLABLE_INTERVALS, isSellableInterval } from '../plans/billing-interval';
 
 /**
  * What differs between the provider and this database (M23.5).
@@ -22,7 +23,17 @@ export interface DriftFinding {
   readonly tenantId: string;
   readonly subscriptionId: string;
   readonly providerSubscriptionId: string;
-  readonly field: 'status' | 'currentPeriodEnd' | 'planPriceId' | 'providerCustomerId' | 'missing';
+  /**
+   * ⚠️ **`interval` is REPORTED, never repaired**, unlike every other field
+   * here. See where it is recorded for why.
+   */
+  readonly field:
+    | 'status'
+    | 'currentPeriodEnd'
+    | 'planPriceId'
+    | 'providerCustomerId'
+    | 'missing'
+    | 'interval';
   readonly local: string | null;
   readonly remote: string | null;
   readonly repaired: boolean;
@@ -206,6 +217,18 @@ export class SubscriptionReconcilerService {
       field: DriftFinding['field'],
       local: string | null,
       value: string | null,
+      /*
+       * 🔴 **Whether this finding was actually repaired.** The default follows
+       * `dryRun`, which is right for every DRIFT field — they are all written
+       * back when repairs are on.
+       *
+       * ⚠️ **A report-only finding must pass `false` explicitly.** The first
+       * version of the interval check inherited `!dryRun` and reported
+       * `repaired: true` for something nothing had touched — a false record in
+       * the one artefact an operator reads to decide whether to act. Caught by
+       * its own test.
+       */
+      repaired: boolean = !dryRun,
     ): void => {
       found.push({
         tenantId: subscription.tenantId,
@@ -214,7 +237,7 @@ export class SubscriptionReconcilerService {
         field,
         local,
         remote: value,
-        repaired: !dryRun,
+        repaired,
       });
     };
 
@@ -291,6 +314,33 @@ export class SubscriptionReconcilerService {
           changed = true;
           planMoved = true;
         }
+      }
+
+      /*
+       * 🔴 **A subscription billing at an interval this product does not sell.**
+       *
+       * Checkout and `changePlan` both refuse an unsellable interval, but they
+       * are not the only way a merchant reaches one: a subscription created
+       * directly in Stripe's dashboard is adopted by the webhook, which records
+       * what the merchant is ACTUALLY billed rather than what we would have sold
+       * them. That is correct — refusing to record it would not stop the billing,
+       * it would only make our database disagree with reality — but until this
+       * check nothing anywhere would ever have said it happened.
+       *
+       * ⚠️ **Reported, never repaired, even when `dryRun` is false.** Every
+       * other finding here has an obviously right repair; this one does not.
+       * Moving the merchant to a yearly price would change what they are charged
+       * without their consent, and cancelling them would take away a service
+       * they are paying for. A human decides; this makes sure a human knows.
+       */
+      if (price !== null && !isSellableInterval(price.interval)) {
+        record(
+          'interval',
+          price.interval,
+          `not sold here (sellable: ${SELLABLE_INTERVALS.join(', ')})`,
+          /* Never repaired — a human decides. */
+          false,
+        );
       }
     }
 

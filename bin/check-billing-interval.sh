@@ -52,8 +52,14 @@ strip_comments() {
   perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g;' "$1"
 }
 
+# ⚠️ **Every path that puts a merchant on a price, not only the two obvious
+# ones.** This list held checkout and changePlan; the discount route validates
+# the interval too, in the DTO and again in the service, but the gate meant to
+# stop that rule regressing was not watching it. Removing the service check would
+# have left this green.
 PURCHASE_PATHS="billing/checkout.service.ts
-billing/billing-account.service.ts"
+billing/billing-account.service.ts
+plans/plans-admin.service.ts"
 
 GUARDED=0
 while IFS= read -r rel; do
@@ -118,7 +124,23 @@ else
   pass "no purchase path hardcodes an interval"
 fi
 
-# 4. The seed writes only sellable rows.
+# 4. Nothing outside the purchase paths can put a merchant on an unsellable
+#    interval WITHOUT someone finding out.
+#
+# 🔴 **The webhook adopts whatever Stripe reports, and that is correct** — it
+# records what a merchant is actually billed rather than what we would have sold
+# them, so refusing would make our database disagree with reality rather than
+# stop the billing. A subscription created in Stripe's own dashboard therefore
+# reaches an unsellable interval legitimately, and until the reconciler check
+# existed nothing anywhere would have said so.
+RECONCILER="$SRC/billing/subscription-reconciler.service.ts"
+if strip_comments "$RECONCILER" | grep -qE '!isSellableInterval\([a-zA-Z_.]+\)'; then
+  pass "the reconciler reports a subscription billing at an unsellable interval"
+else
+  fail "the reconciler does not detect an unsellable interval — a dashboard-created subscription would be silent"
+fi
+
+# 5. The seed writes only sellable rows.
 SEED="$SRC/seeds/plans.seed.ts"
 # Likewise a USE, not an import: the seed must actually map over the vocabulary.
 if strip_comments "$SEED" | grep -qE 'SELLABLE_INTERVALS\.map|of SELLABLE_INTERVALS'; then
@@ -127,7 +149,7 @@ else
   fail "the seed does not read SELLABLE_INTERVALS — it may create unbuyable rows"
 fi
 
-# 5. Provisioning pins to a sellable interval.
+# 6. Provisioning pins to a sellable interval.
 #    🔴 This was the quiet hazard: provisioning looked up `interval: 'month'` by
 #    hand, and the price pin tolerates null BY DESIGN — so retiring the monthly
 #    rows would have left every new signup with no pin, no error and no failure.
