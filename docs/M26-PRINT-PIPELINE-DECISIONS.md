@@ -144,6 +144,56 @@ explained to the merchant by `Admin\StorageNotice`.
 
 ---
 
+## Stage 0 spike — measured 2026-09-30
+
+Run before writing any Design Lab code, on `@resvg/resvg-js` 2.6.2. Every number
+below is from a run on this machine, not an estimate.
+
+### 🔴 The finding that removes a subsystem
+
+**`resvg` renders `<textPath>` from a font FILE. librsvg cannot do either.**
+
+That is the entire reason `optionia-app` converts every glyph to an outline path
+server-side — `text-to-path.server.ts` (243 lines) plus `text-fonts.server.ts`
+(225 lines), the Google Fonts fetch, the `opentype.js` parse, the synthesised
+italic and bold, and the `os.tmpdir()` cache. **~470 lines and a third-party
+runtime dependency, all of it working around a limitation `resvg` does not have.**
+
+Verified three ways rather than assumed: a byte-count against an identical blank
+canvas (4,506 vs 957 — glyphs drew), and two rendered images inspected directly,
+one at 600×200 and one at 3000×3000 composited over a dense source. Kerning,
+baseline and curve were correct in both.
+
+### Measured cost, with a photo-like source
+
+| Canvas | PNG out | RSS delta | Time |
+|---|---|---|---|
+| 2000×2000 | 0.2 MB | +45 MB | 73 ms |
+| 3000×3000 | 0.4 MB | +76 MB | 145 ms |
+| 4000×4000 | 0.6 MB | +128 MB | 252 ms |
+
+Peak process RSS across the whole run: **300 MB**.
+
+### What the numbers change
+
+✅ **A 1 GB App Platform instance is sufficient**, with room for concurrency. The
+earlier worry — that a 3000×3000 RGBA bitmap is ~36 MB decoded and might exceed a
+512 MB container — is real but not close: the measured delta at that size is
+76 MB including the source.
+
+⚠️ **The PNG is 0.4 MB, not the 5–20 MB assumed in Decision 2.** That is *within*
+`MAX_RESPONSE_BYTES` (5 MB). 🔴 **It does not reopen the synchronous option.** The
+ceiling was only one of three reasons; the 8-second attempt and 20-second total
+budget stand, a real product photograph compresses worse than this synthetic
+source, and a merchant's print file must not depend on a customer's checkout
+request completing. Async stays — but the reasoning is now the timeout, not the
+size, and that correction belongs in the record.
+
+📌 **145 ms at 3000×3000 means the job is quick and the queue is short.** The
+async design is about *reliability*, not duration.
+
+---
+
 ## Decision 4 — Fonts
 
 🔴 **Self-hosted, and this is the one place to diverge from `optionia-app`
@@ -164,10 +214,10 @@ What that codebase does, and why it is a warning rather than a model:
   stylesheet, so none of the fonts load."* One wrong entry silently kills every
   font on the storefront.
 
-**Recommendation: ship the TTFs in the repository.** The files are needed
-server-side for the order image regardless, so fetching them at runtime buys
-nothing and adds a failure mode. A font that cannot load is a print file that
-cannot be produced.
+**Recommendation: ship the TTFs in the repository**, and with `resvg` this is
+simpler still: the renderer is handed font *files* directly and needs no
+conversion step at all. A font that cannot load is a print file that cannot be
+produced, and a font fetched at request time is one network call away from that.
 
 ---
 
