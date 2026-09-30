@@ -94,6 +94,25 @@ const EXEMPT = new Map<string, string>([
    * pending — and the 50000×50000 case is live again.
    */
   ['common/render/render-bounds.ts', 'M26e.4 — the order-image renderer is its caller'],
+
+  /*
+   * 🔴 **The aspect policy, built before the thing that applies it** (M26c.3,
+   * Decision 5). Every stored coordinate is a fraction of the canvas, so a
+   * design composed on a square mug photo and assigned to a tall bottle photo
+   * reflows — and `optionia-app` has exactly that behaviour, because nothing
+   * there records what the merchant composed against.
+   *
+   * ⚠️ **It is written first deliberately.** The decision changes the
+   * persistence contract, and the plan is explicit it must be settled *"in
+   * M26c.3, not after merchants have data"* — afterwards it is a migration over
+   * artwork people have already made.
+   *
+   * ⚠️ **DELETE WHEN M26c.4 LANDS.** `buildScene` is its caller: it resolves a
+   * design against a target canvas, which is exactly where the letterbox
+   * applies. If that milestone ships without importing this, a design still
+   * reflows and the decision was recorded rather than kept.
+   */
+  ['design/letterbox.ts', 'M26c.4 — buildScene applies it when resolving a scene'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

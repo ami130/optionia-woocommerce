@@ -422,3 +422,45 @@ instead of the code under it.
 
 **~1,000 lines in, ~470 avoided** — the earlier "~470 avoided" estimate survives
 scrutiny, and is now a count rather than a guess.
+
+---
+
+## Decision 5 — aspect ratio (M26c.3), decided 2026-09-30
+
+🔴 **Every stored coordinate is a fraction of the canvas**, so a design authored
+on a square mug photo and assigned to a tall bottle photo **reflows**: text that
+fitted the mug stretches down the bottle. The plan is explicit that this must be
+decided *"in M26c.3, not after merchants have data"*, because changing it later
+is a migration over artwork people have already composed.
+
+⚠️ **`optionia-app` does not solve this.** `buildScene({ width, height, … })`
+takes whatever dimensions the caller supplies and nothing records what the design
+was authored against — verified in `types.ts`, which has no aspect field. So the
+reference has exactly the failure this decision exists to prevent, and porting it
+faithfully would port that too.
+
+**Decided: store the authoring aspect with the design and letterbox into it.**
+
+A design records that it was composed at, say, 1:1. On a 2:3 product it renders
+inside a centred 1:1 box; the rest of the photo is left alone. The artwork looks
+exactly as the merchant composed it, on every product it is assigned to.
+
+📌 **This is what print-on-demand tooling does, and the reason is not aesthetic.**
+A design that silently reshapes produces a physical object that is wrong — and
+the merchant discovers it after printing, not before. A band of unused photo is a
+visible, correctable compromise; a stretched engraving is a reprint.
+
+⚠️ **The rejected alternatives, recorded so they are not re-proposed as new:**
+
+- **Scope a design to one assignment.** Most faithful — nothing reflows because
+  nothing is reused — and it makes a merchant with thirty products in one option
+  set compose thirty times. The tedium is the defect: they will reuse one design
+  anyway by copying, and arrive at the same problem with more steps.
+- **Let it reflow and warn.** Cheapest, and matches the reference. The failure is
+  invisible until a physical product is wrong, which is the one outcome this
+  whole pipeline exists to avoid.
+
+🔴 **The consequence for the persistence contract, stated now rather than
+discovered:** the stored aspect is part of the design, not of the assignment. Two
+products of different shapes share one design and one authoring aspect; the
+*letterbox* differs per product and is computed at render time, never stored.
