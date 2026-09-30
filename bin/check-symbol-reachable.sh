@@ -41,12 +41,20 @@ printf 'Checking that exported symbols have consumers...\n'
 # is how an exemption list stops being read.
 is_exempt_file() {
   case "$1" in
-    # Guards written before the thing they guard, and already exempt in
-    # `check-reachable.ts` with these same stages. ⚠️ An unbounded canvas
-    # OOM-kills a container with no error to report (M26e.4); a design with no
-    # recorded aspect reflows onto a differently-shaped product (M26c.4).
-    design/letterbox.ts) return 0 ;;
+    # ⚠️ An unbounded canvas OOM-kills a container with no error to report
+    # (M26e.4). Still exempt in `check-reachable.ts` with the same stage.
     common/render/render-bounds.ts) return 0 ;;
+
+    # 🔶 `letterboxFor` is WIRED — `buildScene` applies it, so Decision 5 is
+    # enforced rather than merely recorded. The file stays exempt for one
+    # remaining symbol: `willLetterbox`, which answers "will this design sit
+    # inside a band on this product?" and exists for the EDITOR to warn a
+    # merchant BEFORE they save.
+    #
+    # ⚠️ **DELETE WHEN M26d.1 LANDS** (canvas editor). Telling a merchant their
+    # artwork will be letterboxed is a supported limitation; letting them find
+    # out from a customer's order is the same defect wearing different clothes.
+    design/letterbox.ts) return 0 ;;
 
     # 🔴 **The geometry tree is complete, and nothing in the product renders a
     # design yet.** `buildScene` gave these modules a consumer within the tree,

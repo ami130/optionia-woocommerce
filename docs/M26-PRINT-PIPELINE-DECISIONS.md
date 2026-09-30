@@ -733,3 +733,75 @@ gate's warning now names M26d.6 / M26e.1, which exist.
 | M26c.3 | Aspect policy decided | ✅ Letterbox (Decision 5) |
 | M26c.4 | Persist the measured advance ratio | ❌ **Not started** — needs a design entity and migration |
 | M26c.5 | Cross-surface parity fixtures | ❌ Not started — the exit gate |
+
+## Audit follow-up — four findings closed (2026-09-30)
+
+An adversarial audit of the M26c.1/M26c.2 work raised four findings. All four are
+fixed, and each fix is proven by a probe that made it fail first.
+
+### F1 ✅ The port gate proved NAMES; it now proves more, and says what it cannot
+
+`check-port-fidelity.sh` matched exported symbol names between source and port —
+so the source's **seven private functions were invisible to it**, and those are
+where the geometry actually lives. `arcGeometryFromR` alone builds every arc path
+and bbox. A port that dropped one would still have reported *"every symbol
+ported"*, because the gate was never looking.
+
+⚠️ **Found by auditing the gate, not by it.** All seven were present when checked
+by hand — but "I checked once" is not a gate, and the next private helper the
+source grows would have gone unnoticed. They are now asserted by name, with a
+staleness check so the list cannot silently stop matching the source.
+
+📌 **The gate also now states what it does NOT prove.** It matches names; a
+symbol whose body is wrong passes every check in it. The behavioural evidence is
+the differential fuzzing, and a fourth assertion fails if that evidence
+disappears from this document — so the cheap check and the strong one are read
+together rather than the cheap one being mistaken for proof.
+
+### F2 ✅ The widened public surface is declared, not left to be rediscovered
+
+The source exports 28 symbols; the port exports 50. That gap looks alarming until
+itemised — and an unexplained gap is exactly how an accidental leak hides among
+deliberate ones. Thirteen come from `types.ts` and `helpers.ts`, files this port
+merges in, so they were always public. The remaining ten are deliberate and are
+now listed in the gate with their reasons. **An undeclared new export fails.**
+
+### F3 ✅ The fractions gate watched one directory; design code is coming to three
+
+`check-design-fractions.sh` scoped to the backend's `src/design` alone — correct
+on the day it was written, and quietly wrong within one milestone. **M26d builds
+a canvas editor in the frontend and M26e a storefront overlay in the plugin**,
+and both hold geometry.
+
+🔴 **The editor is the likeliest violator of the three**, because it genuinely
+works in pixels — that is its job, and M26c.2's contract is precisely that the
+conversion happens in two functions and nowhere else. A gate stopping at the
+backend would have been silent exactly where the rule is hardest to keep. It now
+scans every design directory across all three repositories, reports how many it
+found, and was proven to catch a pixel constant in a frontend directory that did
+not exist when it was written.
+
+### F4 ✅ Decision 5 was recorded but not wired — `buildScene` now applies it
+
+The letterbox was decided in M26c.3, documented, tested and **never called**.
+`buildScene` is render time, Decision 5 says the letterbox is computed at render
+time, and it did not compute one. **A design assigned to a differently-shaped
+product would still have reflowed** — the exact defect the decision exists to
+prevent, with a passing test suite either side of it.
+
+`DesignScene` now carries a derived `letterbox`, and `buildScene` takes the
+optional `authoring` canvas. Legacy designs — every one predating M26c.3 — yield
+the full canvas and render exactly as before.
+
+📌 **Proven not to change what renders today**: 12,000 SVG comparisons against
+the original with `authoring` varying randomly, **zero mismatches**. The
+letterbox is carried for the surfaces that will consume it without altering
+current output.
+
+⚠️ **This retired `letterbox.ts`'s module exemption and exposed a real dead
+symbol**: `willLetterbox` has no caller. It is not deleted — it answers *"will
+this design sit inside a band?"* for the editor to warn a merchant **before** they
+save, which its own docblock gives the reason for. Exempted per file, naming
+M26d.1. Telling a merchant their artwork will be letterboxed is a supported
+limitation; letting them find out from a customer's order is the same defect
+wearing different clothes.

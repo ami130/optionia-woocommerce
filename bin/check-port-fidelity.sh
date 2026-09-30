@@ -28,6 +28,9 @@ pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE="$ROOT/optionia-app/app/components/design-lab/designScene.ts"
+# The two sibling files this port MERGES IN — their exports were always public,
+# just in a different file, so they are not "widened" surface.
+SRC_DIR="$ROOT/optionia-app/app/components/design-lab"
 PORT_DIR="$ROOT/optioniaWooCommerceBackend/src/design"
 
 printf '\033[1m== check-port-fidelity.sh ==\033[0m\n'
@@ -103,6 +106,121 @@ elif [ -n "$MISSING" ]; then
   fi
 else
   pass "every one of $CHECKED source symbol(s) is ported ($SKIPPED not ported by design)"
+fi
+
+# 🔴 **The source's PRIVATE functions are invisible to the check above**, which
+# reads `^export` only — and they are where the geometry actually lives.
+# `arcGeometryFromR` alone builds every arc path and bbox; `glyphReach` and
+# `curveTheta` feed every radius. A port that dropped one would still report
+# "every symbol ported", because the gate would never have been looking.
+#
+# ⚠️ **Found by auditing this gate, not by it.** Each was verified by hand and
+# all seven were present — but "I checked once" is not a gate, and the next
+# private helper the source grows would go unnoticed.
+PRIVATE_SYMBOLS="curveTheta
+glyphReach
+arcGeometryFromR
+escAttr
+textAnchorFor
+GLYPH_ASCENT
+GLYPH_DESCENT"
+
+PRIVATE_MISSING=""
+PRIVATE_CHECKED=0
+while IFS= read -r sym; do
+  [ -z "$sym" ] && continue
+  # It must exist in the SOURCE (or this list has gone stale) …
+  if ! grep -qE "(^|[^A-Za-z0-9_])(function|const) $sym\b" "$SOURCE"; then
+    fail "private symbol '$sym' is no longer in the source — this list is stale"
+    continue
+  fi
+  PRIVATE_CHECKED=$((PRIVATE_CHECKED + 1))
+  # … and somewhere in the port, exported or not.
+  if ! grep -rqE "(^|[^A-Za-z0-9_])(function|const) $sym\b" "$PORT_DIR"/*.ts 2>/dev/null; then
+    PRIVATE_MISSING="$PRIVATE_MISSING  $sym\n"
+  fi
+done <<EOF
+$PRIVATE_SYMBOLS
+EOF
+
+if [ "$PRIVATE_CHECKED" -eq 0 ]; then
+  fail "checked no private symbols at all — the parser is wrong, not the code"
+elif [ -n "$PRIVATE_MISSING" ]; then
+  fail "private source symbol(s) absent from the port:"
+  printf "%b" "$PRIVATE_MISSING" | sed 's|^|      |'
+  printf '        these carry the geometry; the export check cannot see them\n'
+else
+  pass "all $PRIVATE_CHECKED private source symbol(s) are present too"
+fi
+
+# ⚠️ **The port EXPORTS more than the source does, and every addition is listed
+# here rather than left for a reviewer to rediscover.** The source exports 28
+# symbols; the port exports 50. That gap looks alarming until it is itemised, and
+# an unexplained gap is exactly how an accidental leak hides among deliberate
+# ones.
+#
+# 📌 Thirteen come from `types.ts` and `helpers.ts` — separate files in the
+# source that this port merges in, so they were always public, just elsewhere.
+# The rest are deliberate:
+#
+#   • LINE_HEIGHT, MIN_FONT_RATIO — the named-constant fix M26c.1 asked for.
+#   • Letterbox, letterboxFor, willLetterbox, AuthoringCanvas, authoringCanvasOf
+#     — the aspect policy (Decision 5). Deliberately absent from the source,
+#     which is where the reflow defect it prevents comes from.
+#   • LayerRect, TextAnchor — return shapes named so callers can hold one.
+#   • textAnchorFor — private in the source; exported here because flat and
+#     curved text now live in separate modules and both need it.
+WIDENED="LINE_HEIGHT
+MIN_FONT_RATIO
+Letterbox
+letterboxFor
+willLetterbox
+AuthoringCanvas
+authoringCanvasOf
+LayerRect
+TextAnchor
+textAnchorFor"
+
+UNDECLARED=""
+WIDENED_OK=0
+PORT_ONLY=$(printf '%s\n' "$PORTED" | while IFS= read -r sym; do
+  [ -z "$sym" ] && continue
+  grep -qE "^export (const|function|interface|type|class) $sym\b" "$SOURCE" && continue
+  grep -qE "^export (const|function|interface|type) $sym\b" "$SRC_DIR/types.ts" 2>/dev/null && continue
+  grep -qE "^export (const|function|interface|type) $sym\b" "$SRC_DIR/helpers.ts" 2>/dev/null && continue
+  printf '%s\n' "$sym"
+done)
+
+while IFS= read -r sym; do
+  [ -z "$sym" ] && continue
+  if printf '%s\n' "$WIDENED" | grep -qx "$sym"; then
+    WIDENED_OK=$((WIDENED_OK + 1))
+  else
+    UNDECLARED="$UNDECLARED  $sym\n"
+  fi
+done <<EOF
+$PORT_ONLY
+EOF
+
+if [ -n "$UNDECLARED" ]; then
+  fail "the port exports symbol(s) the source does not, and they are not declared:"
+  printf "%b" "$UNDECLARED" | sed 's|^|      |'
+  printf '        add it to WIDENED with a reason, or stop exporting it\n'
+else
+  pass "all $WIDENED_OK widened export(s) are declared with a reason"
+fi
+
+# 📌 **What this gate does NOT prove, stated so nobody over-reads it.** It
+# matches NAMES. A symbol whose body is wrong passes every check above. The
+# evidence for behaviour is the differential fuzzing recorded in
+# docs/M26-PRINT-PIPELINE-DECISIONS.md — 300,003 arc comparisons and 46,837
+# byte-identical SVG documents — and this assertion exists so the two are read
+# together rather than the cheap one being mistaken for the strong one.
+if grep -q '46,837' "$ROOT/docs/M26-PRINT-PIPELINE-DECISIONS.md" 2>/dev/null; then
+  pass "behavioural evidence is recorded (names alone are not proof)"
+else
+  fail "the differential-fuzz evidence is missing from the decisions document"
+  printf '        this gate proves NAMES; the fuzz is what proves behaviour\n'
 fi
 
 printf '\n'

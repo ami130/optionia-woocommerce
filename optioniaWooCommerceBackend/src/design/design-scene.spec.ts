@@ -140,6 +140,67 @@ describe('buildScene', () => {
   });
 });
 
+describe('buildScene — the letterbox (M26c.3, Decision 5)', () => {
+  it('fills the whole canvas when the design records no authoring aspect', () => {
+    // Every design predating M26c.3. It must still render edge to edge, which
+    // is what it already did — refusing would take away existing artwork.
+    const s = buildScene({ width: 800, height: 600, groups: [] });
+    expect(s.letterbox).toEqual({ x: 0, y: 0, width: 800, height: 600 });
+  });
+
+  it('fills the whole canvas when the aspects already match', () => {
+    // A ratio-of-ratios comparison, not an edge comparison: a 1000x1000 design
+    // on a 2000x2000 product has the same shape and must fill it exactly.
+    const s = buildScene({
+      width: 2000, height: 2000, groups: [],
+      authoring: { width: 1000, height: 1000 },
+    });
+    expect(s.letterbox).toEqual({ x: 0, y: 0, width: 2000, height: 2000 });
+  });
+
+  it('centres a square design on a tall product instead of stretching it', () => {
+    // 🔴 This is the reflow Decision 5 exists to prevent: without it, artwork
+    // composed on a square mug stretches down a tall bottle.
+    const s = buildScene({
+      width: 400, height: 800, groups: [],
+      authoring: { width: 100, height: 100 },
+    });
+    expect(s.letterbox).toEqual({ x: 0, y: 200, width: 400, height: 400 });
+  });
+
+  it('centres a wide design on a square product', () => {
+    const s = buildScene({
+      width: 800, height: 800, groups: [],
+      authoring: { width: 200, height: 100 },
+    });
+    expect(s.letterbox).toEqual({ x: 0, y: 200, width: 800, height: 400 });
+  });
+
+  it('never stores the letterbox — it is derived per target', () => {
+    // One design, two differently shaped products, two different boxes.
+    const authoring = { width: 100, height: 100 };
+    const tall = buildScene({ width: 400, height: 800, groups: [], authoring });
+    const wide = buildScene({ width: 800, height: 400, groups: [], authoring });
+    expect(tall.letterbox).not.toEqual(wide.letterbox);
+  });
+
+  it('survives a null authoring canvas as well as an absent one', () => {
+    const s = buildScene({ width: 800, height: 600, groups: [], authoring: null });
+    expect(s.letterbox).toEqual({ x: 0, y: 0, width: 800, height: 600 });
+  });
+
+  it('does not change the emitted SVG', () => {
+    // The letterbox is carried on the scene for the surfaces that will consume
+    // it; it must not alter what renders today.
+    const base = { width: 800, height: 600, groups: [] };
+    const plain = sceneToSvgString(buildScene(base));
+    const boxed = sceneToSvgString(
+      buildScene({ ...base, authoring: { width: 100, height: 400 } }),
+    );
+    expect(boxed).toBe(plain);
+  });
+});
+
 describe('sceneToSvgString', () => {
   const sceneWith = (l: Partial<DesignLayer>) =>
     buildScene({

@@ -39,10 +39,12 @@ import {
   textArcPath,
 } from './arc-geometry';
 import type {
+  AuthoringCanvas,
   DesignLayer,
   LayerShape,
   TextDesign,
 } from './design-geometry.types';
+import { letterboxFor, type Letterbox } from './letterbox';
 
 /** A single resolved image node in viewBox (background-pixel) coordinates. */
 export interface SceneImage {
@@ -95,6 +97,20 @@ export interface DesignScene {
   readonly height: number;
   readonly backgroundHref?: string;
   readonly groups: readonly SceneGroup[];
+  /**
+   * Where the design sits inside the target canvas (M26c.3, Decision 5).
+   *
+   * 🔴 **Derived here, never stored.** A design records the canvas it was
+   * composed on; the box it occupies on each product is computed at render
+   * time, so one design serves every product it is assigned to without a
+   * per-product row.
+   *
+   * ⚠️ **Equal to the full canvas when no authoring aspect was recorded** —
+   * every design predating M26c.3 — so legacy artwork renders exactly as it
+   * already did rather than being taken away to prevent a reflow the merchant
+   * has already accepted.
+   */
+  readonly letterbox: Letterbox;
 }
 
 /** Input group: a choice's raw layers plus its current visibility. */
@@ -133,9 +149,21 @@ export function buildScene(input: {
   groups: readonly DesignGroupInput[];
   /** TEXT options — always visible; each resolves to one text node. */
   textOptions?: readonly DesignTextInput[];
+  /**
+   * The canvas this design was COMPOSED on (M26c.3, Decision 5).
+   *
+   * ⚠️ **Absent on every design predating M26c.3**, and that is handled rather
+   * than refused: the letterbox becomes the full target and the design renders
+   * edge to edge, exactly as it did before the aspect was recorded.
+   */
+  authoring?: AuthoringCanvas | null;
 }): DesignScene {
   const width = input.width || 1;
   const height = input.height || 1;
+  // Decision 5: resolve the design against the box of its OWN aspect inside the
+  // target, so a square design on a tall product keeps its shape instead of
+  // stretching down it. Legacy designs yield the full canvas.
+  const letterbox = letterboxFor(input.authoring, width, height);
   const textGroups: SceneGroup[] = (input.textOptions ?? []).map((t) => ({
     key: t.key,
     visible: true,
@@ -146,6 +174,7 @@ export function buildScene(input: {
     width,
     height,
     backgroundHref: input.backgroundHref,
+    letterbox,
     groups: [
       ...(input.groups ?? []).map((g) => ({
         key: g.key,

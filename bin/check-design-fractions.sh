@@ -43,10 +43,42 @@ fail() { printf '\033[31mFAIL\033[0m  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GEO="$ROOT/optioniaWooCommerceBackend/src/design"
 
-if [ ! -d "$GEO" ]; then
-  fail "the geometry directory is missing — this gate is checking nothing"
+# 🔴 **Every directory that holds design geometry, not just today's one.**
+# The first spelling scoped to the backend's `src/design` alone, which was
+# correct on the day it was written and would have gone quietly wrong within one
+# milestone: M26d builds a canvas editor in the FRONTEND and M26e a storefront
+# overlay in the PLUGIN, and both hold geometry.
+#
+# ⚠️ **The editor is the likeliest violator of the three.** It genuinely works in
+# pixels — that is its job — and M26c.2's contract is precisely that the pixel↔
+# fraction conversion happens in exactly two functions and nowhere else. A gate
+# that stopped at the backend would have been silent exactly where the rule is
+# hardest to keep.
+#
+# A directory that does not exist yet is not an error; it is simply not scanned,
+# and the count below states how many were found so the coverage is visible
+# rather than assumed.
+GEO_DIRS="$ROOT/optioniaWooCommerceBackend/src/design
+$ROOT/optioniaWooCommerceFrontend/src/design
+$ROOT/optioniaWooCommerceFrontend/src/lib/design
+$ROOT/optioniaWooCommercePlugin/src/Design
+$ROOT/optioniaWooCommercePlugin/assets/design"
+
+PRESENT=""
+DIR_COUNT=0
+while IFS= read -r d; do
+  [ -z "$d" ] && continue
+  if [ -d "$d" ]; then
+    PRESENT="$PRESENT$d\n"
+    DIR_COUNT=$((DIR_COUNT + 1))
+  fi
+done <<EOF
+$GEO_DIRS
+EOF
+
+if [ "$DIR_COUNT" -eq 0 ]; then
+  fail "no geometry directory found at all — this gate is checking nothing"
   exit 1
 fi
 
@@ -80,10 +112,13 @@ SUSPECT="(^|[^A-Za-z0-9_.])${SPATIAL}[[:space:]]*[:=][[:space:]]*-?[0-9]{2,}(\.[
 
 VIOLATIONS=""
 CHECKED=0
-for f in "$GEO"/*.ts; do
-  case "$f" in *.spec.ts) continue ;; esac
+while IFS= read -r GEO; do
+  [ -z "$GEO" ] && continue
+for f in "$GEO"/*.ts "$GEO"/*.tsx "$GEO"/*.js; do
+  [ -e "$f" ] || continue
+  case "$f" in *.spec.ts|*.spec.tsx|*.test.ts) continue ;; esac
   CHECKED=$((CHECKED + 1))
-  rel="design/$(basename "$f")"
+  rel="$(basename "$(dirname "$f")")/$(basename "$f")"
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     num="${line%%:*}"
@@ -101,6 +136,9 @@ for f in "$GEO"/*.ts; do
     VIOLATIONS="$VIOLATIONS  $rel:$num  $(printf '%s' "$body" | sed 's/^[[:space:]]*//')\n"
   done < <(strip "$f" | grep -nE "$SUSPECT" || true)
 done
+done <<EOF
+$(printf "%b" "$PRESENT")
+EOF
 
 if [ "$CHECKED" -eq 0 ]; then
   fail "read no geometry files at all — the parser is wrong, not the code"
@@ -110,12 +148,15 @@ elif [ -n "$VIOLATIONS" ]; then
   printf '        every stored quantity is a FRACTION of the canvas (M26c.2)\n'
   printf '        derive it from the viewBox, or name it as an exported ratio\n'
 else
-  pass "$CHECKED geometry file(s) carry no absolute pixel constant"
+  pass "$CHECKED geometry file(s) in $DIR_COUNT director(y/ies) carry no absolute pixel constant"
 fi
 
 # The inverse: a gate that only forbids passes trivially on a module that does
 # no geometry at all. Assert the ratio vocabulary is still present.
-RATIOS=$(grep -rhoE '\b(Pct|sizePct|wPct|hPct|xPct|yPct)\b' "$GEO" --include='*.ts' 2>/dev/null | wc -l | tr -d ' ')
+RATIOS=$(printf "%b" "$PRESENT" | while IFS= read -r d; do
+  [ -z "$d" ] && continue
+  grep -rhoE '\b(Pct|sizePct|wPct|hPct|xPct|yPct)\b' "$d" 2>/dev/null
+done | wc -l | tr -d ' ')
 if [ "$RATIOS" -lt 10 ]; then
   fail "the fraction vocabulary has thinned to $RATIOS use(s) — is geometry still stored as ratios?"
 else
