@@ -88,17 +88,36 @@ fi
 # the client, rounded to 10000 and was refused by the server — a form saying yes
 # where the server says no. Both now express the ceiling in basis points, and
 # this asserts they still agree.
-BACKEND_MAX=$(strip_comments "$SRC/plans/plan-discount.ts" \
-  | grep -oE 'FULL_DISCOUNT_BASIS_POINTS = 10_000' | head -1)
+# 🔴 **The VALUES are extracted and compared, not matched as literals.**
+#
+# ⚠️ The first version grepped for the exact strings `10_000` and `9_999`, which
+# was wrong twice over. Changing the dashboard ceiling to 5000 — the precise
+# divergence this exists to catch — made the grep match nothing, and under
+# `set -euo pipefail` a grep with no match exits 1 and KILLS THE SCRIPT. The gate
+# printed four passes, no fifth line, no message, and exited 1. It blocked the
+# commit while saying nothing about why, which is barely a gate.
+#
+# 📌 `|| true` on every extraction, then a real comparison. The backend's
+# ceiling is one below its full-circle constant, so the arithmetic is asserted
+# rather than a second literal being kept in step by hand.
+BACKEND_FULL=$(strip_comments "$SRC/plans/plan-discount.ts" \
+  | grep -oE 'FULL_DISCOUNT_BASIS_POINTS = [0-9_]+' \
+  | grep -oE '[0-9_]+$' | tr -d '_' | head -1 || true)
 FRONT_MAX=$(strip_comments "$ROOT/optioniaWooCommerceFrontend/src/lib/admin/api.ts" \
-  | grep -oE 'MAX_DISCOUNT_BASIS_POINTS = 9_999' | head -1)
+  | grep -oE 'MAX_DISCOUNT_BASIS_POINTS = [0-9_]+' \
+  | grep -oE '[0-9_]+$' | tr -d '_' | head -1 || true)
 
-if [ -n "$BACKEND_MAX" ] && [ -n "$FRONT_MAX" ]; then
-  pass "the dashboard's discount ceiling matches the API's (9999 bp)"
-else
+if [ -z "$BACKEND_FULL" ] || [ -z "$FRONT_MAX" ]; then
+  fail "could not read a discount ceiling — the parser is wrong, not the code"
+  printf '        backend full-discount constant: %s\n' "${BACKEND_FULL:-<not found>}"
+  printf '        dashboard ceiling: %s\n' "${FRONT_MAX:-<not found>}"
+elif [ "$FRONT_MAX" -ne $((BACKEND_FULL - 1)) ]; then
   fail "the discount ceiling disagrees between the API and the dashboard"
-  printf '        backend: %s\n' "${BACKEND_MAX:-<not found>}"
-  printf '        dashboard: %s\n' "${FRONT_MAX:-<not found>}"
+  printf '        the API refuses %s bp and above, so the dashboard ceiling is %s\n' \
+    "$BACKEND_FULL" "$((BACKEND_FULL - 1))"
+  printf '        the dashboard says %s\n' "$FRONT_MAX"
+else
+  pass "the dashboard's discount ceiling matches the API's ($FRONT_MAX bp)"
 fi
 
 printf '\n'

@@ -97,4 +97,77 @@ describe('navigation', () => {
       expect(pageFor(href)).toBeNull();
     }
   });
+
+  /**
+   * 🔴 **The Platform section is staff-only, and nothing proved it.**
+   *
+   * Changing `{me?.staff != null ? (` to `{true ? (` — showing every merchant a
+   * link to the platform realm — passed all 1,872 frontend tests and all 29
+   * gates. The damage is bounded (`StaffGuard` refuses every `/admin` request
+   * and the route guard redirects a merchant who clicks) so it leaks product
+   * surface rather than data. But it advertises a room they can never enter,
+   * which is the exact thing the hidden-not-disabled choice exists to prevent.
+   *
+   * ⚠️ **Asserted on the SOURCE, because this project has no JSX runner.** That
+   * is the same reason `route-guards.test.ts` models its decisions as data —
+   * see its header. What can be checked here is that the staff block exists,
+   * that its items are separate from the merchant list, and that the only place
+   * they render is behind a staff condition.
+   */
+  describe('the Platform section', () => {
+    const source = readFileSync(SHELL, 'utf8');
+
+    /** The staff block, read on its own so a merchant item cannot satisfy it. */
+    function staffBlock(): string {
+      const start = source.indexOf('const STAFF_NAVIGATION');
+
+      expect(start).toBeGreaterThan(-1);
+
+      return source.slice(start, source.indexOf('export function AppShell'));
+    }
+
+    it('keeps staff items out of the merchant navigation', () => {
+      const merchant = source.slice(
+        source.indexOf('const NAVIGATION'),
+        source.indexOf('const STAFF_NAVIGATION'),
+      );
+
+      expect(merchant).not.toContain('/admin/');
+    });
+
+    it('declares at least one staff item', () => {
+      // Guards the cases below: an empty block would make them vacuous.
+      expect([...staffBlock().matchAll(/href: '([^']+)'/g)].length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('renders every staff item behind a staff check', () => {
+      /*
+       * 🔴 **The rendering half.** `STAFF_NAVIGATION` could be perfectly
+       * declared and mapped unconditionally, which is precisely the mutation
+       * that survived: the list was right and the condition was gone.
+       */
+      const rendered = source.indexOf('STAFF_NAVIGATION.map');
+
+      expect(rendered).toBeGreaterThan(-1);
+
+      const guardAt = source.indexOf('me?.staff != null');
+
+      expect(guardAt).toBeGreaterThan(-1);
+      expect(guardAt).toBeLessThan(rendered);
+    });
+
+    it('gates on staff PRESENCE, not on being signed in', () => {
+      /*
+       * ⚠️ `me?.staff != null`, never `me != null`. Gating on the session alone
+       * would show the section to every signed-in merchant — a one-word edit
+       * that reads almost identically.
+       */
+      const between = source.slice(
+        source.indexOf('STAFF_NAVIGATION') ,
+        source.indexOf('STAFF_NAVIGATION.map'),
+      );
+
+      expect(between).toContain('me?.staff != null');
+    });
+  });
 });
