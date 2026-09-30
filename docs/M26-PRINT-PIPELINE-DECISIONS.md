@@ -464,3 +464,122 @@ visible, correctable compromise; a stretched engraving is a reprint.
 discovered:** the stored aspect is part of the design, not of the assignment. Two
 products of different shapes share one design and one authoring aspect; the
 *letterbox* differs per product and is computed at render time, never stored.
+## Stage 26c.5a — `resvg` vs a browser on curved text, measured 2026-09-30
+
+This gate exists because the arc geometry (`radiusForBox`, `textArcPath`,
+`curveBoxTop`, `curveBoxPlace`, `curveRotOrigin`, `arcTextAnchor` — ~500 lines)
+was written against a browser's `<textPath>` implementation. If `resvg` places
+glyphs differently, every one of those functions needs a compensation layer and
+the 26c estimate changes. **Measure before porting, not after.**
+
+**Method.** One SVG, rendered twice: Chromium via Playwright, and `resvg` 2.6.2
+with the same font file. A 600 px-wide arc, `startOffset="50%"`,
+`text-anchor="middle"`, 48 px Arial, the string `Sarah and James`.
+
+### ✅ The verdict: port the arc geometry unchanged
+
+| Measurement | Result |
+|---|---|
+| Ink bounding box | **identical to the pixel** — `x[211..584] y[0..52]` both |
+| Centroid shift | **(−0.039, +0.123) px** — sub-pixel |
+| Best integer offset over ±3 px (49 candidates) | **dx=0, dy=0** — zero wins |
+| Column-profile correlation | **0.9977** |
+| Mean per-pixel delta | **0.232 / 255** |
+| Ink mass ratio (resvg ÷ browser) | **0.888** |
+
+📌 **Glyph *placement* agrees; only *weight* differs.** The bbox matching
+exactly, and zero offset beating all 48 alternatives, is the property the port
+depends on: `resvg` resolves `startOffset`, `text-anchor` and the arc parameterisation
+the same way the browser does. The 11% ink deficit is anti-aliasing — `resvg`
+renders glyph edges slightly lighter (`resvg`-only ink: 7 px; browser-only: 224 px,
+i.e. one-directional edge softness, not displacement). At print DPI it is invisible,
+and it moves nothing.
+
+**No compensation layer is needed. 26c.5c ports the arc functions as written.**
+
+### 🔴 The first measurement was wrong, and it was my decoder, not `resvg`
+
+The first pixel-diff reported **99.35% of pixels differing** and `resvg` ink at
+2,297 px against the browser's 317,653 — which would have read as "`resvg` renders
+curved text blank." Both images look identical to the eye, so the two disagreed.
+
+⚠️ **The cause: the two PNGs have different colour types.** Chromium wrote
+`colorType=2` (RGB, 3 bytes/px); `resvg` wrote `colorType=6` (RGBA, 4 bytes/px).
+My decoder hardcoded 4 bytes per pixel for both, so the browser image was
+un-filtered with a one-byte-per-row drift that corrupted every row after the first.
+**The 99% was measuring my bug.** Reading `IHDR` and decoding each file by its own
+colour type gave the numbers above.
+
+📌 **This is the fourth false proxy this session**, after the Arabic byte-count, the
+1366×768 aspect assumption, and the shell-grep clip-path comparison. The pattern
+is consistent and worth naming: *a cheap proxy that returns a dramatic number is
+more likely to be broken than to be a discovery.* The tell here was direction —
+a decoder bug cannot make `resvg` render blank while the PNG plainly shows text,
+so the implausible result indicted the instrument. The diff now asserts
+`raw.length === h * (stride + 1)` and throws on an unsupported colour type or
+filter byte, which is the check that would have caught it on the first run.
+
+## Stage 26c.5b — the flat-text path, ported and fuzzed (2026-09-30)
+
+`src/design/text-geometry.ts`: `CHAR_ADVANCE`, `estimateTextLength`,
+`wrapTextLines`, `fitTextToBox`, `resolveSceneText`, `textAnchorFor`,
+`flatBlockFirstY`, `SceneText`. Port-fidelity ledger: **12 of 27 symbols**, up
+from 6.
+
+### ✅ The `1.25` defect, fixed by naming it once
+
+The line height is written out **five times across four files** in `optionia-app`
+— `fitTextToBox` (as a local `LINE_H` carrying the comment *"must match
+serializeTextNode / the editor line height"*), `serializeTextNode`,
+`DesignSvg.tsx`, and twice in `TextDesignLabModal.tsx`. Nothing enforces the
+agreement that comment requests.
+
+🔴 **The failure mode is a reprint, not a glitch.** `fitTextToBox` uses the value
+to decide how many lines fit and therefore what size to shrink to; the renderer
+uses it to space the lines it draws. If they ever differ, text is *measured* at
+one line height and *drawn* at another — it fits in the editor and overflows the
+print file. The port exports `LINE_HEIGHT` once and both consumers read it.
+
+### ✅ Verified by differential fuzz, not by inspection
+
+The port is a transcription, and a transcription is exactly the kind of work that
+looks right while being subtly wrong. Both implementations were compiled and run
+side by side over **180,003 comparisons**: Latin, Arabic, Hebrew, Greek,
+Cyrillic, Japanese, emoji, combining marks, zero/negative/huge dimensions, and
+every present/absent/zero combination of the optional `TextDesign` fields.
+
+**Zero mismatches.** Plus 37 unit tests, including the two subtleties the port
+documents:
+
+- **`||` vs `??` is load-bearing.** `wPct || 0.5` treats a stored `0` as
+  "unrecorded" and defaults to half the canvas; `xPct ?? 0.5` keeps a `0`,
+  because that is a legitimate left edge. Swapping either changes where text
+  lands.
+- **Code points, not UTF-16 units.** `[...text]` and `for...of` mean an emoji
+  counts as one glyph and a surrogate pair is never split across a line break.
+  `.length` would measure it as two and shrink text that did not need shrinking.
+
+### ⚠️ Two gates fail by design until 26c.5d, and both are exempted with a stage
+
+`check-reachable` and `check-symbol-reachable` both correctly report the module
+as test-only: nothing in the product calls it until `buildScene` lands. Both
+exemptions name **M26c.5d** as the removal stage, and the file-scoped exemption
+was re-proven non-blanket — a fresh dead symbol in `src/design/` still fails.
+
+### 🔴 Two more false proxies, both self-inflicted, both caught by implausibility
+
+- **The pixel-diff decoder** (26c.5a above) — hardcoded 4 bytes/px across two
+  different PNG colour types.
+- **The fuzz harness itself.** The first run reported `flatBlockFirstY`
+  mismatching wildly. The cause: I called `pick(NUMS)` *separately* in the
+  original's and the port's argument lists, and `pick` advances a shared PRNG —
+  so the two sides were fed **different inputs**. The other five functions passed
+  only because their arguments were bound to variables first. Binding them gave
+  zero mismatches.
+
+📌 **Five false proxies this session now**, and the pattern has not varied: a
+cheap measurement returning a dramatic number is more often a broken instrument
+than a discovery. Each was caught the same way — by asking whether the *magnitude*
+was physically possible, not by re-reading the code. A decoder bug cannot make
+`resvg` render blank when the PNG visibly contains text; a faithful transcription
+cannot be wrong only in its fifth function.
