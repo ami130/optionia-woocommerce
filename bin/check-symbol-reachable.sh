@@ -41,11 +41,6 @@ printf 'Checking that exported symbols have consumers...\n'
 # is how an exemption list stops being read.
 is_exempt_file() {
   case "$1" in
-    # Ported from `optionia-app` ahead of its consumer. `designScene.ts`
-    # (M26c.1) reads every one of these in one function signature.
-    # ⚠️ **DELETE WHEN M26c.1 LANDS**, or they are a transcription nobody needed.
-    design/design-geometry.types.ts) return 0 ;;
-
     # Guards written before the thing they guard, and already exempt in
     # `check-reachable.ts` with these same stages. ⚠️ An unbounded canvas
     # OOM-kills a container with no error to report (M26e.4); a design with no
@@ -53,21 +48,19 @@ is_exempt_file() {
     design/letterbox.ts) return 0 ;;
     common/render/render-bounds.ts) return 0 ;;
 
-    # The coordinate model, ported ahead of `buildScene` (M26c.1). ⚠️ **DELETE
-    # WHEN M26c.4 LANDS** — that is where every layer resolves through it.
+    # 🔴 **The geometry tree is complete, and nothing in the product renders a
+    # design yet.** `buildScene` gave these modules a consumer within the tree,
+    # but the tree's own root has no caller, so every symbol it does not itself
+    # use still reports as dead. That is the gate being right, not noisy.
+    #
+    # ⚠️ **DELETE WHEN THE FIRST SURFACE RENDERS A DESIGN** — M26d.6 (dashboard
+    # preview) or M26e.1 (storefront overlay), whichever lands first. Exempted
+    # per FILE, so a genuinely unused NEW symbol in any of them still fails.
+    design/design-geometry.types.ts) return 0 ;;
     design/layer-geometry.ts) return 0 ;;
-
-    # Curved-text geometry (M26c.1), ported ahead of `buildScene`. ⚠️ **DELETE
-    # WHEN `buildScene` LANDS.** Verified against the source by a 300,003-case
-    # differential fuzz, including both branch boundaries (theta = pi and the
-    # full-circle threshold) and both fixed/legacy splits.
-    design/arc-geometry.ts) return 0 ;;
-
-    # Flat-text measurement, wrapping and shrink-to-fit (M26c.5b), ported ahead
-    # of `buildScene` — which is the one caller that resolves a `TextDesign`
-    # through them. ⚠️ **DELETE WHEN M26c.5d LANDS**, or this is a port with no
-    # consumer. Verified against the source by a 180,003-case differential fuzz.
     design/text-geometry.ts) return 0 ;;
+    design/arc-geometry.ts) return 0 ;;
+    design/design-scene.ts) return 0 ;;
 
     *) return 1 ;;
   esac
@@ -138,7 +131,7 @@ if [ "$CHECKED" -eq 0 ] && [ "$EXEMPT" -eq 0 ]; then
 elif [ "$CHECKED" -eq 0 ]; then
   printf '\033[33mwarn\033[0m  every watched file is exempt (%d) — this gate is checking nothing\n' "$EXEMPT"
   printf '        expected while the port runs ahead of its consumers;\n'
-  printf '        landing M26c.5d retires the design/ exemptions and revives it\n'
+  printf '        the first surface to render a design (M26d.6 / M26e.1) revives it\n'
 elif [ -n "$UNUSED" ]; then
   fail "exported symbol(s) with no production consumer:"
   printf "%b" "$UNUSED" | sed 's|^|      |'

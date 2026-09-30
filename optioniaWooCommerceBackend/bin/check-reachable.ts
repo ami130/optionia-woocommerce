@@ -114,53 +114,25 @@ const EXEMPT = new Map<string, string>([
    */
   ['design/letterbox.ts', 'M26c.4 — buildScene applies it when resolving a scene'],
 
-  /*
-   * 🔴 **The coordinate model, ported ahead of the function that walks it**
-   * (M26c.1). Every branch in `layerRect` resolves a disagreement between the
-   * four surfaces `optionia-app` had to keep in agreement to the pixel, and the
-   * plan calls re-deriving them the most expensive avoidable work in this
-   * project.
-   *
-   * ⚠️ **DELETE WHEN M26c.4 LANDS.** `buildScene` is its caller: it resolves a
-   * stored design into a scene, which is `layerRect` and `frameImageRect` per
-   * layer. If that milestone ships without them, the geometry was transcribed
-   * and then re-derived anyway.
-   */
-  ['design/layer-geometry.ts', 'M26c.4 — buildScene resolves every layer through it'],
-
   /**
-   * 🔴 **Flat-text geometry, ported ahead of the function that calls it**
-   * (M26c.5b). `fitTextToBox` and `wrapTextLines` decide how large a customer's
-   * name renders and where it breaks — and the editor, the storefront preview
-   * and the print file must agree on all three or the merchant ships a product
-   * that does not match the proof they approved.
+   * 🔴 **The geometry tree is complete and has no product caller yet** — this is
+   * the root of it, and exempting the root is what keeps the other four modules
+   * honest: `design-geometry.types`, `layer-geometry`, `text-geometry` and
+   * `arc-geometry` all reach production THROUGH `buildScene`, so their own
+   * exemptions were retired when it landed (M26c.1). Only this one remains.
    *
-   * 📌 The port names `LINE_HEIGHT`, which the source repeats as a bare `1.25`
-   * in five places across four files. Behaviour is unchanged: a 180,003-case
-   * differential fuzz against the original found zero mismatches.
+   * 📌 **Ported, not re-derived, and verified rather than asserted.** The SVG it
+   * emits was compared byte-for-byte against `optionia-app` across 46,837
+   * generated scenes — clip paths, alpha masks, curved `<textPath>`, wrapped
+   * `<tspan>`, inner rotation and XML escaping all exercised — with zero
+   * mismatches. That is the evidence that the eight recurring parity defects
+   * this port exists to avoid have not been reintroduced.
    *
-   * ⚠️ **DELETE WHEN M26c.5d LANDS.** `buildScene` is the caller — it resolves
-   * each `TextDesign` through `resolveSceneText` and fits it with
-   * `fitTextToBox`. If that milestone ships without them, this was transcribed
-   * and then re-derived anyway.
+   * ⚠️ **DELETE WHEN THE FIRST SURFACE RENDERS A DESIGN** — M26d.6 (dashboard
+   * preview) or M26e.1 (storefront overlay), whichever lands first. If both ship
+   * without importing this, the scene was built and then re-derived anyway.
    */
-  ['design/text-geometry.ts', 'M26c.5d — buildScene resolves every text node through it'],
-
-  /**
-   * 🔴 **Curved-text geometry, ported ahead of `buildScene`** (M26c.1). The ring
-   * radius, its bounding box, and the fixed/legacy splits in `curveBoxPlace` and
-   * `curveRotOrigin` — each of which the source records a measured cost for
-   * collapsing (~221px and ~123px of drift respectively).
-   *
-   * 📌 Ported unchanged on evidence: stage 26c.5a measured `resvg` against
-   * Chromium on the same `<textPath>` and found identical ink bounding boxes, so
-   * no compensation layer is needed. Behaviour verified by a 300,003-case
-   * differential fuzz against the original.
-   *
-   * ⚠️ **DELETE WHEN `buildScene` LANDS** — it is the caller that resolves a
-   * curved `TextDesign` through `textArcPath` and places it with `curveBoxPlace`.
-   */
-  ['design/arc-geometry.ts', 'M26c.1 — buildScene places every curved node through it'],
+  ['design/design-scene.ts', 'M26d.6 / M26e.1 — the first surface to render a design imports it'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

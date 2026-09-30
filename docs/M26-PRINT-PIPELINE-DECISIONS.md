@@ -601,3 +601,63 @@ and expected state, not a defect. Failing on it would block every commit until a
 removal stage lands, which teaches people to bypass the gate — the habit that
 makes a check worthless. Proven both ways: the warning appears only when there is
 nothing to check, and a single non-exempt dead symbol still fails with exit 1.
+
+## M26c.1 complete — 27 of 27 symbols, verified byte-for-byte (2026-09-30)
+
+`buildScene`, `serializeTextNode`, `sceneToSvgString` and the five scene
+interfaces land in `src/design/design-scene.ts`, completing the port.
+
+### ✅ The strongest verification available: identical SVG bytes
+
+This module emits strings, so the port could be checked against the original at
+the byte level rather than by comparing numbers. Both modules were compiled and
+run side by side over **46,837 comparisons** of complete SVG documents, plus
+their intermediate scenes and individual text nodes.
+
+**Zero mismatches.** Branch coverage was then confirmed rather than assumed —
+across 12,000 generated scenes the fuzz produced clip paths (5,843), alpha masks
+(810), curved `<textPath>` (7,969), wrapped `<tspan>` (4,031), inner rotation
+(1,400), backgrounds (6,040) and XML escaping (all 12,000). The byte-identical
+result is earned, not vacuous.
+
+📌 **This also proves `LINE_HEIGHT` changed nothing.** The sixth occurrence of
+`1.25` lived in `serializeTextNode`, which now reads the named constant — and the
+emitted markup is byte-identical to the source that used the literal.
+
+### ⚠️ Retiring four exemptions exposed the honest state, and the gates said so
+
+Landing `buildScene` retired the exemptions for `design-geometry.types`,
+`layer-geometry`, `text-geometry` and `arc-geometry` — each had named this
+milestone as its removal stage, and each now reaches production through
+`buildScene`. That is a removal stage working as designed.
+
+🔴 **What it revealed: the geometry tree is complete and nothing in the product
+renders a design.** Both gates reported it independently — `check:reachable`
+named `design-scene.ts` as the unreachable root, and the symbol gate listed 19
+individual symbols with no consumer. Neither was noise.
+
+The four scattered exemptions were replaced by **one at the root**, naming the
+real removal stage (M26d.6 dashboard preview, or M26e.1 storefront overlay —
+whichever renders a design first). Consolidating at the root is what keeps the
+other four modules honest: they are checked normally, and only the root is
+excused.
+
+### ✏️ Corrected: a stale milestone label in the gate's own warning
+
+The symbol gate's all-exempt warning named "M26c.5d" — one of the sub-stage
+labels F1 established were my invention rather than the plan's. It now names
+M26d.6 / M26e.1, which exist.
+
+### 📌 Three test-fixture defects, all caught by the compiler
+
+Writing the tests surfaced three places where my fixtures had invented a shape
+the types do not have: `DesignLayer` uses `name` (not `id`) with required `hPct`,
+`rot` and `style`; `LayerCrop` requires every field; and `shapeSrc` is
+`string | undefined`, not nullable. **Each was a defect in the test, not the
+port** — verified against `optionia-app/types.ts` field by field before changing
+anything.
+
+⚠️ One genuine inconsistency in the source, recorded rather than silently
+resolved: `types.ts` declares `shapeSrc?: string`, while `effectiveShape`'s
+inline parameter type widens it to `string | null`. The port follows the
+authoritative declaration.
