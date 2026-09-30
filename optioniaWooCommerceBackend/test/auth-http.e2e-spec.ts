@@ -2,6 +2,8 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
+import { StaffRole } from '../src/common/database/enums';
+import { PlatformStaff } from '../src/admin/entities/platform-staff.entity';
 import { deleteTenantsFor } from './cleanup-tenants';
 
 import { bootstrapTestApp } from './harness';
@@ -461,10 +463,75 @@ describe('auth endpoints (e2e)', () => {
         'locale',
         'name',
         'role',
+        /*
+         * ⚠️ **`staff` joined this list deliberately.** This assertion exists so
+         * a column cannot enter the payload unnoticed, and it did its job — the
+         * field was added to the profile and this test failed until someone
+         * looked at it. It carries a role name and nothing else; no identifier,
+         * no grant history.
+         */
+        'staff',
         'tenant',
       ]);
       expect(JSON.stringify(response.body)).not.toContain('passwordHash');
       expect(JSON.stringify(response.body)).not.toContain('$2b$');
+    }, 30_000);
+
+    /**
+     * 🔴 **A merchant is not staff, and the field says so explicitly.** `null`
+     * rather than an absent key, so a client reading `me.staff` gets a decisive
+     * answer instead of `undefined` — which reads the same as "not loaded yet".
+     */
+    it('reports null staff for an ordinary merchant', async () => {
+      const payload = await loginPayload();
+
+      const response = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${payload.accessToken}`);
+
+      expect(response.body.data.staff).toBeNull();
+    }, 30_000);
+
+    /**
+     * 🔴 **Read live, not from the token.** A staff grant made after a token was
+     * minted takes effect at once — and, more importantly, one REVOKED after it
+     * was minted stops working at once rather than lasting until expiry.
+     */
+    it('reports a staff role, and stops reporting it once revoked', async () => {
+      const payload = await loginPayload();
+      const repo = dataSource.getRepository(PlatformStaff);
+
+      const [row] = await dataSource.query('SELECT id FROM users WHERE email = ?', [EMAIL]);
+
+      const existing = await repo.findOne({ where: { userId: row.id } });
+      await repo.save(
+        existing
+          ? Object.assign(existing, { role: StaffRole.BILLING_OPS, revokedAt: null })
+          : repo.create({
+              userId: row.id,
+              role: StaffRole.BILLING_OPS,
+              grantedAt: new Date(),
+            }),
+      );
+
+      const granted = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${payload.accessToken}`);
+
+      expect(granted.body.data.staff).toEqual({ role: 'billing_ops' });
+
+      /* The SAME token, after the grant is revoked. */
+      const staffRow = await repo.findOneByOrFail({ userId: row.id });
+      await repo.save(Object.assign(staffRow, { revokedAt: new Date() }));
+
+      const revoked = await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Authorization', `Bearer ${payload.accessToken}`);
+
+      expect(revoked.body.data.staff).toBeNull();
+
+      /* Leave no grant behind for the next suite. */
+      await repo.delete({ userId: row.id });
     }, 30_000);
 
     it('refuses an unauthenticated caller', async () => {

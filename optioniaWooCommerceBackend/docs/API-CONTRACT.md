@@ -324,8 +324,30 @@ Who the caller is — the dashboard's shell reads it on boot
             "emailVerified": true, "locale": null,
             "tenant": { "id": "8a1b…", "name": "Acme", "slug": "acme",
                         "status": "active" },
-            "role": "owner" } }
+            "role": "owner",
+            // `null` for every merchant; `{ "role": "billing_ops" }` for staff.
+            "staff": null } }
 ```
+
+🔴 **`staff` tells a client what to RENDER; it grants nothing.** `StaffGuard`
+remains the enforcement on every `/admin` route, so a client that lied about this
+field would still be refused at each one. It exists because the dashboard has to
+decide whether to show the platform-admin group at all, and had no way to know.
+
+⚠️ **Read live, with the same `revokedAt IS NULL` predicate `StaffGuard` uses.**
+A grant revoked a minute ago stops opening the admin group at once rather than
+lasting until the token expires — and using a different predicate from the guard
+would let the screen and the routes disagree, which is a dashboard offering
+buttons that always `403`.
+
+📌 **A nested object, not an `isStaff` boolean.** The ROLE is what a screen
+needs: `read_only` may look at plan pricing and `billing_ops` may change it.
+
+⚠️ **Staff hold a tenant too.** This route runs `TenantGuard`, so a user with no
+tenant membership is refused before the handler runs — a platform employee signs
+in with an ordinary account and additionally sees the admin group. A separate
+tenant-less staff session was considered and deferred; it would be a second auth
+surface to secure and keep in step with this one.
 
 **Why an endpoint rather than persisting the login response.** After a page
 reload a client holds only its tokens, whose claims are `sub`, `tid` and `role` —

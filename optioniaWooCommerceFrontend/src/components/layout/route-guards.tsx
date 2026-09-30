@@ -190,20 +190,46 @@ export function RequireUnverified({ children }: { children: ReactNode }) {
  * carry — so until Phase 26 issues a staff token, this correctly admits nobody.
  */
 export function RequirePlatformStaff({ children }: { children: ReactNode }) {
-  const { isLoading } = useSession();
+  const { me, isLoading } = useSession();
   const router = useRouter();
 
+  const isStaff = me?.staff != null;
+
   useEffect(() => {
-    if (!isLoading) {
+    /*
+     * ⚠️ **Only redirect once the session has LOADED.** Redirecting while
+     * `me` is still undefined would bounce a staff member off their own screen
+     * on every refresh, before the answer had arrived.
+     */
+    if (isLoading) return;
+
+    /*
+     * 🔴 **Signed out goes to `/login`; signed in but not staff goes to
+     * `/dashboard`.** Sending everyone to `/dashboard` would make a signed-out
+     * visitor take an extra hop through a guard that only bounces them onward,
+     * and would suggest their session was fine when it is the thing missing.
+     * The decision table in `route-guards.test.ts` models exactly this split.
+     */
+    if (!me) {
+      router.replace('/login');
+    } else if (!isStaff) {
       router.replace('/dashboard');
     }
-  }, [isLoading, router]);
+  }, [isLoading, me, isStaff, router]);
 
   if (isLoading) {
     return <FullPageLoading />;
   }
 
-  // Deliberately unreachable until Phase 26. `children` is referenced so the
-  // signature stays honest and the group renders once staff tokens exist.
-  return process.env.NEXT_PUBLIC_ENABLE_ADMIN === 'true' ? <>{children}</> : <FullPageLoading />;
+  /*
+   * 🔴 **Routing, not security** — the same principle as the other two guards
+   * above. `StaffGuard` authorises every `/admin` request server-side, so a
+   * merchant who edited their way past this would see the shell and a string of
+   * 403s rather than any platform data.
+   *
+   * 📌 The redirect is already in flight for a non-staff caller; rendering the
+   * loading state rather than `children` keeps the admin shell from flashing on
+   * screen before it happens.
+   */
+  return isStaff ? <>{children}</> : <FullPageLoading />;
 }

@@ -9,7 +9,19 @@ import { describe, expect, it } from 'vitest';
  * components apply it. That is the half worth testing: a redirect loop is a
  * property of the decision table, not of the rendering.
  */
-type Session = { signedIn: boolean; verified: boolean; hasTenant: boolean };
+type Session = {
+  signedIn: boolean;
+  verified: boolean;
+  hasTenant: boolean;
+  /**
+   * 🔴 **Platform staff also hold a tenant** (decided 2026-09-30). `/auth/me`
+   * runs `TenantGuard`, so a user with no tenant membership is refused before
+   * the handler runs — a staff member signs in with an ordinary account and
+   * additionally sees the admin group. `isStaff` is therefore an ADDITION to a
+   * merchant session, never an alternative to one.
+   */
+  isStaff: boolean;
+};
 
 /** `RequireAnonymous` — `(auth)`. */
 function anonymousGuard(s: Session): string | null {
@@ -30,6 +42,20 @@ function unverifiedGuard(s: Session): string | null {
   if (!s.signedIn) return null;
 
   return s.verified ? '/dashboard' : null;
+}
+
+/**
+ * `RequirePlatformStaff` — `(admin)`.
+ *
+ * ⚠️ **Sends a non-staff visitor to `/dashboard`, not to `/login`.** They are
+ * signed in and perfectly entitled to be in the app; they simply have no
+ * platform role. Sending them to sign in would suggest their session was the
+ * problem, and `merchantGuard` would send them straight back — a loop.
+ */
+function platformStaffGuard(s: Session): string | null {
+  if (!s.signedIn) return '/login';
+
+  return s.isStaff ? null : '/dashboard';
 }
 
 /** `RequireSignedIn` — `(session)`. */
@@ -64,6 +90,7 @@ const GUARD_FOR: Record<string, (s: Session) => string | null> = {
    * visitor has one is irrelevant.
    */
   '/reset-password': () => null,
+  '/admin/plans': platformStaffGuard,
 };
 
 /** Follow the redirects, and report a cycle rather than hanging on one. */
@@ -90,10 +117,27 @@ function settle(start: string, session: Session): { at: string; looped: boolean 
   return { at: path, looped: true };
 }
 
-const SIGNED_OUT: Session = { signedIn: false, verified: false, hasTenant: false };
-const UNVERIFIED: Session = { signedIn: true, verified: false, hasTenant: true };
-const READY: Session = { signedIn: true, verified: true, hasTenant: true };
-const NO_TENANT: Session = { signedIn: true, verified: true, hasTenant: false };
+const SIGNED_OUT: Session = {
+  signedIn: false,
+  verified: false,
+  hasTenant: false,
+  isStaff: false,
+};
+const UNVERIFIED: Session = {
+  signedIn: true,
+  verified: false,
+  hasTenant: true,
+  isStaff: false,
+};
+const READY: Session = { signedIn: true, verified: true, hasTenant: true, isStaff: false };
+const NO_TENANT: Session = {
+  signedIn: true,
+  verified: true,
+  hasTenant: false,
+  isStaff: false,
+};
+/** A platform staff member: a ready merchant session, plus a staff grant. */
+const STAFF: Session = { signedIn: true, verified: true, hasTenant: true, isStaff: true };
 
 describe('route guards', () => {
   /**
@@ -108,7 +152,7 @@ describe('route guards', () => {
   });
 
   it('never loops, from any entry point, for any session', () => {
-    const sessions = { SIGNED_OUT, UNVERIFIED, READY, NO_TENANT };
+    const sessions = { SIGNED_OUT, UNVERIFIED, READY, NO_TENANT, STAFF };
 
     for (const [name, session] of Object.entries(sessions)) {
       for (const path of Object.keys(GUARD_FOR)) {
@@ -158,5 +202,34 @@ describe('route guards', () => {
   /** Signed in, verified, member of nothing — its own destination, not a loop. */
   it('sends a tenantless user somewhere they can read', () => {
     expect(settle('/dashboard', NO_TENANT).at).toBe('/no-workspace');
+  });
+
+  /**
+   * 🔴 **The admin group was closed from the day it existed**, redirecting
+   * everyone to `/dashboard` behind an env var. This is the milestone that opens
+   * it, and these say to whom.
+   */
+  it('lets a staff member into the admin group', () => {
+    expect(settle('/admin/plans', STAFF)).toEqual({ at: '/admin/plans', looped: false });
+  });
+
+  it('sends an ordinary merchant out of the admin group, without a loop', () => {
+    // ⚠️ To `/dashboard`, not `/login`: they are signed in and entitled to be
+    // here, just not to this. Sending them to sign in would bounce them back.
+    expect(settle('/admin/plans', READY)).toEqual({ at: '/dashboard', looped: false });
+  });
+
+  it('sends a signed-out visitor at an admin path to sign in', () => {
+    expect(settle('/admin/plans', SIGNED_OUT)).toEqual({ at: '/login', looped: false });
+  });
+
+  it('does not let an unverified staff member skip verification', () => {
+    // A staff grant is not a way around the email check every account passes.
+    const unverifiedStaff = { ...STAFF, verified: false };
+
+    expect(settle('/dashboard', unverifiedStaff)).toEqual({
+      at: '/verify-email',
+      looped: false,
+    });
   });
 });

@@ -87,6 +87,15 @@ export class AuthController {
     locale: string | null;
     tenant: { id: string; name: string; slug: string; status: string } | null;
     role: string | null;
+    /**
+     * Platform staff, when this user is one — `null` for every merchant.
+     *
+     * ⚠️ **Declared here as well as in the service, and that is not ceremony.**
+     * This signature is what the API contract and the OpenAPI document are
+     * generated from; a field the service returns but the controller does not
+     * declare is a field no client knows exists.
+     */
+    staff: { role: string } | null;
   }> {
     const userId = getUserId();
 

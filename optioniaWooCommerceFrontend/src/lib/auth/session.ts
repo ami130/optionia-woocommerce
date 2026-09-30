@@ -10,6 +10,15 @@ export interface Me {
   locale: string | null;
   tenant: { id: string; name: string; slug: string; status: string } | null;
   role: string | null;
+  /**
+   * Platform staff, when this user is one — `null` for every merchant.
+   *
+   * 🔴 **This decides what to RENDER, never what is permitted.** `StaffGuard`
+   * enforces every `/admin` route server-side, so a client that ignored this
+   * field would see the group and then be refused at each request. Hiding it is
+   * a courtesy to staff, not a security boundary.
+   */
+  staff: { role: string } | null;
 }
 
 interface LoginResponse {

@@ -376,6 +376,15 @@ export class AuthService {
     locale: string | null;
     tenant: { id: string; name: string; slug: string; status: string } | null;
     role: string | null;
+    /**
+     * Platform staff, when this user is one.
+     *
+     * 🔴 **`null` for every merchant, which is almost everybody.** A nested
+     * object rather than a bare `isStaff` boolean because the ROLE is what a
+     * screen needs — `read_only` may look at plan pricing and `billing_ops` may
+     * change it, and a boolean would make the dashboard ask again.
+     */
+    staff: { role: string } | null;
   } | null> {
     const users: Array<{
       id: string;
@@ -416,6 +425,28 @@ export class AuthService {
 
     const membership = memberships[0];
 
+    /*
+     * 🔴 **Read live, exactly like the membership above, and for a stronger
+     * reason.** A staff grant that was revoked a minute ago must stop opening
+     * the admin group NOW; taking it from the token's claims would leave it
+     * working until the token expired.
+     *
+     * ⚠️ **`revokedAt IS NULL` is the same predicate `StaffGuard` uses**, so the
+     * screen a staff member sees and the routes they may call cannot disagree.
+     * Reporting staff here while the guard refused them would be the worse
+     * failure of the two: a dashboard offering buttons that always 403.
+     *
+     * 📌 **This does not grant anything.** `StaffGuard` remains the enforcement;
+     * this only tells a client what to render, and a client that lied about it
+     * would still be refused at every admin route.
+     */
+    const staffRows: Array<{ role: string }> = await this.dataSource.query(
+      `SELECT role FROM platform_staff WHERE userId = ? AND revokedAt IS NULL LIMIT 1`,
+      [userId],
+    );
+
+    const staff = staffRows[0];
+
     return {
       id: user.id,
       email: user.email,
@@ -431,6 +462,7 @@ export class AuthService {
           }
         : null,
       role: membership?.role ?? null,
+      staff: staff ? { role: staff.role } : null,
     };
   }
 
