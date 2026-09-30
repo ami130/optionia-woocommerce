@@ -55,6 +55,41 @@ host verifies nothing.
 native and a container is the only way to make "it works here" mean "it works
 there". `optionia-app` already ships a `Dockerfile`; this backend has none.
 
+### ✅ Answered 2026-09-30: DigitalOcean
+
+The owner named DigitalOcean. That settles the platform and leaves one sub-choice
+that genuinely changes the build, so it is recorded rather than assumed.
+
+📌 **The backend containerises cleanly today.** Verified rather than hoped: it
+writes nothing to disk — `grep` for `writeFileSync|mkdirSync|createWriteStream`
+across `src/` matches **nothing** outside tests. Its only filesystem read is
+`plugin-download.service.ts` listing built plugin zips, which is a build artefact
+baked into the image rather than state.
+
+| | What it is | For rasterisation |
+|---|---|---|
+| **App Platform** | DO's managed PaaS; builds from a Dockerfile | ✅ Works with a Dockerfile — system libraries are ours to install. ⚠️ Ephemeral disk, so no font cache survives a restart, which is another reason fonts ship in the image (Decision 4) |
+| **Droplet + Docker** | A VM we administer | ✅ Full control, and a persistent disk if one is ever wanted. ⚠️ Patching, backups and uptime become ours |
+
+**Recommendation: App Platform with a Dockerfile.** The native dependency needs a
+controlled image, which a Dockerfile gives; the *server* underneath it does not
+need administering, and making it ours would add an operational burden this
+project has no other reason to carry.
+
+⚠️ **Either way the disk is treated as ephemeral.** That is not a DigitalOcean
+limitation to work around — it is the property that makes Decision 3 (the print
+file lives on the merchant's WordPress) and Decision 4 (fonts ship in the image)
+correct rather than merely convenient. A pipeline that needed local persistence
+would be one restart from losing a merchant's print file.
+
+🔴 **What still needs deciding is memory, and it is not a formality.**
+Rasterising at print resolution is memory-bound: a 3000×3000 RGBA bitmap is
+~36 MB **decoded**, before the source images composited into it. The smallest App
+Platform instances are 512 MB–1 GB, and a render that exceeds the container's
+memory is killed by the kernel with no error the application can catch or report.
+Sizing is part of Stage 0's spike, not an afterthought — and it is the reason the
+spike must run on the real platform rather than on a laptop with 32 GB.
+
 ---
 
 ## Decision 2 — Who renders, and when?
@@ -139,7 +174,7 @@ cannot be produced.
 ## What this unblocks, in order
 
 ```text
-D1  deployment target        → everything
+D1  deployment target        ✅ DigitalOcean, container (2026-09-30)
 D2  async render             → the order's "not rendered yet" state
 D3  plugin-side storage      → reuse UploadStore's three measured layers
 D4  self-hosted fonts        → the rasteriser can be chosen at all
@@ -156,9 +191,14 @@ are not chosen first — and then the spike is the decision, taken silently.
 
 ## The honest summary
 
-🔴 **Three of these four are mine to recommend and yours to accept**; the first
-is genuinely open. None of them is about Design Lab's features, and all of them
-decide whether it can ship at all.
+✅ **D1 is answered: DigitalOcean, containerised.** The remaining three are mine
+to recommend and yours to accept. None of them is about Design Lab's features,
+and all of them decide whether it can ship at all.
+
+⚠️ **One consequence of D1 is not a decision but a measurement**: how much memory
+a print-resolution render needs. It is the first thing Stage 0 establishes,
+because getting it wrong shows up as a container killed without an error rather
+than as a failure the application can report.
 
 📌 **The cheapest finding here is the oldest code.** `UploadStore` already
 measured the thing that would otherwise have been discovered by a merchant: that
