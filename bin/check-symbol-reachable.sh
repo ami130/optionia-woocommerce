@@ -53,6 +53,10 @@ is_exempt_file() {
     design/letterbox.ts) return 0 ;;
     common/render/render-bounds.ts) return 0 ;;
 
+    # The coordinate model, ported ahead of `buildScene` (M26c.1). ⚠️ **DELETE
+    # WHEN M26c.4 LANDS** — that is where every layer resolves through it.
+    design/layer-geometry.ts) return 0 ;;
+
     *) return 1 ;;
   esac
 }

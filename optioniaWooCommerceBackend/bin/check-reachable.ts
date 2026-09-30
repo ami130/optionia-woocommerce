@@ -113,6 +113,20 @@ const EXEMPT = new Map<string, string>([
    * reflows and the decision was recorded rather than kept.
    */
   ['design/letterbox.ts', 'M26c.4 — buildScene applies it when resolving a scene'],
+
+  /*
+   * 🔴 **The coordinate model, ported ahead of the function that walks it**
+   * (M26c.1). Every branch in `layerRect` resolves a disagreement between the
+   * four surfaces `optionia-app` had to keep in agreement to the pixel, and the
+   * plan calls re-deriving them the most expensive avoidable work in this
+   * project.
+   *
+   * ⚠️ **DELETE WHEN M26c.4 LANDS.** `buildScene` is its caller: it resolves a
+   * stored design into a scene, which is `layerRect` and `frameImageRect` per
+   * layer. If that milestone ships without them, the geometry was transcribed
+   * and then re-derived anyway.
+   */
+  ['design/layer-geometry.ts', 'M26c.4 — buildScene resolves every layer through it'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');
