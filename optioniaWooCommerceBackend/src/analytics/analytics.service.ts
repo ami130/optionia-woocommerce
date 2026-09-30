@@ -1076,6 +1076,23 @@ export class AnalyticsService {
    * column of minor units with the currency stated once at the top is a column
    * somebody sorts, filters, or pastes elsewhere — and then the currency is
    * gone. `null` becomes an empty cell rather than the word "null".
+   *
+   * ## Scope: option revenue only, and deliberately so
+   *
+   * ⚠️ **Per-product revenue (M25.4), view counts and conversion (M25.1) are
+   * NOT here**, and that is a decision rather than an omission. An audit raised
+   * it as a possible gap; the answer is that these are four different shapes —
+   * one row per option, one per product, one per option-day, one per option
+   * with a denominator — and a single CSV holding all four is four files in a
+   * trench coat.
+   *
+   * 🔴 **The failure mode of merging them is silent and expensive**: a merchant
+   * sums a revenue column that now contains rows from two different grains and
+   * gets a number that is wrong in a way no spreadsheet will flag.
+   *
+   * 📌 **So further exports are separate routes with their own shapes**, added
+   * when a merchant asks. The name says what it holds: this one is option
+   * revenue.
    */
   async exportOptionRevenue(tenantId: string): Promise<string> {
     const [rows, currency] = await Promise.all([

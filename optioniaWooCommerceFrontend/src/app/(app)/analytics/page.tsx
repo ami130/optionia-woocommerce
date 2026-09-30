@@ -264,6 +264,29 @@ export function Summary({ data }: { data: AnalyticsSummary }) {
         name={(row) => row.label}
       />
 
+      {/*
+        🔴 **M25.3 asks for most AND least selected values**, and only the second
+        was rendered — `topValues` was computed, typed, fixtured and shown to
+        nobody. The fourth instance of this project's mechanism-with-no-caller
+        defect, found auditing the file that fixed the third.
+
+        ⚠️ **"Highest-earning", not "most-chosen", because that is what it is.**
+        `valueRevenue('most')` orders by `revenueMinor DESC` — so a value bought
+        twice at a high price outranks one bought fifty times. Calling it
+        most-chosen would describe an ordering the query does not use; the
+        selection-count view is the least-chosen list below, which orders by
+        `orders ASC` for exactly that reason.
+      */}
+      <RankedSection
+        title="Highest-earning values"
+        description="Which specific choices bring in the most, within each option."
+        capped={data.topValues}
+        empty="No value has earned anything yet."
+        money={money}
+        rowKey={(row) => `${row.optionKey}:${row.valueKey}`}
+        name={(row) => `${row.label} — ${row.valueKey}`}
+      />
+
       <RankedSection
         title="Least-chosen values"
         description="Ordered by how often each was picked, not by what it earned."

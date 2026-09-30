@@ -350,6 +350,57 @@ describe('Analytics summary', () => {
   });
 
   /**
+   * 🔴 **M25.3 asks for most AND least selected values.** `topValues` was
+   * computed by the backend, carried in the type, present in every fixture —
+   * and rendered by nothing. The fourth instance of this project's
+   * mechanism-with-no-caller defect, found auditing the commit that fixed the
+   * third.
+   */
+  it('lists the highest-earning values, not only the least-chosen', () => {
+    const { container } = render(
+      <Summary
+        data={summary({
+          topValues: {
+            rows: [
+              {
+                optionKey: 'finish',
+                valueKey: 'gloss',
+                label: 'Finish',
+                revenueMinor: 7_700,
+                orders: 3,
+              },
+            ],
+            total: 1,
+            truncated: false,
+          },
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('Highest-earning values');
+    expect(container.textContent).toContain('Finish — gloss');
+    expect(container.textContent).toContain('£77.00');
+  });
+
+  /**
+   * ⚠️ **The two value lists are different questions and must stay
+   * distinguishable.** `topValues` orders by revenue and `leastValues` by
+   * order count — a value bought twice at a high price outranks one bought
+   * fifty times. Rendering both through one component makes it easy to
+   * collapse them by accident.
+   */
+  it('keeps the earning and the selection views separate', () => {
+    const { container } = render(<Summary data={summary()} />);
+    const text = container.textContent ?? '';
+
+    expect(text).toContain('Highest-earning values');
+    expect(text).toContain('Least-chosen values');
+    expect(text.indexOf('Highest-earning values')).not.toBe(
+      text.indexOf('Least-chosen values'),
+    );
+  });
+
+  /**
    * 🔴 **M25.1 + M25.3 — the conversion figure, on the screen at last.**
    *
    * ✏️ **The backend shipped this and nothing rendered it.** An audit found the
