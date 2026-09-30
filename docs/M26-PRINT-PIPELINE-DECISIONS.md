@@ -583,3 +583,21 @@ than a discovery. Each was caught the same way — by asking whether the *magnit
 was physically possible, not by re-reading the code. A decoder bug cannot make
 `resvg` render blank when the PNG visibly contains text; a faithful transcription
 cannot be wrong only in its fifth function.
+
+### ⚠️ A gate went quiet, and only its own output said so
+
+Landing 26c.5b exempted the fifth and last file in `check-symbol-reachable.sh`'s
+watch path, and the gate reported **"all 0 watched symbol(s) have a consumer
+(5 file(s) exempt)"** — passing green while verifying nothing.
+
+Its existing guard was `CHECKED -eq 0 && EXEMPT -eq 0`, which distinguishes
+"the parser broke" from "everything is legitimately exempt" — correct, but it
+left no signal for the second case. Since every exemption here is temporary by
+construction, the gate was set to go silent exactly while the port is most
+exposed to drift.
+
+📌 **Now warned, not failed, and that choice is the point.** All-exempt is a true
+and expected state, not a defect. Failing on it would block every commit until a
+removal stage lands, which teaches people to bypass the gate — the habit that
+makes a check worthless. Proven both ways: the warning appears only when there is
+nothing to check, and a single non-exempt dead symbol still fails with exit 1.

@@ -118,6 +118,21 @@ EOF
 
 if [ "$CHECKED" -eq 0 ] && [ "$EXEMPT" -eq 0 ]; then
   fail "checked no symbols at all — the parser is wrong, not the code"
+# ⚠️ **Every watched file exempt = a gate that verifies nothing while printing
+# green.** The exemptions are temporary by construction — each names the stage
+# that removes it — so this state arrives simply by porting ahead of the
+# consumers, which is exactly what M26c.5b did. The `0` in "all 0 watched
+# symbol(s) have a consumer" is easy to read straight past.
+#
+# 📌 **Warned, not failed, and the distinction is deliberate.** This is a true
+# and expected state, not a defect: failing here would block every commit until
+# a removal stage lands, which trains people to bypass the gate — the exact
+# habit that makes a check worthless. A gate should be loud about going quiet
+# without holding the build hostage to it.
+elif [ "$CHECKED" -eq 0 ]; then
+  printf '\033[33mwarn\033[0m  every watched file is exempt (%d) — this gate is checking nothing\n' "$EXEMPT"
+  printf '        expected while the port runs ahead of its consumers;\n'
+  printf '        landing M26c.5d retires the design/ exemptions and revives it\n'
 elif [ -n "$UNUSED" ]; then
   fail "exported symbol(s) with no production consumer:"
   printf "%b" "$UNUSED" | sed 's|^|      |'
