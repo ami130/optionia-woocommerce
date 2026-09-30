@@ -661,3 +661,75 @@ anything.
 resolved: `types.ts` declares `shapeSrc?: string`, while `effectiveShape`'s
 inline parameter type widens it to `string | null`. The port follows the
 authoritative declaration.
+
+## M26c.2 — the fractions gate, and a rule that had to be narrowed (2026-09-30)
+
+`bin/check-design-fractions.sh` — the 26th gate, satisfying M26c.2's exit clause
+*"a CI check that fails on an absolute pixel constant inside the geometry
+module"*.
+
+### 🔴 The first spelling was too blunt, and its own first run proved it
+
+The obvious rule — flag any literal ≥ 2 in the geometry module — produced three
+hits immediately, and **all three were false positives**:
+
+```
+design-scene.ts:131   opacity: (l.opacity ?? 100) / 100
+design-scene.ts:152   opacity: ((l.opacity ?? 100) / 100) * ((c?.opacity ?? 100) / 100)
+text-geometry.ts:83   curve: Math.max(-100, Math.min(100, design.curve ?? 0))
+```
+
+⚠️ **Opacity is a percentage and curve is a slider bound.** Both are unitless and
+identical at every canvas size, so neither violates a contract about *spatial*
+quantities scaling with the viewBox. A pixel constant is one that **should have
+scaled and did not**.
+
+📌 **A rule that cannot tell those apart gets switched off within a week**, which
+is how a gate stops being read — the same way an exemption list stops being read
+once it holds a symbol nobody can justify. The match is now anchored to the
+spatial vocabulary the module actually uses (`x`, `y`, `w`, `h`, `cx`, `cy`,
+`fontSize`, `letterSpacing`, `boxW`, `sceneH`, …) assigned a two-digit-or-larger
+literal.
+
+### ✅ Proven in three directions, not one
+
+| Probe | Expected | Result |
+|---|---|---|
+| `const w = 460` (hardcoded width) | FAIL | ✅ caught |
+| `fontSize: 48` (hardcoded size) | FAIL | ✅ caught |
+| A **comment** reading *"width = 460 and height = 221"* | PASS | ✅ ignored |
+
+🔴 **The third probe is the one that matters.** This project's recurring gate
+defect is reading documentation instead of code — the screen-reachability gate
+passed *both* its probes by matching a field name inside a comment. These
+geometry files are heavily commented and several comments quote real pixel
+measurements (*"~221px of drift"*, *"8px on a 460-tall canvas"*). Those are prose
+about the defect, not the defect. Comments, block comments, template literals and
+string literals are all stripped **before** matching.
+
+The gate also asserts the inverse — that the fraction vocabulary is still present
+(117 `Pct` references) — because a rule that only forbids passes trivially on a
+module that has stopped doing geometry at all.
+
+## ✏️ Correction — my sub-stage numbering was invented (2026-09-30)
+
+I labelled the port work **26c.5a–5e**. The plan's **M26c.5 is "Cross-surface
+parity fixtures"**, something else entirely; the porting work belongs to
+**M26c.1**. Commits `e1c261f`, `49be7ea` and the exemptions they added therefore
+read as if parity fixtures were underway when they were not.
+
+⚠️ **The work and its ordering were correct; only the labels were wrong.** They
+are reconciled from `78f5ed0` onward, and the stale "M26c.5d" in the symbol
+gate's warning now names M26d.6 / M26e.1, which exist.
+
+## Where M26c stands
+
+| Stage | Requirement | State |
+|---|---|---|
+| M26c.1 | Port `designScene.ts` | ✅ **27 of 27**, byte-verified |
+| M26c.1 | Name the `1.25` line-height | ✅ `LINE_HEIGHT`, all six occurrences |
+| M26c.1 | Fix two visible measured defects | ➡️ **Moved to M26e.1 / M26e.2** — they live in the storefront overlay script, not the geometry module |
+| M26c.2 | Fractions enforced in CI | ✅ **Gate 26**, proven in three directions |
+| M26c.3 | Aspect policy decided | ✅ Letterbox (Decision 5) |
+| M26c.4 | Persist the measured advance ratio | ❌ **Not started** — needs a design entity and migration |
+| M26c.5 | Cross-surface parity fixtures | ❌ Not started — the exit gate |

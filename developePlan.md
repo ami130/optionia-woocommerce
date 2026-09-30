@@ -31220,6 +31220,24 @@ The plugin mounts the server-built SVG over the theme's real product image and u
 as the customer types or selects. **No geometry computed in PHP** — the payload arrives
 resolved.
 
+🔴 **Two of M26c.1's four "fix on the way in" defects belong HERE, moved 2026-09-30 after
+checking where they actually live.** M26c.1 asks for the *k²* screen-space defect and the
+border-box/`object-fit` defect to be fixed while porting `designScene.ts`. They are not in
+`designScene.ts`: both are in `optionia-app/app/assets/optionia-designlab.js`, a 1,255-line
+storefront DOM overlay script. Verified — `designScene.ts` contains **zero** DOM measurement
+(no `getBoundingClientRect`, no `getComputedStyle`) and that overlay script contains **zero**
+line-height geometry. They are cleanly separated concerns.
+
+- **`planMount` mixes screen space and pre-transform local space**, so a CSS `scale(k)` on the
+  anchor chain sizes the overlay by **k²**. This is the overlay's mounting maths → **M26e.1**.
+- **The overlay is sized to the `<img>` border box while `object-fit` paints the content box.**
+  Finding the paint box inside an arbitrary theme's markup → **M26e.2**.
+
+⚠️ **Attempting them during M26c.1 would mean porting a storefront overlay inside a geometry
+milestone, with no storefront to mount it on.** The other two known defects stay as recorded
+known issues: the `hhea` baseline belongs to the order renderer (M26e.4), and the ≤0.085px
+canvas rounding residual is below the threshold of anything visible.
+
 ### M26e.2 — Finding the product image in an arbitrary theme
 
 The hardest problem in this Part, and materially harder than on Shopify.
