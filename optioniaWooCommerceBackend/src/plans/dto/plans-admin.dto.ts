@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsInt, IsObject, IsString, Length, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsObject, IsString, Length, Max, Min } from 'class-validator';
 import { SELLABLE_INTERVALS } from '../billing-interval';
+import { MAX_DISCOUNT_BASIS_POINTS } from '../plan-discount';
 
 /**
  * Setting a plan's price (M22.1a).
@@ -98,4 +99,38 @@ export class SetPlanFeaturesDto {
   })
   @IsObject()
   features: Record<string, boolean>;
+}
+
+/**
+ * Discount a plan's list price by a percentage.
+ *
+ * 📌 **Basis points, not a percentage float.** 2000 is 20%, 250 is 2.5%. Money
+ * arithmetic here is integer throughout — a float percentage would reintroduce
+ * the drift `PRICING-SPEC.md` §4 exists to prevent, at the one boundary where a
+ * staff member is setting what merchants pay.
+ */
+export class DiscountPlanPriceDto {
+  @ApiProperty({ description: 'ISO 4217, e.g. USD.', minLength: 3, maxLength: 3 })
+  @IsString()
+  @Length(3, 3)
+  currency: string;
+
+  @ApiProperty({ enum: SELLABLE_INTERVALS })
+  @IsIn(SELLABLE_INTERVALS)
+  interval: string;
+
+  /**
+   * ⚠️ **Bounded at both ends by the validator, and again by the maths.** 0 is
+   * allowed — it is how a discount is removed, by writing a price back at the
+   * list figure.
+   */
+  @ApiProperty({
+    description: 'Discount in basis points — 2000 is 20%. Max 10000 (100%).',
+    minimum: 0,
+    maximum: MAX_DISCOUNT_BASIS_POINTS,
+  })
+  @IsInt()
+  @Min(0)
+  @Max(MAX_DISCOUNT_BASIS_POINTS)
+  basisPoints: number;
 }

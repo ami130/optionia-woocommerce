@@ -9,6 +9,7 @@ import { ApiErrors } from '../common/openapi/api-errors.decorator';
 import {
   SetPlanFeaturesDto,
   SetPlanLimitsDto,
+  DiscountPlanPriceDto,
   SetPlanPriceDto,
   SetPlanVisibilityDto,
 } from './dto/plans-admin.dto';
@@ -73,6 +74,40 @@ export class PlansAdminController {
       currency: body.currency,
       interval: body.interval,
       amountMinor: body.amountMinor,
+    });
+  }
+
+  /**
+   * Discount a plan's yearly list price by a percentage.
+   *
+   * 🔴 **A discount is a PRICE CHANGE, and is audited as one.** It retires the
+   * current row and writes a replacement, so an existing subscriber's next
+   * invoice is unchanged — they stay pinned to the price they bought. Making
+   * this a separate mutable field would instead re-price everyone already on
+   * the plan, silently.
+   *
+   * 📌 Same role and rate limit as `setPrice`, because it IS `setPrice` with the
+   * amount computed from the list price rather than typed.
+   */
+  @Post(':code/discount')
+  @RequireStaffRole(StaffRole.SUPER_ADMIN, StaffRole.BILLING_OPS)
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @ApiErrors(201, 400, 401, 403, 404, 429)
+  async discountPrice(
+    @Param('code') code: string,
+    @Body() body: DiscountPlanPriceDto,
+  ): Promise<{
+    priceId: string;
+    superseded: string | null;
+    listMinor: number;
+    amountMinor: number;
+    savingMinor: number;
+  }> {
+    return this.plans.discountPrice({
+      planCode: code,
+      currency: body.currency,
+      interval: body.interval,
+      basisPoints: body.basisPoints,
     });
   }
 

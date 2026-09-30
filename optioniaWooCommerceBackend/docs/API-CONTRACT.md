@@ -2601,6 +2601,7 @@ it blocks (M24.4).
 | --- | --- | --- |
 | `GET /admin/plans` | staff realm — `super_admin`, `read_only` | `[built]` |
 | `POST /admin/plans/:code/price` | staff realm — `super_admin` | `[built]` |
+| `POST /admin/plans/:code/discount` | staff realm — `super_admin`, `billing_ops` | `[built]` |
 | `PATCH /admin/plans/:code/visibility` | staff realm — `super_admin` | `[built]` |
 | `POST /admin/plans/:code/limits/preview` | staff realm — `super_admin`, `billing_ops`, `read_only` | `[built]` |
 | `PUT /admin/plans/:code/limits` | staff realm — `super_admin`, `billing_ops` | `[built]` |

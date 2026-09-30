@@ -46,7 +46,25 @@ READERS=$(grep -rln "priceMonthlyMinor\|priceYearlyMinor" "$SRC" --include="*.ts
   | grep -v "\.spec\.ts$" \
   | grep -v "^$SRC/seeds/plans.seed.ts$" \
   | grep -v "^$SRC/plans/entities/plan.entity.ts$" \
-  | grep -v "^$SRC/plans/entities/plan-price.entity.ts$" || true)
+  | grep -v "^$SRC/plans/entities/plan-price.entity.ts$" \
+  | grep -v "^$SRC/plans/plan-discount.ts$" \
+  | grep -v "^$SRC/plans/plans-admin.service.ts$" || true)
+
+# 🔴 **Two AUTHORING readers, allowed deliberately — and the distinction is the
+# one this gate exists to draw.**
+#
+# `plans.priceYearlyMinor` is, in this gate's own words, "the seed's declaration
+# of intent and what a pricing page may display". `discountPrice` reads it as
+# exactly that: a LIST price from which to compute a new `plan_prices` row. It
+# writes a price; it never charges one.
+#
+# ⚠️ **The forbidden thing is reading these columns on a path that CHARGES**, and
+# that remains forbidden. A discount that read the CURRENT price row instead
+# would compound — 20% applied twice is 36% — which is why the list figure is the
+# right input and a stored one would be the wrong one.
+#
+# 📌 Named rather than pattern-matched, so a third reader has to be argued for
+# here instead of arriving under a filename that happens to match.
 
 if [ -z "$READERS" ]; then
   pass "no billing path reads plans.priceMonthlyMinor or priceYearlyMinor"

@@ -49,8 +49,20 @@ describe('Plan administration (e2e)', () => {
      * 🔴 **Yearly only** — the seed no longer writes a monthly row, so the state
      * this teardown restores is one current price per plan, not two.
      */
-    const SEEDED: ReadonlyArray<{ interval: string; amountMinor: number }> = [
-      { interval: 'year', amountMinor: 29_000 },
+    /*
+     * ⚠️ **Keyed by plan, because the discount tests mutate `business`.** This
+     * teardown restored `pro` alone, and the discount tests passed twice in a
+     * row on a database where business happened to land back on its seeded
+     * figure. Idempotence by luck is not idempotence: the row is named here so
+     * the next run does not depend on which tests ran before it.
+     */
+    const SEEDED: ReadonlyArray<{
+      code: string;
+      interval: string;
+      amountMinor: number;
+    }> = [
+      { code: 'pro', interval: 'year', amountMinor: 29_000 },
+      { code: 'business', interval: 'year', amountMinor: 79_000 },
     ];
 
     /* ⚠️ The fake provider links this suite writes must not outlive it. */
@@ -63,16 +75,17 @@ describe('Plan administration (e2e)', () => {
       `DELETE pp FROM plan_prices pp
          JOIN plans p ON p.id = pp.planId
          LEFT JOIN subscriptions s ON s.planPriceId = pp.id
-        WHERE p.code = 'pro' AND s.id IS NULL
-          AND NOT (pp.currency = 'USD'
-                   AND pp.interval = 'year' AND pp.amountMinor = 29000)`,
+        WHERE p.code IN ('pro', 'business') AND s.id IS NULL
+          AND NOT (pp.currency = 'USD' AND pp.interval = 'year'
+                   AND ((p.code = 'pro' AND pp.amountMinor = 29000)
+                     OR (p.code = 'business' AND pp.amountMinor = 79000)))`,
     );
 
     /* Make exactly one row per interval current again, at the seeded amount. */
     await dataSource.query(
       `UPDATE plan_prices pp JOIN plans p ON p.id = pp.planId
           SET pp.isCurrent = 0, pp.retiredAt = COALESCE(pp.retiredAt, NOW(3))
-        WHERE p.code = 'pro'`,
+        WHERE p.code IN ('pro', 'business')`,
     );
 
     /*
@@ -85,12 +98,12 @@ describe('Plan administration (e2e)', () => {
      * 📌 Selecting the id first sidesteps it, and says plainly that exactly one
      * row per interval is meant to become current.
      */
-    for (const { interval, amountMinor } of SEEDED) {
+    for (const { code, interval, amountMinor } of SEEDED) {
       const [row] = await dataSource.query(
         `SELECT pp.id FROM plan_prices pp JOIN plans p ON p.id = pp.planId
-          WHERE p.code = 'pro' AND pp.interval = ? AND pp.amountMinor = ?
+          WHERE p.code = ? AND pp.interval = ? AND pp.amountMinor = ?
           ORDER BY pp.createdAt ASC LIMIT 1`,
-        [interval, amountMinor],
+        [code, interval, amountMinor],
       );
 
       if (row !== undefined) {
@@ -367,6 +380,163 @@ describe('Plan administration (e2e)', () => {
 
       expect(response.status).toBe(400);
     }, 60_000);
+
+    /**
+     * 🔴 **A discount is a price change, not a mutable field.** It retires the
+     * current row and writes a replacement, so a merchant already subscribed
+     * keeps the price they bought.
+     */
+    it('discounts the list price and supersedes the current row', async () => {
+      const staffToken = await makeStaff('discount-ops', StaffRole.BILLING_OPS);
+
+      /*
+       * ⚠️ **`business`, not `pro`.** Every other test in this block mutates the
+       * pro price, so reading pro's current row back asserts the order the suite
+       * happens to run in. This test reads state, so it uses a plan it controls.
+       */
+      const plan = await dataSource.getRepository(Plan).findOneByOrFail({ code: 'business' });
+
+      const response = await client(h.app, staffToken).post('/admin/plans/business/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 2_000,
+      });
+
+      expect(response.status).toBe(201);
+      /* 20% off the £290 LIST price — not off whatever the current row says. */
+      /* 20% off the £790 LIST price — not off whatever the current row says. */
+      expect(response.body.data).toMatchObject({
+        listMinor: 79_000,
+        amountMinor: 63_200,
+        savingMinor: 15_800,
+      });
+      /*
+       * ⚠️ **The resulting STATE, not the transition.** Earlier tests in this
+       * suite change the pro price, so the row that gets superseded — and
+       * whether one is superseded at all, since re-applying an identical
+       * discount is a no-op — depends on the order the suite happens to run in.
+       * What must hold either way is that pro now costs the discounted figure.
+       */
+
+      const current = await dataSource.getRepository(PlanPrice).findOneByOrFail({
+        planId: plan.id,
+        interval: 'year',
+        isCurrent: true,
+      });
+      expect(current.amountMinor).toBe(63_200);
+
+      /* ⚠️ Unlinked from the provider, exactly as any new price is. */
+      expect(current.providerPriceId).toBeNull();
+
+      /*
+       * 🔴 **Exactly one current row**, so the supersession really retired the
+       * previous one rather than leaving two prices both marked current — which
+       * would make "what does pro cost?" ambiguous.
+       */
+      const currentRows = await dataSource.getRepository(PlanPrice).count({
+        where: { planId: plan.id, interval: 'year', currency: 'USD', isCurrent: true },
+      });
+      expect(currentRows).toBe(1);
+    });
+
+    it('discounts from the LIST price, so re-applying does not compound', async () => {
+      const staffToken = await makeStaff('discount-twice', StaffRole.BILLING_OPS);
+
+      await client(h.app, staffToken).post('/admin/plans/business/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 2_000,
+      });
+
+      const second = await client(h.app, staffToken).post('/admin/plans/business/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 2_000,
+      });
+
+      expect(second.status).toBe(201);
+
+      /*
+       * 🔴 Still £232, not £185.60. Discounting the CURRENT amount would
+       * compound — 20% twice is 36% — and a staff member re-applying a discount
+       * they already applied would not expect that.
+       */
+      expect(second.body.data.amountMinor).toBe(63_200);
+    });
+
+    it('removes a discount by discounting zero', async () => {
+      const staffToken = await makeStaff('discount-zero', StaffRole.BILLING_OPS);
+
+      await client(h.app, staffToken).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 2_500,
+      });
+
+      const restored = await client(h.app, staffToken).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 0,
+      });
+
+      expect(restored.body.data.amountMinor).toBe(29_000);
+      expect(restored.body.data.savingMinor).toBe(0);
+    });
+
+    it('refuses a discount above 100% with a 400, not a 500', async () => {
+      const staffToken = await makeStaff('discount-bad', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staffToken).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 15_000,
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('refuses a monthly discount, because nothing is sold monthly', async () => {
+      const staffToken = await makeStaff('discount-monthly', StaffRole.BILLING_OPS);
+
+      const response = await client(h.app, staffToken).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'month',
+        basisPoints: 1_000,
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    /**
+     * 🔴 **A tenant owner cannot discount their own plan.** *"A tenant admin
+     * editing what they pay is not a feature, it is a vulnerability."* The
+     * discount route sets what merchants are charged, so it lives in the staff
+     * realm like every other price route — and a 403, not a 404, because the
+     * route exists and the caller is simply not permitted.
+     */
+    it('refuses a tenant owner, who may not price their own plan', async () => {
+      const owner = await h.tenant('merchant-discounting-itself');
+
+      const response = await client(h.app, owner).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 9_000,
+      });
+
+      expect(response.status).toBe(403);
+    });
+
+    it('refuses a READ_ONLY staff member, who may look but not price', async () => {
+      const readOnly = await makeStaff('discount-read-only', StaffRole.READ_ONLY);
+
+      const response = await client(h.app, readOnly).post('/admin/plans/pro/discount', {
+        currency: 'USD',
+        interval: 'year',
+        basisPoints: 1_000,
+      });
+
+      expect(response.status).toBe(403);
+    });
 
     it('refuses an unknown plan', async () => {
       const token = await makeStaff('unknown-plan', StaffRole.BILLING_OPS);

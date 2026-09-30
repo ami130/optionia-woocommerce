@@ -12,6 +12,7 @@ import {
 import { Plan } from './entities/plan.entity';
 import { PlanPrice } from './entities/plan-price.entity';
 import { SELLABLE_INTERVALS, isSellableInterval } from './billing-interval';
+import { applyDiscount } from './plan-discount';
 
 /** A plan, with its current prices, as staff need to see it. */
 export interface PlanAdminView {
@@ -132,6 +133,107 @@ export class PlansAdminService {
    * showed the new one — a silent mismatch of exactly the kind F105's verifier
    * exists to catch.
    */
+  /**
+   * Discount a plan's list price by a percentage.
+   *
+   * 🔴 **This computes an amount and then calls {@link setPrice}.** It does not
+   * write a price row itself. Supersession — retire the current row, insert a
+   * replacement, leave every pinned subscriber untouched, record the audit
+   * entry — is difficult and already correct in one place; a second
+   * implementation of it is how the two drift.
+   *
+   * 📌 **The list price is `plans.priceYearlyMinor`**, the seed's declaration of
+   * intent, NOT whatever the current price row happens to say. Discounting the
+   * current amount would compound: 20% off twice is 36% off, and a staff member
+   * re-applying a discount they already applied would not expect that.
+   *
+   * ⚠️ **The discounted row starts unlinked from the provider**, exactly as any
+   * new price does, so `billing:link-prices` must run before a merchant can buy
+   * it. That is the existing contract and not a special case here.
+   */
+  async discountPrice(input: {
+    planCode: string;
+    currency: string;
+    interval: string;
+    basisPoints: number;
+  }): Promise<{
+    priceId: string;
+    superseded: string | null;
+    listMinor: number;
+    amountMinor: number;
+    savingMinor: number;
+  }> {
+    const plan = await this.dataSource
+      .getRepository(Plan)
+      .findOne({ where: { code: input.planCode } });
+
+    if (plan === null) {
+      throw new NotFoundException(`Unknown plan '${input.planCode}'`);
+    }
+
+    let discounted;
+    try {
+      discounted = applyDiscount(plan.priceYearlyMinor, input.basisPoints);
+    } catch (error) {
+      /*
+       * ⚠️ **A RangeError here is a bad REQUEST, not a server fault.** The
+       * discount module refuses an out-of-range figure by throwing; letting that
+       * reach the handler would answer a staff typo with a 500 and put the
+       * investigation in the wrong place.
+       */
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Invalid discount',
+      );
+    }
+
+    /*
+     * 🔴 **Re-applying the same discount is a NO-OP, not an error.**
+     *
+     * `setPrice` refuses an amount identical to the current one, and for a typed
+     * price that is right — writing the same figure twice is likely a mistake
+     * worth surfacing. A discount is different: staff asserting "this plan is
+     * 20% off" are describing a desired STATE, and the honest answer when it is
+     * already true is "it is", not a 400. Detected here rather than by weakening
+     * the shared guard, which still protects the typed path.
+     *
+     * ⚠️ Nothing is written, so no row churns and no audit entry claims a change
+     * that did not happen.
+     */
+    const currency = input.currency.toUpperCase();
+    const current = await this.dataSource.getRepository(PlanPrice).findOne({
+      where: {
+        planId: plan.id,
+        currency,
+        interval: input.interval,
+        isCurrent: true,
+      },
+    });
+
+    if (current?.amountMinor === discounted.amountMinor) {
+      return {
+        priceId: current.id,
+        superseded: null,
+        listMinor: discounted.listMinor,
+        amountMinor: discounted.amountMinor,
+        savingMinor: discounted.savingMinor,
+      };
+    }
+
+    const result = await this.setPrice({
+      planCode: input.planCode,
+      currency: input.currency,
+      interval: input.interval,
+      amountMinor: discounted.amountMinor,
+    });
+
+    return {
+      ...result,
+      listMinor: discounted.listMinor,
+      amountMinor: discounted.amountMinor,
+      savingMinor: discounted.savingMinor,
+    };
+  }
+
   async setPrice(input: {
     planCode: string;
     currency: string;

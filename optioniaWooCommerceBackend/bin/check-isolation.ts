@@ -177,6 +177,16 @@ const COVERED_BY_LEAKAGE_TEST = new Set([
   'PATCH /v1/admin/plans/:code/visibility',
 
   /*
+   * ⚠️ **The discount route sets what merchants PAY**, so it carries the same
+   * obligation as `price` and is proven the same way rather than merely listed:
+   * `plans-admin.e2e-spec` asserts that a tenant owner — the highest role a
+   * merchant holds — is refused with a 403, and that a READ_ONLY staff member is
+   * refused too. A merchant discounting their own plan is the exact defect the
+   * staff realm exists to prevent.
+   */
+  'POST /v1/admin/plans/:code/discount',
+
+  /*
    * B10's three, on the same reasoning and with the same obligation: each is
    * proven cross-realm in `plans-admin.e2e-spec` rather than merely listed here.
    * ⚠️ **The preview is a READ that names no tenant.** It reports how many
