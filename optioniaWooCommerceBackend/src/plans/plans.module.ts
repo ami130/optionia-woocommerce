@@ -11,6 +11,7 @@ import { TaxReportController } from '../billing/tax-report.controller';
 import { TaxReportService } from '../billing/tax-report.service';
 import { PlansAdminController } from './plans-admin.controller';
 import { PlansAdminService } from './plans-admin.service';
+import { PublicPlansController } from './public-plans.controller';
 
 /**
  * Plan administration for platform staff (M22.1a).
@@ -32,7 +33,7 @@ import { PlansAdminService } from './plans-admin.service';
    * and the report is ParseLab's own tax position, not a merchant's history.
    * Grouping by realm rather than by subject keeps the guard chain obvious.
    */
-  controllers: [PlansAdminController, TaxReportController],
+  controllers: [PlansAdminController, PublicPlansController, TaxReportController],
   providers: [PlansAdminService, TaxReportService, StaffGuard],
   exports: [PlansAdminService, TaxReportService],
 })

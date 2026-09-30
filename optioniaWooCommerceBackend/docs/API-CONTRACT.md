@@ -2621,6 +2621,7 @@ it blocks (M24.4).
 
 | Route | Capability | Status |
 | --- | --- | --- |
+| `GET /plans` | **public** — no authentication | `[built]` |
 | `GET /admin/plans` | staff realm — `super_admin`, `read_only` | `[built]` |
 | `POST /admin/plans/:code/price` | staff realm — `super_admin` | `[built]` |
 | `POST /admin/plans/:code/discount` | staff realm — `super_admin`, `billing_ops` | `[built]` |
