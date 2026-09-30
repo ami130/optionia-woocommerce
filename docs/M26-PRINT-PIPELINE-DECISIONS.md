@@ -349,3 +349,76 @@ than as a failure the application can report.
 measured the thing that would otherwise have been discovered by a merchant: that
 `wp-content/uploads/` is public by default. Reusing it makes Decision 3 the least
 risky part of this pipeline rather than the most.
+
+---
+
+## Stage 26c.0 — what to port, read line by line (2026-09-30)
+
+Before porting `designScene.ts`, it was read rather than estimated. Four things
+the plan asserts are **confirmed**, and **one finding of mine was wrong**.
+
+### ✅ Confirmed: the port closure is small and genuinely framework-free
+
+`designScene.ts` is **881 lines, of which 551 are code** — the other 331 are
+comments, and they are the *reason to port rather than rewrite*: they carry the
+parity reasoning that would otherwise be re-derived.
+
+Its only imports are two local ones: a **type-only** import from `types.ts`, and
+exactly **one function** (`clampInside`) from `helpers.ts`. So `helpers.ts` does
+not port wholesale — one 4-line function does.
+
+📌 **No React, no Remix, no platform dependency.** The plan's claim holds exactly.
+
+### ✅ Confirmed: the `1.25` line-height defect, counted independently
+
+Five genuine line-height sites across four files — `designScene.ts`,
+`DesignSvg.tsx`, `TextDesignLabModal.tsx` (twice) and `text-to-path.server.ts` —
+each a bare literal, nothing linking them. (A sixth `1.25` is an unrelated zoom
+step in `useCanvasViewport.ts`.) **Export it as a named constant on the way in.**
+
+### ✅ Confirmed, and it moves work OUT of 26c
+
+🔴 **`designScene.ts` contains NONE of the four measured defects.** `grep` for
+`object-fit`, `getBoundingClientRect` and `devicePixelRatio` inside it matches
+**nothing**. All four live in `useCanvasViewport.ts`, `DesignCanvas.tsx`,
+`TextDesignLabModal.tsx` and `text-to-path.server.ts` — which are **26d and 26e**
+surfaces, not 26c's.
+
+⚠️ **So M26c.1's instruction to "fix two things on the way in" is misfiled.** The
+geometry module is clean; the fixes belong with the editor and the storefront
+overlay that actually mix screen space with local space.
+
+### ✅ And `resvg` deletes one of the four outright
+
+The `hhea` baseline defect exists only in `text-to-path.server.ts`, which
+computes a baseline from `(ascender + descender) / 2 / unitsPerEm`. `resvg`
+renders `<text>` natively and applies `dominant-baseline` itself, so **that file
+does not port and that defect does not travel**. Three remain, all in 26d/26e.
+
+### ✏️ Corrected: my "textPath fallback is dead code" finding was wrong
+
+I claimed `designScene.ts` carries droppable librsvg-only machinery, citing a
+comment about *"a renderer without `<textPath>`"*.
+
+**Reading the function disproved it.** `arcGeometryFromR` returns the path `d`,
+the exact bounding box **and** `ArcParams` from one computation — they are not
+separable, and the geometry is shared by every surface. What *is* droppable is
+the **consumer**: `ArcParams` is used only by `text-to-path.server.ts`, which
+`resvg` makes unnecessary. So a 243-line consumer goes and the producer stays.
+
+📌 **The lesson repeats the font one**: a comment describing why something exists
+is not evidence that it can be removed. Both errors came from reading a comment
+instead of the code under it.
+
+### The honest port size
+
+| | Lines | Ported? |
+|---|---|---|
+| `designScene.ts` | 881 (551 code) | ✅ whole |
+| `types.ts` — the seven imported types | ~120 of 253 | ✅ the geometry subset |
+| `helpers.ts` — `clampInside` | 4 of 168 | ✅ one function |
+| `text-to-path.server.ts` | 243 | ❌ `resvg` replaces it |
+| `text-fonts.server.ts` | 225 | ❌ fonts ship in the image |
+
+**~1,000 lines in, ~470 avoided** — the earlier "~470 avoided" estimate survives
+scrutiny, and is now a count rather than a guess.
