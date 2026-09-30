@@ -192,6 +192,76 @@ size, and that correction belongs in the record.
 📌 **145 ms at 3000×3000 means the job is quick and the queue is short.** The
 async design is about *reliability*, not duration.
 
+### Audit, same day — six findings, two of which change the design
+
+Stage 0's result was re-interrogated rather than accepted. Three claims held, two
+things are genuinely wrong, and **one of my own findings was itself wrong**.
+
+#### ✅ Held
+
+- **Embedded rasters, clip-paths and opacity all render** — data URIs are how a
+  product photo is composited, and clip-paths are the frames/shapes system.
+- **A remote `href` is IGNORED**, in 7 ms. No fetch, so no SSRF from a
+  merchant-supplied SVG and no hidden network call in the order path. ⚠️ Worth
+  stating because `optionia-app` *does* fetch fonts at render time.
+- **A missing font family falls back** rather than vanishing.
+
+#### 🔴 F1 — An unbounded canvas is an OOM kill, and it killed the test run
+
+The first hostile-input batch **died at exit 137 — OS-killed.** Isolated:
+
+| Input | Result |
+|---|---|
+| Billion laughs | ✅ throws catchably |
+| Malformed XML | ✅ throws catchably |
+| Empty string | ✅ throws catchably |
+| **50000×50000 canvas** | 🔴 **rendered — 46 s, 9.8 MB PNG, ~10 GB RGBA** |
+
+🔴 **Three fail safely; the fourth SUCCEEDS, which is worse.** It consumes the
+container until the kernel kills it, and a kernel kill produces **no error the
+application can catch, log, or report**. `optionia-app` has no such bound either.
+
+**Dimensions must be validated against a ceiling before any render call exists**,
+together with a hard render timeout — 46 seconds was reachable on a laptop.
+
+#### ✏️ F2 — Corrected: this is tofu, not blanks, and it is far less severe
+
+**My first measurement was wrong, and the method was the reason.** A byte-count
+heuristic classified Greek, Hebrew and Arabic as "blank" against a threshold.
+Rendering them and **looking** disproved it: with only Arial supplied, Greek,
+Hebrew and **Arabic all draw correctly, shaped and right-to-left**. Arial covers
+them.
+
+The real gap is narrower and **visible rather than silent**: Japanese renders as
+`□□□□□` — tofu boxes. A merchant sees something is wrong instead of receiving a
+blank print file.
+
+📌 **`resvg` chains fallback across supplied font files**, verified: given Latin
+plus a CJK file, `Gift ありがとう` renders in one string. So coverage is a
+packaging decision, not an architectural one.
+
+**Cost of closing it:** CJK is the expensive script — ~25 MB for a Hiragino-class
+family — where Arabic is under 1 MB and Greek/Hebrew/Cyrillic are free with a
+normal Latin font.
+
+⚠️ **The lesson is methodological and applies beyond fonts**: a byte-count
+threshold is a proxy, and a proxy that decides a finding must be checked against
+the thing itself. Two of the three "blank" results were artefacts of my test, not
+defects in the renderer.
+
+#### ⚠️ F3 — ~470 lines is an estimate of mine, not a measurement
+
+`text-to-path.server.ts` (243) plus `text-fonts.server.ts` (225) is a file count.
+Some metric work may still be needed for the editor's shrink-to-fit, so this is
+**"~470 lines avoided", not "470 lines deleted"**.
+
+#### Gaps carried forward
+
+- **G1** No dimension ceiling and no render timeout anywhere — F1 makes both
+  prerequisites rather than hardening.
+- **G2** Font packaging: Latin covers more than expected, CJK costs ~25 MB, and
+  the failure is tofu rather than silence. Decided below.
+
 ---
 
 ## Decision 4 — Fonts
@@ -218,6 +288,31 @@ What that codebase does, and why it is a warning rather than a model:
 simpler still: the renderer is handed font *files* directly and needs no
 conversion step at all. A font that cannot load is a print file that cannot be
 produced, and a font fetched at request time is one network call away from that.
+
+### Coverage, decided 2026-09-30
+
+The owner answered *"yes maybe"* to non-Latin merchants at launch. **That is the
+answer to design for**, because it rules out the one unacceptable outcome: a
+merchant discovering the limit from a customer's order rather than from us.
+
+📌 **Latin-plus covers more than expected, for free.** A normal Latin face carries
+Greek, Cyrillic, Hebrew and Arabic — all verified rendering correctly, Arabic
+shaped and right-to-left. So the gap is **CJK specifically**, not "non-Latin".
+
+**Ship Latin-plus, add CJK when a merchant needs it, and make the limit visible
+rather than silent.** The three parts matter together:
+
+1. **Latin-plus at launch** — covers most of the world's shops for ~1 MB.
+2. **CJK as an added font pack** (~25 MB) rather than always in the image, because
+   it is 25× every other script combined and most merchants never type a kana.
+3. 🔴 **Detect unsupported glyphs at AUTHORING time and say so**, in the editor,
+   before an order exists. Tofu in a print file is visible but it is visible *to
+   the merchant's customer*; the same fact shown in the editor is a supported
+   limitation instead of a defect.
+
+⚠️ **Point 3 is the one that must not be dropped for schedule.** Without it this
+decision is "we support fewer scripts than we implied", which is the shape of
+complaint no amount of documentation answers.
 
 ---
 
