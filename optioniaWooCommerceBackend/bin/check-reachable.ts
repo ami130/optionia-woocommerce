@@ -145,6 +145,22 @@ const EXEMPT = new Map<string, string>([
    * and then re-derived anyway.
    */
   ['design/text-geometry.ts', 'M26c.5d — buildScene resolves every text node through it'],
+
+  /**
+   * 🔴 **Curved-text geometry, ported ahead of `buildScene`** (M26c.1). The ring
+   * radius, its bounding box, and the fixed/legacy splits in `curveBoxPlace` and
+   * `curveRotOrigin` — each of which the source records a measured cost for
+   * collapsing (~221px and ~123px of drift respectively).
+   *
+   * 📌 Ported unchanged on evidence: stage 26c.5a measured `resvg` against
+   * Chromium on the same `<textPath>` and found identical ink bounding boxes, so
+   * no compensation layer is needed. Behaviour verified by a 300,003-case
+   * differential fuzz against the original.
+   *
+   * ⚠️ **DELETE WHEN `buildScene` LANDS** — it is the caller that resolves a
+   * curved `TextDesign` through `textArcPath` and places it with `curveBoxPlace`.
+   */
+  ['design/arc-geometry.ts', 'M26c.1 — buildScene places every curved node through it'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

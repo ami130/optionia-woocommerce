@@ -57,6 +57,12 @@ is_exempt_file() {
     # WHEN M26c.4 LANDS** — that is where every layer resolves through it.
     design/layer-geometry.ts) return 0 ;;
 
+    # Curved-text geometry (M26c.1), ported ahead of `buildScene`. ⚠️ **DELETE
+    # WHEN `buildScene` LANDS.** Verified against the source by a 300,003-case
+    # differential fuzz, including both branch boundaries (theta = pi and the
+    # full-circle threshold) and both fixed/legacy splits.
+    design/arc-geometry.ts) return 0 ;;
+
     # Flat-text measurement, wrapping and shrink-to-fit (M26c.5b), ported ahead
     # of `buildScene` — which is the one caller that resolves a `TextDesign`
     # through them. ⚠️ **DELETE WHEN M26c.5d LANDS**, or this is a port with no
