@@ -6,7 +6,14 @@ import type { DesignStore } from '@/lib/design-lab/store';
 import type { EditorLayer } from '@/lib/design-lab/layer.types';
 import { type DragIntent, dragIntentFor, type HitKind, selectsLayer } from '@/lib/design-lab/drag-dispatch';
 import { moveTo, resizeFrom, rotateTo } from '@/lib/design-lab/drag-geometry';
-import { drawnSelectionRect, handlesFor, showsHandles } from '@/lib/design-lab/selection-box';
+import {
+  drawnSelectionRect,
+  handlesFor,
+  layerCursor,
+  showsHandles,
+} from '@/lib/design-lab/selection-box';
+
+import './design-lab.css';
 
 /**
  * The Design Lab canvas: layers, the selection overlay, and the pointer
@@ -19,15 +26,24 @@ import { drawnSelectionRect, handlesFor, showsHandles } from '@/lib/design-lab/s
  * and a subscription.
  *
  * ⚠️ **That split is deliberate and the honest part of it is this: what remains
- * here is NOT unit-tested.** This project has no JSX test runner
- * (`@vitejs/plugin-react` wants Babel 8 against a Babel 7 toolchain), so the
- * event plumbing is verified structurally and by hand, not by assertion. Pushing
- * the decisions out was the way to make the untested surface small enough that
- * reading it is sufficient.
+ * here is NOT unit-tested, and has NOT been run.** This project has no JSX test
+ * runner (`@vitejs/plugin-react` wants Babel 8 against a Babel 7 toolchain), and
+ * the Design Lab has no route until M26d.4 — so the event plumbing is verified
+ * by a gate and by reading, and by nothing else. Pushing the decisions out was
+ * the way to make that unverified surface small enough that reading it is
+ * sufficient; it is not a claim that it was exercised.
  *
- * 📌 **Crop mode is M26d.2.** The source dispatcher opens with three crop
- * branches; `store.cropping` is always null until that stage, so they would be
- * unreachable code here. They arrive with the feature.
+ * 📌 **Crop mode is M26d.2**, and with it the double-click handler. The source
+ * dispatcher opens with three crop branches and binds `onDoubleClick` to toggle
+ * crop on a shaped layer; `store.cropping` is always null until that stage, so
+ * all four would be unreachable code here. They arrive together with the
+ * feature, because a double-click that toggles nothing is worse than none.
+ *
+ * ⚠️ **Shaped layers are M26d.2 too.** Every layer currently draws as a plain
+ * box: the frame clip-paths, the inner image placement and the crop overlay all
+ * belong to that stage. `shape` already rides on the type and through
+ * {@link resizeFrom}'s aspect lock, so the frames arrive without disturbing
+ * this file's geometry.
  */
 
 /** Marks the drag surface — a click on the surround deselects, as on the canvas. */
@@ -117,15 +133,7 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
     () => store.version,
   );
 
-  /*
-   * Register the three elements the fit measures and writes.
-   *
-   * ⚠️ **`fitCanvas` runs on every render, not only on resize.** A layout
-   * change with no window event — a sidebar opening, the modal growing — moves
-   * the stage without firing one, and a stale `canvasScale` makes every drag
-   * delta wrong. The ResizeObserver covers most of it; the unconditional call
-   * below covers the rest.
-   */
+  /* Register the three elements the fit measures and writes. */
   useEffect(() => {
     store.attachStage({
       stage: stageRef.current,
@@ -151,6 +159,19 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
       store.attachStage(null);
     };
   }, [store]);
+
+  /*
+   * ⚠️ **Re-fit after every render, deliberately dependency-free.** A layout
+   * change with no window resize — a panel opening, the viewport settling after
+   * fonts load — moves the stage without firing an event. `canvasScale` is the
+   * divisor for every drag delta, so a stale one makes dragging wrong by a
+   * factor while the canvas still LOOKS correct, which is the hardest kind of
+   * wrong to see. The ResizeObserver above catches most of it; this catches the
+   * rest, and `fitCanvas` writes nothing when the numbers have not moved.
+   */
+  useEffect(() => {
+    store.fitCanvas();
+  });
 
   function onMouseDown(e: React.MouseEvent) {
     const { hit, layerId, handleDir } = resolveHit(e.target as HTMLElement);
@@ -314,13 +335,7 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
           >
             {store.layers.map((layer) =>
               layer.visible ? (
-                <LayerElement
-                  key={layer.id}
-                  layer={layer}
-                  selected={layer.id === store.selectedId}
-                  cw={store.cw}
-                  ch={store.ch}
-                />
+                <LayerElement key={layer.id} layer={layer} cw={store.cw} ch={store.ch} />
               ) : null,
             )}
           </div>
@@ -335,19 +350,12 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
   );
 }
 
-/**
- * One layer on the canvas.
- *
- * ⚠️ **Shaped layers are M26d.2.** Until then every layer draws as a plain box;
- * `shape` already rides on the type and through the resize maths, so the frames
- * arrive without disturbing this.
- */
+/** One layer on the canvas. Shaped frames are M26d.2 — see the file header. */
 function LayerElement({
   layer,
-  selected,
   cw,
   ch,
-}: Readonly<{ layer: EditorLayer; selected: boolean; cw: number; ch: number }>) {
+}: Readonly<{ layer: EditorLayer; cw: number; ch: number }>) {
   if (layer.kind === 'background') {
     return (
       <div
@@ -363,11 +371,15 @@ function LayerElement({
 
   return (
     <div
-      className={
-        LAYER_CLASS +
-        (selected ? ' optionia-designlab-selected' : '') +
-        (layer.locked ? ' optionia-designlab-locked' : '')
-      }
+      /*
+       * ⚠️ **No `selected` class, deliberately.** In the source it carries one
+       * declaration on a layer — `cursor: move` — which `layerCursor` now
+       * computes properly, including the pinned and locked cases the blanket
+       * rule got wrong. The selection is DRAWN by the overlay's box, not by a
+       * class on the layer, so emitting one that styles nothing would be a
+       * hook for a rule that should never be written.
+       */
+      className={LAYER_CLASS + (layer.locked ? ' optionia-designlab-locked' : '')}
       data-id={layer.id}
       style={{
         position: 'absolute',
@@ -377,6 +389,12 @@ function LayerElement({
         height: layer.h,
         transform: `rotate(${layer.rot}deg)`,
         opacity: layer.opacity < 100 ? layer.opacity / 100 : undefined,
+        /*
+         * 🔴 The only signal that a layer cannot be dragged. `layerCursor`
+         * reads the same `moveAxes` the dispatcher does, so the cursor says
+         * `default` on exactly the layers that answer `select-only`.
+         */
+        cursor: layerCursor(layer, cw, ch),
       }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}

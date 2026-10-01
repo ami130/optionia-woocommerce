@@ -1,3 +1,4 @@
+import { moveAxes } from './drag-geometry';
 import type { EditorLayer } from './layer.types';
 
 /**
@@ -108,4 +109,37 @@ export function handlesFor(layer: EditorLayer): readonly string[] {
   const ratioLocked = layer.shape !== 'none' && layer.shape !== 'square';
 
   return ratioLocked ? CORNER_HANDLES : ALL_HANDLES;
+}
+
+/**
+ * The cursor a layer shows, which is the merchant's only clue that it can be
+ * dragged — and along which axes.
+ *
+ * 🔴 **This is how `pinned` becomes visible.** `dragIntentFor` returns
+ * `select-only` with reason `pinned` for a layer whose style allows no movement,
+ * and `drag-dispatch` keeps that reason distinct from `locked` precisely so the
+ * UI can explain it. Without a cursor the explanation is never given: the layer
+ * looks draggable, silently refuses, and reads as a broken app rather than a
+ * constraint.
+ *
+ * 📌 **Four outcomes, from the same `moveAxes` the drag uses.** Both axes is a
+ * move; one axis is the resize cursor for that axis, because a one-axis drag is
+ * exactly what those arrows mean; neither is the default arrow.
+ *
+ * ⚠️ **A locked layer reports `default` without consulting its axes.** A lock is
+ * the merchant's own choice and outranks the style — showing `move` on a locked
+ * layer would promise a drag the dispatcher refuses.
+ */
+export function layerCursor(layer: EditorLayer, cw: number, ch: number): string {
+  if (layer.locked) {
+    return 'default';
+  }
+
+  const axes = moveAxes(layer, cw, ch);
+
+  if (axes.x && axes.y) return 'move';
+  if (axes.x) return 'ew-resize';
+  if (axes.y) return 'ns-resize';
+
+  return 'default';
 }

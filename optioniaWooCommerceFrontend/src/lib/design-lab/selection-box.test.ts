@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { dragIntentFor } from './drag-dispatch';
 import type { EditorLayer } from './layer.types';
 import {
   ALL_HANDLES,
   CORNER_HANDLES,
   drawnSelectionRect,
   handlesFor,
+  layerCursor,
   selectionRect,
   showsHandles,
 } from './selection-box';
@@ -205,6 +207,81 @@ describe('the overlay and the dispatcher agree', () => {
 
     for (const c of cases) {
       expect(showsHandles(c.l)).toBe(c.drawn);
+    }
+  });
+});
+
+describe('layerCursor', () => {
+  it('offers a move cursor on a freely placed layer', () => {
+    expect(layerCursor(layer({ style: 'free' }), CW, CH)).toBe('move');
+  });
+
+  it('shows the default arrow on a locked layer, whatever its style allows', () => {
+    /*
+     * ⚠️ The lock outranks the style. A free layer would otherwise read
+     * `move`, promising a drag the dispatcher refuses.
+     */
+    expect(layerCursor(layer({ style: 'free', locked: true }), CW, CH)).toBe('default');
+  });
+
+  it('shows the default arrow on a cover layer, which cannot move at all', () => {
+    expect(layerCursor(layer({ style: 'cover' }), CW, CH)).toBe('default');
+  });
+
+  it('offers a vertical cursor when only the vertical axis is free', () => {
+    /* `fullw` spans the width, so only up and down remain. */
+    expect(layerCursor(layer({ style: 'fullw' }), CW, CH)).toBe('ns-resize');
+  });
+
+  it('offers a horizontal cursor when only the horizontal axis is free', () => {
+    expect(layerCursor(layer({ style: 'fullh' }), CW, CH)).toBe('ew-resize');
+  });
+
+  /*
+   * 🔴 `fit` is the CONDITIONAL case, and the one the last four audits were
+   * about: its axes depend on whether the layer fills each dimension, so a
+   * fixture that fills both exercises a different branch from one that fills
+   * neither. Testing a single `fit` layer would leave the comparison
+   * degenerate.
+   */
+  it('reads a fitted layer axis by axis', () => {
+    const narrow = layer({ style: 'fit', w: 100, h: 100 });
+
+    expect(layerCursor(narrow, CW, CH)).toBe('move');
+
+    const fillsWidth = layer({ style: 'fit', w: CW, h: 100 });
+
+    expect(layerCursor(fillsWidth, CW, CH)).toBe('ns-resize');
+
+    const fillsHeight = layer({ style: 'fit', w: 100, h: CH });
+
+    expect(layerCursor(fillsHeight, CW, CH)).toBe('ew-resize');
+
+    const fillsBoth = layer({ style: 'fit', w: CW, h: CH });
+
+    expect(layerCursor(fillsBoth, CW, CH)).toBe('default');
+  });
+
+  /*
+   * 📌 The cross-check that gives this function its purpose: the cursor must
+   * say `default` on exactly the layers the dispatcher refuses to drag.
+   * Anything else promises a gesture that will not happen.
+   */
+  it('shows the default arrow on exactly the layers that cannot be dragged', () => {
+    const cases = [
+      layer({ style: 'free' }),
+      layer({ style: 'free', locked: true }),
+      layer({ style: 'cover' }),
+      layer({ style: 'fullw' }),
+      layer({ style: 'fit', w: CW, h: CH }),
+      layer({ style: 'fit', w: 100, h: 100 }),
+    ];
+
+    for (const l of cases) {
+      const intent = dragIntentFor('layer', l, { cw: CW, ch: CH });
+      const refused = intent.kind === 'select-only';
+
+      expect(layerCursor(l, CW, CH) === 'default').toBe(refused);
     }
   });
 });

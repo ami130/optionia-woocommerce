@@ -218,7 +218,117 @@ else
   fi
 fi
 
-# 6. The Design Lab is not yet reachable, and says so.
+# 6. The canvas has a stylesheet, and it is the FUNCTIONAL kind.
+#
+# 🔴 **Found by audit, after the component was committed.** The canvas emitted
+# twelve class names that nothing styled, and this is not a cosmetic gap: the
+# overlay sets `pointer-events: none` so clicks reach the layers beneath, and
+# each grip takes it back with `pointer-events: auto`. Without the stylesheet a
+# handle is a zero-size div that cannot receive a mousedown — so `resize` and
+# `rotate` are unreachable however correct the dispatch logic is. The component
+# compiled, the suite passed and 33 gates were green while half the editor could
+# not be operated.
+STYLES="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab.css"
+
+if [ ! -f "$STYLES" ]; then
+  fail "the canvas stylesheet is missing — handles would be unclickable"
+else
+  # The component must actually import it; an unreferenced file styles nothing.
+  if grep -q "design-lab.css" "$CANVAS"; then
+    pass "the canvas imports its stylesheet"
+  else
+    fail "the canvas does not import design-lab.css"
+  fi
+
+  # ⚠️ **Comments are stripped first, and that is not fussiness.** The first
+  # version of these checks matched `pointer-events: auto` and `--dl-zoom`
+  # inside this file's own prose, so three of them passed while the
+  # declarations they describe were gone. A check that reads the commentary
+  # about its subject rather than the subject is the recurring defect of this
+  # phase; stripping is what makes the match mean something.
+  CSS_CODE="$(mktemp)"
+  trap 'rm -f "$CSS_CODE"' EXIT
+  perl -0pe 's{/\*.*?\*/}{}gs' "$STYLES" > "$CSS_CODE"
+
+  # Every class the component emits must appear in SELECTOR position — between a
+  # `}` (or the start of the file) and the next `{`. Matching a bare `.foo`
+  # anywhere would be satisfied by a declaration value; anchoring to the start of
+  # a line would reject the legitimate compound selectors this file uses, such as
+  # `.canvas.checker` and `.overlay.is-dragging .handle-pt`. Both were tried, and
+  # the second rejected two real rules — hence this.
+  SELECTORS="$(mktemp)"
+  perl -0ne 'print "$1\n" while /(?:^|\})([^{}]*)\{/gs' "$CSS_CODE" > "$SELECTORS"
+
+  UNSTYLED=""
+  EMITTED=0
+
+  for cls in $(grep -oE "optionia-designlab-[a-z-]+" "$CANVAS" | sort -u); do
+    EMITTED=$((EMITTED + 1))
+
+    # ⚠️ The boundary must exclude every character a CSS identifier may
+    # continue with — letters of EITHER case, digits, `-` and `_`. An earlier
+    # version excluded lowercase only, so `.foo` matched inside `.fooX` and a
+    # renamed rule still satisfied the check.
+    grep -qE "\.$cls([^A-Za-z0-9_-]|\$)" "$SELECTORS" || UNSTYLED="$UNSTYLED $cls"
+  done
+
+  rm -f "$SELECTORS"
+
+  if [ -n "$UNSTYLED" ]; then
+    fail "class(es) emitted but never styled:$UNSTYLED"
+  else
+    pass "all $EMITTED emitted class(es) have a rule"
+  fi
+
+  # 🔴 The pointer-events chain, asserted on the SPECIFIC selectors that carry
+  # it. The overlay must fall through; both grips must take the click back. A
+  # count alone would survive the declarations moving to the wrong rule.
+  CHAIN_OK=1
+
+  overlay_block="$(perl -0ne 'print $1 if /\.optionia-designlab-canvas-overlay\s*\{(.*?)\}/s' "$CSS_CODE")"
+  case "$overlay_block" in *"pointer-events: none"*) ;; *) CHAIN_OK=0 ;; esac
+
+  handle_block="$(perl -0ne 'print $1 if /\.optionia-designlab-handle-pt\s*\{(.*?)\}/s' "$CSS_CODE")"
+  case "$handle_block" in *"pointer-events: auto"*) ;; *) CHAIN_OK=0 ;; esac
+
+  rotate_block="$(perl -0ne 'print $1 if /\.optionia-designlab-rotate-pt\s*\{(.*?)\}/s' "$CSS_CODE")"
+  case "$rotate_block" in *"pointer-events: auto"*) ;; *) CHAIN_OK=0 ;; esac
+
+  if [ "$CHAIN_OK" -eq 1 ]; then
+    pass "the overlay falls through and both grips take the click back"
+  else
+    fail "the overlay's pointer-events chain is broken — grips would not be clickable"
+  fi
+
+  # The grips counter-scale against a property the fit must publish. Checked
+  # against the store's CODE, since a comment naming it proves nothing.
+  STORE_CODE="$(mktemp)"
+  perl -0pe 's{/\*.*?\*/}{}gs; s{//.*$}{}gm' \
+    "$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/store.ts" > "$STORE_CODE"
+
+  if grep -q -- "--dl-zoom" "$CSS_CODE" \
+    && grep -q "setProperty('--dl-zoom'" "$STORE_CODE"; then
+    pass "the grips counter-scale against the zoom the fit publishes"
+  else
+    fail "--dl-zoom is read by the stylesheet but never published by fitCanvas (grips shrink with the canvas)"
+  fi
+
+  rm -f "$STORE_CODE"
+fi
+
+# 7. A layer that cannot be dragged says so with its cursor.
+#
+# ⚠️ **`pinned` is a distinct refusal precisely so the UI can explain it.**
+# `dragIntentFor` returns `select-only` with reason `pinned` for a layer whose
+# style allows no movement; without a cursor the explanation is never given and
+# the layer reads as broken rather than constrained.
+if grep -q "layerCursor(" "$CANVAS"; then
+  pass "the canvas shows which layers can be dragged"
+else
+  fail "the canvas never sets a cursor — a pinned layer looks draggable and silently refuses"
+fi
+
+# 8. The Design Lab is not yet reachable, and says so.
 #
 # ⚠️ **This asserts a KNOWN GAP rather than hiding it.** `DesignCanvas` has no
 # route and no nav entry until M26d.4; gate 30 (page reachability) cannot see it

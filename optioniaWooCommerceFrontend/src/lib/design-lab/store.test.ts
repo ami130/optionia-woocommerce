@@ -308,9 +308,28 @@ describe('the commit / notify split', () => {
   });
 });
 
-/** The three elements `fitCanvas` measures and writes, as plain objects. */
+/**
+ * The three elements `fitCanvas` measures and writes, as plain objects.
+ *
+ * 📌 `setProperty` RECORDS rather than discards, so a test can assert what
+ * custom properties the fit published — `--dl-zoom` is what keeps the grips a
+ * constant size on screen, and a silent stub would let it go missing.
+ */
 function stageRefs(clientWidth: number, clientHeight: number) {
-  const blank = () => ({ width: '', height: '', transformOrigin: '', transform: '' });
+  const blank = () => {
+    const custom: Record<string, string> = {};
+
+    return {
+      width: '',
+      height: '',
+      transformOrigin: '',
+      transform: '',
+      custom,
+      setProperty(name: string, value: string) {
+        custom[name] = value;
+      },
+    };
+  };
 
   return {
     stage: { clientWidth, clientHeight },
@@ -479,6 +498,22 @@ describe('fitCanvas', () => {
     expect(s.canvasScale).toBeGreaterThanOrEqual(0.1);
     expect(s.canvasScale).toBeLessThanOrEqual(1.6);
     expect(s.scaleEl?.style.transform).toBe(`scale(${s.canvasScale})`);
+  });
+
+  /*
+   * 🔴 The stylesheet counter-scales every grip by `1 / --dl-zoom`. Unset it
+   * falls back to 1, and a canvas fitted to 0.4 draws 4px handles that are
+   * nearly impossible to grab — a defect that looks like clumsiness rather
+   * than a bug. The fit is the only thing that knows the scale.
+   */
+  it('publishes the scale as --dl-zoom, so the grips stay a constant size', () => {
+    const refs = stageRefs(1000, 800);
+    const s = store();
+
+    s.attachStage(refs);
+    s.fitCanvas();
+
+    expect(refs.scale.style.custom['--dl-zoom']).toBe(String(s.canvasScale));
   });
 
   it('refuses a collapsed stage rather than scaling to nothing', () => {

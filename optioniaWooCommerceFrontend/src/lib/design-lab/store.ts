@@ -180,6 +180,17 @@ export interface StyledElement {
     height: string;
     transformOrigin: string;
     transform: string;
+    /**
+     * Custom properties go through `setProperty` — dot access cannot reach a
+     * `--name`.
+     *
+     * 🔴 **This is what keeps the handles a constant size on screen.** The
+     * stylesheet counter-scales every grip by `1 / --dl-zoom`; left unset it
+     * falls back to 1, and a canvas fitted to 0.4 would draw 4px handles that
+     * are nearly impossible to grab. The fit is the only thing that knows the
+     * scale, so the fit is what must publish it.
+     */
+    setProperty(name: string, value: string): void;
   };
 }
 
@@ -803,6 +814,8 @@ export class DesignStore {
     scale.style.height = `${this.ch}px`;
     scale.style.transformOrigin = 'top left';
     scale.style.transform = `scale(${s})`;
+    /* Publish the scale so the stylesheet can counter-scale the grips. */
+    scale.style.setProperty('--dl-zoom', String(s));
     wrap.style.width = `${Math.round(this.cw * s)}px`;
     wrap.style.height = `${Math.round(this.ch * s)}px`;
   }

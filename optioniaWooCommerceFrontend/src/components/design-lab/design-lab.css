@@ -1,0 +1,310 @@
+/*
+ * Design Lab — canvas, layers and the selection overlay.
+ *
+ * 🔴 **This file is load-bearing, not decoration.** The overlay sets
+ * `pointer-events: none` so clicks reach the layers beneath it, and each grip
+ * re-enables it with `pointer-events: auto`. Without these rules a handle is a
+ * zero-size div that cannot receive a mousedown at all — so `resize` and
+ * `rotate` would be unreachable however correct the dispatch logic is. Deleting
+ * this file does not make the Design Lab ugly; it makes half of it inert.
+ *
+ * ⚠️ **Ported from the source lab.css, canvas rules only.** The sidebar, panels,
+ * zoom bar, radios and crop styling are M26d.2 and M26d.4 and are deliberately
+ * absent — porting them now would ship ~1,300 lines styling markup that does
+ * not exist yet.
+ *
+ * 📌 **Scoped under `.optionia-designlab-stage`**, and every class carries the
+ * `optionia-designlab-` prefix, so nothing here can reach the rest of the
+ * dashboard. The source learned this the hard way: its reset was scoped to a
+ * root class that was never rendered, so it silently never applied.
+ */
+
+.optionia-designlab-stage {
+  /* Selection chrome. Named here rather than in :root so the tokens travel
+     with the component instead of leaking into the dashboard's palette. */
+  --dl-sel-blue: #2f8bff;
+  --dl-sel-blue-dark: #1f6fe0;
+  --dl-sel-blue-ring: rgba(47, 139, 255, 0.3);
+
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow: hidden;
+  flex: 1;
+  background: #f1f1f1;
+  touch-action: none;
+}
+
+.optionia-designlab-stage *,
+.optionia-designlab-stage *::before,
+.optionia-designlab-stage *::after {
+  box-sizing: border-box;
+}
+
+/* Sized by fitCanvas to the SCALED canvas, so the grid can centre it. */
+.optionia-designlab-canvas-wrap {
+  position: relative;
+  transform-origin: center center;
+  overflow: visible;
+}
+
+/*
+ * The scaled container. fitCanvas writes its width/height in logical pixels
+ * and a `scale()` transform, and publishes that scale as --dl-zoom for the
+ * grips below to counter-scale against.
+ */
+.optionia-designlab-canvas-scale {
+  position: relative;
+  transform-origin: top left;
+  overflow: visible;
+}
+
+.optionia-designlab-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  box-shadow:
+    0 10px 30px -10px rgba(20, 22, 28, 0.28),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  /* Clips layer content, which is what makes `cover` and `fit` read correctly. */
+  overflow: hidden;
+  touch-action: none;
+}
+
+.optionia-designlab-canvas.optionia-designlab-checker {
+  background-image:
+    linear-gradient(45deg, #e9e9ec 25%, transparent 25%),
+    linear-gradient(-45deg, #e9e9ec 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e9e9ec 75%),
+    linear-gradient(-45deg, transparent 75%, #e9e9ec 75%);
+  background-size: 18px 18px;
+  background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+}
+
+/*
+ * ⚠️ Sits exactly over the canvas but is NOT clipped, so a handle on a layer at
+ * the canvas edge stays visible and grabbable. `pointer-events: none` lets
+ * clicks fall through to the layers; the grips re-enable it individually.
+ */
+.optionia-designlab-canvas-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* ───────────────────────── layers ───────────────────────── */
+
+.optionia-designlab-layer {
+  position: absolute;
+  transform-origin: center center;
+  overflow: hidden;
+}
+
+.optionia-designlab-layer img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  /* The IMAGE must not take the click — closest() resolves the layer div. */
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+/*
+ * 📌 The background is fixed furniture: it cannot be selected or dragged, and
+ * the dispatcher's `:not(.bg-layer)` selector already refuses it. This makes
+ * that refusal visible to the merchant rather than merely true.
+ */
+.optionia-designlab-bg-layer {
+  pointer-events: none;
+  cursor: default;
+}
+
+.optionia-designlab-locked {
+  cursor: default;
+}
+
+/* ───────────────────── selection overlay ───────────────────── */
+
+/*
+ * The box itself never takes a click — only its grips do. A merchant clicking
+ * inside the box is clicking the LAYER, which is what starts a move.
+ */
+.optionia-designlab-sel-box {
+  position: absolute;
+  transform-origin: center center;
+  border: calc(1px / var(--dl-zoom, 1)) solid var(--dl-sel-blue);
+  box-shadow: 0 0 0 calc(1px / var(--dl-zoom, 1)) rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+/*
+ * 🔴 `pointer-events: auto` is what makes a resize possible at all — the
+ * overlay above sets `none`, and this is the only thing that takes it back.
+ *
+ * The counter-scale keeps a grip the same size on screen at any zoom: `scale()`
+ * runs before `translate()` in the matrix and about the handle's own centre, so
+ * it stays pinned to its corner while shrinking.
+ */
+.optionia-designlab-sel-box .optionia-designlab-handle-pt {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 1px solid var(--dl-sel-blue);
+  border-radius: 2px;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(calc(1 / var(--dl-zoom, 1)));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+/* Edge grips are pills: wide on the horizontal edges, tall on the vertical. */
+.optionia-designlab-sel-box .optionia-designlab-handle-pt[data-h='n'],
+.optionia-designlab-sel-box .optionia-designlab-handle-pt[data-h='s'] {
+  width: 22px;
+  height: 10px;
+  border-radius: 5px;
+}
+
+.optionia-designlab-sel-box .optionia-designlab-handle-pt[data-h='e'],
+.optionia-designlab-sel-box .optionia-designlab-handle-pt[data-h='w'] {
+  width: 10px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.optionia-designlab-sel-box .optionia-designlab-handle-pt:hover {
+  background: var(--dl-sel-blue);
+  box-shadow:
+    0 0 0 3px var(--dl-sel-blue-ring),
+    0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/*
+ * ⚠️ During a drag the grips are hidden and only the thin border remains — the
+ * component adds `is-dragging` on first move and removes it on release. Without
+ * this the cursor drags a handle across its own siblings and the box flickers.
+ */
+.optionia-designlab-canvas-overlay.optionia-designlab-is-dragging
+  .optionia-designlab-handle-pt,
+.optionia-designlab-canvas-overlay.optionia-designlab-is-dragging
+  .optionia-designlab-rotate-pt,
+.optionia-designlab-canvas-overlay.optionia-designlab-is-dragging
+  .optionia-designlab-rotate-stem {
+  display: none;
+}
+
+/*
+ * 📌 Each grip's position AND its resize cursor. The cursor is the merchant's
+ * only clue which axes a corner pulls, and `handleDirection` reads the same
+ * `data-h` to decide the maths — so these must stay in step.
+ */
+.optionia-designlab-handle-pt[data-h='nw'] {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='n'] {
+  left: 50%;
+  top: 0;
+  cursor: ns-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='ne'] {
+  left: 100%;
+  top: 0;
+  cursor: nesw-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='e'] {
+  left: 100%;
+  top: 50%;
+  cursor: ew-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='se'] {
+  left: 100%;
+  top: 100%;
+  cursor: nwse-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='s'] {
+  left: 50%;
+  top: 100%;
+  cursor: ns-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='sw'] {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+
+.optionia-designlab-handle-pt[data-h='w'] {
+  left: 0;
+  top: 50%;
+  cursor: ew-resize;
+}
+
+/*
+ * The rotate grip sits above the top edge on a stem. Both counter-scale off
+ * --dl-zoom with the origin at the box's top edge, so the stem length, the gap
+ * and the button all stay a constant on-screen size. The inner translate sits
+ * AFTER the scale in the list, so its 22px is scaled too — that is what keeps
+ * the gap constant rather than growing with the zoom.
+ */
+.optionia-designlab-rotate-stem {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 22px;
+  background: var(--dl-sel-blue);
+  transform-origin: center bottom;
+  transform: translate(-50%, -100%) scale(calc(1 / var(--dl-zoom, 1)));
+  pointer-events: none;
+}
+
+.optionia-designlab-rotate-pt {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--dl-sel-blue);
+  border: 1px solid #fff;
+  color: #fff;
+  transform-origin: center bottom;
+  transform: translate(-50%, -100%) scale(calc(1 / var(--dl-zoom, 1)))
+    translate(0, -22px);
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  cursor: grab;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.32);
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+.optionia-designlab-rotate-pt:hover {
+  background: var(--dl-sel-blue-dark);
+  box-shadow:
+    0 0 0 3px var(--dl-sel-blue-ring),
+    0 1px 5px rgba(0, 0, 0, 0.32);
+}
+
+.optionia-designlab-rotate-pt:active {
+  cursor: grabbing;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .optionia-designlab-sel-box .optionia-designlab-handle-pt,
+  .optionia-designlab-rotate-pt {
+    transition: none;
+  }
+}
