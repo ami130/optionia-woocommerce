@@ -339,6 +339,70 @@ if [ "$CONTRACT_FAILS" -eq 0 ]; then
   pass "all $CONTRACTS plugin-stated contract(s) are honoured by the dashboard"
 fi
 
+# Design carriers agree across both repositories (M26d.4).
+#
+# 🔴 **Two independent tables of which types carry a design.** The API declares
+# `designCarrier` per registry entry; the dashboard keeps its own copy so it can
+# avoid offering a button that would answer 400. A mirror that drifts is worse
+# than no mirror — the dashboard would show a Design Lab on a type the API
+# refuses, so a merchant composes a design and loses it on apply.
+#
+# ⚠️ **Compared pair by pair, not by counting.** Two tables with the same NUMBER
+# of entries can disagree about which, which is the failure this is for.
+CARRIER_FAILS=0
+CARRIER_PAIRS=0
+
+# The API's table: presentation → carrier, read from adjacent registry lines.
+API_CARRIERS=$(awk '
+  /presentation: Presentation\./ {
+    match($0, /Presentation\.[A-Z_]+/)
+    pres = tolower(substr($0, RSTART + 13, RLENGTH - 13))
+  }
+  /designCarrier: DesignCarrier\./ {
+    match($0, /DesignCarrier\.[A-Z_]+/)
+    carrier = tolower(substr($0, RSTART + 14, RLENGTH - 14))
+    if (pres != "") { print pres " " carrier; pres = "" }
+  }
+' "$REGISTRY" | sort)
+
+if [ -z "$API_CARRIERS" ]; then
+  fail "could not read designCarrier from the registry — has its shape changed?"
+  CARRIER_FAILS=$((CARRIER_FAILS + 1))
+else
+  while read -r pres carrier; do
+    [ -n "$pres" ] || continue
+
+    CARRIER_PAIRS=$((CARRIER_PAIRS + 1))
+
+    # The dashboard's answer for the same presentation.
+    #
+    # ⚠️ **Read from the declaration LINE, not a sed range.** The first version
+    # used `/NAME = \[/,/\];/`, which on a single-line array runs past it to the
+    # next `];` anywhere below — so `DESIGN_PER_VALUE`'s range swallowed the
+    # text list and `dropdown` matched inside the function body. It reported
+    # three disagreements that did not exist. A range is for multi-line blocks;
+    # these are one line each.
+    if grep -E "^const DESIGN_PER_VALUE = \[" "$PICKER" | grep -q "'$pres'"; then
+      dash='value'
+    elif grep -E "^const DESIGN_PER_OPTION_TEXT = \[" "$PICKER" | grep -q "'$pres'"; then
+      dash='option_text'
+    else
+      dash='none'
+    fi
+
+    if [ "$dash" != "$carrier" ]; then
+      fail "design carrier disagrees for '$pres': API says '$carrier', dashboard says '$dash'"
+      CARRIER_FAILS=$((CARRIER_FAILS + 1))
+    fi
+  done <<EOF
+$API_CARRIERS
+EOF
+fi
+
+if [ "$CARRIER_FAILS" -eq 0 ] && [ "$CARRIER_PAIRS" -gt 0 ]; then
+  pass "all $CARRIER_PAIRS design carrier(s) agree across both repositories"
+fi
+
 # Informational: registered but not yet authorable. Expected, and worth seeing.
 PENDING=$(comm -23 <(printf '%s\n' "$REGISTERED") <(printf '%s\n' "$AUTHORABLE") | grep -c . || true)
 pass "$PENDING registered type(s) are not yet authorable in the dashboard (expected)"

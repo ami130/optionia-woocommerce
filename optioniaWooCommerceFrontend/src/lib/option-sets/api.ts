@@ -199,6 +199,14 @@ export interface AuthoringOption {
    */
   pricing?: Record<string, unknown> | null;
 
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4).
+   *
+   * 📌 On the option rather than a value because a text option has none — see
+   * `designCarrierFor`. The editor reopens it from here.
+   */
+  textDesign?: Record<string, unknown> | null;
+
   values: AuthoringValue[];
 }
 
@@ -219,6 +227,16 @@ export interface AuthoringValue {
    */
   colorHex?: string | null;
   imageUrl?: string | null;
+
+  /**
+   * The Design Lab artwork this value prints (M26d.4).
+   *
+   * 🔴 **Carried so the editor can REOPEN a saved design.** The Design Lab
+   * hydrates from this field; without it a merchant composes, applies, reloads
+   * and finds an empty canvas — a feature that appears to save and does not.
+   * Only types whose carrier is `value` have one; the API refuses the rest.
+   */
+  design?: Record<string, unknown> | null;
 
   /**
    * How this value is priced, beyond a flat amount.
@@ -797,6 +815,17 @@ export async function updateValue(
      * the serializer's job, not a caller's.
      */
     priceConfig?: Record<string, unknown> | null;
+
+    /**
+     * The Design Lab artwork this value prints (M26d.4).
+     *
+     * ⚠️ **`null` clears; `undefined` leaves unchanged**, like the swatch
+     * fields. That distinction is load-bearing here: the API always accepts a
+     * null design whatever the type, so clearing keeps working after a merchant
+     * changes an option's presentation — but a non-null design on a type that
+     * carries none is refused with `TYPE_CARRIES_NO_DESIGN`.
+     */
+    design?: Record<string, unknown> | null;
 
     /**
      * What this choice does to fulfilment.

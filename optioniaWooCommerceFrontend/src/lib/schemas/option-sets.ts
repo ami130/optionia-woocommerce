@@ -733,6 +733,59 @@ export function swatchFieldsFor(presentation: string): {
 }
 
 /**
+ * Where a Design Lab design lives for an option type, if anywhere (M26d.4).
+ *
+ * 🔴 **A MIRROR of the API's `designCarrier`, and mirrors drift.** The backend
+ * declares this per type on its registry; this is the dashboard's copy, and it
+ * exists for the same reason the capability table does — to avoid offering a
+ * control that would answer 400, never to decide the rule. The API refuses a
+ * design on the wrong type regardless of what this says.
+ *
+ * ⚠️ **Three states rather than a boolean, because the design lives on a
+ * different ROW per type.** A swatch's artwork belongs to each value (a red and
+ * a blue swatch print different things); a free-text option has no values, so
+ * its design sits on the option. Collapsing them would send a design to the
+ * wrong endpoint.
+ *
+ * 📌 **`hidden` carries none though it is a text type**, because its value is
+ * merchant-set and never typed by a customer — which is why this is a table
+ * rather than a check on `valueKind`. `bin/check-option-type-parity.sh` compares
+ * it against the API's registry so the two cannot disagree silently.
+ */
+export type DesignCarrier = 'none' | 'value' | 'option_text';
+
+/** Types whose VALUES each carry their own artwork. */
+const DESIGN_PER_VALUE = ['color_swatch', 'image_swatch'];
+
+/** Types carrying one text design on the option itself. */
+const DESIGN_PER_OPTION_TEXT = ['text_field', 'textarea'];
+
+export function designCarrierFor(presentation: string): DesignCarrier {
+  if (DESIGN_PER_VALUE.includes(presentation)) return 'value';
+
+  if (DESIGN_PER_OPTION_TEXT.includes(presentation)) return 'option_text';
+
+  /*
+   * ⚠️ **`none` for anything unrecognised, which is the OPPOSITE default from
+   * `swatchFieldsFor`.** That one shows a form on an unknown type, because
+   * hiding a field a merchant needs is the larger harm. Here the harm runs the
+   * other way: offering a Design Lab button on a type the API will refuse ends
+   * in a 400 after the merchant has composed a design.
+   */
+  return 'none';
+}
+
+/** Whether a VALUE of this type may carry a design. */
+export function valueCarriesDesign(presentation: string): boolean {
+  return designCarrierFor(presentation) === 'value';
+}
+
+/** Whether the OPTION itself carries one text design. */
+export function optionCarriesTextDesign(presentation: string): boolean {
+  return designCarrierFor(presentation) === 'option_text';
+}
+
+/**
  * Whether a value may carry an `<optgroup>` heading (M14.3).
  *
  * ⚠️ **`dropdown` only.** Grouping is a rendering detail of a `<select>`; a radio

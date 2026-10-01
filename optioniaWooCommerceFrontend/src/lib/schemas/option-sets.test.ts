@@ -25,6 +25,9 @@ import {
   swatchSizeFor,
   keyFromLabel,
   swatchFieldsFor,
+  designCarrierFor,
+  valueCarriesDesign,
+  optionCarriesTextDesign,
   takesGroupLabel,
   takesValues,
   valueSchema,
@@ -1059,5 +1062,113 @@ describe('optionFormExtrasSchema (20-2b)', () => {
    */
   it('does not model keyTouched', () => {
     expect(Object.keys(optionFormExtrasSchema.shape)).not.toContain('keyTouched');
+  });
+});
+
+/**
+ * Where a design may live, per type (M26d.4).
+ *
+ * 🔴 **This is a MIRROR of the API's registry**, and a mirror that drifts is
+ * worse than no mirror: the dashboard would offer a Design Lab button on a type
+ * the API refuses, so a merchant composes a design and gets a 400 on apply.
+ * `bin/check-option-type-parity.sh` compares the two tables; these tests pin
+ * this side's behaviour.
+ */
+describe('designCarrierFor', () => {
+  it('puts a design on each VALUE of a swatch type', () => {
+    /* A red swatch and a blue one print different artwork. */
+    expect(designCarrierFor('color_swatch')).toBe('value');
+    expect(designCarrierFor('image_swatch')).toBe('value');
+    expect(valueCarriesDesign('color_swatch')).toBe(true);
+  });
+
+  it('puts one text design on the OPTION for free-text types', () => {
+    /* A text option has no values, so there is no value to hang one on. */
+    expect(designCarrierFor('text_field')).toBe('option_text');
+    expect(designCarrierFor('textarea')).toBe('option_text');
+    expect(optionCarriesTextDesign('textarea')).toBe(true);
+  });
+
+  /*
+   * 🔴 The case that proves this is a table rather than a check on the value
+   * kind. `hidden` is text-valued and carries NO design: its value is set by
+   * the merchant and never typed by a customer.
+   */
+  it('refuses a text design on `hidden`, though it is a text type', () => {
+    expect(designCarrierFor('hidden')).toBe('none');
+    expect(optionCarriesTextDesign('hidden')).toBe(false);
+  });
+
+  it('refuses a design on choice types that draw no artwork', () => {
+    /* `radio` shares every axis with `color_swatch` and draws a label. */
+    for (const presentation of ['radio', 'dropdown', 'checkbox']) {
+      expect(designCarrierFor(presentation)).toBe('none');
+    }
+  });
+
+  it('refuses a design on types with nothing to attach it to', () => {
+    for (const presentation of [
+      'number_field',
+      'range',
+      'quantity',
+      'date_picker',
+      'time_picker',
+      'datetime_picker',
+      'file_input',
+    ]) {
+      expect(designCarrierFor(presentation)).toBe('none');
+    }
+  });
+
+  /*
+   * ⚠️ The OPPOSITE default from `swatchFieldsFor`, deliberately. That one
+   * shows a form on an unknown type because hiding a needed field is the larger
+   * harm; here the harm runs the other way — a Design Lab button on a type the
+   * API refuses ends in a 400 after the merchant has composed a design.
+   */
+  it('refuses a design on a type this build does not know', () => {
+    expect(designCarrierFor('some_future_type')).toBe('none');
+    expect(valueCarriesDesign('some_future_type')).toBe(false);
+    expect(optionCarriesTextDesign('some_future_type')).toBe(false);
+  });
+
+  it('never reports a type as carrying both', () => {
+    const everyType = [
+      'radio',
+      'dropdown',
+      'checkbox',
+      'color_swatch',
+      'image_swatch',
+      'text_field',
+      'textarea',
+      'number_field',
+      'range',
+      'quantity',
+      'date_picker',
+      'time_picker',
+      'datetime_picker',
+      'hidden',
+      'file_input',
+    ];
+
+    for (const presentation of everyType) {
+      const both =
+        valueCarriesDesign(presentation) && optionCarriesTextDesign(presentation);
+
+      expect(both).toBe(false);
+    }
+  });
+
+  /*
+   * 📌 The relationship to `swatchFieldsFor`, asserted: every type that carries
+   * a per-value design is a swatch type. A design hangs off the artwork a
+   * swatch already shows, so the two tables must agree on which types those are.
+   */
+  it('puts per-value designs on exactly the swatch types', () => {
+    for (const presentation of ['color_swatch', 'image_swatch', 'radio', 'text_field']) {
+      const swatch = swatchFieldsFor(presentation);
+
+      expect(valueCarriesDesign(presentation)).toBe(swatch.color || swatch.image);
+    }
   });
 });
