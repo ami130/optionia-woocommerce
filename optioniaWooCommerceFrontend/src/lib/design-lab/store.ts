@@ -155,6 +155,34 @@ export function designLayerToEditor(
   };
 }
 
+/**
+ * The element the fit MEASURES.
+ *
+ * 📌 Structural, not `HTMLElement` — the store stays DOM-free and testable, and
+ * a real div satisfies this.
+ */
+export interface StageElement {
+  readonly clientWidth: number;
+  readonly clientHeight: number;
+}
+
+/**
+ * An element the fit WRITES styles onto.
+ *
+ * ⚠️ **The five properties `fitCanvas` sets, named.** A `Record<string, string>`
+ * would be looser AND reject a real `CSSStyleDeclaration`, which has no string
+ * index signature — so naming them is both the honest contract and the one a
+ * browser element actually satisfies.
+ */
+export interface StyledElement {
+  style: {
+    width: string;
+    height: string;
+    transformOrigin: string;
+    transform: string;
+  };
+}
+
 export class DesignStore {
   /* ----- canonical state ----- */
   layers: EditorLayer[] = [];
@@ -178,12 +206,54 @@ export class DesignStore {
   private suppressHistory = false;
 
   /* ----- DOM refs, set by the canvas component ----- */
-  stageEl: { clientWidth: number; clientHeight: number } | null = null;
-  wrapEl: { style: Record<string, string> } | null = null;
-  scaleEl: { style: Record<string, string> } | null = null;
+  stageEl: StageElement | null = null;
+  wrapEl: StyledElement | null = null;
+  scaleEl: StyledElement | null = null;
+
+  /**
+   * Hand the store the three elements `fitCanvas` measures and writes, or take
+   * them all back on unmount.
+   *
+   * 🔴 **All three together, because `fitCanvas` needs all three.** It returns
+   * early unless the stage, wrap and scale are present — so attaching only the
+   * stage leaves `canvasScale` at its initial 1 and every pointer delta is
+   * divided by the wrong number. The canvas would still LOOK right, because the
+   * layers are positioned in canvas pixels; only dragging would be wrong, and
+   * only once the stage is small enough to scale. Taking one argument object
+   * makes the incomplete call unwritable.
+   *
+   * 📌 **A method rather than public field writes.** React's immutability rule
+   * is right to refuse a component reaching into a prop's fields, and detaching
+   * on unmount belongs with attaching — a stale element would have `fitCanvas`
+   * sizing against a node no longer in the document.
+   */
+  attachStage(
+    els: {
+      stage: StageElement | null;
+      wrap: StyledElement | null;
+      scale: StyledElement | null;
+    } | null,
+  ): void {
+    this.stageEl = els?.stage ?? null;
+    this.wrapEl = els?.wrap ?? null;
+    this.scaleEl = els?.scale ?? null;
+  }
 
   /* ----- subscription ----- */
   private listeners = new Set<() => void>();
+
+  /**
+   * Bumped on every notify.
+   *
+   * 🔴 **A mutable store needs a scalar snapshot.** `useSyncExternalStore`
+   * re-renders when the snapshot changes by `Object.is`; this store writes
+   * `layer.cx` in place, so the layers array is the same reference before and
+   * after a drag and React would see nothing. A counter is the thing that
+   * differs. Returning a fresh object instead would re-render correctly but
+   * allocate on every pointer move — which is the cost the in-place design
+   * exists to avoid.
+   */
+  version = 0;
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -194,6 +264,7 @@ export class DesignStore {
   }
 
   notify(): void {
+    this.version += 1;
     this.listeners.forEach((fn) => fn());
   }
 

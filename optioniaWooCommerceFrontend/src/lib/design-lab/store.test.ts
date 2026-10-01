@@ -262,9 +262,19 @@ describe('the commit / notify split', () => {
     const listener = vi.fn();
 
     s.subscribe(listener);
+
+    /*
+     * ⚠️ The version must move on a gesture, not only on a commit. A drag
+     * notifies many times and commits once; if the snapshot React compares
+     * only changed on commit, the canvas would redraw on release alone and the
+     * layer would teleport rather than follow the pointer.
+     */
+    const versionBefore = s.version;
+
     act();
 
     expect(listener).toHaveBeenCalled();
+    expect(s.version).toBeGreaterThan(versionBefore);
     expect(historyDepth()).toBe(before);
   });
 
@@ -298,6 +308,17 @@ describe('the commit / notify split', () => {
   });
 });
 
+/** The three elements `fitCanvas` measures and writes, as plain objects. */
+function stageRefs(clientWidth: number, clientHeight: number) {
+  const blank = () => ({ width: '', height: '', transformOrigin: '', transform: '' });
+
+  return {
+    stage: { clientWidth, clientHeight },
+    wrap: { style: blank() },
+    scale: { style: blank() },
+  };
+}
+
 describe('subscription', () => {
   it('notifies every listener and stops after unsubscribe', () => {
     const s = store();
@@ -317,6 +338,23 @@ describe('subscription', () => {
 
     expect(a).toHaveBeenCalledTimes(1);
     expect(b).toHaveBeenCalledTimes(2);
+  });
+
+  /*
+   * 🔴 The snapshot React compares. The store mutates layers in place, so the
+   * layers array is the SAME reference across a drag; without a changing
+   * scalar `useSyncExternalStore` sees no change and the canvas freezes
+   * mid-gesture while the data underneath is already correct — the hardest
+   * kind of bug to read from the screen.
+   */
+  it('bumps a version on every notify, so a mutable store has a changing snapshot', () => {
+    const s = store();
+    const first = s.version;
+
+    s.notify();
+    s.notify();
+
+    expect(s.version).toBe(first + 2);
   });
 });
 
@@ -435,26 +473,48 @@ describe('fitCanvas', () => {
   it('scales into the available area, bounded at both ends', () => {
     const s = store();
 
-    s.stageEl = { clientWidth: 1000, clientHeight: 800 };
-    s.wrapEl = { style: {} };
-    s.scaleEl = { style: {} };
-
+    s.attachStage(stageRefs(1000, 800));
     s.fitCanvas();
 
     expect(s.canvasScale).toBeGreaterThanOrEqual(0.1);
     expect(s.canvasScale).toBeLessThanOrEqual(1.6);
-    expect(s.scaleEl.style.transform).toBe(`scale(${s.canvasScale})`);
+    expect(s.scaleEl?.style.transform).toBe(`scale(${s.canvasScale})`);
   });
 
   it('refuses a collapsed stage rather than scaling to nothing', () => {
     const s = store();
 
-    s.stageEl = { clientWidth: 0, clientHeight: 0 };
-    s.wrapEl = { style: {} };
-    s.scaleEl = { style: {} };
+    s.attachStage(stageRefs(0, 0));
     s.fitCanvas();
 
     expect(s.canvasScale).toBe(1);
+  });
+
+  /*
+   * 🔴 The failure this contract exists to prevent. `fitCanvas` needs all three
+   * elements and returns early without them, so attaching only the stage leaves
+   * canvasScale at 1 — the canvas still LOOKS right, because layers are placed
+   * in canvas pixels, but every pointer delta is divided by the wrong number.
+   * Only dragging is wrong, and only once the stage is small enough to scale.
+   */
+  it('does not scale when the wrap and scale elements are missing', () => {
+    const s = store();
+
+    s.attachStage({ stage: { clientWidth: 1000, clientHeight: 800 }, wrap: null, scale: null });
+    s.fitCanvas();
+
+    expect(s.canvasScale).toBe(1);
+  });
+
+  it('releases all three elements on detach, so a unmounted node is not measured', () => {
+    const s = store();
+
+    s.attachStage(stageRefs(1000, 800));
+    s.attachStage(null);
+
+    expect(s.stageEl).toBeNull();
+    expect(s.wrapEl).toBeNull();
+    expect(s.scaleEl).toBeNull();
   });
 });
 

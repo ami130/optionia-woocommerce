@@ -166,6 +166,78 @@ else
   fi
 fi
 
+# 5. Every decision module the canvas was built on is actually wired to it.
+#
+# 🔴 **The defect this repository has met five times**: logic built, typed,
+# tested and reached by nothing. Here the risk is sharper than usual, because
+# the whole point of `drag-dispatch` and `selection-box` was to pull decisions
+# OUT of the component — and an extraction that is never imported back leaves
+# the component with a second, divergent copy of the rule, both green.
+CANVAS="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-canvas.tsx"
+
+if [ ! -f "$CANVAS" ]; then
+  fail "the canvas component is missing"
+else
+  WIRED=0
+  MISSING=""
+
+  for sym in dragIntentFor selectsLayer moveTo resizeFrom rotateTo \
+             drawnSelectionRect showsHandles handlesFor attachStage; do
+    # ⚠️ **A CALL, not a mention.** Matching the bare name passes on the import
+    # line alone — so deleting the call site while leaving the import tidy-up
+    # for later would keep this green. Caught by mutating the call away and
+    # watching the gate pass anyway, which is why it now requires the paren.
+    if grep -qE "\b$sym\(" "$CANVAS"; then
+      WIRED=$((WIRED + 1))
+    else
+      MISSING="$MISSING $sym"
+    fi
+  done
+
+  if [ -n "$MISSING" ]; then
+    fail "the canvas does not use:$MISSING (an extraction nothing imports is a second copy of the rule)"
+  else
+    pass "all $WIRED extracted decision(s) are wired to the canvas"
+  fi
+
+  # The component must not re-implement what it was given.
+  #
+  # ⚠️ `Math.atan2` is the specific one: `rotateTo` does its own, and a second
+  # call in the component meant the angle was computed twice and the function
+  # handed the result of the first — which is exactly the bug this caught.
+  if grep -q "Math\.atan2" "$CANVAS"; then
+    ATAN_COUNT=$(grep -c "Math\.atan2" "$CANVAS")
+
+    if [ "$ATAN_COUNT" -gt 1 ]; then
+      fail "the canvas calls Math.atan2 $ATAN_COUNT times; rotateTo owns that maths"
+    else
+      pass "the canvas measures the opening angle once and delegates the rest"
+    fi
+  else
+    fail "the canvas never measures the drag's opening angle"
+  fi
+fi
+
+# 6. The Design Lab is not yet reachable, and says so.
+#
+# ⚠️ **This asserts a KNOWN GAP rather than hiding it.** `DesignCanvas` has no
+# route and no nav entry until M26d.4; gate 30 (page reachability) cannot see it
+# because it is a component rather than a page. Rather than leave the hole
+# unmarked, this fails the moment the component gains a consumer WITHOUT the
+# note below being removed — so the next person must delete this block
+# deliberately, having actually wired the route.
+CANVAS_CONSUMERS=$( grep -rl "\bDesignCanvas\b" \
+  "$ROOT/optioniaWooCommerceFrontend/src" \
+  --include='*.ts' --include='*.tsx' 2>/dev/null \
+  | grep -v '\.test\.' \
+  | grep -cv 'design-canvas\.tsx$' || true )
+
+if [ "${CANVAS_CONSUMERS:-0}" -eq 0 ]; then
+  pass "the canvas is knowingly unreachable (no route until M26d.4)"
+else
+  fail "the canvas now has a consumer — wire gate 30 to its route and delete this check"
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d design-store check(s) failed.\033[0m\n' "$FAILURES"
