@@ -18,6 +18,25 @@
 #
 # 📌 **The store deliberately does not know when a gesture ends**, which is why
 # the rule cannot be expressed in its own types.
+#
+# ## How to write a check here, learned the hard way
+#
+# 🔴 **Match inside the BLOCK the rule is about, never across the file.** Four
+# commits running, a majority of new checks in this gate passed their first
+# mutation, and every failure was the same shape — a `grep` finding the string
+# somewhere else:
+#
+#   - `<DesignLabDialog` matched inside `<DesignLabDialogX`
+#   - `updateValue(…design…)` also appears in the undo and redo callbacks
+#   - `saveDesign.error` is named twice per branch, so a count of 2 meant 1
+#   - `Design ${value.label}` is the BUTTON's label as well as the undo entry's
+#   - `pointer-events: auto` and `--dl-zoom` matched this file's own comments
+#
+# ⚠️ **So: strip comments, extract the enclosing function or JSX block with
+# `perl -0ne`, and match within it.** A bare `grep -q NAME "$FILE"` over a
+# 4,300-line editor is a check that something is mentioned, not that it is done.
+#
+# 📌 **And prove every new check fails.** Not one of those was found by review.
 set -euo pipefail
 
 printf '\033[1m== check-design-store.sh ==\033[0m\n'
@@ -521,6 +540,32 @@ else
   # the merchant had saved before — the round trip broken at its last step.
   grep -q "design={" "$EDITOR" \
     || { fail "the dialog is not hydrated from the value's stored design"; BOUND_FAILS=$((BOUND_FAILS + 1)); }
+
+  # 🔴 **And hydrated ON OPEN ONLY.** `importDesign` empties the canvas and
+  # resets history, so an effect that also depends on the design prop wipes a
+  # merchant's work the moment any new object identity arrives mid-edit — an
+  # undo from the history panel, a background refetch, a second tab. The first
+  # version did exactly that; `ValueRow` solves the identical problem the right
+  # way and says so in a comment I had already read.
+  #
+  # ⚠️ Asserted on the DEPENDENCY ARRAY, because that is where the defect lives:
+  # the call itself looks identical either way.
+  DIALOG="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab-dialog.tsx"
+  HYDRATE_DEPS=$(perl -0ne 'print $1 if /store\.importDesign\([^;]*;\s*\n\s*\}, (\[[^\]]*\])/s' "$DIALOG")
+
+  case "$HYDRATE_DEPS" in
+    *design*|*background*)
+      fail "the dialog re-hydrates when its design prop changes — that discards work in progress"
+      BOUND_FAILS=$((BOUND_FAILS + 1))
+      ;;
+    '')
+      fail "could not read the hydration effect's dependencies — has its shape changed?"
+      BOUND_FAILS=$((BOUND_FAILS + 1))
+      ;;
+    *)
+      pass "the dialog hydrates on open only, so work in progress survives"
+      ;;
+  esac
 
   # 🔴 **And what it returns is WRITTEN.** `onApply` handing the design to a
   # local setState would look identical until the page reloaded.

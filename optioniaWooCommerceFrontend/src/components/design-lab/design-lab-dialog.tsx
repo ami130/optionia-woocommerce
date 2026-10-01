@@ -80,31 +80,43 @@ export function DesignLabDialog({
   useDesignStore(store);
 
   /*
-   * ⚠️ **Hydrate on OPEN, not on mount.** The dialog stays mounted while closed,
-   * so hydrating once would show the first choice's design for every later one.
+   * ⚠️ **Hydrate on OPEN, and ONLY on open.** The dialog stays mounted while
+   * closed, so hydrating once on mount would show the first choice's design for
+   * every later one.
    *
-   * 🔴 **Tracked in a ref rather than state, and that is not a shortcut.**
-   * Hydration is a one-way push into an external system — the store notifies
-   * React by itself — so recording "already done" in state would schedule a
-   * render that changes nothing React draws. React's compiler refuses a
-   * setState inside an effect body for exactly that reason, and it is right
-   * here: the only consumer of this flag is the effect that writes it.
+   * 🔴 **Depending on `design` too would discard a merchant's work mid-edit.**
+   * `importDesign` empties the canvas and resets history, so any new object
+   * identity arriving while the lab is open — an undo from the history panel,
+   * a background refetch, a second tab — would wipe whatever they had composed.
+   * `ValueRow` solves the identical problem the same way and states the reason:
+   * *"On OPEN, not on every prop change. Resyncing whenever the prop moved
+   * would discard a half-typed edit the moment a background refetch landed."*
+   * I wrote the first version depending on the prop, having read that comment.
+   *
+   * 📌 **The props are read through refs**, so the effect sees the CURRENT
+   * design at the moment it opens without listing it as a dependency. A stale
+   * closure would be the opposite defect: reopening on whatever was current
+   * when the component mounted.
    */
-  const hydratedFor = useRef<DesignData | null | undefined>(undefined);
+  const designRef = useRef(design);
+  const backgroundRef = useRef(background);
+
+  /*
+   * ⚠️ **Written in an effect, not during render.** React's compiler refuses a
+   * ref assignment in the render body — correctly: a ref is invisible to it, so
+   * it cannot tell whether the write is safe. This effect runs after every
+   * render, which is exactly when the latest props are known.
+   */
+  useEffect(() => {
+    designRef.current = design;
+    backgroundRef.current = background;
+  }, [design, background]);
 
   useEffect(() => {
-    if (!open) {
-      /* Re-hydrate next time it opens, with whatever design is current then. */
-      hydratedFor.current = undefined;
+    if (!open) return;
 
-      return;
-    }
-
-    if (hydratedFor.current !== design) {
-      hydratedFor.current = design;
-      store.importDesign(design, background);
-    }
-  }, [open, design, background, store]);
+    store.importDesign(designRef.current, backgroundRef.current);
+  }, [open, store]);
 
   /*
    * Keyboard shortcuts: nudge, delete, duplicate, undo/redo, deselect.

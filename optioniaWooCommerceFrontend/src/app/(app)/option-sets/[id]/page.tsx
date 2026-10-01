@@ -3510,10 +3510,19 @@ export function ValueRow({
        */
       design={(value.design as DesignData | undefined) ?? null}
       /*
-       * ⚠️ **The product photo is M26d.5's.** Until an asset library exists the
-       * canvas composes against a blank background, which is honest: a design
-       * placed against nothing still stores fractions and re-places correctly
-       * when a photo arrives.
+       * ⚠️ **The product photo is M26d.5's, and this is a real limitation.**
+       *
+       * 📌 The DATA is correct either way: geometry is stored as fractions of
+       * the canvas, so a design composed here re-places correctly over any
+       * photo later — verified by an export/import round trip.
+       *
+       * 🔴 **What is missing is what the merchant SEES.** With no background
+       * the canvas keeps the store's default 392×464 rather than the product
+       * photo's aspect, so they place artwork without seeing what it sits on.
+       * A layer centred against a square canvas is still centred against a tall
+       * one, but "looks right" is a judgement they cannot make yet. Calling
+       * that merely "honest" understated it; the feature is usable and
+       * incomplete until the asset library lands.
        */
       background={null}
       title={`Design — ${value.label}`}
