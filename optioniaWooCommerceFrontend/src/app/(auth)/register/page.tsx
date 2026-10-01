@@ -87,12 +87,24 @@ export default function RegisterPage() {
         )}
       </AuthForm>
 
-      <p className="text-muted-foreground text-sm">
-        Already have an account?{' '}
-        <Link href="/login" className="underline">
-          Sign in
-        </Link>
-      </p>
+      <div className="text-muted-foreground space-y-2 text-sm">
+        <p>
+          Already have an account?{' '}
+          <Link href="/login" className="underline">
+            Sign in
+          </Link>
+        </p>
+        {/*
+          📌 **The last moment to check the price.** Someone filling in this form
+          has not committed to anything yet, and making them register to find out
+          what it costs is the pattern this page exists to avoid.
+        */}
+        <p>
+          <Link href="/pricing" className="underline">
+            See pricing
+          </Link>
+        </p>
+      </div>
     </div>
   );
 }

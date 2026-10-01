@@ -71,4 +71,39 @@ describe('Public plans (e2e)', () => {
       expect(body).not.toContain(forbidden);
     }
   }, 30_000);
+
+  /**
+   * 🔴 **A stale token must not turn a public page into a 401.**
+   *
+   * The dashboard's API client attaches whatever access token it holds to every
+   * request, and this project has twice shipped a route where an expired one
+   * triggered a refresh, spent a rotating token for nothing and signed a
+   * merchant out mid-task — on `/auth/` first and `/connect/` second, both found
+   * by tracing which codes map to 401.
+   *
+   * ⚠️ **`@Public()` short-circuits `JwtAuthGuard` BEFORE any token is
+   * inspected**, so a garbage credential is never examined here. That is the
+   * reasoning; this is the proof, because the reasoning was all that existed.
+   */
+  it('ignores a garbage token rather than refusing', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/v1/plans')
+      .set('Authorization', 'Bearer not-a-real-token');
+
+    expect(response.status).toBe(200);
+  }, 30_000);
+
+  it('ignores an expired-looking token too', async () => {
+    // A syntactically valid JWT whose signature and expiry are both wrong.
+    const expired =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' +
+      'eyJzdWIiOiJ1XzEiLCJleHAiOjEwMDAwMDAwMDB9.' +
+      'c2lnbmF0dXJlLXRoYXQtd2lsbC1uZXZlci12ZXJpZnk';
+
+    const response = await request(app.getHttpServer())
+      .get('/v1/plans')
+      .set('Authorization', `Bearer ${expired}`);
+
+    expect(response.status).toBe(200);
+  }, 30_000);
 });

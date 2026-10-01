@@ -138,6 +138,17 @@ function LoginContent() {
             Create an account
           </Link>
         </p>
+        {/*
+          📌 **Pricing belongs here, where the decision is made.** Someone at the
+          sign-in screen who does not have an account is deciding whether to
+          create one, and what it costs is the question they are asking. The page
+          is public, so it answers without an account.
+        */}
+        <p>
+          <Link href="/pricing" className="underline">
+            See pricing
+          </Link>
+        </p>
       </div>
     </div>
   );

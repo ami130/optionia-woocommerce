@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ErrorState, LoadingRows } from '@/components/layout/states';
+import { EmptyState, ErrorState, LoadingRows } from '@/components/layout/states';
 import { fetchPublicPlans } from '@/lib/billing/public-api';
 import { formatMoney } from '@/lib/billing/format';
 import { cn } from '@/lib/utils';
@@ -42,7 +42,23 @@ export default function PricingPage() {
         <LoadingRows rows={3} />
       ) : plans.isError ? (
         <ErrorState error={plans.error} onRetry={() => void plans.refetch()} />
-      ) : plans.data === undefined ? null : (
+      ) : plans.data === undefined ? null : plans.data.length === 0 ? (
+        /*
+         * ⚠️ **A blank page reads as broken, not as "nothing on sale".** The
+         * grid rendered an empty row when `listPublic` returned nothing — every
+         * plan hidden, or none seeded — leaving a heading, a subtitle and
+         * silence. A visitor cannot tell that from a page that failed to load.
+         */
+        <EmptyState
+          title="No plans on sale right now"
+          description="Pricing is being updated. Create an account and we will be in touch, or sign in if you already have one."
+          action={
+            <Link href="/register" className={cn(buttonVariants())}>
+              Create an account
+            </Link>
+          }
+        />
+      ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans.data.map((plan) => {
             const yearly = plan.prices.find((price) => price.interval === 'year');
