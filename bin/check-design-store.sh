@@ -328,32 +328,119 @@ else
   fail "the canvas never sets a cursor — a pinned layer looks draggable and silently refuses"
 fi
 
-# 8. The Design Lab is not yet reachable, and says so.
+# 8. The lab is assembled: every part it was built from is mounted.
 #
-# ⚠️ **This asserts a KNOWN GAP rather than hiding it.** Nothing mounts
-# `DesignCanvas` yet, so a merchant cannot reach it. This fails the moment it
-# gains a consumer, so whoever wires it must delete this block deliberately and
-# replace it with a check that the new entry point is reachable.
+# 🔴 **This replaces the "nothing mounts it yet" check**, which failed the moment
+# the dialog appeared — deliberately, so that whoever wired it had to think
+# rather than delete a line. The risk it guarded against has not gone away, it
+# has moved: a canvas with no panels, or panels built over a second copy of the
+# rules, would still compile and still pass every other check here.
+DIALOG="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab-dialog.tsx"
+LIST="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/layer-list.tsx"
+PROPS="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/properties-panel.tsx"
+
+if [ ! -f "$DIALOG" ] || [ ! -f "$LIST" ] || [ ! -f "$PROPS" ]; then
+  fail "the Design Lab is incomplete — dialog, layer list and properties panel are one feature"
+else
+  MISSING=""
+
+  for part in DesignCanvas LayerList PropertiesPanel; do
+    grep -q "<$part\b" "$DIALOG" || MISSING="$MISSING $part"
+  done
+
+  if [ -n "$MISSING" ]; then
+    fail "the dialog does not mount:$MISSING"
+  else
+    pass "the dialog mounts the canvas and both panels"
+  fi
+
+  # 📌 The two conversion points, and the ONLY place both are called. M26c.2's
+  # contract is that fractions become editor pixels in exactly two functions;
+  # a second caller would be a third conversion nobody is watching.
+  if grep -q "store.importDesign(" "$DIALOG" && grep -q "store.exportDesign(" "$DIALOG"; then
+    pass "the dialog hydrates and returns a design through the two conversion points"
+  else
+    fail "the dialog does not round-trip a design (importDesign / exportDesign)"
+  fi
+
+  # ⚠️ The panels must be built over the tested decisions, not their own copies.
+  PANEL_MISSING=""
+
+  for sym in listOrder backgroundOf canMoveUp canMoveDown moveInList rowActions; do
+    grep -qE "\b$sym\(" "$LIST" || PANEL_MISSING="$PANEL_MISSING $sym"
+  done
+
+  grep -qE "\bpanelState\(" "$PROPS" || PANEL_MISSING="$PANEL_MISSING panelState"
+
+  if [ -n "$PANEL_MISSING" ]; then
+    fail "the panels re-derive rather than use:$PANEL_MISSING"
+  else
+    pass "both panels are built over the tested decisions"
+  fi
+
+  # 🔴 The slider contract's other half. `setRotation` and `setOpacity` notify
+  # WITHOUT committing, by design — committing each input would make one undo
+  # move a slider by a single step. The debounce in the panel is what turns a
+  # drag into one undo entry, and nothing else tests it.
+  #
+  # ⚠️ **The commit must be INSIDE the timeout, which is the whole point.** An
+  # earlier version asked only that `setTimeout` and `store.commit()` both
+  # appear somewhere in the file — and both survive deleting the debounce,
+  # because the cleanup still clears a timer and the commit is still called.
+  # Caught by mutating the debounce away and watching this pass.
+  #
+  # 📌 **Its known limit, stated rather than implied**: an EXTRA immediate
+  # commit beside the timer still passes, because the debounced call is still
+  # there to match. Catching that needs a real render, which this project cannot
+  # do (no JSX runner). What is gated is the structural mistake — a commit that
+  # is not debounced at all.
+  if perl -0ne 'exit 1 unless /setTimeout\(\s*\(\)\s*=>\s*[a-zA-Z]+\.commit\(\)/s' "$PROPS"; then
+    pass "the sliders commit once after a pause, not on every input"
+  else
+    fail "the properties panel commits outside a timer — a slider drag would be dozens of undo entries"
+  fi
+
+  # Every class the panels emit must have a rule, as the canvas's must.
+  PANEL_UNSTYLED=""
+  PANEL_EMITTED=0
+  PANEL_SELECTORS="$(mktemp)"
+  perl -0pe 's{/\*.*?\*/}{}gs' "$STYLES" \
+    | perl -0ne 'print "$1\n" while /(?:^|\})([^{}]*)\{/gs' > "$PANEL_SELECTORS"
+
+  for cls in $(grep -hoE "optionia-designlab-[a-z-]+" "$DIALOG" "$LIST" "$PROPS" | sort -u); do
+    PANEL_EMITTED=$((PANEL_EMITTED + 1))
+
+    grep -qE "\.$cls([^A-Za-z0-9_-]|\$)" "$PANEL_SELECTORS" \
+      || PANEL_UNSTYLED="$PANEL_UNSTYLED $cls"
+  done
+
+  rm -f "$PANEL_SELECTORS"
+
+  if [ -n "$PANEL_UNSTYLED" ]; then
+    fail "panel class(es) emitted but never styled:$PANEL_UNSTYLED"
+  else
+    pass "all $PANEL_EMITTED panel class(es) have a rule"
+  fi
+fi
+
+# 9. The lab is still not reachable by a MERCHANT, and says so.
 #
-# 🔴 **An earlier version of this note said "no route until M26d.4", and that
-# was wrong twice over.** M26d.4 is "Which options carry a design" — a
-# data-binding milestone, not a UI one; the mistake came from confusing internal
-# step labels (4a..4d) within M26d.1 with the plan's own numbering. And the
-# source does not reach the lab by a ROUTE at all: `DesignLabModal` mounts it in
-# a modal opened from a choice, hydrating that choice's saved design and
-# returning the edited one. A standalone page would be a destination editing a
-# design that belongs to nothing — and would have to be removed at M26d.4. Gate
-# 30 (page reachability) therefore never applied here: a modal is not a page.
-CANVAS_CONSUMERS=$( grep -rl "\bDesignCanvas\b" \
+# ⚠️ **An honest gap, asserted.** The dialog exists and round-trips a design,
+# but nothing opens it: binding a design to a choice is M26d.4 ("Which options
+# carry a design"), and the option value entity has no column to persist one.
+# Wiring a trigger now would mean inventing that column ahead of its milestone.
+# This fails the moment something imports the dialog, so M26d.4 must replace it
+# having actually bound the design to the option model.
+DIALOG_CONSUMERS=$( grep -rl "\bDesignLabDialog\b" \
   "$ROOT/optioniaWooCommerceFrontend/src" \
   --include='*.ts' --include='*.tsx' 2>/dev/null \
   | grep -v '\.test\.' \
-  | grep -cv 'design-canvas\.tsx$' || true )
+  | grep -cv 'design-lab-dialog\.tsx$' || true )
 
-if [ "${CANVAS_CONSUMERS:-0}" -eq 0 ]; then
-  pass "the canvas is knowingly unreachable (nothing mounts it yet)"
+if [ "${DIALOG_CONSUMERS:-0}" -eq 0 ]; then
+  pass "the lab is assembled but not yet bound to a choice (M26d.4)"
 else
-  fail "the canvas now has a consumer — replace this check with one that its entry point is reachable"
+  fail "the lab now opens from somewhere — replace this with a check that the design persists"
 fi
 
 printf '\n'

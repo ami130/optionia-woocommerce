@@ -121,13 +121,21 @@ PARITY="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/style-geometry.test
 # `SHARED_STYLES` satisfied perfectly: the suite fell from 32 tests to 5 and
 # this gate stayed green. A check that confirms a name is present rather than
 # work being done is this project's most repeated gate defect.
+#
+# 🔴 **And it must run the PARITY FILE, not the directory.** It ran
+# `src/lib/design-lab` — so the number it reported was every test in the folder,
+# and the message "the fit modes are compared against the renderer (N cases)"
+# counted the drag, store, list and panel suites as fit-mode comparisons. The
+# floor still held, but only because unrelated modules kept arriving: emptying
+# the parity suite would have been masked by them. A floor that any other file
+# can satisfy is not a floor.
 PARITY_MIN=24
 
 if [ ! -f "$PARITY" ]; then
   fail "the fit-mode parity test is missing — the editor and renderer are unchecked"
 else
   PARITY_RUN=$( cd "$ROOT/optioniaWooCommerceFrontend" \
-    && npx vitest run src/lib/design-lab --reporter=json 2>/dev/null \
+    && npx vitest run src/lib/design-lab/style-geometry.test.ts --reporter=json 2>/dev/null \
     | node -e "
       let raw = '';
       process.stdin.on('data', (c) => { raw += c; });

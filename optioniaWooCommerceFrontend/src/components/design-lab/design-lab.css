@@ -308,3 +308,257 @@
     transition: none;
   }
 }
+
+/* ═══════════════════ the lab shell: list · canvas · properties ═══════════════ */
+
+/*
+ * 🔴 **The stage must be allowed to SHRINK, and that is what `min-width: 0`
+ * does.** A grid item defaults to `min-width: auto`, meaning it refuses to go
+ * below its content's intrinsic size; the canvas would then push the dialog
+ * wider than the viewport instead of fitting inside it, and `fitCanvas` would
+ * measure a stage that never gets smaller. The same reasoning applies to
+ * `min-height: 0` down the column.
+ */
+.optionia-designlab-dialog {
+  max-width: min(1200px, 95vw);
+  width: 95vw;
+}
+
+.optionia-designlab-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 240px;
+  gap: 12px;
+  min-height: 0;
+  height: min(70vh, 560px);
+}
+
+/* On a narrow viewport the panels stack above and below the canvas. */
+@media (max-width: 900px) {
+  .optionia-designlab-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: auto;
+  }
+}
+
+/* ───────────────────────── layer list ───────────────────────── */
+
+.optionia-designlab-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.optionia-designlab-side-heading,
+.optionia-designlab-props-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #616161;
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.optionia-designlab-empty {
+  font-size: 13px;
+  color: #8a8a8a;
+  margin: 0;
+}
+
+.optionia-designlab-layer-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.optionia-designlab-layer-row,
+.optionia-designlab-bg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.optionia-designlab-layer-row.optionia-designlab-row-selected {
+  border-color: var(--dl-sel-blue);
+  box-shadow: 0 0 0 1px var(--dl-sel-blue);
+}
+
+/*
+ * ⚠️ A hidden layer is dimmed, NOT removed from the list — hiding is how a
+ * merchant looks underneath, and a row they cannot find is a row they cannot
+ * unhide.
+ */
+.optionia-designlab-layer-row.optionia-designlab-hidden-layer {
+  opacity: 0.55;
+}
+
+/* The select target fills the row; the action buttons sit beside it. */
+.optionia-designlab-row-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.optionia-designlab-row-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #f1f1f1;
+  flex: none;
+}
+
+.optionia-designlab-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.optionia-designlab-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #f1f1f1;
+  color: #616161;
+  flex: none;
+}
+
+.optionia-designlab-row-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.optionia-designlab-row-actions button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 4px;
+  color: #616161;
+}
+
+.optionia-designlab-row-actions button:hover:not(:disabled) {
+  background: #f1f1f1;
+  color: #303030;
+}
+
+/*
+ * 📌 A refused reorder stays VISIBLE and dimmed rather than disappearing. A
+ * control that vanishes at the ends of the list makes the row jump as the
+ * merchant moves a layer up and down.
+ */
+.optionia-designlab-row-actions button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* ───────────────────── properties panel ───────────────────── */
+
+.optionia-designlab-props {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-left: 4px;
+}
+
+.optionia-designlab-props-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/*
+ * ⚠️ A disabled section is dimmed but still READABLE, and its controls carry
+ * their own `disabled` so nothing depends on this rule to be unusable. Opacity
+ * alone would leave a control that looks inert and still responds.
+ */
+.optionia-designlab-is-disabled {
+  opacity: 0.45;
+}
+
+.optionia-designlab-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.optionia-designlab-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 7px;
+  border: 1px solid #e3e3e3;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.optionia-designlab-radio:has(input:checked) {
+  border-color: var(--dl-sel-blue);
+  background: rgba(47, 139, 255, 0.08);
+}
+
+.optionia-designlab-radio.optionia-designlab-is-disabled {
+  cursor: default;
+}
+
+.optionia-designlab-btn-cluster {
+  display: flex;
+  gap: 4px;
+}
+
+.optionia-designlab-btn-cluster button {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.optionia-designlab-btn-cluster button:hover:not(:disabled) {
+  border-color: #d4d4d4;
+  background: #f1f1f1;
+}
+
+.optionia-designlab-btn-cluster button:disabled {
+  cursor: default;
+}
+
+.optionia-designlab-rng {
+  width: 100%;
+  accent-color: var(--dl-sel-blue);
+}
