@@ -10,7 +10,7 @@ import { DomainException } from '../common/errors/domain.exception';
 import { OptionValue } from './entities/option-value.entity';
 import { Option } from './entities/option.entity';
 import { buildPatch, pick } from './entity-patch';
-import { copyableValueFields } from './duplication';
+import { copyableOptionFields, copyableValueFields } from './duplication';
 import { ParentSetService } from './parent-set';
 import { AlreadyDeletedError, CascadeService } from './cascade.service';
 import { OptionGroupsRepository } from './option-groups.repository';
@@ -249,20 +249,9 @@ export class OptionsService {
         manager.create(Option, {
           optionGroupId: source.optionGroupId,
           key: newKey,
-          valueKind: source.valueKind,
-          cardinality: source.cardinality,
-          presentation: source.presentation,
           label: `${source.label} (copy)`,
-          description: source.description,
-          placeholder: source.placeholder,
-          helpText: source.helpText,
-          isRequired: source.isRequired,
-          defaultValue: source.defaultValue,
-          validation: source.validation,
-          pricing: source.pricing,
-          display: source.display,
-          isEnabled: source.isEnabled,
           sortOrder,
+          ...copyableOptionFields(source),
         }),
       );
 

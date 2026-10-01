@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import { Cardinality, Presentation, ValueKind } from '../../common/database/enums';
+import {
+  Cardinality,
+  DesignCarrier,
+  Presentation,
+  ValueKind,
+} from '../../common/database/enums';
 import {
   perCharPricing,
   perUnitPricing,
@@ -38,6 +43,20 @@ export interface OptionTypeDefinition {
    * in M7.4 need to know.
    */
   readonly takesValues: boolean;
+
+  /**
+   * Where a Design Lab design lives for this type, if anywhere (M26d.4).
+   *
+   * 🔴 **The plan's instruction is to reuse the M5.4b axes "rather than
+   * inventing a parallel type system"**, and this is how: a capability declared
+   * beside `takesValues`, keyed on the same `presentation`, rather than a
+   * second enum of "designable types" that could drift from this one.
+   *
+   * ⚠️ It cannot be derived from `valueKind`: `hidden` is `TEXT` too, and its
+   * value is merchant-set and never typed by a customer, so a text design on it
+   * would render something nobody asked for.
+   */
+  readonly designCarrier: DesignCarrier;
 
   /** Shape of `options.validation`. */
   readonly validationSchema: z.ZodType;
@@ -648,6 +667,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.CHOICE,
     cardinality: [Cardinality.ONE],
     takesValues: true,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -691,6 +711,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.CHOICE,
     cardinality: [Cardinality.ONE, Cardinality.MANY],
     takesValues: true,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -710,6 +731,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.CHOICE,
     cardinality: [Cardinality.ONE],
     takesValues: true,
+    designCarrier: DesignCarrier.VALUE,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -727,6 +749,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.CHOICE,
     cardinality: [Cardinality.ONE],
     takesValues: true,
+    designCarrier: DesignCarrier.VALUE,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -745,6 +768,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.CHOICE,
     cardinality: [Cardinality.ONE],
     takesValues: true,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: choiceValidationSchema,
     displaySchema: choiceDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -773,6 +797,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.TEXT,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.OPTION_TEXT,
     validationSchema: textValidationSchema,
     displaySchema: textDisplaySchema,
     /**
@@ -810,6 +835,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.TEXT,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.OPTION_TEXT,
     validationSchema: textValidationSchema,
     displaySchema: textDisplaySchema,
     // Priced exactly as `text_field` is: the axes are identical, and a customer
@@ -834,6 +860,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.NUMBER,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: numberValidationSchema,
     displaySchema: textDisplaySchema,
     /**
@@ -864,6 +891,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.NUMBER,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: rangeValidationSchema,
     displaySchema: textDisplaySchema,
     pricingSchema: numberOptionPricing,
@@ -884,6 +912,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.NUMBER,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: numberValidationSchema,
     displaySchema: textDisplaySchema,
     pricingSchema: numberOptionPricing,
@@ -901,6 +930,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.DATE,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: dateValidationSchema,
     displaySchema: textDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -918,6 +948,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.DATE,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: dateValidationSchema,
     displaySchema: textDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -935,6 +966,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.DATE,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: dateValidationSchema,
     displaySchema: textDisplaySchema,
     pricingSchema: noTypeLevelPricing,
@@ -960,6 +992,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.TEXT,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: z.object({}).strict(),
     displaySchema: z.object({}).strict(),
     pricingSchema: noTypeLevelPricing,
@@ -988,6 +1021,7 @@ const DEFINITIONS: readonly OptionTypeDefinition[] = [
     valueKind: ValueKind.FILE,
     cardinality: [Cardinality.NONE],
     takesValues: false,
+    designCarrier: DesignCarrier.NONE,
     validationSchema: fileValidationSchema,
     displaySchema: textDisplaySchema,
     /*
@@ -1022,6 +1056,35 @@ export function findType(presentation: string): OptionTypeDefinition | null {
 /** Whether a presentation has been implemented. */
 export function isRegistered(presentation: string): boolean {
   return BY_PRESENTATION.has(presentation);
+}
+
+/**
+ * Where a design lives for this presentation — `none` if it carries none.
+ *
+ * 📌 **An unregistered presentation carries no design.** The same reasoning as
+ * `findType`'s null: an unknown type is caller input, and refusing a design for
+ * it is the safe answer. A throw here would turn a typo in a request body into
+ * a 500.
+ */
+export function designCarrierFor(presentation: string): DesignCarrier {
+  return findType(presentation)?.designCarrier ?? DesignCarrier.NONE;
+}
+
+/**
+ * Whether a VALUE of this option type may carry a design.
+ *
+ * 🔴 **This is the guard that stops a design reaching a type that cannot draw
+ * it.** Without it a design could be attached to a date picker, stored, and
+ * published into a config document a storefront will never render — the kind of
+ * data that looks saved and does nothing.
+ */
+export function valueCarriesDesign(presentation: string): boolean {
+  return designCarrierFor(presentation) === DesignCarrier.VALUE;
+}
+
+/** Whether the OPTION itself carries one text design. */
+export function optionCarriesTextDesign(presentation: string): boolean {
+  return designCarrierFor(presentation) === DesignCarrier.OPTION_TEXT;
 }
 
 export { pricingConfigSchema };

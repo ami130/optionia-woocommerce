@@ -1,5 +1,17 @@
-import { Cardinality, Presentation, ValueKind } from '../../common/database/enums';
-import { findType, isRegistered, registeredTypes } from './type-registry';
+import {
+  Cardinality,
+  DesignCarrier,
+  Presentation,
+  ValueKind,
+} from '../../common/database/enums';
+import {
+  designCarrierFor,
+  findType,
+  isRegistered,
+  optionCarriesTextDesign,
+  registeredTypes,
+  valueCarriesDesign,
+} from './type-registry';
 
 /**
  * The registry.
@@ -621,5 +633,113 @@ describe('type registry', () => {
         }).success,
       ).toBe(false);
     });
+  });
+});
+
+/**
+ * Where a design may live, per type (M26d.4).
+ *
+ * 🔴 **The plan's instruction was to reuse the M5.4b axes "rather than
+ * inventing a parallel type system".** These tests exist to keep that true: the
+ * carrier is declared beside the axes, and what follows asserts it agrees with
+ * them wherever it should, and documents the one place it deliberately does not.
+ */
+describe('design carriers', () => {
+  it('lets both swatch types carry a design per value', () => {
+    /* A red swatch and a blue one print different artwork. */
+    expect(valueCarriesDesign(Presentation.COLOR_SWATCH)).toBe(true);
+    expect(valueCarriesDesign(Presentation.IMAGE_SWATCH)).toBe(true);
+  });
+
+  it('lets the free-text types carry one design on the option', () => {
+    /* A text option has no values, so there is no value to hang one on. */
+    expect(optionCarriesTextDesign(Presentation.TEXT_FIELD)).toBe(true);
+    expect(optionCarriesTextDesign(Presentation.TEXTAREA)).toBe(true);
+  });
+
+  it('refuses a design on a type that could not draw one', () => {
+    for (const presentation of [
+      Presentation.DATE_PICKER,
+      Presentation.FILE_INPUT,
+      Presentation.NUMBER_FIELD,
+      Presentation.RANGE,
+      Presentation.QUANTITY,
+    ]) {
+      expect(designCarrierFor(presentation)).toBe(DesignCarrier.NONE);
+    }
+  });
+
+  /*
+   * 🔴 The case that proves this is not derived from `valueKind`. `hidden` is
+   * TEXT like `text_field`, and carries NO design: its value is set by the
+   * merchant and never typed by a customer, so a text design on it would render
+   * something nobody asked for. An implementation that inferred the carrier
+   * from the kind would get this one wrong, and only this one.
+   */
+  it('refuses a text design on `hidden`, though it is a text type', () => {
+    expect(findType(Presentation.HIDDEN)?.valueKind).toBe(
+      findType(Presentation.TEXT_FIELD)?.valueKind,
+    );
+    expect(optionCarriesTextDesign(Presentation.HIDDEN)).toBe(false);
+  });
+
+  /*
+   * ⚠️ Plain choice types carry none either, and that is also not inferable:
+   * `radio` and `color_swatch` share every axis and differ only in rendering.
+   * A radio draws a label, so there is nothing for artwork to attach to.
+   */
+  it('refuses a design on choice types that draw no artwork', () => {
+    expect(findType(Presentation.RADIO)?.valueKind).toBe(
+      findType(Presentation.COLOR_SWATCH)?.valueKind,
+    );
+    expect(designCarrierFor(Presentation.RADIO)).toBe(DesignCarrier.NONE);
+    expect(designCarrierFor(Presentation.DROPDOWN)).toBe(DesignCarrier.NONE);
+    expect(designCarrierFor(Presentation.CHECKBOX)).toBe(DesignCarrier.NONE);
+  });
+
+  it('declares a carrier for every registered type', () => {
+    /*
+     * 📌 A new type with no carrier would be `undefined` rather than `none` —
+     * which reads as falsy everywhere and would never be noticed.
+     */
+    const carriers = Object.values(DesignCarrier) as string[];
+
+    for (const definition of registeredTypes()) {
+      expect(carriers).toContain(definition.designCarrier);
+    }
+  });
+
+  it('never puts a design on a type that takes no values unless it is text', () => {
+    /*
+     * 🔴 The invariant tying the carrier back to the axes. A VALUE carrier
+     * needs values to hang designs on; a type with `takesValues: false` has
+     * none, so the pairing would be unsatisfiable — a design with no row.
+     */
+    for (const definition of registeredTypes()) {
+      if (definition.designCarrier === DesignCarrier.VALUE) {
+        expect(definition.takesValues).toBe(true);
+      }
+
+      if (definition.designCarrier === DesignCarrier.OPTION_TEXT) {
+        expect(definition.valueKind).toBe(ValueKind.TEXT);
+        expect(definition.takesValues).toBe(false);
+      }
+    }
+  });
+
+  it('answers `none` for an unregistered presentation rather than throwing', () => {
+    expect(designCarrierFor('not_a_type')).toBe(DesignCarrier.NONE);
+    expect(valueCarriesDesign('not_a_type')).toBe(false);
+    expect(optionCarriesTextDesign('not_a_type')).toBe(false);
+  });
+
+  it('never reports a type as carrying both', () => {
+    for (const definition of registeredTypes()) {
+      const both =
+        valueCarriesDesign(definition.presentation) &&
+        optionCarriesTextDesign(definition.presentation);
+
+      expect(both).toBe(false);
+    }
   });
 });

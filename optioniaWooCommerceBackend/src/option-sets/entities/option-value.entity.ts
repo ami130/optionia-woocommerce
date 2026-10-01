@@ -52,6 +52,32 @@ export class OptionValue extends SoftDeletableEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   imageUrl: string | null;
 
+  /**
+   * The Design Lab artwork this value prints (M26d.4).
+   *
+   * 🔴 **On the VALUE, because a red swatch and a blue one print different
+   * things.** The option carries the picker; each value carries what it puts on
+   * the product. Hanging one design off the option would make every swatch in a
+   * colour picker share it, which is the opposite of what a design lab is for.
+   *
+   * ⚠️ **JSON, unlike `priceType` and `priceAmountMinor` beside it, and the
+   * contrast is the reason.** ADR-015 made those real columns because analytics
+   * and plan limits filter on them — *"which values cost more than $50"* must
+   * not be a full scan. Nothing filters on a design: it is fetched whole with
+   * its value, rendered whole, and never queried by its contents. A column per
+   * layer would also be unbounded, since a design holds an arbitrary list.
+   *
+   * 📌 **Nullable, and null is the normal case.** Most values carry no artwork,
+   * and a NOT NULL default would write `{}` onto every existing row to mean
+   * "nothing" — a shape the reader would then have to tell apart from a design
+   * that genuinely has no layers yet.
+   *
+   * Only types whose `designCarrier` is `value` may hold one; the service
+   * refuses the rest, so a date picker cannot accumulate artwork nothing draws.
+   */
+  @Column({ type: 'json', nullable: true })
+  design: Record<string, unknown> | null;
+
   @Column({ type: 'char', length: 7, nullable: true })
   colorHex: string | null;
 

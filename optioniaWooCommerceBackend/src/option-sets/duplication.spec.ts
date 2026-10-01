@@ -3,10 +3,12 @@ import { getMetadataArgsStorage } from 'typeorm';
 import {
   COPY_DECIDED_BY_CALLER,
   copyableItemFields,
+  copyableOptionFields,
   copyableRuleFields,
   copyableValueFields,
 } from './duplication';
 import { OptionRule } from './entities/option-rule.entity';
+import { Option } from './entities/option.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { PresentationalItem } from './entities/presentational-item.entity';
 
@@ -101,6 +103,37 @@ describe('copy completeness', () => {
       expect(copied).not.toContain('id');
       expect(copied).not.toContain('optionId');
       expect(copied).not.toContain('valueKey');
+    });
+  });
+
+  /*
+   * 🔴 **Added when `textDesign` nearly repeated the `groupLabel` loss.** The
+   * option copy path was an inline field list in `options.service.ts` that no
+   * test compared against the entity, so a new column would be dropped on every
+   * duplicate in silence — the same defect this suite exists for, one entity
+   * over. It was covered for values, items and rules, and not for options.
+   */
+  describe('Option', () => {
+    const copied = Object.keys(copyableOptionFields({} as Option));
+
+    it('accounts for every column', () => {
+      const unaccounted = columnsOf(Option).filter(
+        (column) =>
+          !copied.includes(column) &&
+          !(COPY_DECIDED_BY_CALLER as readonly string[]).includes(column),
+      );
+
+      expect(unaccounted).toEqual([]);
+    });
+
+    it('carries the text design a copy must still print', () => {
+      expect(copied).toContain('textDesign');
+    });
+
+    it('carries the three axes, which decide what the copy IS', () => {
+      for (const axis of ['valueKind', 'cardinality', 'presentation']) {
+        expect(copied).toContain(axis);
+      }
     });
   });
 

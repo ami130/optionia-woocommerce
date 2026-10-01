@@ -138,6 +138,35 @@ export const Presentation = {
 } as const;
 export type Presentation = (typeof Presentation)[keyof typeof Presentation];
 
+/**
+ * Where a Design Lab design lives for an option type, if anywhere (M26d.4).
+ *
+ * 🔴 **Three states, not a boolean, because the design lives on a different ROW
+ * in each case.** An image or colour choice is a set of `option_values`, and
+ * each value carries its own artwork — a red swatch and a blue one print
+ * different things. A text option has no values at all (`takesValues: false`),
+ * so its design belongs on the `options` row. One flag could not express that
+ * difference, and putting both on the value would strand a text design with
+ * nowhere to live; putting both on the option would make every swatch in a
+ * colour picker share one design, which is the opposite of the point.
+ *
+ * ⚠️ **Declared per type rather than derived from `valueKind`.** `hidden` is
+ * also `TEXT`, and a design on it would be meaningless — its value is set by the
+ * merchant and never seen or typed by a customer. The axes describe what a type
+ * IS; this describes what the Design Lab may attach to it, and the two do not
+ * line up. `takesValues` is the precedent: an explicit capability beside the
+ * axes rather than an inference from them.
+ */
+export const DesignCarrier = {
+  /** No design — a date picker, a file upload, a hidden field. */
+  NONE: 'none',
+  /** Each selectable value carries its own design (`option_values.design`). */
+  VALUE: 'value',
+  /** The option carries one text design (`options.textDesign`). */
+  OPTION_TEXT: 'option_text',
+} as const;
+export type DesignCarrier = (typeof DesignCarrier)[keyof typeof DesignCarrier];
+
 export const GroupDisplayType = {
   INLINE: 'inline',
   ACCORDION: 'accordion',

@@ -127,4 +127,27 @@ export class Option extends SoftDeletableEntity {
   /** Swatch size, column count, label placement, character counter. */
   @Column({ type: 'json', nullable: true })
   display: Record<string, unknown> | null;
+
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4).
+   *
+   * 🔴 **On the OPTION, because a text option has no values to hang it on.**
+   * `text_field` and `textarea` are `takesValues: false` — the customer supplies
+   * the value, so there is no merchant-authored row to carry artwork. That is
+   * why `designCarrier` has three states rather than being a boolean: the design
+   * lives on a different table depending on the type.
+   *
+   * ⚠️ **The merchant's text is a SAMPLE.** What is stored here is a design
+   * whose text layers show placeholder wording; the customer's input replaces it
+   * when the storefront renders (M26d.3 authors it, M26e.1 draws it). So this
+   * column is a template, not content — and it is why a text option can carry
+   * one design while a swatch needs one per value.
+   *
+   * 📌 **Nullable; null is the normal case.** Only types whose `designCarrier`
+   * is `option_text` may hold one, and the service refuses the rest — `hidden`
+   * among them, though it is a text type, because its value is merchant-set and
+   * never typed by a customer.
+   */
+  @Column({ type: 'json', nullable: true })
+  textDesign: Record<string, unknown> | null;
 }

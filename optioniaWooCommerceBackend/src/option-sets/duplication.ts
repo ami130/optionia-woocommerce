@@ -1,4 +1,5 @@
 import { OptionRule } from './entities/option-rule.entity';
+import { Option } from './entities/option.entity';
 import { OptionValue } from './entities/option-value.entity';
 import { PresentationalItem } from './entities/presentational-item.entity';
 
@@ -52,6 +53,8 @@ export const COPY_DECIDED_BY_CALLER = [
   'sortOrder',
   'targetId',
   'conditions',
+  /* An Option's key must be free in its group, so the caller derives one. */
+  'key',
 ] as const;
 
 /**
@@ -62,6 +65,46 @@ export const COPY_DECIDED_BY_CALLER = [
  * defaults is a document the renderer cannot resolve), while copying a whole
  * option into a new set must keep it.
  */
+/**
+ * Everything a copied `Option` inherits from its source.
+ *
+ * 🔴 **Extracted because `textDesign` was about to be lost the way `groupLabel`
+ * was.** The option copy path was an inline field list in `options.service.ts`
+ * with no completeness guard — the suite covered `OptionValue`,
+ * `PresentationalItem` and `OptionRule`, and not this. Adding a column to
+ * `Option` would have dropped it silently on every duplicate, which is the
+ * exact defect this module exists to prevent, one entity over.
+ *
+ * ⚠️ **`label` is caller-decided**, because a copy is renamed "(copy)" rather
+ * than inheriting a name that would then collide in the list.
+ */
+export function copyableOptionFields(source: Option): Omit<
+  Partial<Option>,
+  'id' | 'optionGroupId' | 'key' | 'label' | 'sortOrder'
+> {
+  return {
+    valueKind: source.valueKind,
+    cardinality: source.cardinality,
+    presentation: source.presentation,
+    description: source.description,
+    placeholder: source.placeholder,
+    helpText: source.helpText,
+    isRequired: source.isRequired,
+    defaultValue: source.defaultValue,
+    validation: source.validation,
+    pricing: source.pricing,
+    display: source.display,
+    /*
+     * 🔴 A free-text option's artwork travels with it (M26d.4), for the same
+     * reason a swatch's does: a duplicate that prints nothing is a copy in name
+     * only.
+     */
+    textDesign: source.textDesign,
+    // Disabled work stays disabled, as everywhere else.
+    isEnabled: source.isEnabled,
+  };
+}
+
 export function copyableValueFields(source: OptionValue): Omit<
   Partial<OptionValue>,
   'id' | 'optionId' | 'valueKey' | 'label' | 'sortOrder' | 'isDefault'
@@ -72,6 +115,17 @@ export function copyableValueFields(source: OptionValue): Omit<
     priceConfig: source.priceConfig,
     imageUrl: source.imageUrl,
     colorHex: source.colorHex,
+    /*
+     * 🔴 **The artwork travels with the value** (M26d.4). A duplicate of a
+     * swatch is the same choice on a new key — dropping its design would leave
+     * a value that looks copied and prints nothing, which is the exact shape of
+     * the `groupLabel` loss this suite was written for.
+     *
+     * 📌 It is copied by VALUE rather than by reference-sharing: the object is
+     * read from the source row and written to the new one, so editing the copy
+     * later cannot reach back into the original.
+     */
+    design: source.design,
     /*
      * A copy sits under the same heading: duplicating "Small" out of "Sizes"
      * into no group at all would move it in the rendered list.
