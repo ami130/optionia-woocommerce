@@ -127,13 +127,13 @@ test.describe('Design Lab', () => {
     await test.step('a layer is added, and the image actually loads', async () => {
       /*
        * 🔴 **The CORS question this spec exists to answer.** The image is served
-       * from the dashboard's own origin — `/next.svg` ships with the app — so
+       * from the dashboard's own origin — `/e2e-test-image.png` — so
        * `crossOrigin = 'anonymous'` has a same-origin response to accept. If the
        * add-layer flow is broken, `onerror` fires and no row appears.
        */
       const origin = new URL(page.url()).origin;
 
-      await page.getByLabel('Image URL').fill(`${origin}/next.svg`);
+      await page.getByLabel('Image URL').fill(`${origin}/e2e-test-image.png`);
       await page.getByRole('button', { name: /^Add layer$/ }).click();
 
       /* The row is the proof: addLayer ran, which means the image loaded. */
@@ -255,7 +255,7 @@ test.describe('Design Lab', () => {
        * 📌 Seeded against THIS store, now that its id is known. Same-origin, so
        * `crossOrigin = 'anonymous'` has a response it can accept.
        */
-      seedProductWithPhoto(storeId, 'http://localhost:3001/next.svg');
+      seedProductWithPhoto(storeId, 'http://localhost:3001/e2e-test-image.png');
 
       const set = await request.post('http://localhost:4000/v1/option-sets', {
         headers: auth,
@@ -303,7 +303,8 @@ test.describe('Design Lab', () => {
       });
 
       /*
-       * ⚠️ **And the canvas adopted the photo's aspect.** `next.svg` is wide,
+       * ⚠️ **And the canvas adopted the photo's aspect.** The fixture PNG is
+       * 40x24 — deliberately landscape,
        * so a canvas still at the default 392x464 would be TALLER than it is
        * wide — proving the measurement reached `setCanvasSize` rather than the
        * backdrop merely being drawn on an unchanged canvas.

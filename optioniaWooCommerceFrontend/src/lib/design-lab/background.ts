@@ -1,5 +1,7 @@
 import type { DesignImage } from '@shared/design/design-geometry.types';
 
+import { isVectorImage } from './layer-source';
+
 /**
  * The product photo a design is composed over.
  *
@@ -31,7 +33,18 @@ export interface BackgroundSource {
  * is what it did before this existed.
  */
 export function canBeBackground(product: BackgroundSource | null): boolean {
-  return product !== null && typeof product.imageUrl === 'string' && product.imageUrl !== '';
+  if (product === null || typeof product.imageUrl !== 'string' || product.imageUrl === '') {
+    return false;
+  }
+
+  /*
+   * 🔴 **SVG is refused here as it is on the layer path**, through the SAME
+   * function. M26d.5 states the rule — *"a design lab is not a reason to accept
+   * an XSS vector"* — and a backdrop is drawn by the same canvas and reaches the
+   * same server-side rasteriser. A second copy of the test would be two rules
+   * that agree until one is edited.
+   */
+  return !isVectorImage(product.imageUrl);
 }
 
 /**
@@ -57,6 +70,17 @@ export function backgroundFor(
    * would then put `null` into `src` at runtime.
    */
   if (product === null || product.imageUrl === null || product.imageUrl === '') {
+    return null;
+  }
+
+  /*
+   * 🔴 **The SVG rule again, because this function is exported separately.**
+   * Narrowing above repeats `canBeBackground`'s null checks and did NOT repeat
+   * this one — so a caller reaching here directly got an SVG background while
+   * `canBeBackground` refused it. Caught by a test written for exactly that
+   * shape, after the identical gap in the empty-URL check.
+   */
+  if (isVectorImage(product.imageUrl)) {
     return null;
   }
 

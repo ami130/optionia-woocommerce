@@ -3291,13 +3291,34 @@ export function ValueRow({
    * assertion: no set id simply means no backdrop.
    */
   const designSetId = useParams<{ id: string }>()?.id ?? null;
+
+  /*
+   * 🔴 **`getQueryData` is a one-shot read, NOT a subscription** — it does not
+   * re-run when the cache fills. That is safe here for a reason this row cannot
+   * see: `OptionSetEditorPage` returns early while its set query is loading, so
+   * nothing below it renders until the set is cached. By the time `ValueRow`
+   * exists, this read is guaranteed to find it.
+   *
+   * ⚠️ **That guard is three thousand lines above and nothing tied the two
+   * together.** Removing it — a reasonable move toward streaming — would leave
+   * `storeId` undefined, the products query never enabled, and the backdrop
+   * silently absent, with no test failing. `check-design-store.sh` now asserts
+   * the guard exists, so the coupling is recorded somewhere a refactor meets it.
+   */
   const cachedSet = useQueryClient().getQueryData<AuthoringSet>([
     'option-set',
     designSetId,
   ]);
 
   const designProducts = useQuery({
-    queryKey: ['products', 'design-lab', cachedSet?.storeId],
+    /*
+     * 📌 **The SAME key `SetPreviewSection` uses**, because it is the same
+     * fetch: identical store, identical limit. A separate `'design-lab'`
+     * namespace meant the editor made two byte-identical round trips on every
+     * load — React Query dedupes on the key, and inventing a new one is how a
+     * cache stops being one.
+     */
+    queryKey: ['products', 'preview', cachedSet?.storeId],
     queryFn: () => listProducts({ storeId: cachedSet?.storeId ?? '', limit: 50 }),
     /*
      * 🔴 **NOT gated on `designOpen`, and that was the defect.** Gating on it

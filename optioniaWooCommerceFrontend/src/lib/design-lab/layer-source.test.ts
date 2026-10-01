@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   checkLayerSource,
+  isVectorImage,
   layerNameFromUrl,
   layerSourceMessage,
   MAX_SOURCE_LENGTH,
@@ -92,6 +93,50 @@ describe('checkLayerSource', () => {
     expect(MAX_SOURCE_LENGTH).toBe(500);
   });
 
+  /*
+   * 🔴 **SVG, the rule M26d.5 states and nothing enforced.** The scheme check
+   * stops `data:` and `javascript:`; it says nothing about what an `https:` URL
+   * SERVES, so `https://cdn.example.com/evil.svg` passed everything. A layer's
+   * src becomes an `<image href>` inside the SVG the SERVER rasterises, so this
+   * is not only a browser concern.
+   */
+  it('refuses an SVG served over https', () => {
+    expect(checkLayerSource('https://cdn.example.com/evil.svg').reason).toBe(
+      'vector-image',
+    );
+  });
+
+  it('refuses an SVG however it is cased, and the gzipped form', () => {
+    for (const probe of [
+      'https://cdn.example.com/a.SVG',
+      'https://cdn.example.com/a.Svg',
+      'https://cdn.example.com/a.svgz',
+    ]) {
+      expect(checkLayerSource(probe).reason).toBe('vector-image');
+    }
+  });
+
+  /*
+   * ⚠️ **Judged on the PATH, not the whole URL.** A naive `includes('.svg')`
+   * would refuse these three legitimate images — and the last one is the case
+   * that matters: a CDN that records provenance in a query parameter.
+   */
+  it('accepts a raster image whose URL merely mentions svg', () => {
+    for (const probe of [
+      'https://cdn.example.com/svg-icons/logo.png',
+      'https://cdn.example.com/logo.png#from-svg',
+      'https://cdn.example.com/logo.png?converted=from.svg',
+    ]) {
+      expect(checkLayerSource(probe).ok).toBe(true);
+    }
+  });
+
+  it('accepts the raster formats a design lab actually uses', () => {
+    for (const probe of ['art.png', 'art.jpg', 'art.jpeg', 'art.webp', 'art.gif']) {
+      expect(checkLayerSource(`https://cdn.example.com/${probe}`).ok).toBe(true);
+    }
+  });
+
   it('refuses a URL longer than the column that must store it', () => {
     /*
      * 📌 Exactly at the limit is accepted; one over is not. A boundary tested
@@ -127,6 +172,7 @@ describe('layerSourceMessage', () => {
     'empty',
     'not-absolute',
     'unsupported-scheme',
+    'vector-image',
     'too-long',
   ];
 
@@ -165,5 +211,31 @@ describe('layerNameFromUrl', () => {
   it('falls back when there is no filename', () => {
     expect(layerNameFromUrl('https://cdn.example.com/')).toBe('cdn.example.com');
     expect(layerNameFromUrl('https://')).toBe('Layer');
+  });
+});
+
+describe('isVectorImage', () => {
+  /*
+   * 📌 **The shared rule, tested directly.** Both the layer path and the
+   * product backdrop call it, so a change here moves both — which is the point
+   * of there being one copy.
+   */
+  it('recognises an SVG by its path', () => {
+    expect(isVectorImage('https://cdn.example.com/a.svg')).toBe(true);
+    expect(isVectorImage('https://cdn.example.com/a.svgz')).toBe(true);
+  });
+
+  it('ignores a query string and a fragment', () => {
+    expect(isVectorImage('https://cdn.example.com/a.png?x=y.svg')).toBe(false);
+    expect(isVectorImage('https://cdn.example.com/a.png#a.svg')).toBe(false);
+  });
+
+  it('does not match a directory named svg', () => {
+    expect(isVectorImage('https://cdn.example.com/svg/a.png')).toBe(false);
+  });
+
+  it('does not match a name merely containing svg', () => {
+    /* ⚠️ `logo-svg.png` is a PNG; only the extension decides. */
+    expect(isVectorImage('https://cdn.example.com/logo-svg.png')).toBe(false);
   });
 });

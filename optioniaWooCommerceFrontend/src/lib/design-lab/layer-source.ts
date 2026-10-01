@@ -16,11 +16,27 @@
  * fetches them from a server with no such base.
  */
 
+/**
+ * Whether a URL points at a vector image.
+ *
+ * 🔴 **The one place this is decided**, used by the layer path and by the
+ * product backdrop. Two copies of the test would be two rules that agree until
+ * one is edited.
+ *
+ * 📌 **Judged on the PATH.** A query string may contain anything —
+ * `?from=logo.svg` is not an SVG — and matching the whole URL would refuse
+ * legitimate images. `.svgz` is the gzipped form of the same format.
+ */
+export function isVectorImage(url: string): boolean {
+  return /\.svgz?$/i.test(url.split(/[?#]/)[0]);
+}
+
 /** Why a source was refused, for a message a merchant can act on. */
 export type LayerSourceRefusal =
   | 'empty'
   | 'not-absolute'
   | 'unsupported-scheme'
+  | 'vector-image'
   | 'too-long';
 
 /**
@@ -72,6 +88,25 @@ export function checkLayerSource(raw: string): LayerSourceCheck {
     return { ok: false, url, reason: 'not-absolute' };
   }
 
+  /*
+   * 🔴 **SVG is refused, and M26d.5 states the rule: "a design lab is not a
+   * reason to accept an XSS vector."** The scheme check above stops `data:` and
+   * `javascript:`; it says nothing about what an `https:` URL serves, so
+   * `https://cdn.example.com/evil.svg` passed every check.
+   *
+   * ⚠️ **This is not only a browser concern.** A layer's `src` becomes an
+   * `<image href>` inside the SVG the SERVER rasterises (`design-scene.ts`), so
+   * a nested SVG reaches a renderer rather than merely an `<img>` tag. M15
+   * already refuses SVG on upload for the same reason.
+   *
+   * 📌 **Judged on the PATH, not the whole URL.** A query string may contain
+   * anything — `?from=logo.svg` is not an SVG — and matching the raw URL would
+   * refuse legitimate images. The fragment is dropped for the same reason.
+   */
+  if (isVectorImage(url)) {
+    return { ok: false, url, reason: 'vector-image' };
+  }
+
   return { ok: true, url };
 }
 
@@ -84,6 +119,8 @@ export function layerSourceMessage(reason: LayerSourceRefusal): string {
       return `Keep the URL under ${MAX_SOURCE_LENGTH} characters.`;
     case 'unsupported-scheme':
       return 'Only http:// and https:// images can be used.';
+    case 'vector-image':
+      return 'SVG images cannot be used. Try a PNG, JPEG or WebP.';
     case 'not-absolute':
       return 'Enter a full URL starting http:// or https://.';
   }

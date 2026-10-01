@@ -555,6 +555,64 @@ else
   fi
 fi
 
+# 8f. The SVG rule M26d.5 states, enforced on both paths.
+#
+# 🔴 **"SVG stays rejected — a design lab is not a reason to accept an XSS
+# vector."** The scheme check refuses `data:` and `javascript:` and says nothing
+# about what an `https:` URL SERVES, so `https://cdn.example.com/evil.svg`
+# passed everything — and a layer's `src` becomes an `<image href>` inside the
+# SVG the SERVER rasterises, so this is not only a browser concern. I named this
+# gap in an audit and shipped without closing it.
+LAYER_SRC="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/layer-source.ts"
+BG_SRC="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/background.ts"
+
+if [ ! -f "$LAYER_SRC" ] || [ ! -f "$BG_SRC" ]; then
+  fail "the layer-source or background module is missing"
+else
+  SVG_FAILS=0
+
+  grep -qE "^export function isVectorImage\(" "$LAYER_SRC" \
+    || { fail "no single place decides what a vector image is"; SVG_FAILS=$((SVG_FAILS + 1)); }
+
+  # ⚠️ **One rule, imported — not two copies.** A second regex in the background
+  # module would be two rules that agree until one is edited.
+  if grep -qE "\.svgz\?" "$BG_SRC"; then
+    fail "the background module tests for SVG itself instead of using the shared rule"
+    SVG_FAILS=$((SVG_FAILS + 1))
+  fi
+
+  # ⚠️ **The REFUSAL, not the name.** `layer-source.ts` declares the function, so
+  # matching `isVectorImage(` there matched its own definition and the check
+  # stayed green with the refusal deleted. Each file is asserted on what it does
+  # with the answer.
+  grep -qE "if \(isVectorImage\(url\)\)" "$LAYER_SRC" \
+    || { fail "the layer path does not refuse a vector image"; SVG_FAILS=$((SVG_FAILS + 1)); }
+
+  grep -qE "\bisVectorImage\(product\.imageUrl\)" "$BG_SRC" \
+    || { fail "background.ts does not refuse a vector image"; SVG_FAILS=$((SVG_FAILS + 1)); }
+
+  if [ "$SVG_FAILS" -eq 0 ]; then
+    pass "SVG is refused on the layer path and the backdrop, by one rule"
+  fi
+fi
+
+# 8g. The backdrop's cache read has the guard it depends on.
+#
+# ⚠️ **`ValueRow` reads the set with `getQueryData`, which is a one-shot read
+# and not a subscription.** It is safe only because the page returns early while
+# its set query is loading, so nothing below renders before the cache is filled.
+# Remove that guard — a reasonable move toward streaming — and `storeId` is
+# undefined, the products query never enables, and the backdrop is silently
+# absent with no test failing. The coupling is invisible from the row, so it is
+# asserted here.
+SET_EDITOR="$ROOT/optioniaWooCommerceFrontend/src/app/(app)/option-sets/[id]/page.tsx"
+
+if grep -qE "if \(query\.isLoading\)" "$SET_EDITOR"; then
+  pass "the editor still blocks on its set query, which the backdrop relies on"
+else
+  fail "the editor no longer blocks on its set query — ValueRow's cache read may now miss"
+fi
+
 # 9. The lab opens from a choice, and what it returns is persisted.
 #
 # 🔴 **This replaces the "not yet bound" check**, which failed the moment the

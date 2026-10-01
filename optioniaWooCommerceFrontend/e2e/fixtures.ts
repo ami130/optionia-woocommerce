@@ -125,10 +125,12 @@ export function verifyEmail(email: string): void {
  * store-token ingest route — which a dashboard test has no credential for. So
  * the row is written directly, exactly as `seedConnectedStore` writes a store.
  *
- * ⚠️ **The image URL must be same-origin to the dashboard**, because the lab
- * loads it with `crossOrigin = 'anonymous'`: a third-party CDN would make this
- * suite depend on that host sending CORS headers, and a failure there would look
- * like a product defect. `/next.svg` ships with the app.
+ * ⚠️ **The image URL must be same-origin AND raster.** The lab loads it with
+ * `crossOrigin = 'anonymous'`, so a third-party CDN would make this suite depend
+ * on that host sending CORS headers; and SVG is refused on both the layer and
+ * backdrop paths (M26d.5: "a design lab is not a reason to accept an XSS
+ * vector"), so the SVGs that ship with Next.js cannot be used.
+ * `public/e2e-test-image.png` exists for this.
  *
  * 🔴 **Takes a storeId, not an email.** The first version joined through
  * `tenant_members` to find "the" store — and a tenant may own several, so it

@@ -21,6 +21,23 @@ describe('canBeBackground', () => {
   it('refuses no product at all', () => {
     expect(canBeBackground(null)).toBe(false);
   });
+
+  /*
+   * 🔴 **A product photo that is an SVG is refused too.** M26d.5's rule is
+   * about what reaches a renderer, not about who supplied it — and a backdrop is
+   * drawn by the same canvas and rasterised by the same server. A synced
+   * catalogue can carry one: WooCommerce accepts SVG uploads with a plugin.
+   */
+  it('refuses a product whose photo is an SVG', () => {
+    expect(canBeBackground({ name: 'Mug', imageUrl: 'https://cdn/x.svg' })).toBe(false);
+    expect(canBeBackground({ name: 'Mug', imageUrl: 'https://cdn/x.SVGZ' })).toBe(false);
+  });
+
+  it('accepts a photo whose URL merely mentions svg', () => {
+    expect(
+      canBeBackground({ name: 'Mug', imageUrl: 'https://cdn/svg/x.png?from=y.svg' }),
+    ).toBe(true);
+  });
 });
 
 describe('backgroundFor', () => {
@@ -59,6 +76,11 @@ describe('backgroundFor', () => {
    */
   it('refuses an empty URL when called directly', () => {
     expect(backgroundFor({ name: 'Mug', imageUrl: '' }, NATURAL)).toBeNull();
+  });
+
+  it('refuses an SVG when called directly', () => {
+    /* Same reasoning: a separately exported function must stand alone. */
+    expect(backgroundFor({ name: 'Mug', imageUrl: 'https://cdn/x.svg' }, NATURAL)).toBeNull();
   });
 
   it('names an unnamed product rather than leaving the label blank', () => {
