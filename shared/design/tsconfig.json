@@ -1,0 +1,23 @@
+{
+  /*
+   * 🔴 **Proves this code is framework-free, which is what makes it shareable.**
+   * It compiles with no NestJS, React, Next or DOM types in scope — so a single
+   * import of either framework fails here before it can make the geometry
+   * unusable by the other consumer.
+   *
+   * ⚠️ Specs are excluded deliberately: they run under Jest in the backend and
+   * need its globals. The PRODUCTION code is what must stand alone.
+   */
+  "compilerOptions": {
+    "target": "ES2021",
+    "lib": ["ES2021"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["*.ts"],
+  "exclude": ["*.spec.ts"]
+}

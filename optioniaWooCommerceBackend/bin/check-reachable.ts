@@ -96,25 +96,6 @@ const EXEMPT = new Map<string, string>([
   ['common/render/render-bounds.ts', 'M26e.4 — the order-image renderer is its caller'],
 
 
-  /**
-   * 🔴 **The geometry tree is complete and has no product caller yet** — this is
-   * the root of it, and exempting the root is what keeps the other four modules
-   * honest: `design-geometry.types`, `layer-geometry`, `text-geometry` and
-   * `arc-geometry` all reach production THROUGH `buildScene`, so their own
-   * exemptions were retired when it landed (M26c.1). Only this one remains.
-   *
-   * 📌 **Ported, not re-derived, and verified rather than asserted.** The SVG it
-   * emits was compared byte-for-byte against `optionia-app` across 46,837
-   * generated scenes — clip paths, alpha masks, curved `<textPath>`, wrapped
-   * `<tspan>`, inner rotation and XML escaping all exercised — with zero
-   * mismatches. That is the evidence that the eight recurring parity defects
-   * this port exists to avoid have not been reintroduced.
-   *
-   * ⚠️ **DELETE WHEN THE FIRST SURFACE RENDERS A DESIGN** — M26d.6 (dashboard
-   * preview) or M26e.1 (storefront overlay), whichever lands first. If both ship
-   * without importing this, the scene was built and then re-derived anyway.
-   */
-  ['design/design-scene.ts', 'M26d.6 / M26e.1 — the first surface to render a design imports it'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

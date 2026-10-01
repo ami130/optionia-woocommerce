@@ -12,7 +12,8 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@shared/*": ["../shared/*"]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -26,6 +27,6 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "../shared/**/*"],
   "exclude": ["node_modules", "dist"]
 }

@@ -45,30 +45,11 @@ is_exempt_file() {
     # (M26e.4). Still exempt in `check-reachable.ts` with the same stage.
     common/render/render-bounds.ts) return 0 ;;
 
-    # 🔶 `letterboxFor` is WIRED — `buildScene` applies it, so Decision 5 is
-    # enforced rather than merely recorded. The file stays exempt for one
-    # remaining symbol: `willLetterbox`, which answers "will this design sit
-    # inside a band on this product?" and exists for the EDITOR to warn a
-    # merchant BEFORE they save.
-    #
-    # ⚠️ **DELETE WHEN M26d.1 LANDS** (canvas editor). Telling a merchant their
-    # artwork will be letterboxed is a supported limitation; letting them find
-    # out from a customer's order is the same defect wearing different clothes.
-    design/letterbox.ts) return 0 ;;
-
-    # 🔴 **The geometry tree is complete, and nothing in the product renders a
-    # design yet.** `buildScene` gave these modules a consumer within the tree,
-    # but the tree's own root has no caller, so every symbol it does not itself
-    # use still reports as dead. That is the gate being right, not noisy.
-    #
-    # ⚠️ **DELETE WHEN THE FIRST SURFACE RENDERS A DESIGN** — M26d.6 (dashboard
-    # preview) or M26e.1 (storefront overlay), whichever lands first. Exempted
-    # per FILE, so a genuinely unused NEW symbol in any of them still fails.
-    design/design-geometry.types.ts) return 0 ;;
-    design/layer-geometry.ts) return 0 ;;
-    design/text-geometry.ts) return 0 ;;
-    design/arc-geometry.ts) return 0 ;;
-    design/design-scene.ts) return 0 ;;
+    # ✏️ **The six `design/` exemptions are GONE because the tree moved.** The
+    # geometry now lives in `shared/design/`, outside this gate's watch path, and
+    # `check-shared-design.sh` guards it instead. Leaving them would have been
+    # six entries excusing files nothing could find — an exemption list nobody
+    # can verify is how one stops being read.
 
     *) return 1 ;;
   esac
@@ -138,8 +119,8 @@ if [ "$CHECKED" -eq 0 ] && [ "$EXEMPT" -eq 0 ]; then
 # without holding the build hostage to it.
 elif [ "$CHECKED" -eq 0 ]; then
   printf '\033[33mwarn\033[0m  every watched file is exempt (%d) — this gate is checking nothing\n' "$EXEMPT"
-  printf '        expected while the port runs ahead of its consumers;\n'
-  printf '        the first surface to render a design (M26d.6 / M26e.1) revives it\n'
+  printf '        the one exempt file is the render-bounds guard, written before\n'
+  printf '        the rasteriser it guards (M26e.4); that stage revives this gate\n'
 elif [ -n "$UNUSED" ]; then
   fail "exported symbol(s) with no production consumer:"
   printf "%b" "$UNUSED" | sed 's|^|      |'

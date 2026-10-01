@@ -59,7 +59,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # A directory that does not exist yet is not an error; it is simply not scanned,
 # and the count below states how many were found so the coverage is visible
 # rather than assumed.
-GEO_DIRS="$ROOT/optioniaWooCommerceBackend/src/design
+GEO_DIRS="$ROOT/shared/design
 $ROOT/optioniaWooCommerceFrontend/src/design
 $ROOT/optioniaWooCommerceFrontend/src/lib/design
 $ROOT/optioniaWooCommercePlugin/src/Design

@@ -102,7 +102,11 @@
       "json",
       "ts"
     ],
-    "rootDir": "src",
+    "rootDir": ".",
+    "roots": ["<rootDir>/src", "<rootDir>/../shared"],
+    "moduleNameMapper": {
+      "^@shared/(.*)$": "<rootDir>/../shared/$1"
+    },
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"

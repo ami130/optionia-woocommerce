@@ -31,7 +31,12 @@ SOURCE="$ROOT/optionia-app/app/components/design-lab/designScene.ts"
 # The two sibling files this port MERGES IN — their exports were always public,
 # just in a different file, so they are not "widened" surface.
 SRC_DIR="$ROOT/optionia-app/app/components/design-lab"
-PORT_DIR="$ROOT/optioniaWooCommerceBackend/src/design"
+# ⚠️ **`shared/design`, not the backend's `src/`.** The geometry moved out when
+# the dashboard's canvas store became its second consumer (M26d.1) — before
+# either depended on it, which was the cheapest moment. This gate failed loudly
+# on the stale path rather than passing on an empty one, which is why repointing
+# it was a correction and not a discovery.
+PORT_DIR="$ROOT/shared/design"
 
 printf '\033[1m== check-port-fidelity.sh ==\033[0m\n'
 printf 'Checking the designScene port against its source...\n'
