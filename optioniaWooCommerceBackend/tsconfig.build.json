@@ -1,4 +1,27 @@
 {
   "extends": "./tsconfig.json",
+
+  /*
+   * 🔴 **The BUILD compiles this project only, and `include` is narrowed HERE
+   * rather than in `tsconfig.json`.**
+   *
+   * `tsconfig.json` includes `../shared/**` so `npm run typecheck` and Jest see
+   * the shared geometry. Inheriting that here made TypeScript infer the emit
+   * root from the widest common ancestor — the repository root — so the build
+   * wrote `dist/optioniaWooCommerceBackend/src/main.js` while `start:prod` runs
+   * `node dist/main.js`. The server could not start, and 1,712 unit tests,
+   * 1,279 e2e, lint, typecheck and 31 gates were all green, because none of them
+   * run the built artefact.
+   *
+   * ⚠️ **It also put six `.spec.js` files in the production build**: the
+   * inherited `**/*spec.ts` exclude stopped matching once the shared tree joined
+   * the program at a different path depth.
+   *
+   * 📌 **When a production file imports `@shared/*`, this must change** — the
+   * shared sources will need to be in the program and the emit root moves again.
+   * `check-build-output.sh` is what makes that loud: it builds, then asserts the
+   * entry point exists where `start:prod` looks and that no test code shipped.
+   */
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
 }
