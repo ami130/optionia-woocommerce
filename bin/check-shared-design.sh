@@ -116,13 +116,42 @@ fi
 # editor and a factory prints the result.
 PARITY="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/style-geometry.test.ts"
 
+# ⚠️ **A COUNT, not two names.** The first version asserted that `layerRect(`
+# and `applyStyleGeometry(` both appeared in the file — which emptying
+# `SHARED_STYLES` satisfied perfectly: the suite fell from 32 tests to 5 and
+# this gate stayed green. A check that confirms a name is present rather than
+# work being done is this project's most repeated gate defect.
+PARITY_MIN=24
+
 if [ ! -f "$PARITY" ]; then
   fail "the fit-mode parity test is missing — the editor and renderer are unchecked"
-elif strip_comments "$PARITY" | grep -q 'layerRect(' \
-  && strip_comments "$PARITY" | grep -q 'applyStyleGeometry('; then
-  pass "the fit modes are checked against the renderer, not just against themselves"
 else
-  fail "the parity test no longer compares applyStyleGeometry with layerRect"
+  PARITY_RUN=$( cd "$ROOT/optioniaWooCommerceFrontend" \
+    && npx vitest run src/lib/design-lab --reporter=json 2>/dev/null \
+    | node -e "
+      let raw = '';
+      process.stdin.on('data', (c) => { raw += c; });
+      process.stdin.on('end', () => {
+        const start = raw.indexOf('{');
+        try {
+          const report = JSON.parse(raw.slice(start));
+          process.stdout.write(String(report.numPassedTests ?? 0));
+        } catch {
+          process.stdout.write('0');
+        }
+      });
+    " || true )
+
+  if [ "${PARITY_RUN:-0}" -lt "$PARITY_MIN" ]; then
+    fail "the fit-mode parity suite ran ${PARITY_RUN:-0} test(s), below the floor of $PARITY_MIN"
+    printf '        emptying the style or shape list leaves this file passing\n'
+    printf '        while checking nothing — the floor is what notices\n'
+  elif strip_comments "$PARITY" | grep -q 'layerRect(' \
+    && strip_comments "$PARITY" | grep -q 'applyStyleGeometry('; then
+    pass "the fit modes are compared against the renderer ($PARITY_RUN cases)"
+  else
+    fail "the parity test no longer compares applyStyleGeometry with layerRect"
+  fi
 fi
 
 # 6. The backend's test runner still SEES the shared specs.

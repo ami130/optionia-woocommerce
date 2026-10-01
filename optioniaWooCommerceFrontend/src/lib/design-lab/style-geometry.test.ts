@@ -122,6 +122,80 @@ describe('fit modes agree between the editor and the renderer', () => {
   });
 
   /**
+   * 🔴 **`fit` keeps a dragged centre, and the first version of this suite could
+   * not see that.**
+   *
+   * Every case above used a 200×100 image on a 400×460 canvas, which `fit`
+   * scales to exactly the canvas width — so `clampInside(cx, 200, 400)` has
+   * `lo === hi === 200` and returns 200 whatever was stored. The clamp
+   * SATURATED, and replacing it with plain centring passed all 25 tests.
+   *
+   * ⚠️ **A tall narrow image leaves a real band.** 50×200 fits to 115×460, so a
+   * stored centre anywhere in [57.5, 342.5] must survive untouched — which is
+   * the documented behaviour: *"a dragged `fit` frame remembers its position
+   * across re-open"*.
+   */
+  describe('fit remembers where the merchant dragged it', () => {
+    /* 50x200 fits to 115x460 on this canvas: the horizontal band is real. */
+    const TALL = { natW: 50, natH: 200 };
+
+    it('keeps a centre that sits inside the band', () => {
+      const layer = editorLayer({ ...TALL, style: 'fit', cx: 120, cy: 300 });
+
+      applyStyleGeometry(layer, CW, CH);
+
+      /* Untouched horizontally — 120 is within [57.5, 342.5]. */
+      expect(layer.cx).toBeCloseTo(120, 6);
+
+      /* Vertically `fit` fills the axis, so the centre is forced. */
+      expect(layer.cy).toBeCloseTo(CH / 2, 6);
+    });
+
+    it('pulls a centre that would hang off the edge back inside', () => {
+      const layer = editorLayer({ ...TALL, style: 'fit', cx: 5, cy: 300 });
+
+      applyStyleGeometry(layer, CW, CH);
+
+      /* Clamped to half its own width, not to zero. */
+      expect(layer.cx).toBeCloseTo(layer.w / 2, 6);
+    });
+
+    it('agrees with the renderer at a remembered position', () => {
+      /*
+       * 📌 The parity cases above all saturate here, so this is the one that
+       * proves the editor and renderer treat a REMEMBERED centre the same way.
+       */
+      const layer = editorLayer({ ...TALL, style: 'fit', cx: 120, cy: 300 });
+
+      applyStyleGeometry(layer, CW, CH);
+
+      const rect = layerRect(asDesignLayer(layer), CW, CH);
+
+      expect(rect.cx).toBeCloseTo(layer.cx, 6);
+      expect(rect.cy).toBeCloseTo(layer.cy, 6);
+      expect(rect.w).toBeCloseTo(layer.w, 6);
+      expect(rect.h).toBeCloseTo(layer.h, 6);
+    });
+  });
+
+  /**
+   * ⚠️ **Rotation is zeroed for every non-free style, and nothing asserted it.**
+   *
+   * Removing `layer.rot = 0` from `cover` survived all 25 tests. The renderer
+   * ignores stored rotation for non-free styles — `rotationOf` returns 0
+   * regardless — so a drift here changes no pixel today. It is asserted anyway:
+   * the stored value is what a future surface would read, and "harmless because
+   * one reader happens to ignore it" is a property nothing holds in place.
+   */
+  it.each(SHARED_STYLES)('%s zeroes rotation, as the renderer assumes', (style) => {
+    const layer = editorLayer({ style, rot: 37 });
+
+    applyStyleGeometry(layer, CW, CH);
+
+    expect(layer.rot).toBe(0);
+  });
+
+  /**
    * 🔴 **`free` is the one style that does NOT agree, and that is correct.**
    *
    * In the editor it picks a DEFAULT size for a newly added layer; in the
