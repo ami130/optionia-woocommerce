@@ -30,7 +30,6 @@ fail() { printf '\033[31mFAIL\033[0m  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/optioniaWooCommerceBackend/src"
 
 printf '\033[1m== check-symbol-reachable.sh ==\033[0m\n'
 printf 'Checking that exported symbols have consumers...\n'
@@ -67,9 +66,15 @@ is_exempt_file() {
 # a space, so a `for dir in $WATCHED` loop yielded one non-existent path and the
 # gate checked nothing — caught by the "checked no symbols at all" assertion
 # below, which is why that assertion exists.
-WATCHED_DIRS="design
-common/render
-option-sets/types"
+# ⚠️ **`repo:dir` pairs, because this gate watched only the backend.** The
+# dashboard half of M26d.4 — its mirror of `designCarrier` — sat outside its
+# reach, which is the same blind spot that let the registry's accessors ship
+# unreferenced one commit earlier. A gate that watches one repository of three
+# reports on a third of the code it is named for.
+WATCHED_DIRS="optioniaWooCommerceBackend/src:design
+optioniaWooCommerceBackend/src:common/render
+optioniaWooCommerceBackend/src:option-sets/types
+optioniaWooCommerceFrontend/src:lib/design-lab"
 
 UNUSED=""
 CHECKED=0
@@ -80,14 +85,15 @@ EXEMPT=0
 while IFS= read -r watched; do
   [ -n "$watched" ] || continue
 
-  dir="$SRC/$watched"
+  SRC="$ROOT/${watched%%:*}"
+  dir="$SRC/${watched#*:}"
 
   [ -d "$dir" ] || continue
 
   for file in "$dir"/*.ts; do
     [ -f "$file" ] || continue
 
-    case "$file" in *.spec.ts) continue ;; esac
+    case "$file" in *.spec.ts | *.test.ts) continue ;; esac
 
     rel="${file#"$SRC/"}"
 
@@ -101,9 +107,9 @@ while IFS= read -r watched; do
       CHECKED=$((CHECKED + 1))
 
       # A consumer is any non-test file outside this one that names it.
-      hits=$(grep -rlE "\b$symbol\b" "$SRC" --include='*.ts' 2>/dev/null \
+      hits=$(grep -rlE "\b$symbol\b" "$SRC" --include='*.ts' --include='*.tsx' 2>/dev/null \
         | grep -v "^$file$" \
-        | grep -v '\.spec\.ts$' \
+        | grep -vE '\.(spec|test)\.tsx?$' \
         | wc -l | tr -d ' ')
 
       # 🔴 **An INTERNAL helper is not the defect this gate is for.** Running it
@@ -138,9 +144,10 @@ while IFS= read -r watched; do
 
       if [ "$hits" -eq 0 ]; then
         module="${rel%.ts}"
-        file_consumers=$(grep -rlE "from '[^']*/${module##*/}'" "$SRC" --include='*.ts' 2>/dev/null \
+        file_consumers=$(grep -rlE "from '[^']*/${module##*/}'" "$SRC" \
+          --include='*.ts' --include='*.tsx' 2>/dev/null \
           | grep -v "^$file$" \
-          | grep -v '\.spec\.ts$' \
+          | grep -vE '\.(spec|test)\.tsx?$' \
           | wc -l | tr -d ' ')
         self_uses=$(grep -cE "\b$symbol\b" "$file" | tr -d ' ')
 

@@ -458,6 +458,25 @@ export class OptionSetsService {
             display: option.display ?? null,
           });
 
+          /*
+           * 🔴 **The import writes rows through `manager.save` directly**, so it
+           * passes no guard the create path applies unless that guard is
+           * repeated here. This file already carries that warning, written after
+           * the identical defect let a valueless type collect values — and I
+           * added `textDesign` to the field list below while reading it, without
+           * adding this beside it.
+           *
+           * ⚠️ **An imported document is merchant-supplied JSON**, not
+           * necessarily our own export. Without this, a crafted document
+           * attaches a design to a date picker and it is stored, published and
+           * never drawn.
+           */
+          this.validator.assertOptionMayCarryTextDesign(
+            presentation,
+            option.textDesign,
+            String(option.label ?? option.key ?? ''),
+          );
+
           const optionRow = await manager.save(
             manager.create(Option, {
               optionGroupId: groupRow.id,
@@ -506,6 +525,18 @@ export class OptionSetsService {
            * rows that already passed these checks, and an import's rows have
            * passed nothing.
            */
+          /*
+           * The same guard for artwork, for the same reason, one field over.
+           * Checked per value because each carries its own design.
+           */
+          values.forEach((value) => {
+            this.validator.assertValueMayCarryDesign(
+              presentation,
+              (value as { design?: unknown }).design,
+              String(option.label ?? option.key ?? ''),
+            );
+          });
+
           if (values.length > 0 && !definition.takesValues) {
             throw DomainException.validation([
               { field: `document.groups.${g}.options.${o}.values`, code: 'TYPE_TAKES_NO_VALUES' },

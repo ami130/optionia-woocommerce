@@ -225,6 +225,21 @@ export interface PublishedValue {
   readonly price_config: Record<string, unknown>;
   readonly image_url?: string;
   readonly color_hex?: string;
+  /**
+   * The Design Lab artwork this value prints (M26d.4; drawn by M26e.1).
+   *
+   * 🔴 **Declared here because the serializer already emitted it.** The
+   * `...optional('design', …)` spread compiled without this field — spreads are
+   * not checked against the target type the way a literal property is — so the
+   * document carried a key its own published contract did not acknowledge.
+   * Found when a test cast the result and TypeScript objected to the cast
+   * rather than to the emission.
+   *
+   * ⚠️ **Absent rather than null when there is none**, like every optional key
+   * here, so a document for an option set with no designs stays byte-identical
+   * to what it was before designs existed.
+   */
+  readonly design?: Record<string, unknown>;
   /** `<optgroup>` heading. Absent when the value is not grouped. */
   readonly group_label?: string;
   readonly sku_suffix?: string;

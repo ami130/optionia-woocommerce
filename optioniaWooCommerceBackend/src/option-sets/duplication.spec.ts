@@ -137,6 +137,35 @@ describe('copy completeness', () => {
     });
   });
 
+  /*
+   * 🔴 **The copy functions, EXECUTED rather than inspected.** Everything above
+   * compares column names against entity metadata, which proves a field is
+   * accounted for and not that it survives. A `design: undefined` or a shared
+   * reference would pass every test here and lose or alias a merchant's
+   * artwork.
+   */
+  describe('a design actually survives a copy', () => {
+    const DESIGN = { layers: [{ src: 'https://cdn.example.com/a.png', xPct: 0.5 }] };
+
+    it('carries a value design through to the copy', () => {
+      const source = Object.assign(new OptionValue(), { design: DESIGN });
+
+      expect(copyableValueFields(source).design).toEqual(DESIGN);
+    });
+
+    it('carries a text design through to the copy', () => {
+      const source = Object.assign(new Option(), { textDesign: DESIGN });
+
+      expect(copyableOptionFields(source).textDesign).toEqual(DESIGN);
+    });
+
+    it('leaves a value with no design carrying none', () => {
+      const source = Object.assign(new OptionValue(), { design: null });
+
+      expect(copyableValueFields(source).design).toBeNull();
+    });
+  });
+
   describe('PresentationalItem', () => {
     const copied = Object.keys(copyableItemFields({} as PresentationalItem));
 

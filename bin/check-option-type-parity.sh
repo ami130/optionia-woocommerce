@@ -399,8 +399,29 @@ $API_CARRIERS
 EOF
 fi
 
+# 🔴 **The OTHER direction, which the loop above cannot see.** It iterates the
+# API's types, so a dashboard entry naming a type the API does not register is
+# never visited — and an earlier version of this gate was described as checking
+# "all four directions of drift" when it checked four of five. Verified by
+# putting a type the registry has never heard of into the dashboard's list and
+# watching the gate pass.
+#
+# ⚠️ A typo here is not harmless: the dashboard would offer a Design Lab on a
+# presentation the API cannot accept, and the merchant loses the design on apply.
+for list_name in DESIGN_PER_VALUE DESIGN_PER_OPTION_TEXT; do
+  listed=$(grep -E "^const $list_name = \[" "$PICKER" \
+    | grep -oE "'[a-z_]+'" | tr -d "'" || true)
+
+  for pres in $listed; do
+    if ! printf '%s\n' "$API_CARRIERS" | grep -q "^$pres "; then
+      fail "the dashboard lists '$pres' in $list_name, but the API registers no such type"
+      CARRIER_FAILS=$((CARRIER_FAILS + 1))
+    fi
+  done
+done
+
 if [ "$CARRIER_FAILS" -eq 0 ] && [ "$CARRIER_PAIRS" -gt 0 ]; then
-  pass "all $CARRIER_PAIRS design carrier(s) agree across both repositories"
+  pass "all $CARRIER_PAIRS design carrier(s) agree, in both directions"
 fi
 
 # Informational: registered but not yet authorable. Expected, and worth seeing.

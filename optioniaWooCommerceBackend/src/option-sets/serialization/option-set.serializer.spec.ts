@@ -66,6 +66,7 @@ function option(overrides: Partial<Option> = {}): Option {
     validation: null,
     pricing: null,
     display: null,
+    textDesign: null,
     createdAt: AT,
     updatedAt: AT,
     deletedAt: new Date(1970, 0, 1),
@@ -85,6 +86,7 @@ function value(overrides: Partial<OptionValue> = {}): OptionValue {
     priceConfig: null,
     imageUrl: null,
     colorHex: null,
+    design: null,
     skuSuffix: null,
     weightDeltaGrams: null,
     isDefault: false,
@@ -877,5 +879,118 @@ describe('OptionSetSerializer', () => {
         JSON.stringify(serializer.toPublished(tree())),
       );
     });
+  });
+});
+
+/**
+ * A design that EXISTS, through both serializers (M26d.4).
+ *
+ * 🔴 **Found by audit: not one test anywhere constructed a non-null design.**
+ * Every fixture left it null, so every path was verified only in its absent
+ * state — and `optional()` omits a key when the value is null, which means each
+ * test exercised the OMISSION branch and none the emission branch. A wrong key,
+ * wrong nesting or a dropped field would have passed the whole suite.
+ *
+ * ⚠️ **The duplication guard does not cover this.** It compares column NAMES
+ * against entity metadata, so "the design survives a copy" was asserted
+ * structurally and never once executed.
+ */
+describe('a design that exists', () => {
+  const serializer = new OptionSetSerializer();
+
+  /* Fractions, as the stored contract requires — never pixels. */
+  const DESIGN = {
+    layers: [
+      { src: 'https://cdn.example.com/logo.png', xPct: 0.25, yPct: 0.5, wPct: 0.3, hPct: 0.2 },
+    ],
+  };
+
+  function treeWithDesign() {
+    const base = tree();
+    const group = base.groups[0];
+    const opt = group.options[0];
+
+    return {
+      ...base,
+      groups: [
+        {
+          ...group,
+          options: [
+            {
+              ...opt,
+              option: option({ presentation: 'image_swatch' }),
+              values: [value({ design: DESIGN })],
+            },
+          ],
+        },
+      ],
+    } as typeof base;
+  }
+
+  it('returns the design to the editor, so a saved design can be reopened', () => {
+    /*
+     * 🔴 The round trip the Design Lab depends on. Without this field the
+     * merchant composes, applies, reloads and finds an empty canvas.
+     */
+    const result = serializer.toAuthoring(treeWithDesign());
+    const value0 = result.groups[0].options[0].values[0];
+
+    expect(value0.design).toEqual(DESIGN);
+  });
+
+  it('publishes the design into the config document', () => {
+    const published = serializer.toPublished(treeWithDesign());
+    const value0 = published.groups[0].options[0].values[0];
+
+    /* 📌 The wire key is `design`, flat on the value — not nested, not renamed. */
+    expect(value0.design).toEqual(DESIGN);
+  });
+
+  it('omits the key entirely when there is no design', () => {
+    /*
+     * ⚠️ The OTHER branch, now that the first one is exercised. A document for
+     * an option set with no designs stays byte-identical to what it was before
+     * designs existed — which is why `optional()` is used rather than a null.
+     */
+    const published = serializer.toPublished(tree());
+    const value0 = published.groups[0].options[0].values[0];
+
+    expect('design' in value0).toBe(false);
+  });
+
+  it('keeps the design out of the authoring payload as null, not absent', () => {
+    /*
+     * 📌 The authoring projection is a TYPED shape the dashboard destructures,
+     * so an absent key and a null one are not interchangeable there — unlike
+     * the config document, which is read defensively by PHP.
+     */
+    const result = serializer.toAuthoring(tree());
+
+    expect(result.groups[0].options[0].values[0].design).toBeNull();
+  });
+
+  it('carries a text design on the option, not on its values', () => {
+    const base = tree();
+    const group = base.groups[0];
+    const opt = group.options[0];
+    const withText = {
+      ...base,
+      groups: [
+        {
+          ...group,
+          options: [
+            {
+              ...opt,
+              option: option({ presentation: 'text_field', textDesign: DESIGN }),
+              values: [],
+            },
+          ],
+        },
+      ],
+    } as typeof base;
+
+    expect(serializer.toAuthoring(withText).groups[0].options[0].textDesign).toEqual(
+      DESIGN,
+    );
   });
 });
