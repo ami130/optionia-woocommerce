@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import {
   backgroundOf,
   canMoveDown,
@@ -9,7 +11,14 @@ import {
   rowActions,
 } from '@/lib/design-lab/layer-list';
 import type { EditorLayer } from '@/lib/design-lab/layer.types';
+import {
+  checkLayerSource,
+  layerNameFromUrl,
+  layerSourceMessage,
+} from '@/lib/design-lab/layer-source';
 import type { DesignStore } from '@/lib/design-lab/store';
+
+import { useDesignStore } from './use-design-store';
 
 /**
  * The layer list: what is on the canvas, topmost first.
@@ -26,6 +35,12 @@ import type { DesignStore } from '@/lib/design-lab/store';
  * well and can be verified; a grip can be added later without moving the logic.
  */
 export function LayerList({ store }: Readonly<{ store: DesignStore }>) {
+  /*
+   * ⚠️ Its OWN subscription. Relying on a parent's re-render is what made the
+   * first assembly reconcile this list on every pointer move of a canvas drag.
+   */
+  useDesignStore(store);
+
   const rows = listOrder(store.layers);
   const background = backgroundOf(store.layers);
   const ids = rows.map((l) => l.id);
@@ -38,6 +53,8 @@ export function LayerList({ store }: Readonly<{ store: DesignStore }>) {
   return (
     <div className="optionia-designlab-side">
       <h3 className="optionia-designlab-side-heading">Layers</h3>
+
+      <AddLayer store={store} />
 
       {rows.length === 0 ? (
         <p className="optionia-designlab-empty">No layers yet.</p>
@@ -74,6 +91,102 @@ export function LayerList({ store }: Readonly<{ store: DesignStore }>) {
           <span className="optionia-designlab-row-name">{background.name}</span>
           <span className="optionia-designlab-badge">Background</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Add a layer from an image URL.
+ *
+ * 🔴 **M26d.1's first listed capability is "add", and without this nothing can
+ * reach `store.addLayer`** — the lab opened onto a canvas a merchant could
+ * never put anything on, with every other control operating on layers that
+ * could not exist. Found by auditing each store operation for reachability.
+ *
+ * ⚠️ **A URL box, not the media gallery.** The source reaches `addLayer` from a
+ * 764-line MediaGallery, which is M26d.5 (asset library, tenant-scoped uploads,
+ * MIME and magic-byte verification). Building it here would pull that milestone
+ * forward; a URL is what M26d.1 needs to be true, and the gallery replaces this
+ * control rather than being blocked by it.
+ *
+ * 📌 **The natural size comes from loading the image, and only a browser can
+ * give it.** `addLayer` needs `natW`/`natH` to place the layer at a sensible
+ * default size — so the URL is validated by a tested function, and the load is
+ * the one unavoidable piece of DOM here.
+ */
+function AddLayer({ store }: Readonly<{ store: DesignStore }>) {
+  const [url, setUrl] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  function add() {
+    const check = checkLayerSource(url);
+
+    if (!check.ok) {
+      setError(layerSourceMessage(check.reason!));
+
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+
+    const img = new Image();
+
+    /*
+     * ⚠️ **Anonymous CORS, deliberately.** A layer drawn onto a canvas from a
+     * cross-origin image taints it; requesting anonymously means a server that
+     * allows it stays usable and one that does not fails here, visibly, rather
+     * than at export time with an empty result.
+     */
+    img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      store.addLayer(
+        check.url,
+        layerNameFromUrl(check.url),
+        img.naturalWidth,
+        img.naturalHeight,
+      );
+      setUrl('');
+      setLoading(false);
+    };
+
+    img.onerror = () => {
+      setError('That image could not be loaded. Check the URL is reachable.');
+      setLoading(false);
+    };
+
+    img.src = check.url;
+  }
+
+  return (
+    <div className="optionia-designlab-add-layer">
+      <input
+        type="url"
+        value={url}
+        placeholder="https://…/artwork.png"
+        aria-label="Image URL"
+        onChange={(e) => {
+          setUrl(e.target.value);
+          /* Clear a stale refusal as soon as the merchant edits the box. */
+          if (error) setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            add();
+          }
+        }}
+      />
+      <button type="button" onClick={add} disabled={loading}>
+        {loading ? 'Adding…' : 'Add layer'}
+      </button>
+      {error && (
+        <p className="optionia-designlab-add-error" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );

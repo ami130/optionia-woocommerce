@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -12,9 +12,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { DesignImage } from '@shared/design/design-geometry.types';
+import {
+  keyAction,
+  NUDGE_COMMIT_MS,
+  preventsDefault,
+} from '@/lib/design-lab/keyboard';
 import { type DesignData, DesignStore } from '@/lib/design-lab/store';
 
 import { DesignCanvas } from './design-canvas';
+import { useDesignStore } from './use-design-store';
 import { LayerList } from './layer-list';
 import { PropertiesPanel } from './properties-panel';
 
@@ -66,11 +72,12 @@ export function DesignLabDialog({
    */
   const [store] = useState(() => new DesignStore());
 
-  useSyncExternalStore(
-    useCallback((fn) => store.subscribe(fn), [store]),
-    () => store.version,
-    () => store.version,
-  );
+  /*
+   * The dialog's own subscription, for the footer's undo/redo state. The canvas
+   * and both panels subscribe for themselves, so this re-render is the chrome's
+   * alone rather than the whole tree's.
+   */
+  useDesignStore(store);
 
   /*
    * ⚠️ **Hydrate on OPEN, not on mount.** The dialog stays mounted while closed,
@@ -98,6 +105,82 @@ export function DesignLabDialog({
       store.importDesign(design, background);
     }
   }, [open, design, background, store]);
+
+  /*
+   * Keyboard shortcuts: nudge, delete, duplicate, undo/redo, deselect.
+   *
+   * 🔴 **`store.nudge` had no caller at all** — the method, its lock guard and
+   * its commit-debounce contract were built and tested, and nothing invoked
+   * them. That is this repository's recurring defect, found by auditing each
+   * store operation for reachability rather than by any gate.
+   *
+   * ⚠️ **What each key MEANS is decided in `keyboard.ts`**, including the guard
+   * that matters most: a keypress inside a text field is the field's. Without
+   * it, a merchant correcting a typo in the add-layer box with Backspace would
+   * delete their selected layer.
+   */
+  useEffect(() => {
+    if (!open) return;
+
+    let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+
+      const action = keyAction({
+        key: e.key,
+        shiftKey: e.shiftKey,
+        /* ⌘ on macOS, Ctrl elsewhere — both, so neither platform is wrong. */
+        modifier: e.metaKey || e.ctrlKey,
+        inTextEntry:
+          tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable === true,
+        selection: {
+          present: store.selectedId !== null,
+          locked: store.getSelected()?.locked ?? false,
+        },
+      });
+
+      if (!preventsDefault(action)) return;
+
+      e.preventDefault();
+
+      switch (action.kind) {
+        case 'nudge':
+          store.nudge(action.dx, action.dy);
+
+          /*
+           * 📌 A run of arrow presses is ONE undo step. `nudge` notifies
+           * without committing for exactly this reason.
+           */
+          if (nudgeTimer) clearTimeout(nudgeTimer);
+          nudgeTimer = setTimeout(() => store.commit(), NUDGE_COMMIT_MS);
+          break;
+        case 'delete':
+          if (store.selectedId) store.deleteLayer(store.selectedId);
+          break;
+        case 'duplicate':
+          store.duplicateSelected();
+          break;
+        case 'undo':
+          store.undo();
+          break;
+        case 'redo':
+          store.redo();
+          break;
+        case 'deselect':
+          store.select(null);
+          break;
+      }
+    }
+
+    document.addEventListener('keydown', onKey);
+
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (nudgeTimer) clearTimeout(nudgeTimer);
+    };
+  }, [open, store]);
 
   function apply() {
     onApply(store.exportDesign());

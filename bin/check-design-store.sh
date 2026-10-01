@@ -423,6 +423,75 @@ else
   fi
 fi
 
+# 8b. Every component that reads the store subscribes to it.
+#
+# 🔴 **Found by audit, after the lab was committed.** M26d.1 is the one
+# milestone in its phase that dictates an implementation — "an explicit state
+# engine with subscribe/notify rather than React state… reconciliation on every
+# pointer move is why naive implementations feel laggy" — and the first assembly
+# adopted the store while inverting the pattern. Only the dialog subscribed; the
+# panels read the store with no subscription of their own and updated solely
+# because the parent re-rendered its whole subtree. That reconciles the layer
+# list, the properties panel and the dialog chrome on every pointer move of a
+# drag: exactly the cost the architecture exists to avoid, reintroduced one
+# level up. Nothing caught it, because everything still worked.
+UNSUBSCRIBED=""
+
+for part in design-canvas layer-list properties-panel design-lab-dialog; do
+  file="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/$part.tsx"
+
+  if [ ! -f "$file" ]; then
+    UNSUBSCRIBED="$UNSUBSCRIBED $part(missing)"
+  elif ! grep -qE "\buseDesignStore\(" "$file"; then
+    UNSUBSCRIBED="$UNSUBSCRIBED $part"
+  fi
+done
+
+if [ -n "$UNSUBSCRIBED" ]; then
+  fail "component(s) read the store without subscribing:$UNSUBSCRIBED"
+else
+  pass "all 4 store-reading component(s) subscribe independently"
+fi
+
+# 8c. Every operation M26d.1 names can be reached by a merchant.
+#
+# 🔴 **The defect this repository has now met six times**: built, typed, tested
+# and reached by nothing. Here it was `store.addLayer` and `store.nudge` — "add"
+# is M26d.1's FIRST listed capability, and the lab opened onto a canvas a
+# merchant could never put anything on, with every other control operating on
+# layers that could not exist. `nudge` had its lock guard and commit debounce
+# tested, and no caller at all.
+#
+# ⚠️ **Excluded by name, with a reason**: `setBg` belongs to the background
+# picker (M26d.5) and `setChecker` is a backdrop toggle M26d.1 does not name.
+UI_DIR="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab"
+UNREACHED=""
+
+for op in addLayer nudge reorderByIds toggleLock toggleVisible duplicateLayer \
+          deleteLayer setStyle setOpacity setRotation alignH alignV undo redo; do
+  grep -rqE "\b(store|this)\.$op\(" "$UI_DIR" --include='*.tsx' \
+    || UNREACHED="$UNREACHED $op"
+done
+
+if [ -n "$UNREACHED" ]; then
+  fail "store operation(s) M26d.1 names have no UI caller:$UNREACHED"
+else
+  pass "all 14 operation(s) M26d.1 names are reachable"
+fi
+
+# 8d. A merchant's image URL is checked before it becomes a layer.
+#
+# ⚠️ **A security boundary, not a form nicety.** The URL becomes an `<img src>`
+# and later an `<image href>` inside an SVG the server rasterises, so a
+# `javascript:` URL is an XSS vector and `data:` can carry SVG — which M15
+# already refuses on upload. The check is a tested function; the component must
+# actually call it rather than trusting the input's `type="url"`.
+if grep -qE "\bcheckLayerSource\(" "$UI_DIR/layer-list.tsx"; then
+  pass "an added layer's URL is checked before it is loaded"
+else
+  fail "the add-layer control does not validate its URL (javascript: and data: would pass)"
+fi
+
 # 9. The lab is still not reachable by a MERCHANT, and says so.
 #
 # ⚠️ **An honest gap, asserted.** The dialog exists and round-trips a design,

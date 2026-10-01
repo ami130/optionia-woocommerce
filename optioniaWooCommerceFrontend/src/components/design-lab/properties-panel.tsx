@@ -6,6 +6,8 @@ import type { LayerStyle } from '@shared/design/design-geometry.types';
 import { panelState } from '@/lib/design-lab/properties-panel';
 import type { DesignStore } from '@/lib/design-lab/store';
 
+import { useDesignStore } from './use-design-store';
+
 /**
  * The properties panel: fit mode, alignment, rotation and opacity.
  *
@@ -35,6 +37,9 @@ const STYLES: ReadonlyArray<{ value: LayerStyle; label: string }> = [
 ];
 
 export function PropertiesPanel({ store }: Readonly<{ store: DesignStore }>) {
+  /* Its own subscription — see `useDesignStore`. */
+  useDesignStore(store);
+
   const layer = store.getSelected();
   const state = panelState(layer);
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef } from 'react';
 
 import type { DesignStore } from '@/lib/design-lab/store';
 import type { EditorLayer } from '@/lib/design-lab/layer.types';
@@ -12,6 +12,8 @@ import {
   layerCursor,
   showsHandles,
 } from '@/lib/design-lab/selection-box';
+
+import { useDesignStore } from './use-design-store';
 
 import './design-lab.css';
 
@@ -120,18 +122,8 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<ActiveDrag | null>(null);
 
-  /*
-   * 🔴 The store mutates in place and notifies; `useSyncExternalStore` is how a
-   * mutable store drives React without the editor reconciling on every pointer
-   * move. The snapshot is a version counter rather than state — the component
-   * reads the store directly below, so a structural snapshot would allocate on
-   * every frame and defeat the point.
-   */
-  useSyncExternalStore(
-    (fn) => store.subscribe(fn),
-    () => store.version,
-    () => store.version,
-  );
+  /* This component's own subscription — see `useDesignStore`. */
+  useDesignStore(store);
 
   /* Register the three elements the fit measures and writes. */
   useEffect(() => {

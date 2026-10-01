@@ -562,3 +562,61 @@
   width: 100%;
   accent-color: var(--dl-sel-blue);
 }
+
+/* ───────────────────────── add a layer ───────────────────────── */
+
+/*
+ * 🔴 The entry point M26d.1 requires. Without it the lab opens onto a canvas a
+ * merchant can never put anything on, and every other control operates on
+ * layers that cannot exist.
+ */
+.optionia-designlab-add-layer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.optionia-designlab-add-layer input {
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+}
+
+.optionia-designlab-add-layer input:focus-visible {
+  outline: 2px solid var(--dl-sel-blue);
+  outline-offset: -1px;
+}
+
+.optionia-designlab-add-layer button {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.optionia-designlab-add-layer button:hover:not(:disabled) {
+  border-color: #d4d4d4;
+  background: #f1f1f1;
+}
+
+.optionia-designlab-add-layer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/*
+ * ⚠️ Spans both columns so a long message wraps under the whole control rather
+ * than squeezing the input. `role="alert"` carries it to a screen reader.
+ */
+.optionia-designlab-add-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11px;
+  color: #c4320a;
+}
