@@ -16,7 +16,18 @@ import type { EditorLayer } from './layer.types';
  * gesture ends.
  */
 
-/** The smallest a layer may be dragged to, in canvas pixels. */
+/**
+ * The smallest a layer may be resized to.
+ *
+ * ⚠️ **Measured in the LAYER's own frame, not on screen.** A rotated layer at
+ * this size has a screen-space bounding box larger than 24px — correct, because
+ * the bound exists so the merchant can still grab a handle, and the handles sit
+ * on the layer's own edges.
+ *
+ * 🔴 **Recorded because the obvious "fix" is wrong.** Rewriting this to bound
+ * the screen box would change the minimum size at every angle, so a layer would
+ * stop shrinking at 24px when square and at ~34px when turned 45°.
+ */
 export const MIN_LAYER_SIZE = 24;
 
 /** Shift-drag snaps rotation to this many degrees. */

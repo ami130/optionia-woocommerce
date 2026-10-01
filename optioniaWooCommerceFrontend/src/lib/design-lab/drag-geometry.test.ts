@@ -237,6 +237,42 @@ describe('resizeFrom', () => {
     expect(next.w).toBeGreaterThanOrEqual(MIN_LAYER_SIZE);
     expect(next.h).toBeGreaterThanOrEqual(MIN_LAYER_SIZE);
   });
+
+  it('bounds the size in the LAYER frame, at every angle', () => {
+    /*
+     * ⚠️ The minimum is the layer's own width and height — not its screen
+     * bounding box, which is larger whenever it is rotated. A 24×24 layer at 45°
+     * occupies ~34px on screen, and that is correct: the handles sit on the
+     * layer's edges, so the bound is what keeps them grabbable.
+     *
+     * ✏️ **The first version of this case dragged `(-5000, -5000)` at every
+     * angle and failed at 90°**, where that screen delta maps to ZERO along the
+     * layer's height axis — so the height never shrank. The delta must be
+     * expressed in the LAYER's frame and rotated forward into screen space,
+     * which is the same error the module exists to prevent, made in its test.
+     */
+    for (const rot of [0, 45, 90, 137]) {
+      const r = (rot * Math.PI) / 180;
+      const cos = Math.cos(r);
+      const sin = Math.sin(r);
+
+      /* A hard shrink along BOTH of the layer's own axes… */
+      const localDx = -5000;
+      const localDy = -5000;
+
+      /* …expressed as the screen drag that produces it. */
+      const next = resizeFrom(
+        start,
+        { dx: localDx * cos - localDy * sin, dy: localDx * sin + localDy * cos },
+        'se',
+        rot,
+        'square',
+      );
+
+      expect(next.w).toBeCloseTo(MIN_LAYER_SIZE, 6);
+      expect(next.h).toBeCloseTo(MIN_LAYER_SIZE, 6);
+    }
+  });
 });
 
 describe('rotateTo', () => {
@@ -251,11 +287,46 @@ describe('rotateTo', () => {
     /*
      * 📌 Starting mid-gesture at 45° with the layer already at 45° must leave it
      * unchanged — the offset is what stops the layer snapping to the pointer.
+     *
+     * ⚠️ **This case is DEGENERATE on its own**: the pointer angle, the start
+     * angle and the layer's rotation are all 45°, so every term cancels and
+     * removing the offset entirely still produces 45. The case below is the one
+     * that actually pins it.
      */
     const start = Math.PI / 4;
     const deg = rotateTo({ x: 300, y: 300 }, { x: 200, y: 200 }, start, 45);
 
     expect(deg).toBeCloseTo(45, 6);
+  });
+
+  /**
+   * 🔴 **The offset is what stops the layer SNAPPING to the cursor**, and
+   * nothing proved it until a mutation removed it and all thirty-one cases
+   * passed.
+   *
+   * Both earlier fixtures cancelled the offset — one had `start = 0` and
+   * `rot0 = 0`, the other had the pointer, the start and the rotation all at
+   * 45°. Deleting the term is invisible in either.
+   *
+   * 📌 Hand-computed, with coordinates chosen so the arithmetic is exact: the
+   * pointer due EAST of the centre makes `atan2` exactly 0. A layer already at
+   * 100° whose drag began at 30° must therefore read 100 − 30 = **70**.
+   *
+   * ⚠️ One case distinguishes BOTH failure modes: dropping the offset entirely
+   * gives 0, and keeping `rot0` while dropping `start` gives 100.
+   */
+  it('applies the full offset, so the layer does not snap to the cursor', () => {
+    const deg = rotateTo(
+      /* Due east of the centre: atan2 is exactly 0. */
+      { x: 300, y: 200 },
+      { x: 200, y: 200 },
+      /* The gesture began with the handle 30° round… */
+      (30 * Math.PI) / 180,
+      /* …and the layer already turned 100°. */
+      100,
+    );
+
+    expect(deg).toBeCloseTo(70, 9);
   });
 
   /**
@@ -270,11 +341,38 @@ describe('rotateTo', () => {
     expect(deg).toBeLessThan(360);
   });
 
+  /**
+   * ⚠️ **Asserted against a LITERAL fifteen, not against the constant.**
+   *
+   * The first version checked `snapped % ROTATION_SNAP_DEGREES === 0`, which
+   * reads the very value it is meant to verify — so changing the constant to 1
+   * passed. That is the same shape as a gate asserting a name is present rather
+   * than that work was done.
+   */
   it('snaps to fifteen degrees when asked', () => {
+    expect(ROTATION_SNAP_DEGREES).toBe(15);
+
     const free = rotateTo({ x: 290, y: 160 }, { x: 200, y: 200 }, 0, 0, false);
     const snapped = rotateTo({ x: 290, y: 160 }, { x: 200, y: 200 }, 0, 0, true);
 
-    expect(snapped % ROTATION_SNAP_DEGREES).toBeCloseTo(0, 9);
-    expect(Math.abs(snapped - free)).toBeLessThanOrEqual(ROTATION_SNAP_DEGREES / 2 + 1e-9);
+    expect(snapped % 15).toBeCloseTo(0, 9);
+    /* And it snapped to the NEAREST multiple, not to an arbitrary one. */
+    expect(Math.abs(snapped - free)).toBeLessThanOrEqual(7.5 + 1e-9);
+  });
+
+  it.each([
+    [10, 15],
+    [22, 15],
+    [23, 30],
+    [37, 30],
+    [38, 45],
+  ])('snaps %i° to %i°', (from, expected) => {
+    /*
+     * 📌 Concrete pairs rather than a modulo property: a wrong increment moves
+     * these, where `x % n === 0` holds for any n.
+     */
+    const deg = rotateTo({ x: 300, y: 200 }, { x: 200, y: 200 }, 0, from, true);
+
+    expect(deg).toBeCloseTo(expected, 9);
   });
 });
