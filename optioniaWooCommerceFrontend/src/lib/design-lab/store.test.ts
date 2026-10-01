@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DesignStore } from './store';
+import { DesignStore, designLayerToEditor, editorLayerToDesign } from './store';
 
 /**
  * The state engine M26d.1 calls load-bearing.
@@ -457,3 +457,233 @@ describe('fitCanvas', () => {
     expect(s.canvasScale).toBe(1);
   });
 });
+
+/**
+ * 🔴 **The two conversion points M26c.2 requires**, and the only way a design
+ * leaves or re-enters the editor.
+ *
+ * *"The editor works in pixels; conversion happens in exactly two functions
+ * (export and import) and nowhere else."* Until these existed the store could
+ * edit layers and hand them to nothing — a state engine with no boundary.
+ */
+describe('export and import', () => {
+  it('stores geometry as fractions, never pixels', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    layer.cx = 200;
+    layer.cy = 230;
+    layer.w = 100;
+    layer.h = 50;
+
+    const [stored] = s.exportDesign().layers;
+
+    expect(stored.pos.xPct).toBeCloseTo(0.5, 9);
+    expect(stored.pos.yPct).toBeCloseTo(0.5, 9);
+    expect(stored.pos.wPct).toBeCloseTo(0.25, 9);
+  });
+
+  it('omits the background, which the option set owns', () => {
+    const s = store();
+
+    s.addLayer('bg.png', 'BG', 400, 460, { kind: 'background' });
+    s.addLayer('a.png', 'A', 200, 100);
+
+    const exported = s.exportDesign();
+
+    expect(exported.layers).toHaveLength(1);
+    expect(exported.layers[0].name).toBe('A');
+  });
+
+  it('round-trips a free layer to the same pixels', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    layer.cx = 137;
+    layer.cy = 211;
+    layer.w = 96;
+    layer.h = 48;
+    layer.style = 'free';
+
+    const back = designLayerToEditor(
+      editorLayerToDesign(layer, s.cw, s.ch),
+      s.cw,
+      s.ch,
+      'X',
+    );
+
+    expect(back.cx).toBeCloseTo(137, 6);
+    expect(back.cy).toBeCloseTo(211, 6);
+    expect(back.w).toBeCloseTo(96, 6);
+    /* ⚠️ Height is DERIVED from the image aspect, never read back verbatim. */
+    expect(back.h).toBeCloseTo(48, 6);
+  });
+
+  it('derives a plain layer height from the IMAGE aspect, ignoring stored hPct', () => {
+    /*
+     * 🔴 **A plain layer is never stretched**, so its height follows the image
+     * even when the stored `hPct` disagrees — which legacy rows and hand-edited
+     * data both produce.
+     *
+     * ⚠️ The round trip above could not show this: `hPct` was computed FROM the
+     * height, so reading it back gave the same number either way. A mutation
+     * reading `hPct` for plain layers passed. Here they deliberately disagree.
+     */
+    const s = store();
+
+    const layer = designLayerToEditor(
+      {
+        name: 'A',
+        src: 'a.png',
+        natW: 200,
+        natH: 100,
+        /* wPct 0.25 of 400 = 100px wide; a 2:1 image is therefore 50px tall. */
+        pos: { xPct: 0.5, yPct: 0.5, wPct: 0.25, hPct: 0.9 },
+        rot: 0,
+        style: 'free',
+        opacity: 100,
+        shape: 'none',
+        visible: true,
+      },
+      s.cw,
+      s.ch,
+      'X',
+    );
+
+    expect(layer.w).toBeCloseTo(100, 6);
+    /* 50 from the image's 2:1 — not 414 from the stored hPct. */
+    expect(layer.h).toBeCloseTo(50, 6);
+  });
+
+  it('recomputes a cover layer for the CURRENT canvas, not its stored box', () => {
+    /*
+     * 🔴 **A cover layer must keep covering after the product photo changes.**
+     *
+     * ⚠️ The first version of this case exported a cover layer and checked it
+     * came back centred — which it did whether or not the style was recomputed,
+     * because export had already STORED it centred. A mutation removing the
+     * recompute passed. This stores a deliberately WRONG box instead, which only
+     * a recompute can correct.
+     */
+    const loaded = store();
+
+    loaded.importDesign(
+      {
+        layers: [
+          {
+            name: 'A',
+            src: 'a.png',
+            natW: 200,
+            natH: 100,
+            /* Tiny and off in a corner — nothing a cover layer would ever be. */
+            pos: { xPct: 0.1, yPct: 0.1, wPct: 0.05, hPct: 0.05 },
+            rot: 0,
+            style: 'cover',
+            opacity: 100,
+            shape: 'none',
+            visible: true,
+          },
+        ],
+      },
+      null,
+    );
+
+    const imported = loaded.layers[0];
+
+    /* Recomputed: centred, and large enough to cover. */
+    expect(imported.cx).toBeCloseTo(loaded.cw / 2, 6);
+    expect(imported.cy).toBeCloseTo(loaded.ch / 2, 6);
+    expect(imported.w).toBeGreaterThanOrEqual(loaded.cw);
+  });
+
+  it('adopts the background photo aspect and locks it', () => {
+    const s = store();
+
+    s.importDesign(null, { src: 'bg.png', name: 'BG', natW: 200, natH: 100 });
+
+    const bg = s.backgroundLayer();
+
+    expect(bg).not.toBeNull();
+    /* 🔴 The product photo is not the merchant's to move. */
+    expect(bg!.locked).toBe(true);
+    expect(s.ch).toBe(460);
+    expect(s.cw).toBe(920);
+  });
+
+  it('selects the topmost overlay after loading', () => {
+    const s = store();
+
+    s.addLayer('a.png', 'A', 200, 100);
+    s.addLayer('b.png', 'B', 200, 100);
+
+    const data = s.exportDesign();
+    const loaded = store();
+
+    loaded.importDesign(data, null);
+
+    expect(loaded.getSelected()?.name).toBe('B');
+  });
+
+  /**
+   * 🔴 **Undo cannot walk backwards through the load itself.**
+   *
+   * Without suppression, importing would push a snapshot per layer and undo
+   * would reach a half-built state the merchant never saw. `suppressHistory`
+   * exists for exactly this — and was dead code until `importDesign` was
+   * ported, which is what gave it a caller.
+   */
+  it('leaves exactly one history entry, so undo cannot go behind the load', () => {
+    const s = store();
+
+    s.addLayer('a.png', 'A', 200, 100);
+    s.addLayer('b.png', 'B', 200, 100);
+    s.addLayer('c.png', 'C', 200, 100);
+
+    const data = s.exportDesign();
+    const loaded = store();
+
+    loaded.importDesign(data, null);
+
+    expect(loaded.canUndo()).toBe(false);
+    expect(loaded.layers).toHaveLength(3);
+  });
+
+  it('opens a design saved before opacity, shape and visibility existed', () => {
+    const s = store();
+
+    /* ⚠️ A legacy row: only the fields that existed at the time. */
+    s.importDesign(
+      {
+        layers: [
+          {
+            name: 'old',
+            src: 'a.png',
+            natW: 200,
+            natH: 100,
+            pos: { xPct: 0.5, yPct: 0.5, wPct: 0.25, hPct: 0 },
+            rot: 0,
+            style: 'free',
+          } as never,
+        ],
+      },
+      null,
+    );
+
+    const layer = s.layers[0];
+
+    expect(layer.opacity).toBe(100);
+    expect(layer.shape).toBe('none');
+    expect(layer.visible).toBe(true);
+  });
+
+  it('replaces whatever was open rather than appending to it', () => {
+    const s = store();
+
+    s.addLayer('old.png', 'OLD', 200, 100);
+    s.importDesign({ layers: [] }, null);
+
+    expect(s.layers).toHaveLength(0);
+    expect(s.selectedId).toBeNull();
+  });
+});
+

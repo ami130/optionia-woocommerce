@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { layerRect } from '@shared/design/layer-geometry';
 import type { DesignLayer, LayerShape, LayerStyle } from '@shared/design/design-geometry.types';
 
+import { editorLayerToDesign } from './store';
 import { applyStyleGeometry, freeDefaultSize } from './style-geometry';
 import type { EditorLayer } from './layer.types';
 
@@ -49,30 +50,21 @@ function editorLayer(over: Partial<EditorLayer> = {}): EditorLayer {
 /**
  * The editor layer as the renderer would read it back.
  *
- * 📌 **Verified by hand before being trusted.** A centre of (200, 230) on a
- * 400×460 canvas is x 0.5 / y 0.5, and the round trip is lossless. If a case
- * below fails, this conversion is the FIRST suspect — not the two
- * implementations it compares.
+ * 🔴 **The PRODUCTION conversion, not a copy.** This fixture previously did the
+ * arithmetic by hand — so the suite validated a test helper against the renderer
+ * while production had no conversion at all, and writing one later would have
+ * been a second implementation nothing checked. That is the duplication class
+ * this port exists to prevent, created by the test meant to prevent it.
+ *
+ * 📌 Verified by hand before being trusted: a centre of (200, 230) on a 400×460
+ * canvas is x 0.5 / y 0.5, and the round trip is lossless. If a case below
+ * fails, this conversion is the FIRST suspect — not the two implementations it
+ * compares.
  */
 function asDesignLayer(layer: EditorLayer): DesignLayer {
-  return {
-    name: layer.name,
-    src: layer.src,
-    natW: layer.natW,
-    natH: layer.natH,
-    pos: {
-      xPct: layer.cx / CW,
-      yPct: layer.cy / CH,
-      wPct: layer.w / CW,
-      hPct: layer.h / CH,
-    },
-    rot: layer.rot,
-    style: layer.style,
-    opacity: layer.opacity,
-    shape: layer.shape,
-    visible: layer.visible,
-  };
+  return editorLayerToDesign(layer, CW, CH);
 }
+
 
 /* 🔴 `free` is excluded BY NAME, not silently — see the suite below. */
 const SHARED_STYLES: readonly LayerStyle[] = ['cover', 'fit', 'fullw', 'fullh'];

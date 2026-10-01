@@ -1,4 +1,10 @@
-import type { LayerShape, LayerStyle } from '@shared/design/design-geometry.types';
+import type {
+  DesignImage,
+  DesignLayer,
+  LayerShape,
+  LayerStyle,
+} from '@shared/design/design-geometry.types';
+import { effectiveShape } from '@shared/design/layer-geometry';
 
 import type { EditorLayer } from './layer.types';
 import { CANVAS_BASE_H, applyStyleGeometry, freeDefaultSize } from './style-geometry';
@@ -43,6 +49,110 @@ function nextId(): string {
   counter += 1;
 
   return `L${counter}`;
+}
+
+/**
+ * What a saved design carries — the stored form, in canvas fractions.
+ *
+ * 🔴 **This is the persisted shape, and `DesignLayer` is what the renderer
+ * reads.** They are the same thing: a design is its layers, and the editor's
+ * pixels exist only while it is open.
+ */
+export interface DesignData {
+  layers: DesignLayer[];
+}
+
+/**
+ * One layer, editor pixels → stored fractions.
+ *
+ * 🔴 **One of exactly TWO conversion points**, which is M26c.2's contract: *"the
+ * editor works in pixels; conversion happens in exactly two functions (export
+ * and import) and nowhere else."* Its partner is {@link designLayerToEditor}.
+ *
+ * ⚠️ **Exported so the parity test uses THIS and not its own copy.** The
+ * fit-mode suite previously converted by hand in a fixture — so it validated a
+ * test helper against the renderer while production had no conversion at all,
+ * and writing one later would have made a second implementation nothing checked.
+ */
+export function editorLayerToDesign(
+  layer: EditorLayer,
+  cw: number,
+  ch: number,
+): DesignLayer {
+  return {
+    name: layer.name,
+    src: layer.src,
+    natW: layer.natW,
+    natH: layer.natH,
+    pos: {
+      xPct: layer.cx / cw,
+      yPct: layer.cy / ch,
+      wPct: layer.w / cw,
+      hPct: layer.h / ch,
+    },
+    rot: layer.rot,
+    style: layer.style,
+    opacity: layer.opacity,
+    shape: layer.shape,
+    shapeSrc: layer.shape === 'image' ? layer.shapeSrc : undefined,
+    visible: layer.visible,
+  };
+}
+
+/**
+ * One layer, stored fractions → editor pixels.
+ *
+ * ⚠️ **Height is DERIVED, never simply scaled.** A plain layer takes the
+ * image's own aspect so it is never stretched; a `square` or custom-PNG frame is
+ * a free rectangle and uses its stored height; every other shape is a square.
+ * Reading `hPct` for all of them would distort three cases out of four.
+ *
+ * 📌 **Older designs predate `opacity`, `shape` and `visible`**, so each
+ * defaults rather than arriving as `undefined` — a design saved before a field
+ * existed must still open.
+ */
+export function designLayerToEditor(
+  stored: DesignLayer,
+  cw: number,
+  ch: number,
+  id: string,
+): EditorLayer {
+  const natW = stored.natW || 1;
+  const natH = stored.natH || 1;
+  const w = stored.pos.wPct * cw;
+  /* `effectiveShape` maps legacy data: a "square" with no crop is a plain layer. */
+  const shape = effectiveShape(stored);
+  const framed = shape !== 'none';
+
+  let h: number;
+
+  if (!framed) {
+    h = w * (natH / natW);
+  } else if (shape === 'square' || shape === 'image') {
+    h = stored.pos.hPct > 0 ? stored.pos.hPct * ch : w;
+  } else {
+    h = w;
+  }
+
+  return {
+    id,
+    kind: 'layer',
+    name: stored.name || 'Layer',
+    src: stored.src,
+    natW,
+    natH,
+    cx: stored.pos.xPct * cw,
+    cy: stored.pos.yPct * ch,
+    w,
+    h,
+    rot: stored.rot ?? 0,
+    style: stored.style ?? 'free',
+    opacity: stored.opacity ?? 100,
+    shape,
+    shapeSrc: shape === 'image' ? (stored.shapeSrc ?? undefined) : undefined,
+    visible: stored.visible ?? true,
+    locked: false,
+  };
 }
 
 export class DesignStore {
@@ -239,6 +349,99 @@ export class DesignStore {
 
   getSelected(): EditorLayer | null {
     return this.layers.find((l) => l.id === this.selectedId) ?? null;
+  }
+
+  /**
+   * The design as it is stored — the only way it leaves the editor.
+   *
+   * 🔴 **Overlay layers only.** The background is one shared product image for
+   * the whole option set, stored separately; baking it into each choice's design
+   * would duplicate it per choice and make changing the photo a migration.
+   *
+   * 📌 Geometry is normalised 0..1, so the design re-places exactly on that
+   * shared background at any display size — M26c.2's ratio-only contract.
+   */
+  exportDesign(): DesignData {
+    return {
+      layers: this.layers
+        .filter((l) => l.kind !== 'background')
+        .map((l) => editorLayerToDesign(l, this.cw, this.ch)),
+    };
+  }
+
+  /**
+   * Load a stored design, replacing whatever is open.
+   *
+   * 🔴 **History is reset afterwards, so undo cannot go behind the load.** The
+   * merchant opens a design and undo has nothing to walk back into — not a
+   * half-built state they never saw.
+   *
+   * ⚠️ **`suppressHistory` is DEFENSIVE, and inert today — in the source too.**
+   * Nothing in this method commits while it is set, so removing it changes no
+   * behaviour; a mutation proved that rather than a reading. It is kept because
+   * it guards the loop against a future step that DOES commit — `setCanvasSize`
+   * gaining one, say — where a snapshot per layer would be exactly the defect
+   * the reset exists to prevent. Recorded as a guard without a live case, not
+   * claimed as load-bearing.
+   *
+   * ⚠️ **Background-relative styles are RECOMPUTED, never sized from the stored
+   * width.** A `cover` layer must keep covering after the product photo
+   * changes; only `free` uses its stored box. This mirrors `layerRect`, which
+   * does the same on the render side.
+   */
+  importDesign(data: DesignData | null, background: DesignImage | null): void {
+    this.suppressHistory = true;
+    this.layers = [];
+    this.selectedId = null;
+
+    if (background?.src) {
+      const natW = background.natW || 1;
+      const natH = background.natH || 1;
+
+      /* The canvas adopts the photo's aspect before any layer is placed. */
+      this.setCanvasSize(natW, natH);
+
+      this.layers.push({
+        id: nextId(),
+        kind: 'background',
+        name: background.name || 'Background',
+        src: background.src,
+        natW,
+        natH,
+        cx: this.cw / 2,
+        cy: this.ch / 2,
+        w: this.cw,
+        h: this.ch,
+        rot: 0,
+        style: 'cover',
+        opacity: 100,
+        shape: 'none',
+        visible: true,
+        /* 🔴 Locked: the product photo is not the merchant's to move. */
+        locked: true,
+      });
+    }
+
+    for (const stored of data?.layers ?? []) {
+      const layer = designLayerToEditor(stored, this.cw, this.ch, nextId());
+
+      if (layer.style !== 'free') {
+        applyStyleGeometry(layer, this.cw, this.ch);
+      }
+
+      this.layers.push(layer);
+    }
+
+    const overlays = this.layers.filter((l) => l.kind !== 'background');
+
+    this.selectedId = overlays.length > 0 ? overlays[overlays.length - 1].id : null;
+
+    this.suppressHistory = false;
+    this.history = [];
+    this.hidx = -1;
+    this.commit();
+    this.notify();
+    this.fitCanvas();
   }
 
   addLayer(
