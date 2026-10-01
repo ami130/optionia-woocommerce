@@ -492,24 +492,104 @@ else
   fail "the add-layer control does not validate its URL (javascript: and data: would pass)"
 fi
 
-# 9. The lab is still not reachable by a MERCHANT, and says so.
+# 9. The lab opens from a choice, and what it returns is persisted.
 #
-# ⚠️ **An honest gap, asserted.** The dialog exists and round-trips a design,
-# but nothing opens it: binding a design to a choice is M26d.4 ("Which options
-# carry a design"), and the option value entity has no column to persist one.
-# Wiring a trigger now would mean inventing that column ahead of its milestone.
-# This fails the moment something imports the dialog, so M26d.4 must replace it
-# having actually bound the design to the option model.
-DIALOG_CONSUMERS=$( grep -rl "\bDesignLabDialog\b" \
-  "$ROOT/optioniaWooCommerceFrontend/src" \
-  --include='*.ts' --include='*.tsx' 2>/dev/null \
-  | grep -v '\.test\.' \
-  | grep -cv 'design-lab-dialog\.tsx$' || true )
+# 🔴 **This replaces the "not yet bound" check**, which failed the moment the
+# trigger appeared — deliberately, so whoever wired it had to think rather than
+# delete a line. The risk has moved rather than gone: a dialog that opens and
+# returns a design nobody saves looks like a working feature and loses every
+# edit.
+EDITOR="$ROOT/optioniaWooCommerceFrontend/src/app/(app)/option-sets/[id]/page.tsx"
 
-if [ "${DIALOG_CONSUMERS:-0}" -eq 0 ]; then
-  pass "the lab is assembled but not yet bound to a choice (M26d.4)"
+if [ ! -f "$EDITOR" ]; then
+  fail "the option-set editor is missing — the lab has nowhere to open from"
 else
-  fail "the lab now opens from somewhere — replace this with a check that the design persists"
+  BOUND_FAILS=0
+
+  # The dialog is mounted from the editor.
+  #
+  # ⚠️ **A word boundary, because `grep` matches substrings.** The first version
+  # looked for `<DesignLabDialog` and so matched inside `<DesignLabDialogX` —
+  # renaming the component away left the check green. The boundary must include
+  # end-of-line: this JSX tag has its props on the lines below it, so a class of
+  # trailing characters alone matched nothing and failed on correct code.
+  grep -qE "<DesignLabDialog([[:space:]/>]|$)" "$EDITOR" \
+    || { fail "nothing opens the Design Lab"; BOUND_FAILS=$((BOUND_FAILS + 1)); }
+
+  # 📌 **Hydrated from the STORED design, not from nothing.** A dialog opened
+  # with `design={null}` would compose correctly and silently discard whatever
+  # the merchant had saved before — the round trip broken at its last step.
+  grep -q "design={" "$EDITOR" \
+    || { fail "the dialog is not hydrated from the value's stored design"; BOUND_FAILS=$((BOUND_FAILS + 1)); }
+
+  # 🔴 **And what it returns is WRITTEN.** `onApply` handing the design to a
+  # local setState would look identical until the page reloaded.
+  #
+  # 🔴 **Matched on the MUTATION, not on any `updateValue` naming a design.**
+  # The undo and redo callbacks also send a design, so an earlier version
+  # stayed green with the primary write gutted: two matches remained and the
+  # check only asked for one. What must exist is the handler that writes what
+  # the dialog returned.
+  #
+  # ⚠️ **Scoped to the mutation's own body.** Two earlier versions matched text
+  # that exists elsewhere: `updateValue(…design…)` also appears in the undo and
+  # redo callbacks, so gutting the primary write left two matches behind and the
+  # check green. What is asserted is that the function receiving the applied
+  # design is the one that sends it.
+  APPLY_BODY=$(perl -0ne 'print $1 if /mutationFn: \(design: DesignData\) =>(.*?)onSuccess:/s' "$EDITOR")
+
+  if grep -q "onApply=" "$EDITOR" \
+    && [ -n "$APPLY_BODY" ] \
+    && printf '%s' "$APPLY_BODY" | grep -qE "updateValue\(value\.id, \{ design"; then
+    pass "the lab opens from a choice and persists what it returns"
+  else
+    fail "the applied design is never sent to the API"
+    BOUND_FAILS=$((BOUND_FAILS + 1))
+  fi
+
+  # ⚠️ **Offered only where the API accepts it.** `valueCarriesDesign` mirrors
+  # the registry; without it the button appears on a date picker and the
+  # merchant loses a whole design to a 400.
+  if grep -qE "\bvalueCarriesDesign\(" "$EDITOR"; then
+    pass "the Design button is offered only on types that carry one"
+  else
+    fail "the editor does not check which types carry a design"
+    BOUND_FAILS=$((BOUND_FAILS + 1))
+  fi
+
+  # 🔴 **A refusal must be visible, in BOTH branches.** The row returns early
+  # when collapsed and that branch holds the Design button, so an error rendered
+  # only in the editing branch would leave a refused save silent — the merchant
+  # watches their work vanish with no reason given.
+  #
+  # ⚠️ **Counting the RENDERED element, not every mention.** Each branch names
+  # `saveDesign.error` twice — once to test it and once to pass it — so a count
+  # of the name reached four and `>= 2` passed with a whole branch deleted.
+  DESIGN_ERRORS=$(grep -c "<ErrorState error={saveDesign.error}" "$EDITOR" || true)
+
+  if [ "${DESIGN_ERRORS:-0}" -ge 2 ]; then
+    pass "a refused design save is reported from either branch of the row"
+  else
+    fail "a refused design save is invisible in at least one branch (found ${DESIGN_ERRORS:-0})"
+    BOUND_FAILS=$((BOUND_FAILS + 1))
+  fi
+
+  # 📌 **Undoable, like every other edit in this editor.** M20.10 made the row's
+  # field edits reversible; a design applied outside that log would be the one
+  # change a merchant could not take back.
+  #
+  # ⚠️ **Scoped to the design mutation's success handler**, for the same reason.
+  # `Design ${value.label}` is also the BUTTON's label, so matching it anywhere
+  # in the file passed with the undo entry deleted outright — the one change a
+  # merchant could not take back, reported as reversible.
+  DESIGN_SUCCESS=$(perl -0ne 'print $1 if /const saveDesign = useMutation\(\{(.*?)\n  \}\);/s' "$EDITOR")
+
+  if [ -n "$DESIGN_SUCCESS" ] && printf '%s' "$DESIGN_SUCCESS" | grep -qE "onRecord\(\{"; then
+    pass "an applied design is recorded for undo"
+  else
+    fail "an applied design cannot be undone"
+    BOUND_FAILS=$((BOUND_FAILS + 1))
+  fi
 fi
 
 printf '\n'

@@ -125,6 +125,30 @@ else
   printf '        %s\n' "$RESOLVE"
 fi
 
+# The DASHBOARD builds too.
+#
+# 🔴 **Added after a defect that typecheck, lint and 2161 tests all missed.**
+# The shared geometry lives outside the Next.js project root, and Turbopack
+# reads neither `tsconfig.json` nor `vitest.config.ts` — so `@shared/*` resolved
+# everywhere except in a real build. It stayed latent for several commits
+# because nothing in the PAGE TREE had imported a design-lab module; the moment
+# M26d.4 wired the Design Lab into the option-set editor, `next build` failed
+# with three unresolved imports while every other check stayed green.
+#
+# ⚠️ **A build is the only check that sees a bundler's resolver.** This gate
+# already builds the backend for the same class of reason; the dashboard was
+# simply never added.
+FRONTEND="$ROOT/optioniaWooCommerceFrontend"
+
+if [ ! -d "$FRONTEND/node_modules" ]; then
+  printf '\033[33mskip\033[0m  the dashboard builds: dependencies not installed\n'
+elif ( cd "$FRONTEND" && npm run build >/tmp/check-build-frontend.log 2>&1 ); then
+  pass "the dashboard builds"
+else
+  fail "the dashboard does not build"
+  grep -E "Error|Can't resolve" /tmp/check-build-frontend.log | head -5 | sed 's/^/        /' || true
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d build-output check(s) failed.\033[0m\n' "$FAILURES"

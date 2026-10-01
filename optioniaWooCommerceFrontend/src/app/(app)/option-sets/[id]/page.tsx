@@ -87,6 +87,8 @@ import {
   setValueDirty,
   useUnsavedGuard,
 } from '@/lib/hooks/use-unsaved-guard';
+import { DesignLabDialog } from '@/components/design-lab/design-lab-dialog';
+import type { DesignData } from '@/lib/design-lab/store';
 import { formatAmount, parseAmount } from '@/lib/money/money';
 import { formatBasisPoints, parsePercent } from '@/lib/money/percent';
 import {
@@ -151,6 +153,7 @@ import {
   optionSchema,
   swatchFieldsFor,
   takesGroupLabel,
+  valueCarriesDesign,
   takesValues,
   valueSchema,
 } from '@/lib/schemas/option-sets';
@@ -3255,6 +3258,14 @@ export function ValueRow({
   const { color: needsColor, image: needsImage } = swatchFieldsFor(presentation);
   const takesGroup = takesGroupLabel(presentation);
 
+  /*
+   * 🔴 **The Design Lab, opened from the choice it belongs to** (M26d.4). Only
+   * swatch types carry a per-value design; the API refuses the rest, so showing
+   * the button elsewhere would end in a 400 after the merchant composed one.
+   */
+  const takesDesign = valueCarriesDesign(presentation);
+  const [designOpen, setDesignOpen] = useState(false);
+
   const parsed = valueSchema.safeParse({
     valueKey: value.valueKey,
     label,
@@ -3337,6 +3348,37 @@ export function ValueRow({
         label: `Edit ${value.label}`,
         inverse: async () => void onPatched(await updateValue(value.id, before)),
         replay: async () => void onPatched(await updateValue(value.id, after)),
+      });
+    },
+  });
+
+  /**
+   * Apply a design from the Design Lab.
+   *
+   * 🔴 **A DISCRETE act, not part of the row's autosave.** The five text fields
+   * are one editing session committed when focus leaves the row; a design is
+   * composed in a modal and applied by a button, like a lock toggle. Folding it
+   * into `isDirty` would mean a merchant who applies a design and clicks away
+   * without touching a field saves nothing — and `useUnsavedGuard` would warn
+   * about an edit that was already finished.
+   *
+   * 📌 **Recorded for undo the same way the field edit is**: both directions
+   * are plain `updateValue` calls over values captured here, so one small
+   * request each and no snapshot of a tree that reaches 12,000 values.
+   */
+  const saveDesign = useMutation({
+    mutationFn: (design: DesignData) =>
+      updateValue(value.id, { design: design as unknown as Record<string, unknown> }),
+    onSuccess: (updated) => {
+      onPatched(updated);
+
+      const before = (value.design ?? null) as Record<string, unknown> | null;
+      const after = (updated.design ?? null) as Record<string, unknown> | null;
+
+      onRecord({
+        label: `Design ${value.label}`,
+        inverse: async () => void onPatched(await updateValue(value.id, { design: before })),
+        replay: async () => void onPatched(await updateValue(value.id, { design: after })),
       });
     },
   });
@@ -3446,6 +3488,39 @@ export function ValueRow({
     onSuccess: onPatched,
   });
 
+  /*
+   * 🔴 **One dialog, rendered by BOTH branches below.** The row returns early
+   * when collapsed, so a dialog placed in one branch would close itself the
+   * moment the row opened or closed — and a merchant mid-design would lose it.
+   * Declared once here and rendered in both returns.
+   *
+   * ⚠️ **Mounted only when this value takes a design**, so a page of date
+   * pickers does not build a Design Lab store per row. The dialog itself
+   * hydrates on open rather than on mount, but the store is allocated eagerly.
+   */
+  const designDialog = takesDesign ? (
+    <DesignLabDialog
+      open={designOpen}
+      onOpenChange={setDesignOpen}
+      /*
+       * 📌 **The stored design, cast at this boundary only.** `AuthoringValue`
+       * carries it as the opaque JSON the API sends; `DesignData` is the
+       * editor's shape. The two conversion points M26c.2 pins are inside the
+       * store — this is the type boundary, not a third conversion.
+       */
+      design={(value.design as DesignData | undefined) ?? null}
+      /*
+       * ⚠️ **The product photo is M26d.5's.** Until an asset library exists the
+       * canvas composes against a blank background, which is honest: a design
+       * placed against nothing still stores fractions and re-places correctly
+       * when a photo arrives.
+       */
+      background={null}
+      title={`Design — ${value.label}`}
+      onApply={(design) => saveDesign.mutate(design)}
+    />
+  ) : null;
+
   /** Reset the draft to what is stored, so Cancel really cancels. */
   const cancel = () => {
     setLabel(value.label);
@@ -3517,6 +3592,26 @@ export function ValueRow({
               >
                 Edit
               </Button>
+              {/*
+                🔴 **Only on types that carry a per-value design** (M26d.4).
+                `valueCarriesDesign` mirrors the API's registry, and the API
+                refuses the rest — so offering this elsewhere would end in a 400
+                after the merchant had composed a whole design.
+
+                📌 The label says whether there is one, because a design is
+                invisible in a flat list and "Design" alone cannot tell a
+                merchant whether this choice already prints something.
+              */}
+              {takesDesign ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={saveDesign.isPending}
+                  onClick={() => setDesignOpen(true)}
+                >
+                  {value.design ? `Edit design for ${value.label}` : `Design ${value.label}`}
+                </Button>
+              ) : null}
               {/* 🔴 Reversible, where × is not — see the group toggle above. */}
               <Button
                 variant="ghost"
@@ -3530,6 +3625,17 @@ export function ValueRow({
             </>
           ) : null}
         </span>
+        {/*
+          🔴 **The error belongs in BOTH branches, and the Design button lives
+          in this one.** A refused design save — `TYPE_CARRIES_NO_DESIGN`, a
+          lapsed subscription, a lost connection — would otherwise close the
+          dialog and leave nothing behind: the merchant sees their work vanish
+          with no reason given, which reads as data loss rather than a refusal.
+        */}
+        {saveDesign.error === null || saveDesign.error === undefined ? null : (
+          <ErrorState error={saveDesign.error} />
+        )}
+        {designDialog}
       </div>
     );
   }
@@ -3727,6 +3833,17 @@ export function ValueRow({
       )}
 
       {save.error === null || save.error === undefined ? null : <ErrorState error={save.error} />}
+
+      {/*
+        ⚠️ A refused design save must be visible. The API refuses a design on a
+        type that carries none (`TYPE_CARRIES_NO_DESIGN`), and without this the
+        dialog would close on apply and the design would simply not be there.
+      */}
+      {saveDesign.error === null || saveDesign.error === undefined ? null : (
+        <ErrorState error={saveDesign.error} />
+      )}
+
+      {designDialog}
     </div>
   );
 }
