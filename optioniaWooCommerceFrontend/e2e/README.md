@@ -155,3 +155,32 @@ The storefront render, the customer's selection, cart, checkout, and the order's
 option row. Those need [M19.1](../../developePlan.md)'s catalogue import to make
 the flow a merchant's own rather than a seeded one; `catalogue.ts` is a stand-in
 that reads the Store API directly, and it goes when M19.1 lands.
+
+## `design-lab.spec.ts` — the canvas, driven by a pointer
+
+🔴 **Written because everything in M26d.1 and M26d.4 was verified structurally.**
+This project has no JSX test runner, so the Design Lab's canvas was checked by
+gates and by reading: `getBoundingClientRect`, the drag loop, the handle
+hit-testing and the add-layer image load had never once executed. 2161 unit
+tests and 33 gates all passed while nothing had clicked anything.
+
+⚠️ **The specific risk it was written to find** was the add-layer control
+loading a merchant's URL with `crossOrigin = 'anonymous'`: a host sending no
+CORS headers fires `onerror`, and a merchant could add no layers at all. The
+spec serves the image from the dashboard's own origin, so the same-origin path
+is proven; **a cross-origin CDN remains unverified** and is the next thing to
+check when M26d.5 brings real uploads.
+
+📌 **Three assertions were mutation-tested** rather than trusted, because the
+suite finishes in under four seconds and that looks like it skipped:
+
+- demanding two layer rows reported `Received: 1` — the image loaded and the row
+  is real
+- asserting the layer did *not* move reported `Expected: 532, Received: 592` —
+  the 60px drag moved it exactly as asked
+- renaming the rotate grip's class failed on visibility — the stylesheet is
+  doing the work that once went missing
+
+Run it with the API on 4000 and the dashboard on 3001, and with `SMTP_HOST`
+empty in the backend's `.env` — `global-setup.ts` refuses otherwise, and says
+why.
