@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 
-import { type Merchant, newMerchant, seedConnectedStore, verifyEmail } from './fixtures';
+import {
+  type Merchant,
+  newMerchant,
+  seedConnectedStore,
+  seedProductWithPhoto,
+  verifyEmail,
+} from './fixtures';
 
 /**
  * The Design Lab, driven by a real pointer.
@@ -139,6 +145,21 @@ test.describe('Design Lab', () => {
       await expect(page.locator('.optionia-designlab-layer')).toHaveCount(1);
     });
 
+    await test.step('the canvas opens without a backdrop when no product has a photo', async () => {
+      /*
+       * 🔴 **The fallback, asserted rather than assumed.** This tenant's
+       * catalogue is empty, so `canBeBackground` refuses and the lab composes on
+       * a blank canvas — exactly as it did before backdrops existed. A crash or
+       * an empty dialog here would mean the no-photo path was never handled.
+       *
+       * ⚠️ **The background layer is the thing to count.** A backdrop adds a
+       * locked `bg-layer`; without one there is none, and the single layer on
+       * the canvas is the merchant's own.
+       */
+      await expect(page.locator('.optionia-designlab-bg-layer')).toHaveCount(0);
+      await expect(page.locator('.optionia-designlab-canvas')).toBeVisible();
+    });
+
     await test.step('the layer can be selected and dragged', async () => {
       const layer = page.locator('.optionia-designlab-layer').first();
       const before = await layer.boundingBox();
@@ -193,6 +214,106 @@ test.describe('Design Lab', () => {
       await expect(page.locator('.optionia-designlab-layer-row')).toHaveCount(1, {
         timeout: 15_000,
       });
+    });
+  });
+
+  test('the canvas composes over the product photo', async ({ page, request }) => {
+    const merchant: Merchant = newMerchant();
+    let setId = '';
+
+    await test.step('a merchant with a photographed product exists', async () => {
+      await page.goto('/register');
+
+      await page.locator('input[name="name"]').fill(merchant.name);
+      await page.locator('input[name="tenantName"]').fill(merchant.tenantName);
+      await page.locator('input[name="email"]').fill(merchant.email);
+      await page.locator('input[name="password"]').fill(merchant.password);
+      await page.getByRole('button', { name: /create|register|sign up/i }).click();
+      await expect(page.getByText(merchant.email)).toBeVisible();
+
+      verifyEmail(merchant.email);
+      seedConnectedStore(merchant.email);
+
+      await page.goto('/login');
+      await page.locator('input[name="email"]').fill(merchant.email);
+      await page.locator('input[name="password"]').fill(merchant.password);
+      await page.getByRole('button', { name: /sign in|log in/i }).click();
+      await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+    });
+
+    await test.step('a colour swatch is authored', async () => {
+      const login = await request.post('http://localhost:4000/v1/auth/login', {
+        data: { email: merchant.email, password: merchant.password },
+      });
+      const token = (await login.json()).data.accessToken;
+      const auth = { Authorization: `Bearer ${token}` };
+
+      const stores = await request.get('http://localhost:4000/v1/stores', { headers: auth });
+      const storeId = (await stores.json()).data[0].id;
+
+      /*
+       * 📌 Seeded against THIS store, now that its id is known. Same-origin, so
+       * `crossOrigin = 'anonymous'` has a response it can accept.
+       */
+      seedProductWithPhoto(storeId, 'http://localhost:3001/next.svg');
+
+      const set = await request.post('http://localhost:4000/v1/option-sets', {
+        headers: auth,
+        data: { name: 'Design Lab Backdrop', storeId },
+      });
+
+      setId = (await set.json()).data.id;
+
+      const group = await request.post(
+        `http://localhost:4000/v1/option-sets/${setId}/groups`,
+        { headers: auth, data: { label: 'Artwork' } },
+      );
+      const groupId = (await group.json()).data.id;
+
+      const option = await request.post(
+        `http://localhost:4000/v1/groups/${groupId}/options`,
+        {
+          headers: auth,
+          data: { key: 'colour', label: 'Colour', presentation: 'color_swatch' },
+        },
+      );
+      const optionId = (await option.json()).data.id;
+
+      await request.post(`http://localhost:4000/v1/options/${optionId}/values`, {
+        headers: auth,
+        data: { valueKey: 'red', label: 'Red', colorHex: '#ff0000' },
+      });
+    });
+
+    await test.step('the product photo is the backdrop', async () => {
+      await page.goto(`/option-sets/${setId}`);
+      await page.getByRole('button', { name: /^Design Red$/ }).click();
+
+      await expect(page.getByRole('dialog')).toBeVisible();
+
+      /*
+       * 🔴 **The whole point of this change.** A backdrop is a locked
+       * `bg-layer`, added by `importDesign` only when a measured `DesignImage`
+       * reaches it — which requires the product's photo to have loaded and
+       * `backgroundFor` to have built one. Its absence means the merchant is
+       * composing over nothing, which is what this milestone fixed.
+       */
+      await expect(page.locator('.optionia-designlab-bg-layer')).toHaveCount(1, {
+        timeout: 15_000,
+      });
+
+      /*
+       * ⚠️ **And the canvas adopted the photo's aspect.** `next.svg` is wide,
+       * so a canvas still at the default 392x464 would be TALLER than it is
+       * wide — proving the measurement reached `setCanvasSize` rather than the
+       * backdrop merely being drawn on an unchanged canvas.
+       */
+      const canvas = await page.locator('.optionia-designlab-canvas').boundingBox();
+
+      expect(canvas).not.toBeNull();
+      expect(canvas!.width, 'the canvas is wider than tall, like the photo').toBeGreaterThan(
+        canvas!.height,
+      );
     });
   });
 });

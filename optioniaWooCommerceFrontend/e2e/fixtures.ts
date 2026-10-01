@@ -117,6 +117,46 @@ export function verifyEmail(email: string): void {
  * ⚠️ **Keyed to the merchant's tenant**, so each run seeds its own store and
  * nothing is shared between them.
  */
+/**
+ * Give the merchant's store one product, with a photo.
+ *
+ * 🔴 **The Design Lab composes over a product's image** (M26d.5's goal reached
+ * without its storage), and a catalogue arrives through the plugin's
+ * store-token ingest route — which a dashboard test has no credential for. So
+ * the row is written directly, exactly as `seedConnectedStore` writes a store.
+ *
+ * ⚠️ **The image URL must be same-origin to the dashboard**, because the lab
+ * loads it with `crossOrigin = 'anonymous'`: a third-party CDN would make this
+ * suite depend on that host sending CORS headers, and a failure there would look
+ * like a product defect. `/next.svg` ships with the app.
+ *
+ * 🔴 **Takes a storeId, not an email.** The first version joined through
+ * `tenant_members` to find "the" store — and a tenant may own several, so it
+ * attached the product to a different one than the option set used. The test
+ * then showed no backdrop and looked like a product defect; it was the fixture
+ * picking the wrong row. The caller already knows which store it is using.
+ */
+export function seedProductWithPhoto(storeId: string, imageUrl: string): void {
+  const escaped = storeId.replace(/'/g, "''");
+
+  execFileSync(
+    'mysql',
+    [
+      `-h${DB.host}`,
+      `-P${DB.port}`,
+      `-u${DB.user}`,
+      `-p${DB.password}`,
+      DB.name,
+      '-e',
+      `INSERT INTO store_products
+         (id, storeId, externalId, name, type, status, imageUrl, syncedAt, createdAt, updatedAt)
+       VALUES (UUID(), '${escaped}', 'e2e-1', 'Design Lab Mug', 'simple', 'publish',
+               '${imageUrl}', NOW(3), NOW(3), NOW(3))`,
+    ],
+    { stdio: ['ignore', 'ignore', 'ignore'] },
+  );
+}
+
 export function seedConnectedStore(email: string, storeUrl = 'https://usability.test'): void {
   const escaped = email.replace(/'/g, "''");
 

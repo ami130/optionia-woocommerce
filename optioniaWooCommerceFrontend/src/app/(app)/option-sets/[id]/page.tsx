@@ -88,6 +88,7 @@ import {
   useUnsavedGuard,
 } from '@/lib/hooks/use-unsaved-guard';
 import { DesignLabDialog } from '@/components/design-lab/design-lab-dialog';
+import { canBeBackground } from '@/lib/design-lab/background';
 import type { DesignData } from '@/lib/design-lab/store';
 import { formatAmount, parseAmount } from '@/lib/money/money';
 import { formatBasisPoints, parsePercent } from '@/lib/money/percent';
@@ -3266,6 +3267,63 @@ export function ValueRow({
   const takesDesign = valueCarriesDesign(presentation);
   const [designOpen, setDesignOpen] = useState(false);
 
+  /*
+   * 🔴 **The product photo the design is composed over** (M26d.5's goal, reached
+   * without its storage). The lab opened on a blank 392×464 canvas, so a
+   * merchant placed artwork without seeing what it sat on. Phase 19 already
+   * syncs every product with its `imageUrl`; nothing was using it here.
+   *
+   * 📌 **Read from the cache rather than threaded down.** `ValueRow` sits three
+   * components below the page, and passing `storeId` through `GroupList`,
+   * `GroupCard` and `OptionBlock` would touch four files to carry one string.
+   * The set is already cached under this key by the page above.
+   *
+   * ⚠️ **Fetched only once the dialog opens.** A set with fifty values would
+   * otherwise issue fifty identical product queries on render — React Query
+   * would dedupe them, but the request is pointless until a merchant actually
+   * opens the lab.
+   */
+  /*
+   * ⚠️ **`useParams()` returns null outside a route**, and reading `.id` on it
+   * throws. The render tests mount this row directly — correctly, since it is a
+   * component — and a crash there is the same crash a merchant would see if the
+   * row were ever reused outside this page. Optional access rather than an
+   * assertion: no set id simply means no backdrop.
+   */
+  const designSetId = useParams<{ id: string }>()?.id ?? null;
+  const cachedSet = useQueryClient().getQueryData<AuthoringSet>([
+    'option-set',
+    designSetId,
+  ]);
+
+  const designProducts = useQuery({
+    queryKey: ['products', 'design-lab', cachedSet?.storeId],
+    queryFn: () => listProducts({ storeId: cachedSet?.storeId ?? '', limit: 50 }),
+    /*
+     * 🔴 **NOT gated on `designOpen`, and that was the defect.** Gating on it
+     * was the obvious economy and it broke the feature outright: the dialog
+     * hydrates once, on open, and at that instant a query enabled by the very
+     * same click has not resolved — so the product was always null and the
+     * canvas always blank. Found by a browser test; every unit test and all 33
+     * gates passed while it was broken.
+     *
+     * 📌 **The cost is one request for the page, not one per row.** React Query
+     * dedupes on the key, and every row shares it — so fifty swatches issue a
+     * single fetch, cached for the session.
+     */
+    enabled: takesDesign && Boolean(designSetId) && Boolean(cachedSet?.storeId),
+  });
+
+  /*
+   * ⚠️ **The first product with a photo, not a chosen one.** Choosing which
+   * product to compose against belongs with M26d.6's preview, where a merchant
+   * is already picking one. Until then this is a representative backdrop — the
+   * stored geometry is fractions, so it re-places correctly whatever the
+   * customer's product turns out to be.
+   */
+  const designProduct =
+    designProducts.data?.items.find((item) => canBeBackground(item)) ?? null;
+
   const parsed = valueSchema.safeParse({
     valueKey: value.valueKey,
     label,
@@ -3510,21 +3568,14 @@ export function ValueRow({
        */
       design={(value.design as DesignData | undefined) ?? null}
       /*
-       * ⚠️ **The product photo is M26d.5's, and this is a real limitation.**
+       * 🔴 **The backdrop, so a merchant can see what they are composing over.**
+       * `null` here was a real limitation for several commits: the canvas kept
+       * its default aspect and artwork was placed against nothing.
        *
-       * 📌 The DATA is correct either way: geometry is stored as fractions of
-       * the canvas, so a design composed here re-places correctly over any
-       * photo later — verified by an export/import round trip.
-       *
-       * 🔴 **What is missing is what the merchant SEES.** With no background
-       * the canvas keeps the store's default 392×464 rather than the product
-       * photo's aspect, so they place artwork without seeing what it sits on.
-       * A layer centred against a square canvas is still centred against a tall
-       * one, but "looks right" is a judgement they cannot make yet. Calling
-       * that merely "honest" understated it; the feature is usable and
-       * incomplete until the asset library lands.
+       * 📌 The stored design is unaffected either way — geometry is fractions —
+       * so this changes what is SEEN, not what is saved.
        */
-      background={null}
+      product={designProduct}
       title={`Design — ${value.label}`}
       onApply={(design) => saveDesign.mutate(design)}
     />

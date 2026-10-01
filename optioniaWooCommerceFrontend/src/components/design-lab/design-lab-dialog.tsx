@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { DesignImage } from '@shared/design/design-geometry.types';
+import { type BackgroundSource, backgroundFor, canBeBackground } from '@/lib/design-lab/background';
 import {
   keyAction,
   NUDGE_COMMIT_MS,
@@ -46,8 +46,15 @@ export interface DesignLabDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The choice's saved design, or null for a blank canvas. */
   design: DesignData | null;
-  /** The product photo the design is composed against. */
-  background: DesignImage | null;
+  /**
+   * The product the design is composed against, or null for a blank canvas.
+   *
+   * 🔴 **A product, not a `DesignImage`.** The canvas needs the photo's natural
+   * dimensions — `setCanvasSize` divides by them — and a synced product carries
+   * a URL and no size. Measuring belongs here, where the image is loaded once on
+   * open, rather than in every caller.
+   */
+  product: BackgroundSource | null;
   /** Called with the edited design when the merchant applies it. */
   onApply: (design: DesignData) => void;
   title?: string;
@@ -57,7 +64,7 @@ export function DesignLabDialog({
   open,
   onOpenChange,
   design,
-  background,
+  product,
   onApply,
   title = 'Design Lab',
 }: Readonly<DesignLabDialogProps>) {
@@ -99,7 +106,7 @@ export function DesignLabDialog({
    * when the component mounted.
    */
   const designRef = useRef(design);
-  const backgroundRef = useRef(background);
+  const productRef = useRef(product);
 
   /*
    * ⚠️ **Written in an effect, not during render.** React's compiler refuses a
@@ -109,13 +116,66 @@ export function DesignLabDialog({
    */
   useEffect(() => {
     designRef.current = design;
-    backgroundRef.current = background;
-  }, [design, background]);
+    productRef.current = product;
+  }, [design, product]);
 
   useEffect(() => {
     if (!open) return;
 
-    store.importDesign(designRef.current, backgroundRef.current);
+    const chosen = productRef.current;
+
+    /*
+     * 📌 **No photo is the ordinary case**, not a failure: a synced catalogue
+     * carries plenty of products without one, and the lab composes on a blank
+     * canvas exactly as it did before backgrounds existed.
+     */
+    if (!canBeBackground(chosen)) {
+      store.importDesign(designRef.current, null);
+
+      return;
+    }
+
+    /*
+     * 🔴 **The image is MEASURED before the design is imported, and the order
+     * is load-bearing.** `importDesign` calls `setCanvasSize` from the photo's
+     * aspect and then places every layer against that canvas; importing first
+     * and resizing after would place them against 392×464 and leave them there.
+     *
+     * ⚠️ **Hydration still happens exactly once per open.** The effect depends
+     * on `open` alone — see above — and `cancelled` stops a late `onload` from
+     * a previous open re-importing over a canvas the merchant has since edited.
+     */
+    let cancelled = false;
+    const img = new Image();
+
+    img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      if (cancelled) return;
+
+      store.importDesign(
+        designRef.current,
+        backgroundFor(chosen, { width: img.naturalWidth, height: img.naturalHeight }),
+      );
+    };
+
+    /*
+     * ⚠️ **A photo that will not load must not block the lab.** A merchant's
+     * CDN may refuse the cross-origin request, or the URL may have rotted; the
+     * design is still editable, and refusing to open would be a worse failure
+     * than a blank canvas.
+     */
+    img.onerror = () => {
+      if (cancelled) return;
+
+      store.importDesign(designRef.current, null);
+    };
+
+    img.src = chosen?.imageUrl ?? '';
+
+    return () => {
+      cancelled = true;
+    };
   }, [open, store]);
 
   /*

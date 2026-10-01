@@ -511,6 +511,50 @@ else
   fail "the add-layer control does not validate its URL (javascript: and data: would pass)"
 fi
 
+# 8e. The canvas has a backdrop to compose against.
+#
+# 🔴 **The lab opened on a blank 392x464 canvas for several commits**, so a
+# merchant placed artwork without seeing what it sat on. I twice described that
+# as a limitation of shipping before M26d.5 — and the data was already there:
+# Phase 19 syncs every product with its `imageUrl`, and nothing read it.
+#
+# ⚠️ **The photo must be MEASURED before the design is imported.** `importDesign`
+# calls `setCanvasSize` from the aspect and then places every layer against that
+# canvas; importing first and resizing after places them against the default and
+# leaves them there.
+DIALOG_BG="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab-dialog.tsx"
+
+if [ ! -f "$DIALOG_BG" ]; then
+  fail "the Design Lab dialog is missing"
+else
+  BG_FAILS=0
+
+  grep -qE "\bbackgroundFor\(" "$DIALOG_BG" \
+    || { fail "the dialog never builds a background from the product"; BG_FAILS=$((BG_FAILS + 1)); }
+
+  # The measurement, and the import that depends on it, inside one handler.
+  ONLOAD=$(perl -0ne 'print $1 if /img\.onload = \(\) => \{(.*?)\n    \};/s' "$DIALOG_BG")
+
+  if [ -n "$ONLOAD" ] \
+    && printf '%s' "$ONLOAD" | grep -q "naturalWidth" \
+    && printf '%s' "$ONLOAD" | grep -q "importDesign"; then
+    pass "the product photo is measured before the design is imported"
+  else
+    fail "the design is imported without measuring the photo — layers land on the default canvas"
+    BG_FAILS=$((BG_FAILS + 1))
+  fi
+
+  # 📌 A photo that will not load must not block the lab.
+  ONERROR=$(perl -0ne 'print $1 if /img\.onerror = \(\) => \{(.*?)\n    \};/s' "$DIALOG_BG")
+
+  if [ -n "$ONERROR" ] && printf '%s' "$ONERROR" | grep -q "importDesign"; then
+    pass "a photo that cannot load still opens the lab on a blank canvas"
+  else
+    fail "a failed photo load leaves the lab empty — the design would be unreachable"
+    BG_FAILS=$((BG_FAILS + 1))
+  fi
+fi
+
 # 9. The lab opens from a choice, and what it returns is persisted.
 #
 # 🔴 **This replaces the "not yet bound" check**, which failed the moment the
@@ -551,7 +595,13 @@ else
   # ⚠️ Asserted on the DEPENDENCY ARRAY, because that is where the defect lives:
   # the call itself looks identical either way.
   DIALOG="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab-dialog.tsx"
-  HYDRATE_DEPS=$(perl -0ne 'print $1 if /store\.importDesign\([^;]*;\s*\n\s*\}, (\[[^\]]*\])/s' "$DIALOG")
+  #
+  # ✏️ **Re-anchored when the photo measurement landed.** The first version
+  # matched the dependency array immediately after `importDesign`, which was the
+  # effect's last statement until the image load made it one branch of several.
+  # It now anchors on the effect's OPENING — `if (!open) return;` — and takes the
+  # array that closes it, which does not depend on what the body grows into.
+  HYDRATE_DEPS=$(perl -0ne 'print $1 if /if \(!open\) return;(?:(?!useEffect).)*?\n  \}, (\[[^\]]*\])\);/s' "$DIALOG")
 
   case "$HYDRATE_DEPS" in
     *design*|*background*)
