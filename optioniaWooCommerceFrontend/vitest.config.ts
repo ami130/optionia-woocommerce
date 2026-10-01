@@ -30,6 +30,16 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', '**/.next/**', 'e2e/**'],
   },
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    /*
+     * ⚠️ **`@shared` is declared HERE as well as in `tsconfig.json`.** Vitest
+     * resolves through Vite, which does not read tsconfig paths — so a test
+     * importing the shared geometry failed with "Failed to resolve import"
+     * while `tsc` was perfectly happy. Two resolvers, two declarations;
+     * `check-shared-design.sh` asserts both so they cannot drift.
+     */
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@shared': path.resolve(__dirname, '../shared'),
+    },
   },
 });

@@ -93,7 +93,39 @@ for project in optioniaWooCommerceBackend optioniaWooCommerceFrontend; do
   fi
 done
 
-# 4. The backend's test runner still SEES the shared specs.
+# 4. The dashboard's test runner resolves `@shared` too.
+#
+# 🔴 **Two resolvers, two declarations.** Vitest resolves through Vite, which
+# does not read tsconfig paths — so the first test importing the shared geometry
+# failed with "Failed to resolve import" while `tsc` was perfectly happy. Gate 31
+# checked the tsconfig alias and said nothing, because that alias was fine.
+VITEST="$ROOT/optioniaWooCommerceFrontend/vitest.config.ts"
+
+if [ -f "$VITEST" ] && strip_comments "$VITEST" | grep -q "'@shared'"; then
+  pass "vitest resolves @shared (tsconfig paths do not reach Vite)"
+else
+  fail "vitest.config.ts does not alias @shared — a test importing it cannot resolve"
+fi
+
+# 5. The fit modes agree across the two implementations.
+#
+# ⚠️ `applyStyleGeometry` WRITES a layer when its style changes; `layerRect`
+# READS one on every render. Both implement cover/fit/fullw/fullh, in different
+# coordinate spaces, and in `optionia-app` the only thing tying them together was
+# a comment in each pointing at the other. A merchant picks a fit mode in the
+# editor and a factory prints the result.
+PARITY="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/style-geometry.test.ts"
+
+if [ ! -f "$PARITY" ]; then
+  fail "the fit-mode parity test is missing — the editor and renderer are unchecked"
+elif strip_comments "$PARITY" | grep -q 'layerRect(' \
+  && strip_comments "$PARITY" | grep -q 'applyStyleGeometry('; then
+  pass "the fit modes are checked against the renderer, not just against themselves"
+else
+  fail "the parity test no longer compares applyStyleGeometry with layerRect"
+fi
+
+# 6. The backend's test runner still SEES the shared specs.
 #
 # ⚠️ This is the check that would have caught the 134 vanished tests. A `roots`
 # entry is what carries them; without it Jest finds nothing here and says so in
