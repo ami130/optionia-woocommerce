@@ -191,6 +191,7 @@ export class OptionSetSerializer {
       validation: option.validation,
       pricing: option.pricing,
       display: option.display,
+      textDesign: option.textDesign,
       createdAt: iso(option.createdAt) as string,
       updatedAt: iso(option.updatedAt) as string,
       values: values.map((value) => this.valueToAuthoring(value)),
@@ -208,6 +209,8 @@ export class OptionSetSerializer {
       priceConfig: value.priceConfig,
       imageUrl: value.imageUrl,
       colorHex: value.colorHex,
+      /* The editor reopens a design from here — see AuthoringOptionValue. */
+      design: value.design,
       groupLabel: value.groupLabel,
       skuSuffix: value.skuSuffix,
       weightDeltaGrams: value.weightDeltaGrams,
@@ -380,6 +383,14 @@ export class OptionSetSerializer {
       }),
       ...optional('image_url', value.imageUrl),
       ...optional('color_hex', value.colorHex),
+      /*
+       * The artwork the storefront overlays (M26d.4; drawn by M26e.1).
+       *
+       * 📌 **Absent rather than null when there is none**, like every optional
+       * key here: a document for an option set with no designs stays
+       * byte-identical to what it was before designs existed.
+       */
+      ...optional('design', value.design),
       // `<optgroup>` heading (M14.3). Absent when ungrouped, so an ordinary
       // dropdown's document is byte-identical to what it was before grouping
       // existed.

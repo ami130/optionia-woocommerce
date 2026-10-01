@@ -388,3 +388,127 @@ describe('OptionTypeValidator', () => {
   });
 
 });
+
+/**
+ * Designs reach only the types that can draw them (M26d.4).
+ *
+ * 🔴 **Without this guard a design is accepted, stored, published and never
+ * rendered** — worse than a refusal, because the merchant believes the work is
+ * done. The entity comments claimed "the service refuses the rest" before any
+ * service did; these tests are what make that sentence true.
+ */
+describe('design eligibility', () => {
+  const validator = new OptionTypeValidator();
+  const design = { layers: [] };
+
+  it('accepts a design on both swatch types', () => {
+    expect(() =>
+      validator.assertValueMayCarryDesign(Presentation.COLOR_SWATCH, design, 'Colour'),
+    ).not.toThrow();
+    expect(() =>
+      validator.assertValueMayCarryDesign(Presentation.IMAGE_SWATCH, design, 'Art'),
+    ).not.toThrow();
+  });
+
+  it('refuses a design on a type that draws no artwork', () => {
+    expect(() =>
+      validator.assertValueMayCarryDesign(Presentation.RADIO, design, 'Size'),
+    ).toThrow(DomainException);
+  });
+
+  it('names the field and the presentation in the refusal', () => {
+    /*
+     * ⚠️ A merchant must be able to act on it: which field, and why. A bare
+     * "validation failed" sends them hunting.
+     */
+    try {
+      validator.assertValueMayCarryDesign(Presentation.DATE_PICKER, design, 'Delivery');
+      throw new Error('expected a refusal');
+    } catch (error) {
+      const details = (error as DomainException).details as ErrorDetail[];
+
+      expect(details[0].field).toBe('design');
+      expect(details[0].code).toBe('TYPE_CARRIES_NO_DESIGN');
+      expect(JSON.stringify(details[0].params)).toContain(Presentation.DATE_PICKER);
+    }
+  });
+
+  /*
+   * 🔴 **Clearing must always work, whatever the type.** A merchant who turns a
+   * swatch into a dropdown would otherwise be stuck: the option now carries
+   * artwork it can neither draw nor delete, because deleting it is an update
+   * that the guard would refuse.
+   */
+  it('always allows null, so a design can be cleared after a type change', () => {
+    for (const presentation of Object.values(Presentation)) {
+      expect(() =>
+        validator.assertValueMayCarryDesign(presentation, null, 'x'),
+      ).not.toThrow();
+      expect(() =>
+        validator.assertValueMayCarryDesign(presentation, undefined, 'x'),
+      ).not.toThrow();
+    }
+  });
+
+  /*
+   * 🔴 **The same clearing guarantee, for the text guard.** Caught by mutation:
+   * removing this guard's null check passed all 38 tests, because the "always
+   * allows null" case above only exercised the VALUE guard. Two guards need two
+   * tests; one test covering one of them is a half-check that reads as a whole.
+   */
+  it('always allows a null text design, so it can be cleared too', () => {
+    for (const presentation of Object.values(Presentation)) {
+      expect(() =>
+        validator.assertOptionMayCarryTextDesign(presentation, null, 'x'),
+      ).not.toThrow();
+      expect(() =>
+        validator.assertOptionMayCarryTextDesign(presentation, undefined, 'x'),
+      ).not.toThrow();
+    }
+  });
+
+  it('accepts a text design on the free-text types', () => {
+    expect(() =>
+      validator.assertOptionMayCarryTextDesign(Presentation.TEXT_FIELD, design, 'Name'),
+    ).not.toThrow();
+    expect(() =>
+      validator.assertOptionMayCarryTextDesign(Presentation.TEXTAREA, design, 'Message'),
+    ).not.toThrow();
+  });
+
+  /*
+   * 🔴 The case that proves the carrier is declared rather than inferred.
+   * `hidden` is a TEXT type like `text_field`, and must still refuse.
+   */
+  it('refuses a text design on `hidden`, though it is a text type', () => {
+    expect(() =>
+      validator.assertOptionMayCarryTextDesign(Presentation.HIDDEN, design, 'Batch'),
+    ).toThrow(DomainException);
+  });
+
+  it('refuses a text design on a swatch, which carries one per value instead', () => {
+    expect(() =>
+      validator.assertOptionMayCarryTextDesign(Presentation.COLOR_SWATCH, design, 'Colour'),
+    ).toThrow(DomainException);
+  });
+
+  it('refuses a VALUE design on a text type, and vice versa', () => {
+    /*
+     * ⚠️ The two guards are not interchangeable: each type carries at most one
+     * kind, and crossing them would store a design the renderer looks for in
+     * the wrong place.
+     */
+    expect(() =>
+      validator.assertValueMayCarryDesign(Presentation.TEXT_FIELD, design, 'Name'),
+    ).toThrow(DomainException);
+    expect(() =>
+      validator.assertOptionMayCarryTextDesign(Presentation.IMAGE_SWATCH, design, 'Art'),
+    ).toThrow(DomainException);
+  });
+
+  it('refuses a design on an unregistered presentation', () => {
+    expect(() => validator.assertValueMayCarryDesign('not_a_type', design, 'x')).toThrow(
+      DomainException,
+    );
+  });
+});

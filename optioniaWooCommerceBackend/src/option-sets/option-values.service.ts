@@ -23,6 +23,13 @@ export interface ValueChanges {
   priceConfig?: Record<string, unknown> | null;
   imageUrl?: string | null;
   colorHex?: string | null;
+  /**
+   * The Design Lab artwork (M26d.4). `null` clears it.
+   *
+   * ⚠️ Accepted only on types whose `designCarrier` is `value` — see
+   * `assertValueMayCarryDesign`.
+   */
+  design?: Record<string, unknown> | null;
   /** `<optgroup>` heading (M14.3). `null` clears it. */
   groupLabel?: string | null;
   skuSuffix?: string | null;
@@ -89,6 +96,18 @@ export class OptionValuesService {
      * merchant has already done the work, and the error names a decision they
      * made minutes ago instead of one they made in another session.
      */
+    /*
+     * 🔴 **A design on a type that draws none is accepted, stored, published
+     * and never rendered** — worse than a refusal, because the merchant
+     * believes the work is done. Refused here for the same reason the
+     * valueless check below is: publish is far too late.
+     */
+    this.validator.assertValueMayCarryDesign(
+      option.presentation,
+      input.design,
+      option.label,
+    );
+
     if (!this.validator.describe(option.presentation).takesValues) {
       throw DomainException.validation([
         {
@@ -126,6 +145,7 @@ export class OptionValuesService {
       priceConfig: input.priceConfig ?? null,
       imageUrl: input.imageUrl ?? null,
       colorHex: input.colorHex ?? null,
+      design: input.design ?? null,
       groupLabel: input.groupLabel ?? null,
       skuSuffix: input.skuSuffix ?? null,
       weightDeltaGrams: input.weightDeltaGrams ?? null,
@@ -159,6 +179,22 @@ export class OptionValuesService {
 
     if ('priceConfig' in patch && patch.priceConfig !== null) {
       this.validator.assertValidValuePricing(patch.priceConfig);
+    }
+
+    /*
+     * ⚠️ **The update path needs the same guard as create.** Without it a
+     * design is merely harder to attach, not impossible: PATCH a value on a
+     * date picker and it is stored. The option is loaded only when a design is
+     * actually being set, so an ordinary label edit costs no extra query.
+     */
+    if ('design' in patch && patch.design !== null) {
+      const option = await this.assertOptionExists(before.optionId);
+
+      this.validator.assertValueMayCarryDesign(
+        option.presentation,
+        patch.design,
+        option.label,
+      );
     }
 
     await this.values.update({ id } as never, patch as never);

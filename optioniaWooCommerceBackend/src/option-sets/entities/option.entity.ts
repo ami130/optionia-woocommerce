@@ -144,8 +144,8 @@ export class Option extends SoftDeletableEntity {
    * one design while a swatch needs one per value.
    *
    * 📌 **Nullable; null is the normal case.** Only types whose `designCarrier`
-   * is `option_text` may hold one, and the service refuses the rest — `hidden`
-   * among them, though it is a text type, because its value is merchant-set and
+   * is `option_text` may hold one — enforced by `OptionsService`, and `hidden`
+   * is excluded though it is a text type, because its value is merchant-set and
    * never typed by a customer.
    */
   @Column({ type: 'json', nullable: true })

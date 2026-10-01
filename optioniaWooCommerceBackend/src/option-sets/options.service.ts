@@ -29,6 +29,14 @@ export interface OptionChanges {
   validation?: Record<string, unknown> | null;
   pricing?: Record<string, unknown> | null;
   display?: Record<string, unknown> | null;
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4). `null` clears it.
+   *
+   * ⚠️ Accepted only on types whose `designCarrier` is `option_text` — see
+   * `assertOptionMayCarryTextDesign`. `hidden` is refused though it is a text
+   * type, because its value is never typed by a customer.
+   */
+  textDesign?: Record<string, unknown> | null;
 }
 
 export interface CreateOptionInput extends OptionChanges {
@@ -96,6 +104,12 @@ export class OptionsService {
       display: input.display,
     });
 
+    this.validator.assertOptionMayCarryTextDesign(
+      input.presentation,
+      input.textDesign,
+      input.label,
+    );
+
     await this.assertKeyAvailable(optionGroupId, key);
 
     const definition = this.validator.describe(input.presentation);
@@ -116,6 +130,7 @@ export class OptionsService {
       validation: input.validation ?? null,
       pricing: input.pricing ?? null,
       display: input.display ?? null,
+      textDesign: input.textDesign ?? null,
       sortOrder: await this.options.nextSortOrder(optionGroupId),
     } as never);
 
@@ -145,6 +160,18 @@ export class OptionsService {
 
     if (Object.keys(patch).length === 0) {
       return before;
+    }
+
+    /*
+     * ⚠️ The presentation cannot change on update, so `before`'s is the one
+     * that decides — no extra query needed, unlike the value path.
+     */
+    if ('textDesign' in patch && patch.textDesign !== null) {
+      this.validator.assertOptionMayCarryTextDesign(
+        before.presentation,
+        patch.textDesign,
+        before.label,
+      );
     }
 
     /*

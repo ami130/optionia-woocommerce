@@ -39,6 +39,17 @@ export interface AuthoringOptionValue {
   readonly priceConfig: Record<string, unknown> | null;
   readonly imageUrl: string | null;
   readonly colorHex: string | null;
+  /**
+   * The Design Lab artwork this value prints (M26d.4).
+   *
+   * 🔴 **Without this the editor could never reopen a saved design.** The Design
+   * Lab hydrates from what this projection returns, so a design absent here
+   * means a merchant composes, applies, reloads, and finds an empty canvas — a
+   * feature that appears to save and does not. Caught by audit, not by a test:
+   * `duplication.spec.ts` compares the COPY path against the entity and is the
+   * only completeness guard in the repository.
+   */
+  readonly design: Record<string, unknown> | null;
   /** `<optgroup>` heading. `null` means the value is not grouped. */
   readonly groupLabel: string | null;
   readonly skuSuffix: string | null;
@@ -66,6 +77,13 @@ export interface AuthoringOption {
   readonly validation: Record<string, unknown> | null;
   readonly pricing: Record<string, unknown> | null;
   readonly display: Record<string, unknown> | null;
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4).
+   *
+   * 📌 On the option rather than a value because a text option has none — see
+   * `DesignCarrier`. The editor reopens it from here.
+   */
+  readonly textDesign: Record<string, unknown> | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly values: readonly AuthoringOptionValue[];

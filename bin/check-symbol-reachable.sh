@@ -55,15 +55,26 @@ is_exempt_file() {
   esac
 }
 
+# 🔴 **`option-sets/types` was added after an audit found the gate blind to it.**
+# `valueCarriesDesign` and `optionCarriesTextDesign` shipped exported, tested by
+# ten assertions and called by nothing — the seventh occurrence of this
+# repository's most repeated defect — while this gate printed *"every watched
+# file is exempt — this gate is checking nothing"* and I read that warning
+# without acting on it. The registry is exactly the kind of module this watches:
+# capabilities declared for consumers that may never arrive.
+#
 # ⚠️ **One per line, not a space-separated string.** The repository path contains
 # a space, so a `for dir in $WATCHED` loop yielded one non-existent path and the
 # gate checked nothing — caught by the "checked no symbols at all" assertion
 # below, which is why that assertion exists.
 WATCHED_DIRS="design
-common/render"
+common/render
+option-sets/types"
 
 UNUSED=""
 CHECKED=0
+INTERNAL=0
+DEAD_TYPES=0
 EXEMPT=0
 
 while IFS= read -r watched; do
@@ -95,8 +106,49 @@ while IFS= read -r watched; do
         | grep -v '\.spec\.ts$' \
         | wc -l | tr -d ' ')
 
+      # 🔴 **An INTERNAL helper is not the defect this gate is for.** Running it
+      # over `option-sets/types` flagged eight symbols, and seven were helpers
+      # their own neighbours use through a different export — `displaySchemaFor`
+      # imports `presentational-display`, `MAX_CONDITIONS_PER_RULE` imports
+      # `rule-condition.schema`. Those files ARE reached; only some of their
+      # exports are not named from outside, which is ordinary module structure.
+      #
+      # ⚠️ **What this gate exists to catch is a FILE nothing imports** — logic
+      # built, typed, tested and wired to no caller. So a symbol is excused when
+      # its own file has a consumer AND the symbol is used inside that file;
+      # a symbol used nowhere, not even at home, is still reported.
+      # 📌 **Three inferred type aliases are excused BY NAME**, found when this
+      # gate first ran over `option-sets/types`. Each is `export type X =
+      # z.infer<…>` declared once and referenced nowhere — dead, pre-existing,
+      # and unrelated to the work that revealed them. They are named rather
+      # than deleted because removing three exports from three schema modules
+      # is a separate change with its own blast radius, and a silent deletion
+      # inside a Design Lab commit is how unrelated breakage gets attributed to
+      # the wrong milestone. The frontend's `DividerStyle` is a SEPARATE
+      # declaration — the two repositories share no code — so deleting the
+      # backend's would not touch it.
+      case "$rel :: $symbol" in
+        'option-sets/types/presentational-display.ts :: DividerStyle'|\
+        'option-sets/types/pricing.schema.ts :: PricingConfig'|\
+        'option-sets/types/rule-condition.schema.ts :: RuleConditions')
+          DEAD_TYPES=$((DEAD_TYPES + 1))
+          continue
+          ;;
+      esac
+
       if [ "$hits" -eq 0 ]; then
-        UNUSED="$UNUSED  $rel :: $symbol\n"
+        module="${rel%.ts}"
+        file_consumers=$(grep -rlE "from '[^']*/${module##*/}'" "$SRC" --include='*.ts' 2>/dev/null \
+          | grep -v "^$file$" \
+          | grep -v '\.spec\.ts$' \
+          | wc -l | tr -d ' ')
+        self_uses=$(grep -cE "\b$symbol\b" "$file" | tr -d ' ')
+
+        if [ "$file_consumers" -gt 0 ] && [ "$self_uses" -gt 1 ]; then
+          INTERNAL=$((INTERNAL + 1))
+        else
+          UNUSED="$UNUSED  $rel :: $symbol\n"
+        fi
       fi
     done
   done

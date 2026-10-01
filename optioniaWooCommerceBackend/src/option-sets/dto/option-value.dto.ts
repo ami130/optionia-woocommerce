@@ -86,6 +86,25 @@ export class CreateOptionValueDto {
   colorHex?: string;
 
   /**
+   * The Design Lab artwork this value prints (M26d.4).
+   *
+   * 🔴 **`@IsObject()` only — the shape is NOT validated here, deliberately.**
+   * A design is a layer list whose geometry is defined by the shared module, and
+   * duplicating that schema at the API boundary would create a second
+   * definition to drift from the first. What this boundary enforces is the one
+   * thing a wrong shape cannot be recovered from: that it is an object rather
+   * than an array or a string.
+   *
+   * ⚠️ **Which TYPES may carry one is enforced in the service**, not here —
+   * `assertValueMayCarryDesign`. A DTO cannot see the owning option's
+   * presentation, so the rule would be unexpressible at this layer.
+   */
+  @IsOptional()
+  @IsObject()
+  @ApiPropertyOptional({ type: Object })
+  design?: Record<string, unknown>;
+
+  /**
    * The `<optgroup>` heading this value sits under (M14.3).
    *
    * ⚠️ **Grouping is a rendering detail of `dropdown`, not a type.** Values
@@ -165,6 +184,25 @@ export class UpdateOptionValueDto {
   @Matches(/^#[0-9a-fA-F]{6}$/, { message: 'A colour must be a six-digit hex value, e.g. #1a2b3c.' })
   @ApiPropertyOptional({ type: String })
   colorHex?: string;
+
+  /**
+   * The Design Lab artwork this value prints (M26d.4).
+   *
+   * 🔴 **`@IsObject()` only — the shape is NOT validated here, deliberately.**
+   * A design is a layer list whose geometry is defined by the shared module, and
+   * duplicating that schema at the API boundary would create a second
+   * definition to drift from the first. What this boundary enforces is the one
+   * thing a wrong shape cannot be recovered from: that it is an object rather
+   * than an array or a string.
+   *
+   * ⚠️ **Which TYPES may carry one is enforced in the service**, not here —
+   * `assertValueMayCarryDesign`. A DTO cannot see the owning option's
+   * presentation, so the rule would be unexpressible at this layer.
+   */
+  @IsOptional()
+  @IsObject()
+  @ApiPropertyOptional({ type: Object })
+  design?: Record<string, unknown>;
 
   /**
    * The `<optgroup>` heading this value sits under (M14.3).

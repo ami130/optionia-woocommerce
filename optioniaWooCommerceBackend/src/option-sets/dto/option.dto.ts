@@ -122,6 +122,21 @@ export class CreateOptionDto {
   @IsObject()
   @ApiPropertyOptional({ type: Object })
   display?: Record<string, unknown>;
+
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4).
+   *
+   * 📌 On the option rather than a value because a text option has none. The
+   * merchant's wording is a SAMPLE; the customer's input replaces it when the
+   * storefront renders (M26d.3 authors it, M26e.1 draws it).
+   *
+   * ⚠️ Shape unvalidated here and type eligibility enforced in the service, for
+   * the same reasons `design` on a value is — see `OptionValue`'s DTO.
+   */
+  @IsOptional()
+  @IsObject()
+  @ApiPropertyOptional({ type: Object })
+  textDesign?: Record<string, unknown>;
 }
 
 export class UpdateOptionDto {
@@ -190,6 +205,21 @@ export class UpdateOptionDto {
   @IsObject()
   @ApiPropertyOptional({ type: Object })
   display?: Record<string, unknown>;
+
+  /**
+   * The Design Lab artwork a free-text option prints (M26d.4).
+   *
+   * 📌 On the option rather than a value because a text option has none. The
+   * merchant's wording is a SAMPLE; the customer's input replaces it when the
+   * storefront renders (M26d.3 authors it, M26e.1 draws it).
+   *
+   * ⚠️ Shape unvalidated here and type eligibility enforced in the service, for
+   * the same reasons `design` on a value is — see `OptionValue`'s DTO.
+   */
+  @IsOptional()
+  @IsObject()
+  @ApiPropertyOptional({ type: Object })
+  textDesign?: Record<string, unknown>;
 }
 
 export class DuplicateOptionDto {

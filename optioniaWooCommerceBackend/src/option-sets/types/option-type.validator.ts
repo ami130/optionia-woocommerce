@@ -4,7 +4,13 @@ import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception';
 import type { ErrorDetail } from '../../common/http/api-response.types';
 import { pricingConfigSchema } from './pricing.schema';
-import { findType, registeredTypes, type OptionTypeDefinition } from './type-registry';
+import {
+  findType,
+  optionCarriesTextDesign,
+  registeredTypes,
+  valueCarriesDesign,
+  type OptionTypeDefinition,
+} from './type-registry';
 
 /**
  * Validates an option's type-specific JSON at the API boundary.
@@ -201,6 +207,77 @@ export class OptionTypeValidator {
     }
 
     return definition;
+  }
+
+  /**
+   * Refuse a design on a type that cannot carry one (M26d.4).
+   *
+   * 🔴 **Without this a design is accepted, stored, published and never drawn.**
+   * A date picker has nothing for artwork to attach to, and a `radio` draws a
+   * label rather than an image — so a design on either would sit in the row
+   * looking saved while every renderer ignored it. That is worse than a refusal:
+   * the merchant believes the work is done.
+   *
+   * ⚠️ **Refused at the API boundary rather than at publish**, for the reason
+   * `TYPE_TAKES_NO_VALUES` gives a few lines above: publish is far too late, and
+   * names a decision the merchant made in another session.
+   *
+   * 📌 **A null design is always allowed**, whatever the type. Clearing a design
+   * must keep working after a merchant changes an option's presentation —
+   * otherwise a swatch turned into a dropdown would carry artwork it could
+   * neither draw nor delete.
+   */
+  assertValueMayCarryDesign(
+    presentation: string,
+    design: unknown,
+    label: string,
+  ): void {
+    if (design === null || design === undefined) return;
+
+    if (valueCarriesDesign(presentation)) return;
+
+    throw DomainException.validation([
+      {
+        field: 'design',
+        code: 'TYPE_CARRIES_NO_DESIGN',
+        params: {
+          message:
+            `"${label}" is a ${presentation}, which draws no artwork, ` +
+            `so its values cannot carry a design.`,
+          presentation,
+        },
+      },
+    ]);
+  }
+
+  /**
+   * Refuse a text design on an option that cannot carry one (M26d.4).
+   *
+   * ⚠️ **`hidden` is refused here though it is a text type.** Its value is set
+   * by the merchant and never typed by a customer, so a design whose text layers
+   * await customer input would render something nobody asked for. This is why
+   * the carrier is declared per type rather than derived from `valueKind`.
+   */
+  assertOptionMayCarryTextDesign(
+    presentation: string,
+    textDesign: unknown,
+    label: string,
+  ): void {
+    if (textDesign === null || textDesign === undefined) return;
+
+    if (optionCarriesTextDesign(presentation)) return;
+
+    throw DomainException.validation([
+      {
+        field: 'textDesign',
+        code: 'TYPE_CARRIES_NO_TEXT_DESIGN',
+        params: {
+          message:
+            `"${label}" is a ${presentation}, which carries no text design.`,
+          presentation,
+        },
+      },
+    ]);
   }
 
   assertValidValuePricing(priceConfig: unknown, valueIndex?: number): void {

@@ -72,8 +72,9 @@ export class OptionValue extends SoftDeletableEntity {
    * "nothing" — a shape the reader would then have to tell apart from a design
    * that genuinely has no layers yet.
    *
-   * Only types whose `designCarrier` is `value` may hold one; the service
-   * refuses the rest, so a date picker cannot accumulate artwork nothing draws.
+   * Only types whose `designCarrier` is `value` may hold one — enforced by
+   * `OptionValuesService`, so a date picker cannot accumulate artwork nothing
+   * draws.
    */
   @Column({ type: 'json', nullable: true })
   design: Record<string, unknown> | null;

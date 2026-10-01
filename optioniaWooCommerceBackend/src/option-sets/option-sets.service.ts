@@ -482,6 +482,11 @@ export class OptionSetsService {
               validation: (option.validation ?? null) as never,
               pricing: (option.pricing ?? null) as never,
               display: (option.display ?? null) as never,
+              /*
+               * A free-text option's artwork survives the round trip too
+               * (M26d.4). Coerced the same way its sibling JSON fields are.
+               */
+              textDesign: (option.textDesign ?? null) as never,
             }),
           );
 
@@ -552,6 +557,22 @@ export class OptionSetsService {
                 priceConfig: (value.priceConfig ?? null) as never,
                 imageUrl: typeof value.imageUrl === 'string' ? value.imageUrl : null,
                 colorHex: typeof value.colorHex === 'string' ? value.colorHex : null,
+                /*
+                 * 🔴 The artwork survives an export/import round trip (M26d.4).
+                 * Dropping it would make a re-imported set look identical and
+                 * print nothing.
+                 *
+                 * ⚠️ Accepted only as an OBJECT. A document is merchant-supplied
+                 * here, and an array or a string in this field would reach the
+                 * renderer as a design it cannot read; `null` is the safe
+                 * coercion for anything unexpected, as every sibling line does.
+                 */
+                design:
+                  value.design !== null &&
+                  typeof value.design === 'object' &&
+                  !Array.isArray(value.design)
+                    ? (value.design as never)
+                    : null,
                 groupLabel: typeof value.groupLabel === 'string' ? value.groupLabel : null,
                 skuSuffix: typeof value.skuSuffix === 'string' ? value.skuSuffix : null,
                 weightDeltaGrams:
