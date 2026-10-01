@@ -1,4 +1,8 @@
-import type { LayerShape, LayerStyle } from '@shared/design/design-geometry.types';
+import type {
+  LayerCrop,
+  LayerShape,
+  LayerStyle,
+} from '@shared/design/design-geometry.types';
 
 /**
  * A layer as the EDITOR holds it — absolute canvas pixels, mutable.
@@ -42,6 +46,19 @@ export interface EditorLayer {
   shape: LayerShape;
   /** Custom PNG mask URL when `shape === 'image'`. */
   shapeSrc?: string;
+  /**
+   * Where the image sits INSIDE its frame (M26d.2).
+   *
+   * 🔴 **Fractions of the FRAME, not of the canvas.** The layer's own `cx/cy/w/h`
+   * are canvas pixels because they mutate on every pointer move; this is stored
+   * exactly as it persists, because the inner image moves far less often and the
+   * frame is its whole coordinate space. `crop-geometry` converts at the one
+   * boundary, mirroring `editorLayerToDesign` one level down.
+   *
+   * ⚠️ **Absent on a plain layer.** `shape: 'none'` means there is no frame, so
+   * there is nothing for an inner placement to be relative to.
+   */
+  crop?: LayerCrop | null;
   visible: boolean;
   locked: boolean;
 }

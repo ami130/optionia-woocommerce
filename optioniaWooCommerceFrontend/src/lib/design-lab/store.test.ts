@@ -782,3 +782,162 @@ describe('export and import', () => {
   });
 });
 
+
+/**
+ * Frames and the image inside them (M26d.2).
+ *
+ * 🔴 **The crop is a second placement, and it must survive the boundary.**
+ * `editorLayerToDesign` omitted it when these methods were first written — so a
+ * merchant's inner positioning was lost on every save, silently, because the
+ * design still opened and simply re-covered the frame. Found while wiring the
+ * store, and pinned here.
+ */
+describe('frames and cropping', () => {
+  function framed(): { s: DesignStore; id: string } {
+    const s = store();
+    const layer = s.addLayer('https://cdn/a.png', 'a', 400, 100);
+
+    s.setShapeOn(layer, 'circle');
+
+    return { s, id: layer.id };
+  }
+
+  it('creates a crop when a layer enters a frame', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id);
+
+    expect(layer?.shape).toBe('circle');
+    expect(layer?.crop).not.toBeNull();
+    expect(layer?.w).toBe(layer?.h);
+  });
+
+  it('keeps the inner placement when the frame changes', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+
+    s.setCropBox(layer, { icx: layer.w * 0.2, icy: layer.h * 0.8, w: layer.w });
+
+    const before = layer.crop?.xPct;
+
+    s.setShapeOn(layer, 'star');
+
+    expect(layer.crop?.xPct).toBeCloseTo(before ?? -1);
+  });
+
+  it('clears the crop when a layer leaves its frame', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+
+    s.setShapeOn(layer, 'none');
+
+    expect(layer.shape).toBe('none');
+    expect(layer.crop).toBeNull();
+  });
+
+  it('refuses to crop a plain layer', () => {
+    const s = store();
+    const layer = s.addLayer('https://cdn/a.png', 'a', 400, 100);
+
+    s.setCropBox(layer, { icx: 10, icy: 10, w: 50 });
+
+    expect(layer.crop).toBeUndefined();
+  });
+
+  /*
+   * ⚠️ **A continuous gesture: notifies, does not commit.** The same contract
+   * every drag and slider follows, and `check-design-store.sh` asserts it.
+   */
+  it('moves the inner image without committing', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+    const listener = vi.fn();
+
+    s.subscribe(listener);
+
+    /*
+     * 🔴 **The DEPTH, not `canUndo()`.** My first version compared a boolean,
+     * which is true both before and after one extra entry — so adding a commit
+     * here passed. Mutation found it; the probe below counts.
+     */
+    function depth(): number {
+      let n = 0;
+
+      while (s.canUndo() && n < 500) {
+        s.undo();
+        n += 1;
+      }
+
+      while (s.canRedo()) s.redo();
+
+      return n;
+    }
+
+    const before = depth();
+
+    s.setCropBox(layer, { icx: layer.w * 0.3, icy: layer.h * 0.3, w: layer.w });
+
+    expect(listener).toHaveBeenCalled();
+    expect(depth()).toBe(before);
+  });
+
+  it('rotates the image inside the frame, leaving the frame upright', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+
+    s.setInnerRotation(layer, 400);
+
+    /* 🔴 Normalised into 0..360, like the outer rotation. */
+    expect(layer.crop?.rot).toBe(40);
+    expect(layer.rot).toBe(0);
+  });
+
+  it('enters and leaves crop mode only for a shaped, unlocked layer', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+
+    s.enterCrop(id);
+    expect(s.cropping).toBe(id);
+
+    s.exitCrop();
+    expect(s.cropping).toBeNull();
+
+    layer.locked = true;
+    s.enterCrop(id);
+    expect(s.cropping).toBeNull();
+  });
+
+  /*
+   * 🔴 **The round trip the export once broke.** A crop written, exported and
+   * re-imported must come back — otherwise the lab reopens on a re-covered
+   * frame and the merchant's positioning is gone with no error anywhere.
+   */
+  it('carries the crop through export and import', () => {
+    const { s, id } = framed();
+    const layer = s.layers.find((l) => l.id === id)!;
+
+    s.setCropBox(layer, { icx: layer.w * 0.25, icy: layer.h * 0.75, w: layer.w * 1.5 });
+    s.commit();
+
+    const exported = s.exportDesign();
+
+    expect(exported.layers[0].crop).toBeDefined();
+
+    const reopened = new DesignStore();
+
+    reopened.importDesign(exported, null);
+
+    const back = reopened.layers.find((l) => l.kind !== 'background');
+
+    expect(back?.crop?.xPct).toBeCloseTo(layer.crop?.xPct ?? -1);
+    expect(back?.crop?.wPct).toBeCloseTo(layer.crop?.wPct ?? -1);
+  });
+
+  it('does not store a crop on a plain layer', () => {
+    /* 📌 `effectiveShape` treats a cropless square as plain; a stored crop
+     * there would contradict that. */
+    const s = store();
+    const layer = s.addLayer('https://cdn/a.png', 'a', 400, 100);
+
+    expect(editorLayerToDesign(layer, s.cw, s.ch).crop).toBeUndefined();
+  });
+});

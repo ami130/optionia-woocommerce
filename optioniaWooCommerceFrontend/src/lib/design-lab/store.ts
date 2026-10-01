@@ -7,6 +7,13 @@ import type {
 import { effectiveShape } from '@shared/design/layer-geometry';
 
 import type { EditorLayer } from './layer.types';
+import {
+  type CropBox,
+  clampCropBox,
+  cropBoxToCrop,
+  cropDefault,
+  shapeChangeFor,
+} from './crop-geometry';
 import { CANVAS_BASE_H, applyStyleGeometry, freeDefaultSize } from './style-geometry';
 
 /**
@@ -95,6 +102,17 @@ export function editorLayerToDesign(
     opacity: layer.opacity,
     shape: layer.shape,
     shapeSrc: layer.shape === 'image' ? layer.shapeSrc : undefined,
+    /*
+     * 🔴 **The inner placement travels with the layer** (M26d.2). It is already
+     * fractions of the frame, so unlike `cx/cy/w/h` it needs no conversion —
+     * but omitting it would lose a merchant's crop on every save, silently,
+     * since the design would still open and simply re-cover the frame.
+     *
+     * ⚠️ **Only on a framed layer.** A plain layer has no frame for an inner
+     * placement to be relative to, and `effectiveShape` already treats a
+     * cropless square as plain — so storing one would contradict that.
+     */
+    crop: layer.shape === 'none' ? undefined : (layer.crop ?? undefined),
     visible: layer.visible,
   };
 }
@@ -150,6 +168,13 @@ export function designLayerToEditor(
     opacity: stored.opacity ?? 100,
     shape,
     shapeSrc: shape === 'image' ? (stored.shapeSrc ?? undefined) : undefined,
+    /*
+     * 📌 **Read back on the framed side only**, mirroring the export. A stored
+     * crop on a layer `effectiveShape` resolves to plain is legacy data the
+     * renderer already ignores, and carrying it into the editor would make the
+     * crop controls appear for a layer that has no frame.
+     */
+    crop: shape === 'none' ? null : (stored.crop ?? null),
     visible: stored.visible ?? true,
     locked: false,
   };
@@ -760,8 +785,110 @@ export class DesignStore {
     this.notify();
   }
 
+  /**
+   * Put a layer in a frame, change its frame, or take it out of one (M26d.2).
+   *
+   * 🔴 **The decision is `shapeChangeFor`'s; this applies it.** Three
+   * transitions that look like one `if` and are not: entering a frame squares
+   * the box and creates a crop, switching between frames KEEPS the merchant's
+   * inner placement, and leaving discards it. The middle case is the one most
+   * easily lost, and the one a merchant would notice first.
+   *
+   * ⚠️ **Leaving a frame restores the default size**, which needs the canvas —
+   * so that part stays here, where `cw`/`ch` are known.
+   */
   setShapeOn(layer: EditorLayer, shape: LayerShape): void {
-    layer.shape = shape;
+    const change = shapeChangeFor(layer, shape);
+
+    layer.shape = change.shape as LayerShape;
+    layer.w = change.size.w;
+    layer.h = change.size.h;
+    layer.crop = change.crop;
+
+    if (change.resetStyle) {
+      layer.style = 'free';
+
+      const size = freeDefaultSize(layer.natW, layer.natH, this.cw, this.ch);
+
+      layer.w = size.w;
+      layer.h = size.h;
+
+      /* A layer leaving its frame cannot still be the one being cropped. */
+      if (this.cropping === layer.id) this.cropping = null;
+    } else if (layer.style !== 'free') {
+      /*
+       * 📌 A framed layer whose style sizes it must re-derive its box, since
+       * the shape change moved it.
+       */
+      applyStyleGeometry(layer, this.cw, this.ch);
+    }
+
+    this.commit();
+    this.notify();
+  }
+
+  /**
+   * Move the image inside its frame (M26d.2).
+   *
+   * ⚠️ **Notifies without committing**, like every other continuous gesture:
+   * the component commits when the drag ends. `check-design-store.sh` asserts
+   * that split.
+   */
+  setCropBox(layer: EditorLayer, box: CropBox): void {
+    if (layer.shape === 'none') return;
+
+    const clamped = clampCropBox(layer, box);
+
+    layer.crop = cropBoxToCrop(layer, clamped, layer.crop);
+    this.notify();
+  }
+
+  /**
+   * Rotate the image inside its frame, leaving the frame itself alone.
+   *
+   * 🔴 **The clip does not rotate with the image**, which is what makes a
+   * tilted photo in an upright circle possible — and is why this is separate
+   * from `setRotation`.
+   */
+  setInnerRotation(layer: EditorLayer, deg: number): void {
+    if (layer.shape === 'none') return;
+
+    const normalised = ((deg % 360) + 360) % 360;
+
+    layer.crop = { ...(layer.crop ?? cropDefault(layer)), rot: normalised };
+    this.notify();
+  }
+
+  /**
+   * Enter crop mode: adjust the image within its frame.
+   *
+   * 📌 **Only a shaped, unlocked layer can be cropped.** A plain layer has no
+   * frame to crop against, and a locked one is the merchant's own refusal.
+   */
+  enterCrop(id: string): void {
+    const layer = this.layers.find((l) => l.id === id);
+
+    if (!layer || layer.kind === 'background' || layer.shape === 'none' || layer.locked) {
+      return;
+    }
+
+    this.selectedId = id;
+    this.cropping = id;
+    layer.crop ??= cropDefault(layer);
+    this.notify();
+  }
+
+  /**
+   * Leave crop mode, committing whatever the gesture produced.
+   *
+   * ⚠️ **Commits**, because crop mode is a session of continuous gestures and
+   * leaving it is the discrete act that ends them — the same shape as a drag
+   * release.
+   */
+  exitCrop(): void {
+    if (this.cropping === null) return;
+
+    this.cropping = null;
     this.commit();
     this.notify();
   }
