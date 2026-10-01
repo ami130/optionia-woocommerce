@@ -28,8 +28,8 @@ import './design-lab.css';
  * ⚠️ **That split is deliberate and the honest part of it is this: what remains
  * here is NOT unit-tested, and has NOT been run.** This project has no JSX test
  * runner (`@vitejs/plugin-react` wants Babel 8 against a Babel 7 toolchain), and
- * the Design Lab has no route until M26d.4 — so the event plumbing is verified
- * by a gate and by reading, and by nothing else. Pushing the decisions out was
+ * nothing mounts the Design Lab yet — so the event plumbing is verified by a
+ * gate and by reading, and by nothing else. Pushing the decisions out was
  * the way to make that unverified surface small enough that reading it is
  * sufficient; it is not a claim that it was exercised.
  *

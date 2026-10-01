@@ -330,12 +330,20 @@ fi
 
 # 8. The Design Lab is not yet reachable, and says so.
 #
-# ⚠️ **This asserts a KNOWN GAP rather than hiding it.** `DesignCanvas` has no
-# route and no nav entry until M26d.4; gate 30 (page reachability) cannot see it
-# because it is a component rather than a page. Rather than leave the hole
-# unmarked, this fails the moment the component gains a consumer WITHOUT the
-# note below being removed — so the next person must delete this block
-# deliberately, having actually wired the route.
+# ⚠️ **This asserts a KNOWN GAP rather than hiding it.** Nothing mounts
+# `DesignCanvas` yet, so a merchant cannot reach it. This fails the moment it
+# gains a consumer, so whoever wires it must delete this block deliberately and
+# replace it with a check that the new entry point is reachable.
+#
+# 🔴 **An earlier version of this note said "no route until M26d.4", and that
+# was wrong twice over.** M26d.4 is "Which options carry a design" — a
+# data-binding milestone, not a UI one; the mistake came from confusing internal
+# step labels (4a..4d) within M26d.1 with the plan's own numbering. And the
+# source does not reach the lab by a ROUTE at all: `DesignLabModal` mounts it in
+# a modal opened from a choice, hydrating that choice's saved design and
+# returning the edited one. A standalone page would be a destination editing a
+# design that belongs to nothing — and would have to be removed at M26d.4. Gate
+# 30 (page reachability) therefore never applied here: a modal is not a page.
 CANVAS_CONSUMERS=$( grep -rl "\bDesignCanvas\b" \
   "$ROOT/optioniaWooCommerceFrontend/src" \
   --include='*.ts' --include='*.tsx' 2>/dev/null \
@@ -343,9 +351,9 @@ CANVAS_CONSUMERS=$( grep -rl "\bDesignCanvas\b" \
   | grep -cv 'design-canvas\.tsx$' || true )
 
 if [ "${CANVAS_CONSUMERS:-0}" -eq 0 ]; then
-  pass "the canvas is knowingly unreachable (no route until M26d.4)"
+  pass "the canvas is knowingly unreachable (nothing mounts it yet)"
 else
-  fail "the canvas now has a consumer — wire gate 30 to its route and delete this check"
+  fail "the canvas now has a consumer — replace this check with one that its entry point is reachable"
 fi
 
 printf '\n'

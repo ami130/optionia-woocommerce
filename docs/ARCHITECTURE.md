@@ -33,7 +33,7 @@ backend owns the architecture; it does not.
 optioniaWooCommerceFrontend  ──▶  optioniaWooCommerceBackend  ◀──  optioniaWooCommercePlugin
    Next.js · TypeScript             NestJS · TypeORM · MySQL          PHP 7.4+ · WordPress
    the merchant's dashboard         the multi-tenant SaaS             the merchant's storefront
-   ~219 TS/TSX files                105 routes                         ~93 PHP files in src/
+   ~235 TS/TSX files                105 routes                         ~93 PHP files in src/
 ```
 
 **They never talk to each other.** The dashboard and the plugin share no code and
@@ -81,6 +81,28 @@ enforce: every rule it applies to a form, the API applies again to the request.
 The capability table it uses to decide which buttons to show is a **mirror** of the
 backend's, kept honest by `bin/check-capability-parity.sh` — the UI's copy exists
 to avoid offering an action that would answer `403`, never to decide authorisation.
+
+### `shared/` — geometry two services must agree on
+
+Not a service: a tree of framework-free TypeScript that both the dashboard and the
+backend compile directly, reached through a `@shared/*` path alias in each.
+
+🔴 **It exists because the same geometry had to run in two places.** The Design Lab
+places a layer in the merchant's browser; the print pipeline re-places it on the
+server to produce artwork. A layer that lands differently in those two renders is
+the defect the whole of Phase 26c was about, and the only reliable way to prevent
+it is for both to execute the *same* module rather than two ports of one idea.
+
+⚠️ **It depends on no framework, and that is enforced** — its own `tsconfig.json`
+sets `"types": []` so a file reaching for a DOM or Node global fails to compile.
+`bin/check-shared-design.sh` also pins the two path aliases, Vitest's separate
+resolution (Vite does not read tsconfig paths), and the backend test runner's
+second `roots` entry — added after moving this tree silently dropped 134 backend
+tests, which still passed because the runner no longer looked at them.
+
+📌 **Stored geometry is fractions of the canvas, never pixels**, so a design
+re-places sensibly against a product photo of any shape. `bin/check-design-fractions.sh`
+refuses an absolute pixel constant in these modules.
 
 ---
 
