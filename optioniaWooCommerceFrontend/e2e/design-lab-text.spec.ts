@@ -221,5 +221,42 @@ test.describe('Design Lab — text', () => {
 
       await expect(curve).toHaveValue('60');
     });
+
+    await test.step('the dashboard preview draws it through the shared renderer', async () => {
+      /*
+       * 🔴 **M26d.6: "rendered through the M26c.1 scene module — never a second
+       * renderer."** `buildScene` and `sceneToSvgString` had NO production
+       * caller before this milestone — built, tested and drawing nothing since
+       * M26c.1, invisible because `shared/design` sits outside the symbol
+       * gate's watch path. This is the first time that geometry reaches a
+       * screen.
+       */
+      await page.getByRole('button', { name: /^Cancel$/ }).click();
+      await expect(page.getByRole('dialog')).toBeHidden();
+
+      /*
+       * ⚠️ **The scene's own SVG, identified by what the SERIALIZER emits.**
+       * `data-design-text` is written by `serializeTextNode` — so finding it
+       * proves the markup came from the shared renderer rather than from a
+       * component drawing its own text.
+       */
+      const node = page.locator('[data-design-text="1"]').first();
+
+      await expect(node).toBeVisible({ timeout: 15_000 });
+
+      /* Present is not drawn: a mis-placed scene has a zero box. */
+      const box = await node.boundingBox();
+
+      expect(box, 'the previewed text has a box on screen').not.toBeNull();
+      expect(box!.width).toBeGreaterThan(0);
+      expect(box!.height).toBeGreaterThan(0);
+
+      /*
+       * 🔴 **The merchant's own wording, drawn by the renderer.** This is the
+       * milestone's exit in one assertion: what the lab saved is what the
+       * storefront's own code puts on screen.
+       */
+      await expect(node).toContainText('Happy Birthday');
+    });
   });
 });

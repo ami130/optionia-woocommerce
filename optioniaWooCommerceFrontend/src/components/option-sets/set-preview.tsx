@@ -23,6 +23,8 @@ import {
 import { optionsUnder } from '@/lib/preview/options-under';
 import { evaluableAnswers, evaluableRules, type PreviewAnswers } from '@/lib/preview/preview-answers';
 import { previewTree, type PreviewOption, type PreviewValue } from '@/lib/preview/preview-tree';
+
+import { DesignPreview } from './design-preview';
 import { pricingState, ruleEffects } from '@/lib/preview/rule-effects';
 import { evaluateRules, type TargetState } from '@/lib/rules/rule-evaluator';
 
@@ -267,6 +269,21 @@ export function SetPreview({
           </div>
         ))}
       </div>
+
+      {/*
+        🔴 **The saved design, drawn by the SHARED scene module** (M26d.6) —
+        *"never a second renderer"*. It sits under the choices because it is
+        what those choices produce: a merchant picks a swatch above and watches
+        the artwork for it appear here, which is the whole point of a preview.
+
+        📌 **Renders nothing when the set carries no artwork**, which is most
+        of them — see `hasAnythingToDraw`.
+      */}
+      <DesignPreview
+        options={tree.groups.flatMap((group) => group.options)}
+        answers={answers}
+        product={chosen}
+      />
 
       {/*
         * 🔴 **The base is stated, never implied** (ADR-107, following M20.6).

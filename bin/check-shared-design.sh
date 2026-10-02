@@ -173,6 +173,88 @@ else
   fail "jest no longer roots the shared tree — its specs would vanish silently"
 fi
 
+# 🔴 **The scene module must have a PRODUCTION caller, and for four milestones
+# it had none.** `buildScene` and `sceneToSvgString` were built in M26c.1,
+# covered by their own specs, and wired to nothing — invisible because
+# `shared/design` sits outside `check-symbol-reachable.sh`'s watch path and
+# every check above this one asserts the tree's STRUCTURE (framework-free,
+# aliased, parity-tested) rather than whether anything draws with it.
+#
+# ⚠️ **Tests do not count.** A module exercised only by its own spec is
+# geometry the product never runs, which is exactly the state this went
+# unnoticed in.
+RENDER_ENTRY="buildScene
+sceneToSvgString"
+
+ORPHANED=""
+ENTRY_CHECKED=0
+
+while IFS= read -r symbol; do
+  [ -z "$symbol" ] && continue
+
+  ENTRY_CHECKED=$((ENTRY_CHECKED + 1))
+
+  consumers=$(grep -rlE "\b$symbol\b" \
+    "$ROOT/optioniaWooCommerceFrontend/src" \
+    "$ROOT/optioniaWooCommerceBackend/src" \
+    --include='*.ts' --include='*.tsx' 2>/dev/null \
+    | grep -vE '\.(spec|test)\.tsx?$' \
+    | wc -l | tr -d ' ')
+
+  if [ "${consumers:-0}" -eq 0 ]; then
+    ORPHANED="$ORPHANED  $symbol\n"
+  fi
+done <<EOF
+$RENDER_ENTRY
+EOF
+
+if [ "$ENTRY_CHECKED" -eq 0 ]; then
+  fail "checked no renderer entry points — the parser is wrong, not the code"
+elif [ -n "$ORPHANED" ]; then
+  fail "scene module entry point(s) nothing in the product calls:"
+  printf "%b" "$ORPHANED" | sed 's|^|      |'
+  printf '        geometry built, tested, and drawing nothing\n'
+else
+  pass "all $ENTRY_CHECKED scene entry point(s) have a production caller"
+fi
+
+# ⚠️ **One renderer, which is M26d.6's exact wording — "never a second
+# renderer".** The dashboard preview must hand its decisions to the shared
+# module, not lay artwork out itself; a component computing its own geometry
+# would agree with the storefront only by accident.
+PREVIEW="$ROOT/optioniaWooCommerceFrontend/src/components/option-sets/design-preview.tsx"
+
+if [ ! -f "$PREVIEW" ]; then
+  fail "the dashboard design preview is missing (M26d.6)"
+#
+# 📌 **Matched with or without the call paren.** A first version required
+# `wrapTextLines(`, so importing the geometry and not yet calling it passed —
+# and an import is the step before a call, which is the moment worth catching.
+elif grep -qE 'textArcPath|wrapTextLines|fitTextToBox|layerRect|frameImageRect' "$PREVIEW"; then
+  fail "the preview re-derives geometry instead of delegating to the scene"
+  printf '        M26d.6: "never a second renderer"\n'
+elif grep -q 'buildScene(' "$PREVIEW" && grep -q 'sceneToSvgString(' "$PREVIEW"; then
+  pass "the dashboard preview draws through the shared scene module"
+else
+  fail "the preview does not render through buildScene/sceneToSvgString"
+fi
+
+# 🔴 **Stored URLs are re-checked before they reach the DOM.** The preview is
+# the first surface to read a saved design back and inject it, and the API
+# stores the design body unvalidated BY DESIGN — so a row written by any other
+# path can carry a `javascript:` href. `escAttr` escapes `&"<>`, which does
+# nothing about a scheme; the check has to be the editor's own rule.
+SCENE_INPUT="$ROOT/optioniaWooCommerceFrontend/src/lib/preview/preview-scene.ts"
+
+if [ ! -f "$SCENE_INPUT" ]; then
+  fail "the preview's scene input module is missing"
+elif grep -q 'checkLayerSource(' "$SCENE_INPUT"; then
+  pass "stored design URLs are re-checked before the preview renders them"
+else
+  fail "the preview renders stored URLs without re-checking them"
+  printf '        escAttr escapes quotes; it does not refuse javascript:\n'
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d shared-design check(s) failed.\033[0m\n' "$FAILURES"
