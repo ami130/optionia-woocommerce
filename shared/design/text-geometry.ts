@@ -101,29 +101,49 @@ export function textAnchorFor(align: TextAlign): TextAnchor {
  * `0` is a legitimate left edge and must survive, so it uses `??`. Ported as
  * written.
  */
+/**
+ * A stored number, or the fallback when it is not one.
+ *
+ * 🔴 **`Infinity` and `NaN` reach the emitted SVG otherwise**, measured: a
+ * stored `rot: Infinity` produces `rotate(Infinity …)`. `resvg` tolerates it —
+ * it renders, dropping the rotation — so the result is a SILENTLY WRONG print
+ * file rather than a failure anyone sees.
+ *
+ * ⚠️ **The editor's `clampText` cannot cover this.** It guards what a merchant
+ * types; this guards what STORAGE returns, and the API stores a design body
+ * unvalidated by design. Every surface reads through here, so one guard serves
+ * all of them.
+ *
+ * 📌 **`?? ` is not enough and neither is `||`.** Both pass `Infinity`
+ * through — it is neither null nor falsy.
+ */
+function finite(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export function resolveSceneText(
   design: TextDesign,
   vbW: number,
   vbH: number,
   value?: string,
 ): SceneText {
-  const w = (design.pos.wPct || 0.5) * vbW;
+  const w = (finite(design.pos.wPct, 0) || 0.5) * vbW;
   return {
     text: (value ?? design.text ?? '').toString(),
     font: design.font,
-    fontSize: (design.sizePct || 0) * vbH,
+    fontSize: (finite(design.sizePct, 0) || 0) * vbH,
     bold: !!design.bold,
     italic: !!design.italic,
     align: design.align ?? 'center',
     valign: design.valign ?? 'middle',
     color: design.color || '#000000',
-    cx: (design.pos.xPct ?? 0.5) * vbW,
-    cy: (design.pos.yPct ?? 0.5) * vbH,
+    cx: finite(design.pos.xPct, 0.5) * vbW,
+    cy: finite(design.pos.yPct, 0.5) * vbH,
     w,
-    h: (design.pos.hPct ?? 0) * vbH,
-    rot: design.rot ?? 0,
-    curve: Math.max(-100, Math.min(100, design.curve ?? 0)),
-    letterSpacing: (design.letterSpacing ?? 0) * vbH,
+    h: finite(design.pos.hPct, 0) * vbH,
+    rot: finite(design.rot, 0),
+    curve: Math.max(-100, Math.min(100, finite(design.curve, 0))),
+    letterSpacing: finite(design.letterSpacing, 0) * vbH,
     advanceRatio:
       design.advanceRatio && design.advanceRatio > 0 ? design.advanceRatio : 0,
   };

@@ -59,6 +59,15 @@ is_exempt_file() {
     # code rather than pending, and the 50000×50000 case has no live guard.
     design/scene-raster.ts) return 0 ;;
 
+    # 🔴 **The font inventory, pending the same job.** `fontInventory` is what
+    # stops the blank print file: `resvg` renders a MISSING font file without
+    # throwing — 112 bytes, no error — so what is on disk must be established
+    # before the renderer is handed anything. The render job is its caller.
+    #
+    # ⚠️ **DELETE WITH `scene-raster.ts`.** The two land together or neither is
+    # doing anything.
+    design/design-fonts.ts) return 0 ;;
+
     # ✏️ **The six `design/` exemptions are GONE because the tree moved.** The
     # geometry now lives in `shared/design/`, outside this gate's watch path, and
     # `check-shared-design.sh` guards it instead. Leaving them would have been

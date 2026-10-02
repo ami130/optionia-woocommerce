@@ -235,3 +235,81 @@ describe('flatBlockFirstY', () => {
     expect(flatBlockFirstY('bottom', 100, -1, 3, 20)).toBe(80);
   });
 });
+
+describe('a stored design whose numbers are not numbers', () => {
+  /*
+   * 🔴 **`Infinity` reached the emitted SVG before this.** A stored
+   * `rot: Infinity` produced `rotate(Infinity …)`; `resvg` tolerates it and
+   * renders without the rotation, so the result was a SILENTLY WRONG print
+   * file rather than a failure anyone saw.
+   *
+   * ⚠️ **The editor's clamp cannot cover it.** `clampText` guards what a
+   * merchant types; this guards what STORAGE returns, and the API stores a
+   * design body unvalidated by design.
+   */
+  const base = {
+    text: 'hi',
+    font: 'Roboto' as const,
+    sizePct: 0.1,
+    bold: false,
+    italic: false,
+    align: 'center' as const,
+    color: '#000000',
+    pos: { xPct: 0.5, yPct: 0.5, wPct: 0.5 },
+    rot: 0,
+    curve: 0,
+  };
+
+  it.each([
+    ['rot', 'rot'],
+    ['sizePct', 'sizePct'],
+    ['curve', 'curve'],
+    ['letterSpacing', 'letterSpacing'],
+  ] as const)('resolves a non-finite %s to a finite number', (_name, field) => {
+    const resolved = resolveSceneText(
+      { ...base, [field]: Number.POSITIVE_INFINITY },
+      100,
+      100,
+    );
+
+    for (const value of Object.values(resolved)) {
+      if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true);
+    }
+  });
+
+  /*
+   * ⚠️ **BOTH `NaN` and `Infinity`, because they fail differently.** `NaN` is
+   * falsy, so `NaN || 0.5` already yields the fallback — a `wPct` guard tested
+   * with `NaN` alone survives being removed. `Infinity` is truthy and passes
+   * straight through. Measured by mutation, not reasoned.
+   */
+  it.each([
+    ['xPct', 'xPct', Number.NaN],
+    ['yPct', 'yPct', Number.NaN],
+    ['wPct', 'wPct', Number.NaN],
+    ['hPct', 'hPct', Number.NaN],
+    ['xPct', 'xPct', Number.POSITIVE_INFINITY],
+    ['yPct', 'yPct', Number.POSITIVE_INFINITY],
+    ['wPct', 'wPct', Number.POSITIVE_INFINITY],
+    ['hPct', 'hPct', Number.POSITIVE_INFINITY],
+  ] as const)('resolves a non-finite pos.%s (%s) to a finite number', (_name, field, bad) => {
+    const resolved = resolveSceneText(
+      { ...base, pos: { ...base.pos, [field]: bad } },
+      100,
+      100,
+    );
+
+    for (const value of Object.values(resolved)) {
+      if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true);
+    }
+  });
+
+  /* ⚠️ A legitimate zero must survive — it is a left edge, not a missing value. */
+  it('keeps a legitimate zero', () => {
+    expect(resolveSceneText({ ...base, pos: { ...base.pos, xPct: 0 } }, 100, 100).cx).toBe(0);
+  });
+
+  it('keeps a legitimate rotation', () => {
+    expect(resolveSceneText({ ...base, rot: 37 }, 100, 100).rot).toBe(37);
+  });
+});

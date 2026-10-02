@@ -268,6 +268,33 @@ EOF
     fi
   fi
 
+  # 🔴 **The backend MIRRORS `TEXT_FONTS`, and this keeps the two honest.** A
+  # production backend file cannot import `@shared/*`: it moves the build's
+  # emit root, so the artefact lands at
+  # `dist/optioniaWooCommerceBackend/src/main.js` while `start:prod` runs
+  # `node dist/main.js` — measured, with every unit test green.
+  # `tsconfig.build.json` predicted exactly this; the first `design-fonts.ts`
+  # hit it.
+  #
+  # ⚠️ **A mirror nothing compares is a mirror that drifts.** Nine families in
+  # one list and eight in the other means the renderer silently never loads a
+  # font a merchant can choose.
+  MIRROR="$ROOT/optioniaWooCommerceBackend/src/option-sets/types/text-fonts.ts"
+
+  if [ ! -f "$MIRROR" ]; then
+    fail "the backend's TEXT_FONTS mirror is missing"
+  else
+    MIRRORED=$(perl -0ne 'print $1 if /TEXT_FONTS = \[(.*?)\] as const;/s' "$MIRROR" \
+      | grep -oE "'[^']+'" | tr -d "'" || true)
+
+    if [ "$MIRRORED" = "$FONT_LIST" ]; then
+      pass "the backend's font mirror matches the shared list"
+    else
+      fail "the backend's TEXT_FONTS mirror disagrees with shared/design"
+      printf '        the renderer would never load a font a merchant can choose\n'
+    fi
+  fi
+
   # 🔴 **The sign-off landed (2026-10-02), so this check CHANGED MEANING rather
   # than being deleted.** It used to say "no font file may ship"; it now says
   # "exactly the eight that were signed off, and no others". Removing it would
@@ -278,21 +305,65 @@ EOF
   # subset, re-hinted or renamed engages the Reserved Font Name clause on Lato,
   # Playfair Display and Dancing Script — which is why what ships is checked
   # against `TEXT_FONTS` rather than merely counted.
-  FONT_DIR="$ROOT/optioniaWooCommerceBackend/src/design/fonts"
+  #
+  # 🔴 **`assets/`, NOT `src/` — and the first version of this gate got it
+  # wrong.** It pointed at `src/design/fonts`, where `nest build` copies
+  # nothing: a TTF there compiles to nothing, `dist/` never sees it, and
+  # `resvg` then renders a blank print file without throwing (measured: 112
+  # bytes, no error). The gate would have reported eight licensed fonts while
+  # production had none. Proven by building with a file in place and finding no
+  # `dist/design/fonts`.
+  #
+  # ⚠️ **The path is the config default, not a string only this gate knows.**
+  # `DESIGN_FONTS_DIR` defaults to `assets/fonts` in `env.ts`, and
+  # `resolveFontsDir` is what production reads — so a move breaks the check
+  # rather than silently diverging from it.
+  #
+  # 📌 **Read FROM the config rather than repeated**, so the two cannot drift.
+  # A gate holding its own copy of a path is a gate that keeps passing after
+  # the code moves.
+  ENV_TS="$ROOT/optioniaWooCommerceBackend/src/config/env.ts"
+  CONFIGURED=$(grep -oE "designFontsDir: optional\('DESIGN_FONTS_DIR', '[^']+'\)" "$ENV_TS" \
+    | grep -oE "'[^']+'\)$" | tr -d "')" || true)
 
-  if [ ! -d "$FONT_DIR" ]; then
+  if [ -z "$CONFIGURED" ]; then
+    fail "could not read DESIGN_FONTS_DIR's default from env.ts"
+    CONFIGURED="assets/fonts"
+  fi
+
+  FONT_DIR="$ROOT/optioniaWooCommerceBackend/$CONFIGURED"
+
+  #
+  # 🔴 **Strays are counted BEFORE the directory is tested, and that ordering
+  # was a real hole.** The first version returned early with "no font file
+  # ships yet" whenever `FONT_DIR` was absent — so moving the configured path
+  # while leaving fonts behind in the old one passed, silently. A file nobody
+  # reviewed is exactly what the sign-off exists to prevent, and its absence
+  # from the *configured* home is what makes it a stray.
+  #
+  # ⚠️ **`|| true` on the pipe, because `grep -v` that filters EVERYTHING away
+  # exits 1** — and under `set -euo pipefail` that killed the script on this
+  # very line, silently, with exit 0 and every later check unprinted. The
+  # healthy case (no stray fonts) was the one that aborted.
+  #
+  # 📌 **`|| true` on the `find` too**, because it exits 1 when a search root
+  # does not exist — and `assets/` does not, until the fonts land.
+  # `2>/dev/null` hides the message and not the status, which is what makes
+  # this one easy to miss.
+  STRAY=$(
+    { find "$ROOT/shared" "$ROOT/optioniaWooCommerceBackend/src" \
+      "$ROOT/optioniaWooCommerceBackend/assets" \
+      \( -name '*.ttf' -o -name '*.otf' \) 2>/dev/null || true; } \
+    | { grep -v "^$FONT_DIR/" || true; } | wc -l | tr -d ' ')
+
+  if [ "${STRAY:-0}" -gt 0 ]; then
+    fail "$STRAY font file(s) ship from outside $CONFIGURED"
+    printf '        the sign-off names one home; a file elsewhere is one nobody reviewed\n'
+  elif [ ! -d "$FONT_DIR" ]; then
     # 📌 Not an error: the renderer that needs them is M26e.4, still to come.
     pass "no font file ships yet (the renderer that needs them is M26e.4)"
   else
     SHIPPED=$(find "$FONT_DIR" -name '*.ttf' -o -name '*.otf' 2>/dev/null | wc -l | tr -d ' ')
-    #
-    # ⚠️ **`|| true` on the pipe, because `grep -v` that filters EVERYTHING away
-    # exits 1** — and under `set -euo pipefail` that killed the script on this
-    # very line, silently, with exit 0 and every later check unprinted. The
-    # healthy case (no stray fonts) was the one that aborted.
-    STRAY=$(find "$ROOT/shared" "$ROOT/optioniaWooCommerceBackend/src" \
-      \( -name '*.ttf' -o -name '*.otf' \) 2>/dev/null \
-      | { grep -v "^$FONT_DIR/" || true; } | wc -l | tr -d ' ')
 
     UNSHIPPED=""
 
@@ -315,10 +386,7 @@ EOF
 $FONT_LIST
 EOF
 
-    if [ "${STRAY:-0}" -gt 0 ]; then
-      fail "$STRAY font file(s) ship from outside $FONT_DIR"
-      printf '        the sign-off names one home; a file elsewhere is one nobody reviewed\n'
-    elif [ -n "$UNSHIPPED" ]; then
+    if [ -n "$UNSHIPPED" ]; then
       fail "curated font(s) with no file to render from:$UNSHIPPED"
       printf '        resvg renders textPath from a FILE — a missing one prints nothing\n'
     elif [ "${SHIPPED:-0}" -ne "$FONT_COUNT" ]; then

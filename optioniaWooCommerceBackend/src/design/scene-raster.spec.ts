@@ -56,11 +56,15 @@ describe('rasteriseScene', () => {
   });
 
   /*
-   * 🔴 **Fonts come from FILES, never the host's.** A render that fell back to
-   * system fonts would produce one print file on a laptop and a different one
-   * on App Platform — and the merchant would hear it from a customer.
+   * 🔴 **Fonts come from FILES, never the host's** — and a scene that draws
+   * text with none is REFUSED rather than rendered.
+   *
+   * ⚠️ **Because `resvg` renders it silently.** Measured on 2.6.2: given a
+   * missing font path it returns a 112-byte PNG and throws nothing. An earlier
+   * version of this test asserted that blank output was correct; it is not —
+   * it is a blank print file reaching a customer with every check green.
    */
-  it('draws nothing but tofu when no font file is supplied', () => {
+  it('refuses a scene that draws text with no font file', () => {
     const withText =
       '<svg viewBox="0 0 60 30" xmlns="http://www.w3.org/2000/svg">' +
       '<rect width="60" height="30" fill="#ffffff"/>' +
@@ -68,31 +72,30 @@ describe('rasteriseScene', () => {
 
     const outcome = rasteriseScene(withText, 60, 30, NO_FONTS);
 
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok).toBe(false);
+    expect(!outcome.ok && outcome.failure.reason).toBe('no-fonts');
+  });
 
-    if (!outcome.ok) return;
+  /*
+   * 📌 **A design of images alone needs no fonts**, and must not be blocked by
+   * a directory it never reads.
+   */
+  it('renders a scene with no text even when no font file is supplied', () => {
+    expect(rasteriseScene(square(10), 10, 10, NO_FONTS).ok).toBe(true);
+  });
 
-    /*
-     * ⚠️ **Compared against the SAME scene with no text at all.** With system
-     * fonts disabled and no file supplied there is nothing to draw with, so the
-     * output matches an empty canvas. Allowing system fonts makes these differ
-     * — which is exactly what must not happen.
-     */
-    const blank = rasteriseScene(
+  /*
+   * ⚠️ **A supplied font lets text through.** Any readable file proves the
+   * path is exercised; the glyphs themselves are `resvg`'s business.
+   */
+  it('renders text when a font file is supplied', () => {
+    const withText =
       '<svg viewBox="0 0 60 30" xmlns="http://www.w3.org/2000/svg">' +
-        '<rect width="60" height="30" fill="#ffffff"/></svg>',
-      60,
-      30,
-      NO_FONTS,
-    );
+      '<text x="2" y="22" font-size="20" font-family="Roboto">Hi</text></svg>';
 
-    expect(blank.ok).toBe(true);
+    const outcome = rasteriseScene(withText, 60, 30, { files: ['/any/path.ttf'] });
 
-    if (!blank.ok) return;
-
-    expect(outcome.result.png.toString('base64')).toBe(
-      blank.result.png.toString('base64'),
-    );
+    expect(outcome.ok).toBe(true);
   });
 
   /*

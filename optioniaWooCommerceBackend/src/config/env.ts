@@ -243,6 +243,17 @@ export interface AppConfig {
   /** Directory holding built plugin zips, for the download route (M20b.3). */
   readonly pluginDistDir: string;
 
+  /**
+   * Directory holding the licensed font files the order renderer draws with
+   * (M26e.4).
+   *
+   * 🔴 **Outside `src/`, because `nest build` does not copy non-TypeScript
+   * files.** A TTF placed under `src/` compiles to nothing and `dist/` never
+   * sees it — measured, not assumed. `resvg` then renders with no font at all
+   * and reports NOTHING: 112 bytes, no throw, a blank print file.
+   */
+  readonly designFontsDir: string;
+
   readonly logLevel: string;
 }
 
@@ -373,6 +384,13 @@ export function loadConfig(): AppConfig {
      * — and pulling in `node:path` to build a default would give it one.
      */
     pluginDistDir: optional('PLUGIN_DIST_DIR', '../optioniaWooCommercePlugin/dist'),
+
+    /*
+     * 📌 **`assets/`, beside `src/` rather than inside it**, and relative for
+     * the same reason `pluginDistDir` is: this file has no imports and must
+     * stay loadable by the TypeORM CLI as well as by Nest.
+     */
+    designFontsDir: optional('DESIGN_FONTS_DIR', 'assets/fonts'),
 
     billing: {
       secretKey: nullableSecret('STRIPE_SECRET_KEY'),

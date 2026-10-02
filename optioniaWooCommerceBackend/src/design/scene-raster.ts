@@ -37,7 +37,11 @@ export interface RasterResult {
 
 /** Why a render was refused or failed, in terms an order can carry. */
 export interface RasterFailure {
-  readonly reason: RenderBoundsFailure['reason'] | 'render-failed' | 'timed-out';
+  readonly reason:
+    | RenderBoundsFailure['reason']
+    | 'render-failed'
+    | 'timed-out'
+    | 'no-fonts';
   readonly message: string;
 }
 
@@ -124,6 +128,35 @@ export function rasteriseScene(
   }
 
   const ms = Date.now() - started;
+
+  /*
+   * 🔴 **A scene with text and NO font file renders blank, silently.** Measured
+   * on 2.6.2: `fontFiles: ['/does/not/exist.ttf']` returns a 112-byte PNG and
+   * throws nothing. A packaging mistake would reach a customer as an empty
+   * print file with every check green, which is why this refuses rather than
+   * logs.
+   *
+   * ⚠️ **AFTER the render, not before — and that ordering was earned.** Placed
+   * before, it answered `no-fonts` for an entity-expansion bomb: true, and the
+   * wrong answer, because the input was malformed and saying so matters more
+   * than what it would have drawn with. A string test for `<text` cannot tell
+   * well-formed markup from a bomb; the renderer can. So the render runs
+   * first, its own failures win, and this catches the case that SUCCEEDED
+   * wrongly.
+   *
+   * 📌 **Only when the scene actually DRAWS text.** A design of images alone is
+   * legitimate and must not be blocked by a font directory it never needed.
+   */
+  if (fonts.files.length === 0 && svg.includes('<text')) {
+    return {
+      ok: false,
+      failure: {
+        reason: 'no-fonts',
+        message:
+          'The scene draws text but no font file was supplied; it would render blank.',
+      },
+    };
+  }
 
   if (ms > MAX_RENDER_MS) {
     return {

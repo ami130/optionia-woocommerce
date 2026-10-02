@@ -116,6 +116,15 @@ const EXEMPT = new Map<string, string>([
    */
 
   ['design/scene-raster.ts', 'M26e.4 — the render job is its caller'],
+
+  /*
+   * 🔴 **The font inventory, pending the same job.** `resvg` renders a missing
+   * font file without throwing — measured at 112 bytes, no error — so this is
+   * what stands between a packaging mistake and a blank print file.
+   *
+   * ⚠️ **DELETE WITH `scene-raster.ts`.** They land together or neither does.
+   */
+  ['design/design-fonts.ts', 'M26e.4 — the render job is its caller'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');
