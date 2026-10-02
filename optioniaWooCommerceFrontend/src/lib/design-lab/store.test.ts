@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DesignStore, designLayerToEditor, editorLayerToDesign } from './store';
+import { DEFAULT_SAMPLE_TEXT } from './text-model';
 
 /**
  * The state engine M26d.1 calls load-bearing.
@@ -939,5 +940,298 @@ describe('frames and cropping', () => {
     const layer = s.addLayer('https://cdn/a.png', 'a', 400, 100);
 
     expect(editorLayerToDesign(layer, s.cw, s.ch).crop).toBeUndefined();
+  });
+});
+
+describe('text', () => {
+  it('adds one text, centred and selected', () => {
+    const s = store();
+
+    s.addText();
+
+    expect(s.text?.cx).toBe(200);
+    expect(s.text?.cy).toBe(230);
+    expect(s.textSelected).toBe(true);
+  });
+
+  /*
+   * 🔴 **A design carries exactly ONE text.** `buildScene` resolves each text
+   * option to a single node, so a second add must not replace the merchant's
+   * styling with a fresh default.
+   */
+  it('keeps the existing text when add is pressed twice', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ text: 'Mine', size: 99 });
+    s.addText();
+
+    expect(s.text?.text).toBe('Mine');
+    expect(s.text?.size).toBe(99);
+  });
+
+  it('re-selects the existing text when add is pressed twice', () => {
+    const s = store();
+
+    s.addText();
+    s.select(null);
+    s.addText();
+
+    expect(s.textSelected).toBe(true);
+  });
+
+  it('removes the text and its selection', () => {
+    const s = store();
+
+    s.addText();
+    s.removeText();
+
+    expect(s.text).toBeNull();
+    expect(s.textSelected).toBe(false);
+  });
+
+  it('does nothing when there is no text to add to, select or update', () => {
+    const s = store();
+
+    s.selectText();
+    s.updateText({ text: 'x' });
+    s.nudgeText({ size: 4 });
+    s.removeText();
+
+    expect(s.text).toBeNull();
+    expect(s.textSelected).toBe(false);
+  });
+});
+
+describe('text selection is exclusive', () => {
+  /*
+   * 🔴 **Selecting one subject deselects the other.** Both selected at once
+   * means the properties panel shows the text while a keyboard nudge moves a
+   * layer — the defect this pair of tests exists to catch.
+   */
+  it('deselects the text when a layer is selected', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    s.addText();
+    s.select(layer.id);
+
+    expect(s.textSelected).toBe(false);
+    expect(s.selectedId).toBe(layer.id);
+  });
+
+  it('deselects the layer when the text is selected', () => {
+    const s = store();
+
+    s.addLayer('a.png', 'A', 200, 100);
+    s.addText();
+
+    expect(s.selectedId).toBeNull();
+  });
+
+  it('reports the selected text only while it holds the selection', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    s.addText();
+    expect(s.getSelectedText()).toBe(s.text);
+
+    s.select(layer.id);
+    expect(s.getSelectedText()).toBeNull();
+  });
+});
+
+describe('text history', () => {
+  it('walks undo back through a text edit', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ text: 'Engraved' });
+    s.undo();
+
+    expect(s.text?.text).toBe(DEFAULT_SAMPLE_TEXT);
+  });
+
+  it('undoes the text away entirely', () => {
+    const s = store();
+
+    s.addText();
+    s.undo();
+
+    expect(s.text).toBeNull();
+  });
+
+  /*
+   * 🔴 **The commit / notify split, for text.** A slider drag calls `nudgeText`
+   * per frame; committing each one would fill all eighty history entries with
+   * one gesture and make undo step back a pixel at a time.
+   */
+  /** Undo to the floor, counting, then redo back — so the probe leaves no mark. */
+  function depth(s: DesignStore): number {
+    let n = 0;
+
+    while (s.canUndo() && n < 500) {
+      s.undo();
+      n += 1;
+    }
+
+    while (s.canRedo()) s.redo();
+
+    return n;
+  }
+
+  it('does not commit a continuous nudge', () => {
+    const s = store();
+
+    s.addText();
+
+    const before = depth(s);
+
+    s.nudgeText({ size: 40 });
+    s.nudgeText({ size: 41 });
+
+    expect(depth(s)).toBe(before);
+  });
+
+  it('commits a discrete update', () => {
+    const s = store();
+
+    s.addText();
+
+    const before = depth(s);
+
+    s.updateText({ bold: true });
+
+    expect(depth(s)).toBe(before + 1);
+  });
+
+  it('notifies on a nudge, so the canvas redraws mid-gesture', () => {
+    const s = store();
+
+    s.addText();
+
+    const seen = vi.fn();
+    const off = s.subscribe(seen);
+
+    s.nudgeText({ size: 40 });
+    off();
+
+    expect(seen).toHaveBeenCalled();
+  });
+});
+
+describe('text persistence', () => {
+  /*
+   * 🔴 **A SEPARATE channel from `exportDesign`.** A text option's artwork
+   * persists to `options.textDesign`, not `option_values.design` — folding it
+   * into `DesignData` would write it where no reader looks.
+   */
+  it('keeps the text out of the layer export', () => {
+    const s = store();
+
+    s.addText();
+
+    expect(s.exportDesign().layers).toHaveLength(0);
+    expect(s.exportText()).not.toBeNull();
+  });
+
+  it('exports null when the design has no text', () => {
+    const s = store();
+
+    expect(s.exportText()).toBeNull();
+  });
+
+  it('round-trips the text through its own channel', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ text: 'Engraved', size: 46, bold: true, cx: 100, cy: 115 });
+
+    const stored = s.exportText();
+    const reopened = store();
+
+    reopened.importText(stored);
+
+    expect(reopened.text).toEqual(s.text);
+  });
+
+  it('clears the text when importing null', () => {
+    const s = store();
+
+    s.addText();
+    s.importText(null);
+
+    expect(s.text).toBeNull();
+  });
+
+  /*
+   * ⚠️ **A load replaces what is open.** Without this, the previous choice's
+   * text follows the merchant into the next design the dialog opens.
+   */
+  it('clears the text when a design is loaded over it', () => {
+    const s = store();
+
+    s.addText();
+    s.importDesign({ layers: [] }, null);
+
+    expect(s.text).toBeNull();
+    expect(s.textSelected).toBe(false);
+  });
+
+  /*
+   * 🔴 **Undo cannot walk back behind a load**, matching `importDesign`: the
+   * merchant opens a design and undo has nothing to step into but what they
+   * were shown — not a half-built state from the previous choice.
+   *
+   * ⚠️ **The text loaded must DIFFER from what was open**, or undo lands on an
+   * identical state and the test passes with the history reset deleted. Here
+   * the store holds 'Before' and loads 'After'.
+   */
+  it('cannot undo behind a text load', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ text: 'After' });
+
+    const loaded = s.exportText();
+
+    s.updateText({ text: 'Before' });
+    s.importText(loaded);
+    s.undo();
+
+    expect(s.canUndo()).toBe(false);
+    expect(s.text?.text).toBe('After');
+  });
+
+  /*
+   * 🔴 **Imported AFTER the design, because the canvas aspect comes from the
+   * product photo.** Reading `cw/ch` before `importDesign` has set them places
+   * the text against the previous canvas.
+   *
+   * ⚠️ **A WIDE photo, deliberately.** The canvas always normalises to
+   * `CANVAS_BASE_H`, so a photo of the fixture's own aspect reopens at 400×460
+   * and the test would pass without re-placing anything. A 2:1 photo gives
+   * 920×460 — a different width, the same height — which is what makes the
+   * per-axis fractions visible.
+   */
+  it('re-places the text against the canvas the photo set', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ cx: 100, cy: 115 });
+
+    const stored = s.exportText();
+    const reopened = new DesignStore();
+
+    reopened.importDesign({ layers: [] }, {
+      src: 'p.png', name: 'p', natW: 1000, natH: 500,
+    });
+    reopened.importText(stored);
+
+    expect(reopened.cw).toBe(920);
+    expect(reopened.ch).toBe(460);
+    /* xPct 0.25 of a wider canvas; yPct 0.25 of the same height. */
+    expect(reopened.text?.cx).toBeCloseTo(230);
+    expect(reopened.text?.cy).toBeCloseTo(115);
   });
 });

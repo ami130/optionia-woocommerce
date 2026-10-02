@@ -73,7 +73,8 @@ method_body() {
 # 1. Continuous gestures notify and never commit.
 CONTINUOUS="setOpacity
 setRotation
-nudge"
+nudge
+nudgeText"
 
 OFFENDERS=""
 CHECKED=0
@@ -839,6 +840,91 @@ else
     BOUND_FAILS=$((BOUND_FAILS + 1))
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Text (M26d.3)
+# ---------------------------------------------------------------------------
+
+# 🔴 **A design carries exactly ONE text, and that is the architecture.**
+# `buildScene` resolves each text option to a single node, and M26d.4 put
+# `textDesign` on the OPTIONS row because a text option has no values. A
+# `texts: []` here would model something no surface can render — and it is the
+# obvious "generalisation" a later hand would reach for.
+if strip_comments "$STORE" | grep -qE '^  texts(\??):'; then
+  fail "the store holds a COLLECTION of texts"
+  printf '        buildScene resolves each text option to exactly one node
+'
+  printf '        and options.textDesign stores one — a texts[] has no reader
+'
+elif strip_comments "$STORE" | grep -qE '^  text: EditorText \| null'; then
+  pass "the design carries exactly one text"
+else
+  fail "the store no longer holds the design's text"
+fi
+
+# 🔴 **Text persists on its OWN channel, not inside DesignData.** A value's
+# artwork is `option_values.design`; a text option's is `options.textDesign`,
+# and a text option has no values to hang the first one on. Folding text into
+# the layer export writes it where no reader looks — and nothing about
+# `layers` and `text` sharing one object looks wrong in a diff.
+#
+# ⚠️ **Matched inside the interface BLOCK**, because `text` appears several
+# hundred times in this file.
+DESIGN_DATA=$(strip_comments "$STORE" \
+  | perl -0ne 'print $1 if /export interface DesignData \{(.*?)\}/s')
+
+if [ -z "$DESIGN_DATA" ]; then
+  fail "DesignData is missing — this gate's parser is stale"
+elif printf '%s' "$DESIGN_DATA" | grep -qE 'text'; then
+  fail "DesignData carries the text, which persists to a different column"
+  printf '        layers go to option_values.design; text to options.textDesign
+'
+else
+  pass "the text persists on its own channel, not inside DesignData"
+fi
+
+# 🔴 **Selection is EXCLUSIVE between a layer and the text.** Both at once means
+# the properties panel shows one subject while the keyboard nudges the other.
+# Scoped to `select()`, since `textSelected = false` appears in four methods.
+SELECT_BODY=$(method_body "select")
+
+if [ -z "$SELECT_BODY" ]; then
+  fail "select() is missing — this gate's parser is stale"
+elif printf '%s' "$SELECT_BODY" | grep -qE 'this\.textSelected = false'; then
+  pass "selecting a layer deselects the text"
+else
+  fail "selecting a layer leaves the text selected too"
+  printf '        the panel would show the text while the keyboard moved a layer
+'
+fi
+
+# ⚠️ **A load REPLACES what is open.** Without this the previous choice's text
+# follows the merchant into the next design the dialog opens — and the dialog
+# reuses one store per row, so this is reachable by ordinary clicking.
+IMPORT_BODY=$(method_body "importDesign")
+
+if [ -z "$IMPORT_BODY" ]; then
+  fail "importDesign is missing — this gate's parser is stale"
+elif printf '%s' "$IMPORT_BODY" | grep -qE 'this\.text = null'; then
+  pass "loading a design clears the previous text"
+else
+  fail "loading a design keeps the previous choice's text"
+fi
+
+# 🔴 **Both text conversions divide by the CANVAS, not by 1.** The stored
+# contract is fractions; a conversion that forgets the canvas stores pixels
+# that re-place correctly only at the size they were composed at.
+for fn in exportText importText; do
+  body=$(method_body "$fn")
+
+  if [ -z "$body" ]; then
+    fail "$fn is missing — this gate's method list is stale"
+  elif printf '%s' "$body" | grep -qE 'this\.cw, this\.ch'; then
+    pass "$fn converts against the canvas"
+  else
+    fail "$fn does not convert against the canvas"
+  fi
+done
 
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then

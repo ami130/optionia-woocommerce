@@ -3,6 +3,7 @@ import type {
   DesignLayer,
   LayerShape,
   LayerStyle,
+  TextDesign,
 } from '@shared/design/design-geometry.types';
 import { effectiveShape } from '@shared/design/layer-geometry';
 
@@ -15,6 +16,12 @@ import {
   shapeChangeFor,
 } from './crop-geometry';
 import { CANVAS_BASE_H, applyStyleGeometry, freeDefaultSize } from './style-geometry';
+import {
+  type EditorText,
+  defaultText,
+  designTextToEditor,
+  editorTextToDesign,
+} from './text-model';
 
 /**
  * The Design Lab's state engine (M26d.1).
@@ -43,6 +50,13 @@ const DUPLICATE_OFFSET = 16;
 
 interface Snapshot {
   layers: EditorLayer[];
+  /**
+   * 🔴 **In the snapshot, so undo walks back through text edits too.** A
+   * merchant who restyles a text and presses undo expects the styling back, not
+   * only the last layer move.
+   */
+  text: EditorText | null;
+  textSelected: boolean;
   selectedId: string | null;
   bg: string;
   checker: boolean;
@@ -222,6 +236,29 @@ export interface StyledElement {
 export class DesignStore {
   /* ----- canonical state ----- */
   layers: EditorLayer[] = [];
+  /**
+   * The design's ONE text, or null when it has none.
+   *
+   * 🔴 **One text, not a collection, and that is the architecture.**
+   * `buildScene` takes `textOptions`, each resolving to exactly one text node
+   * keyed by its option, and M26d.4 put `textDesign` on the OPTIONS row because
+   * a text option has no values. A `texts[]` here would model something no
+   * surface can render.
+   *
+   * ⚠️ **Persisted to a DIFFERENT column than the layers**, so it is exported
+   * and imported on its own channel — see {@link exportText}. Putting it inside
+   * `DesignData` would write it to `option_values.design`, where nothing reads
+   * it.
+   */
+  text: EditorText | null = null;
+  /**
+   * Whether the text, rather than a layer, holds the selection.
+   *
+   * 🔴 **Selection is EXCLUSIVE between the two.** The properties panel reads
+   * one subject, and both being selected at once would let a keyboard nudge
+   * move a layer while the panel showed the text's font.
+   */
+  textSelected = false;
   selectedId: string | null = null;
   /**
    * The layer currently in crop mode.
@@ -370,6 +407,8 @@ export class DesignStore {
   private serialize(): string {
     return JSON.stringify({
       layers: this.layers,
+      text: this.text,
+      textSelected: this.textSelected,
       selectedId: this.selectedId,
       bg: this.bg,
       checker: this.checker,
@@ -413,6 +452,9 @@ export class DesignStore {
      * through the store after every notify rather than caching.
      */
     this.layers = snapshot.layers;
+    /* ⚠️ Replaced, not patched — same staleness rule as the layer array. */
+    this.text = snapshot.text ?? null;
+    this.textSelected = snapshot.textSelected ?? false;
     this.selectedId = snapshot.selectedId;
     this.bg = snapshot.bg;
     this.checker = snapshot.checker;
@@ -477,6 +519,41 @@ export class DesignStore {
   }
 
   /**
+   * The design's text, in stored fractions, or null when it has none.
+   *
+   * 🔴 **A SEPARATE channel from {@link exportDesign}, because it persists to a
+   * different column.** A value's artwork is `option_values.design`; a text
+   * option's artwork is `options.textDesign` (M26d.4), and a text option has no
+   * values to hang the first one on. Folding text into `DesignData` would write
+   * it where no reader looks.
+   */
+  exportText(): TextDesign | null {
+    return this.text ? editorTextToDesign(this.text, this.cw, this.ch) : null;
+  }
+
+  /**
+   * Load a stored text, replacing whatever is open.
+   *
+   * ⚠️ **Called AFTER {@link importDesign}, never before.** `importDesign`
+   * resets history and sets the canvas size from the product photo, and this
+   * reads `cw/ch` to turn fractions back into pixels — running it first would
+   * place the text against the previous canvas's aspect.
+   */
+  importText(stored: TextDesign | null): void {
+    this.text = stored ? designTextToEditor(stored, this.cw, this.ch) : null;
+    this.textSelected = false;
+    /*
+     * 📌 **Re-commits so the loaded text is the undo floor**, matching
+     * `importDesign`: undo cannot walk back behind a load into a state the
+     * merchant never saw.
+     */
+    this.history = [];
+    this.hidx = -1;
+    this.commit();
+    this.notify();
+  }
+
+  /**
    * Load a stored design, replacing whatever is open.
    *
    * 🔴 **History is reset afterwards, so undo cannot go behind the load.** The
@@ -499,6 +576,13 @@ export class DesignStore {
   importDesign(data: DesignData | null, background: DesignImage | null): void {
     this.suppressHistory = true;
     this.layers = [];
+    /*
+     * ⚠️ **The text is cleared too, so a load really replaces what is open.**
+     * `importText` runs after this and puts the new one back; leaving it would
+     * carry the previous choice's text into the next design the dialog opens.
+     */
+    this.text = null;
+    this.textSelected = false;
     this.selectedId = null;
 
     if (background?.src) {
@@ -663,6 +747,12 @@ export class DesignStore {
     }
 
     this.selectedId = id;
+    /*
+     * 🔴 **Clears the text selection, because the two are EXCLUSIVE.** Without
+     * this, clicking a layer leaves the text selected too, and the properties
+     * panel shows one subject while the keyboard nudges the other.
+     */
+    this.textSelected = false;
     this.notify();
   }
 
@@ -703,6 +793,88 @@ export class DesignStore {
    */
   private inCropMode(layer: EditorLayer): boolean {
     return layer.shape !== 'none' && this.cropping === layer.id;
+  }
+
+  /* ---------- text ---------- */
+
+  /**
+   * Add the design's text, centred, and select it.
+   *
+   * 📌 **A no-op when one already exists**, rather than replacing it: a design
+   * carries exactly one text, and a second click should not silently discard
+   * the merchant's styling.
+   */
+  addText(): void {
+    if (this.text) {
+      this.selectText();
+
+      return;
+    }
+
+    this.text = defaultText(this.cw, this.ch);
+    this.selectedId = null;
+    this.textSelected = true;
+    this.commit();
+    this.notify();
+  }
+
+  removeText(): void {
+    if (!this.text) return;
+
+    this.text = null;
+    this.textSelected = false;
+    this.commit();
+    this.notify();
+  }
+
+  /**
+   * ⚠️ **Clears the layer selection**, because the two are exclusive — see
+   * {@link textSelected}.
+   */
+  selectText(): void {
+    if (!this.text) return;
+
+    /* Selecting away from a cropped layer ends crop mode, as {@link select} does. */
+    if (this.cropping) {
+      this.cropping = null;
+      this.commit();
+    }
+
+    this.selectedId = null;
+    this.textSelected = true;
+    this.notify();
+  }
+
+  getSelectedText(): EditorText | null {
+    return this.textSelected ? this.text : null;
+  }
+
+  /**
+   * Change text fields, committing the edit.
+   *
+   * 🔴 **For DISCRETE acts only** — picking a font, toggling bold, typing in the
+   * text box. Continuous gestures (the size, rotation, curve and spacing
+   * sliders) call {@link nudgeText} and commit once when the gesture ends. See
+   * {@link commit}: committing per slider frame fills all eighty history
+   * entries with one drag.
+   */
+  updateText(patch: Partial<EditorText>): void {
+    if (!this.text) return;
+
+    Object.assign(this.text, patch);
+    this.commit();
+    this.notify();
+  }
+
+  /**
+   * ⚠️ **Notifies WITHOUT committing** — the continuous half of
+   * {@link updateText}, for sliders and drags. The component commits on release.
+   */
+  nudgeText(patch: Partial<EditorText>): void {
+    if (!this.text) return;
+
+    Object.assign(this.text, patch);
+    this.notify();
   }
 
   setStyle(style: LayerStyle): void {
