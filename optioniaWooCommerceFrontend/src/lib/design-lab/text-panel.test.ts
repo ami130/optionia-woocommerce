@@ -5,6 +5,10 @@ import { DesignStore } from './store';
 import { MAX_TEXT_CURVE, MIN_TEXT_SIZE, defaultText, type EditorText } from './text-model';
 import {
   TEXT_ALIGNS,
+  alphaRange,
+  colorAlphaPercent,
+  colorSwatch,
+  composeColor,
   TEXT_VALIGNS,
   curveRange,
   defaultFixedHeight,
@@ -261,5 +265,134 @@ describe('the ranges against the real store', () => {
     s.updateText({ h: 0 });
 
     expect(hasFixedHeight(s.text)).toBe(false);
+  });
+});
+
+describe('colour and alpha', () => {
+  /*
+   * 🔴 **`<input type="color">` accepts `#rrggbb` ONLY.** Handed an
+   * eight-digit colour it silently falls back to black — so a merchant who set
+   * 50% red would reopen their design and find the swatch showing black. The
+   * swatch and the alpha are separate controls over one stored value.
+   */
+  it('shows the RGB half of a colour that carries alpha', () => {
+    expect(colorSwatch('#ff000080')).toBe('#ff0000');
+  });
+
+  it('shows a six-digit colour unchanged', () => {
+    expect(colorSwatch('#ff0000')).toBe('#ff0000');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['not a colour', 'red'],
+    ['too short', '#f00'],
+  ])('falls back to black for a %s value', (_n, stored) => {
+    expect(colorSwatch(stored)).toBe('#000000');
+  });
+
+  /*
+   * 📌 **Absent alpha is fully opaque** — what a six-digit hex means
+   * everywhere, and what every design saved before this control existed must
+   * keep looking like.
+   */
+  it('reads an absent alpha as fully opaque', () => {
+    expect(colorAlphaPercent('#ff0000')).toBe(100);
+  });
+
+  it.each([
+    ['opaque', '#ff0000ff', 100],
+    ['transparent', '#ff000000', 0],
+    ['half', '#ff000080', 50],
+  ])('reads a %s alpha', (_n, stored, expected) => {
+    expect(colorAlphaPercent(stored)).toBe(expected);
+  });
+
+  /*
+   * 🔴 **Fully opaque composes to SIX digits, not `…ff`.** Both render
+   * identically, but a design that opened as `#ff0000` and saved itself as
+   * `#ff0000ff` would report itself modified when nothing was touched.
+   */
+  it('composes a fully opaque colour without an alpha pair', () => {
+    expect(composeColor('#ff0000', 100)).toBe('#ff0000');
+  });
+
+  it('composes a transparent colour', () => {
+    expect(composeColor('#ff0000', 0)).toBe('#ff000000');
+  });
+
+  it('clamps an alpha above the range', () => {
+    expect(composeColor('#ff0000', 150)).toBe('#ff0000');
+  });
+
+  it('clamps an alpha below the range', () => {
+    expect(composeColor('#ff0000', -20)).toBe('#ff000000');
+  });
+
+  it('drops any alpha already on the swatch before composing', () => {
+    expect(composeColor('#ff000080', 100)).toBe('#ff0000');
+  });
+
+  /*
+   * 🔴 **The round trip is what keeps a reopened design unchanged.** Every
+   * percentage the slider can produce must survive compose → read.
+   */
+  it.each([0, 1, 25, 50, 75, 99, 100])('round-trips %s%% alpha', (percent) => {
+    expect(colorAlphaPercent(composeColor('#3366cc', percent))).toBe(percent);
+  });
+
+  it('keeps the RGB half across a round trip', () => {
+    expect(colorSwatch(composeColor('#3366cc', 40))).toBe('#3366cc');
+  });
+
+  it('offers the whole alpha range', () => {
+    expect(alphaRange()).toEqual({ min: 0, max: 100, step: 1 });
+  });
+});
+
+describe('alpha against the real store', () => {
+  /*
+   * 🔴 **An eight-digit colour must survive the store and the conversions.**
+   * `clampText` touches numbers, not the colour string, and the two conversion
+   * points copy it verbatim — but nothing proved that until this test, and a
+   * colour mangled on save is a design that reopens the wrong shade.
+   */
+  it('stores and reopens a semi-transparent colour unchanged', () => {
+    const s = new DesignStore();
+
+    s.cw = CW;
+    s.ch = CH;
+    s.commit();
+    s.addText();
+    s.updateText({ color: composeColor('#3366cc', 40) });
+
+    const reopened = new DesignStore();
+
+    reopened.cw = CW;
+    reopened.ch = CH;
+    reopened.commit();
+    reopened.importText(s.exportText());
+
+    expect(reopened.text?.color).toBe('#3366cc66');
+    expect(colorAlphaPercent(reopened.text?.color ?? '')).toBe(40);
+  });
+
+  /*
+   * ⚠️ **A fully opaque colour must stay SIX digits through the round trip**,
+   * or a design nobody edited would report itself modified.
+   */
+  it('keeps an opaque colour six digits through a round trip', () => {
+    const s = new DesignStore();
+
+    s.cw = CW;
+    s.ch = CH;
+    s.commit();
+    s.addText();
+
+    const before = s.text?.color;
+
+    s.updateText({ color: composeColor(colorSwatch(s.text?.color ?? ''), 100) });
+
+    expect(s.text?.color).toBe(before);
   });
 });

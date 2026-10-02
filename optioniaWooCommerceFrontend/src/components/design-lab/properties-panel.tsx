@@ -8,6 +8,9 @@ import { panelState } from '@/lib/design-lab/properties-panel';
 import {
   TEXT_ALIGNS,
   TEXT_VALIGNS,
+  colorAlphaPercent,
+  colorSwatch,
+  composeColor,
   defaultFixedHeight,
   isCuratedFont,
   panelSubject,
@@ -357,15 +360,49 @@ function TextProperties({
           >
             Italic
           </button>
+          {/*
+            🔴 **The swatch shows only the RGB half.** `<input type="color">`
+            accepts and reports `#rrggbb` ONLY — handed an eight-digit colour it
+            silently falls back to black, so binding the stored value straight
+            to it would show black for every semi-transparent text.
+          */}
           <label className="optionia-designlab-colour">
             <span>Colour</span>
             <input
               type="color"
-              value={text.color}
-              onChange={(e) => store.updateText({ color: e.target.value })}
+              value={colorSwatch(text.color)}
+              onChange={(e) =>
+                store.updateText({
+                  color: composeColor(e.target.value, colorAlphaPercent(text.color)),
+                })
+              }
             />
           </label>
         </div>
+      </section>
+
+      {/*
+        🔴 **Text opacity IS the colour's alpha, not a separate field.** The
+        original editor records the same decision — *"opacity is handled via the
+        text color's alpha … no separate slider"* — and the stored contract
+        calls its colour *"Hex colour, with alpha"*. A second `opacity` field
+        would be a value with nowhere to persist and nothing to render it.
+      */}
+      <section className="optionia-designlab-props-section">
+        <h3 className="optionia-designlab-props-heading">
+          Opacity <span>{colorAlphaPercent(text.color)}%</span>
+        </h3>
+        <input
+          type="range"
+          className="optionia-designlab-rng"
+          min={state.alpha.min}
+          max={state.alpha.max}
+          step={state.alpha.step}
+          value={colorAlphaPercent(text.color)}
+          onChange={(e) =>
+            drag({ color: composeColor(text.color, Number(e.target.value)) })
+          }
+        />
       </section>
 
       <section className="optionia-designlab-props-section">

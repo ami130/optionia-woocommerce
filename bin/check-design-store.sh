@@ -1068,6 +1068,48 @@ else
   pass "the text sliders notify and commit once after a pause"
 fi
 
+# 🔴 **Text opacity IS the colour's alpha — there is no separate field.** The
+# stored contract calls the colour *"Hex colour, with alpha"* and the source
+# editor records the same decision: *"opacity is handled via the text color's
+# alpha … no separate slider"*. An `opacity` on the text model would be a value
+# with nowhere to persist and nothing to render it — and it would LOOK right in
+# the panel while changing nothing on the object.
+TEXT_MODEL="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/text-model.ts"
+#
+# 📌 **`|| true`, because a no-match exits 1 under `pipefail`** and would kill
+# the script before it could report — the silent-abort this gate has already
+# been bitten by once.
+EDITOR_TEXT=$(strip_comments "$TEXT_MODEL" \
+  | perl -0ne 'print $1 if /export interface EditorText \{(.*?)\n\}/s' || true)
+
+if [ -z "$EDITOR_TEXT" ]; then
+  fail "EditorText is missing — this gate's parser is stale"
+elif printf '%s' "$EDITOR_TEXT" | grep -qE '^\s*opacity'; then
+  fail "the text carries its own opacity, which nothing stores or renders"
+  printf '        TextDesign has no opacity field — alpha lives in the colour
+'
+else
+  pass "text opacity rides on the colour's alpha, as the stored shape requires"
+fi
+
+# ⚠️ **The swatch must show only the RGB half.** `<input type="color">` reports
+# `#rrggbb` only and silently falls back to BLACK when handed eight digits — so
+# binding the stored colour straight to it shows black for every
+# semi-transparent text the merchant reopens.
+if [ -n "$TEXT_PROPS" ]; then
+  SWATCH=$(printf '%s' "$TEXT_PROPS" | grep -A4 'type="color"' || true)
+
+  if [ -z "$SWATCH" ]; then
+    fail "the text panel offers no colour control"
+  elif printf '%s' "$SWATCH" | grep -q 'colorSwatch('; then
+    pass "the colour swatch shows the RGB half of a colour with alpha"
+  else
+    fail "the colour swatch is bound to the stored colour directly"
+    printf '        an eight-digit colour falls back to black in that input
+'
+  fi
+fi
+
 # ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each
 # clamping to a different number is the same defect as not clamping at all.
 #

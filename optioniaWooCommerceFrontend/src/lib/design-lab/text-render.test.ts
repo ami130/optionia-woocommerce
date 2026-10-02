@@ -385,3 +385,65 @@ describe('curved placement matches the renderer', () => {
     expect(long.kind === 'curved' && long.fontSize).toBeLessThan(30);
   });
 });
+
+describe('the closed circle M26d.3 names', () => {
+  /*
+   * 🔴 **±100 must actually CLOSE the ring, not draw a near-circle.** The
+   * milestone names "arc/curve including a closed circle" explicitly, and the
+   * geometry switches at `FULL_CIRCLE_THRESHOLD` (99.9) — a slider that stopped
+   * at 99 would offer every arc except the one the milestone asks for.
+   */
+  /*
+   * ⚠️ **Asserted on the PATH, not the bounding box.** A closed ring and one
+   * that stops a degree short have the SAME bbox — 300×300 either way — so a
+   * width-equals-height assertion passed with the closure disabled entirely.
+   * A closed ring is two arc segments returning to their start; an open one is
+   * a single arc.
+   */
+  it.each([100, -100])('closes the ring at curve %s', (curve) => {
+    const p = placeText(text({ text: 'AROUND THE RING', curve, w: 300, h: 300 }), CW, CH);
+
+    if (p.kind !== 'curved') throw new Error('expected curved');
+
+    expect(p.d.match(/A /g)?.length).toBe(2);
+    expect(p.width).toBeCloseTo(p.height, 6);
+  });
+
+  it('draws a single arc just below the threshold', () => {
+    const p = placeText(text({ text: 'AROUND THE RING', curve: 95, w: 300, h: 300 }), CW, CH);
+
+    if (p.kind !== 'curved') throw new Error('expected curved');
+
+    expect(p.d.match(/A /g)?.length).toBe(1);
+  });
+
+  /*
+   * ⚠️ **The seam is where a measured advance ratio earns its keep.** A ring
+   * sized by the generic estimate leaves a visible gap for narrow glyphs; this
+   * pins that the measurement reaches the closed-circle path at all.
+   */
+  it('sizes a closed circle by the measured advance when there is one', () => {
+    /*
+     * ⚠️ **A longer run than the arc test uses, because the RING here is
+     * bigger.** A 300px-tall box inscribes a wider circle than a 200px one, so
+     * 32 glyphs fit either way and the ratio never binds — the first fixture
+     * here passed with the measurement dropped entirely.
+     */
+    const base = { text: 'i'.repeat(128), curve: 100, size: 30, w: 300, h: 300 } as const;
+    const measured = placeText(text({ ...base, advanceRatio: 0.28 }), CW, CH);
+    const estimated = placeText(text({ ...base, advanceRatio: undefined }), CW, CH);
+
+    if (measured.kind !== 'curved' || estimated.kind !== 'curved') {
+      throw new Error('expected curved');
+    }
+
+    expect(measured.fontSize).not.toBeCloseTo(estimated.fontSize, 3);
+    /*
+     * Both must actually have shrunk. At 64 glyphs only the ESTIMATE shrinks —
+     * the measured run still fits — so the assertion below would fail there
+     * while the one above passed. 128 puts both past the ring.
+     */
+    expect(measured.fontSize).toBeLessThan(30);
+    expect(estimated.fontSize).toBeLessThan(measured.fontSize);
+  });
+});

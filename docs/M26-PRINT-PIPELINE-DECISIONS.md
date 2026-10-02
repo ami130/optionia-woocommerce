@@ -859,3 +859,31 @@ save, which its own docblock gives the reason for. Exempted per file, naming
 M26d.1. Telling a merchant their artwork will be letterboxed is a supported
 limitation; letting them find out from a customer's order is the same defect
 wearing different clothes.
+
+### F5 ⚠️ Text alpha is wired for the BROWSER and unverified against `resvg`
+
+**M26d.3 asks for "colour with alpha"**, `TextDesign` documents its colour as
+*"Hex colour, with alpha"*, and the source editor records that text opacity is
+carried there rather than in a field of its own — *"opacity is handled via the
+text color's alpha (ColorInputField isAlphaUsed), no separate slider"*.
+
+The editor now does the same. `composeColor` writes `#rrggbbaa`, and the colour
+reaches the SVG as a `fill` attribute untouched by either conversion point.
+Browsers accept eight-digit hex in `fill`, so the Design Lab and the storefront
+draw it correctly.
+
+🔴 **What is NOT verified: whether `resvg` honours eight-digit hex in a `fill`
+attribute.** The rasteriser is not installed yet — it arrives with M26e — so
+there was nothing to measure against. Every other claim in this document was
+measured; this one cannot be yet, and is recorded as open rather than assumed.
+
+⚠️ **The failure mode if it does not, is silent and total**: an unrecognised
+colour value makes an SVG renderer fall back to black, so semi-transparent text
+would print as solid black rather than as a lighter shade. That is a wrong
+print file, not a missing feature.
+
+📌 **What to do at M26e**, before any print file is produced: render a text at
+50% alpha through `resvg` and compare the pixel against the browser's. If it
+disagrees, the fix is in the renderer's serializer — emit `fill` plus
+`fill-opacity` instead of eight-digit hex — and NOT in the stored shape, which
+`TextDesign` has always defined as carrying alpha.

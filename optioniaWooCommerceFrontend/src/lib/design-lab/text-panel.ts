@@ -118,6 +118,8 @@ export interface TextPanelState {
   curve: SliderRange;
   letterSpacing: SliderRange;
   rotation: SliderRange;
+  /** 📌 Text opacity is the colour's alpha — see {@link composeColor}. */
+  alpha: SliderRange;
 }
 
 export function textPanelState(
@@ -147,6 +149,7 @@ export function textPanelState(
     curve: curveRange(),
     letterSpacing: letterSpacingRange(ch),
     rotation: rotationRange(),
+    alpha: alphaRange(),
   };
 }
 
@@ -177,4 +180,67 @@ export function isCuratedFont(
   fonts: readonly string[],
 ): value is TextFont {
   return fonts.includes(value);
+}
+
+/**
+ * The colour a `<input type="color">` can show, from a stored colour.
+ *
+ * 🔴 **The stored colour may carry ALPHA; the swatch cannot.** `TextDesign`
+ * documents its colour as *"Hex colour, with alpha"*, and the original editor
+ * routes text opacity through exactly that — *"opacity is handled via the text
+ * color's alpha … no separate slider"*. But `<input type="color">` accepts and
+ * reports `#rrggbb` ONLY: handed `#ff000080` it silently falls back to black,
+ * so a merchant who set 50% red would reopen their design to find the swatch
+ * showing black.
+ *
+ * ⚠️ **Returns the RGB half, never the alpha**, so the swatch and the slider
+ * stay separate controls over one stored value.
+ */
+export function colorSwatch(stored: string): string {
+  const hex = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(stored);
+
+  /* Anything unparseable shows black rather than an empty swatch. */
+  return hex ? `#${hex[1]}` : '#000000';
+}
+
+/**
+ * The alpha a stored colour carries, as a percentage.
+ *
+ * 📌 **Absent alpha is fully opaque**, which is what a six-digit hex means
+ * everywhere else — and what every design saved before this control existed
+ * should keep looking like.
+ */
+export function colorAlphaPercent(stored: string): number {
+  const hex = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})$/.exec(stored);
+
+  if (!hex) return 100;
+
+  return Math.round((parseInt(hex[1], 16) / 255) * 100);
+}
+
+/**
+ * Compose a stored colour from a swatch and an alpha percentage.
+ *
+ * 🔴 **Fully opaque is written as SIX digits, not `…ff`.** Both render
+ * identically, but a design that opened as `#ff0000` and saved itself as
+ * `#ff0000ff` would show as modified when nothing was touched — and the
+ * round-trip test that proves designs reopen unchanged would be the thing that
+ * caught it, after the merchant.
+ */
+export function composeColor(swatch: string, alphaPercent: number): string {
+  const rgb = colorSwatch(swatch);
+  const clamped = Math.max(0, Math.min(100, Math.round(alphaPercent)));
+
+  if (clamped >= 100) return rgb;
+
+  const byte = Math.round((clamped / 100) * 255)
+    .toString(16)
+    .padStart(2, '0');
+
+  return `${rgb}${byte}`;
+}
+
+/** The alpha slider's range, as a percentage. */
+export function alphaRange(): SliderRange {
+  return { min: 0, max: 100, step: 1 };
 }
