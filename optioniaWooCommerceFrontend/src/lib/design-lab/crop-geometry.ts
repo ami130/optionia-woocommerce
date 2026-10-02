@@ -294,3 +294,95 @@ export function innerPlacement(layer: CroppableLayer): InnerPlacement {
     opacity: layer.crop?.opacity ?? 100,
   };
 }
+
+/**
+ * A screen delta, expressed along the axes of the space being dragged in.
+ *
+ * 🔴 **Two different un-rotations, and conflating them is the defect.** The
+ * inner image lives inside a frame that may itself be rotated, and the image may
+ * be rotated again inside it:
+ *
+ *   - **Panning** moves the image's CENTRE, which lives in frame space — so the
+ *     delta un-rotates by the frame's angle alone.
+ *   - **Resizing** drags a handle that sits on the inner-rotated BOX — so the
+ *     delta un-rotates by frame + inner.
+ *
+ * ⚠️ **At rot = 0 both answers are identical**, which is exactly why a test at
+ * zero rotation proves nothing: `cos` is 1, `sin` is 0, and every term vanishes.
+ * The suite exercises non-zero angles on both, and a mutation that swaps the two
+ * callers survives any fixture that does not.
+ */
+export function unrotate(
+  delta: { dx: number; dy: number },
+  degrees: number,
+): { dx: number; dy: number } {
+  const r = (degrees * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+
+  return {
+    dx: delta.dx * cos + delta.dy * sin,
+    dy: -delta.dx * sin + delta.dy * cos,
+  };
+}
+
+/** Where a pan drag puts the inner image, before clamping. */
+export function cropMoveTo(
+  start: CropBox,
+  delta: { dx: number; dy: number },
+  axes: MoveAxes,
+  frameRotation: number,
+): CropBox {
+  /* 📌 The frame's angle only — the centre lives in frame space. */
+  const local = unrotate(delta, frameRotation);
+
+  return {
+    icx: start.icx + (axes.x ? local.dx : 0),
+    icy: start.icy + (axes.y ? local.dy : 0),
+    w: start.w,
+  };
+}
+
+/**
+ * Where a corner-resize drag puts the inner image, before clamping.
+ *
+ * 🔴 **Aspect-locked, with the centre shifting toward the handle** — the same
+ * shape as `resizeFrom` one level up, so the opposite corner stays still rather
+ * than the image drifting while it grows.
+ *
+ * ⚠️ **The centre shift is rotated by the INNER angle, not the frame's.** The
+ * shift happens along the handle direction in the box's own space, and the box
+ * is what `crop.rot` turns; mapping it back through the frame's angle instead
+ * would make a rotated image drift sideways as it resized.
+ */
+export function cropResizeTo(
+  start: { icx: number; icy: number; w: number; h: number },
+  delta: { dx: number; dy: number },
+  dir: string,
+  frameRotation: number,
+  innerRotation: number,
+): CropBox {
+  /* 📌 Frame + inner: the handles sit on the inner-rotated box. */
+  const local = unrotate(delta, frameRotation + innerRotation);
+
+  const hx = dir.includes('w') ? -1 : 1;
+  const hy = dir.includes('n') ? -1 : 1;
+
+  const aspect = start.w / (start.h || 1);
+  const w = Math.max(MIN_LAYER_SIZE, start.w + hx * local.dx);
+  const h = w / aspect;
+
+  /* Half the growth, along the handle, mapped back through the INNER angle. */
+  const shiftX = (hx * (w - start.w)) / 2;
+  const shiftY = (hy * (h - start.h)) / 2;
+
+  const ri = (innerRotation * Math.PI) / 180;
+  const ci = Math.cos(ri);
+  const si = Math.sin(ri);
+
+  return {
+    icx: start.icx + (shiftX * ci - shiftY * si),
+    icy: start.icy + (shiftX * si + shiftY * ci),
+    w,
+  };
+}

@@ -233,6 +233,66 @@ test.describe('Design Lab', () => {
       await expect(page.locator(`#${clipId}`)).toHaveCount(1);
     });
 
+    await test.step('double-clicking a framed layer adjusts the image inside it', async () => {
+      /*
+       * 🔴 **Crop mode, in a browser.** The nested transforms, the two
+       * un-rotations and the grips on the inner box had never been rendered —
+       * the unit tests prove the maths and say nothing about whether a
+       * double-click reaches `enterCrop` or whether the box lands on the image.
+       */
+      await page.locator('.optionia-designlab-layer').first().dblclick();
+
+      const cropBox = page.locator('.optionia-designlab-crop-box');
+
+      await expect(cropBox).toHaveCount(1);
+
+      /* ⚠️ Crop mode replaces the selection box; two sets of grips would mean
+       * different things on screen at once. */
+      await expect(page.locator('.optionia-designlab-sel-box:not(.optionia-designlab-crop-box)')).toHaveCount(0);
+
+      const box = await cropBox.boundingBox();
+
+      expect(box, 'the crop box has a box on screen').not.toBeNull();
+      expect(box!.width).toBeGreaterThan(0);
+    });
+
+    await test.step('dragging inside the frame pans the image', async () => {
+      const cropBox = page.locator('.optionia-designlab-crop-box');
+      const before = await cropBox.boundingBox();
+      /* 🔴 The frame's box BEFORE the drag — it must not move. */
+      const frameBefore = await page.locator('.optionia-designlab-frame-clip').boundingBox();
+
+      /*
+       * 📌 A drag on the IMAGE, not the frame: in crop mode the same pixels
+       * pan the photo inside its window rather than moving the window.
+       */
+      await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(
+        before!.x + before!.width / 2 + 25,
+        before!.y + before!.height / 2,
+        { steps: 8 },
+      );
+      await page.mouse.up();
+
+      const after = await cropBox.boundingBox();
+
+      expect(after!.x, 'the image moved inside its frame').toBeGreaterThan(before!.x);
+
+      /* 🔴 And the FRAME did not move — that is what makes it a frame. */
+      const frameAfter = await page.locator('.optionia-designlab-frame-clip').boundingBox();
+
+      expect(frameAfter!.x).toBeCloseTo(frameBefore!.x, 0);
+      expect(frameAfter!.width).toBeCloseTo(frameBefore!.width, 0);
+    });
+
+    await test.step('double-clicking again leaves crop mode', async () => {
+      await page.locator('.optionia-designlab-layer').first().dblclick();
+
+      await expect(page.locator('.optionia-designlab-crop-box')).toHaveCount(0);
+      await expect(page.locator('.optionia-designlab-sel-box')).toHaveCount(1);
+    });
+
     await test.step('choosing the same frame again clears it', async () => {
       /* 📌 A toggle, not a one-way door — `shapeChangeFor`'s third transition. */
       await page.getByRole('button', { name: /^Circle$/ }).click();

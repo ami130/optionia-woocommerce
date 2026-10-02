@@ -4,7 +4,17 @@ import { useEffect, useId, useRef } from 'react';
 
 import type { PathShape } from '@shared/design/design-geometry.types';
 import { SHAPE_CLIP_PATHS } from '@shared/design/layer-geometry';
-import { innerPlacement } from '@/lib/design-lab/crop-geometry';
+import {
+  type CropHitKind,
+  type CropIntent,
+  canEnterCrop,
+  cropIntentFor,
+} from '@/lib/design-lab/crop-dispatch';
+import {
+  cropMoveTo,
+  cropResizeTo,
+  innerPlacement,
+} from '@/lib/design-lab/crop-geometry';
 import type { DesignStore } from '@/lib/design-lab/store';
 import type { EditorLayer } from '@/lib/design-lab/layer.types';
 import { type DragIntent, dragIntentFor, type HitKind, selectsLayer } from '@/lib/design-lab/drag-dispatch';
@@ -58,6 +68,8 @@ const BG_LAYER_CLASS = 'optionia-designlab-bg-layer';
 const SEL_BOX_CLASS = 'optionia-designlab-sel-box';
 const HANDLE_CLASS = 'optionia-designlab-handle-pt';
 const ROTATE_CLASS = 'optionia-designlab-rotate-pt';
+/** The dashed box around the IMAGE while crop mode is open (M26d.2). */
+const CROP_BOX_CLASS = 'optionia-designlab-crop-box';
 
 /**
  * A gesture in progress.
@@ -68,7 +80,13 @@ const ROTATE_CLASS = 'optionia-designlab-rotate-pt';
  * jumps. The source hook records the same warning.
  */
 interface ActiveDrag {
-  intent: DragIntent;
+  /**
+   * 🔴 **Either dispatcher's intent.** Crop mode replaces the outer gestures
+   * rather than adding to them, so one drag record carries whichever is open —
+   * the alternative is a second ref that must never be non-null at the same
+   * time as this one.
+   */
+  intent: DragIntent | CropIntent;
   layer: EditorLayer;
   startX: number;
   startY: number;
@@ -77,6 +95,12 @@ interface ActiveDrag {
   pivotX?: number;
   pivotY?: number;
   startAngle?: number;
+  /**
+   * Crop gestures only: the inner image's box when the gesture began, in
+   * frame-local pixels. Read from `frameImageRect` once rather than recomputed
+   * per move, so a clamp mid-drag cannot feed back into the start.
+   */
+  cropStart?: { icx: number; icy: number; w: number; h: number };
   /** Whether anything actually moved, so a click does not push a history entry. */
   changed: boolean;
 }
@@ -116,6 +140,63 @@ function resolveHit(target: HTMLElement): {
   }
 
   return { hit: 'empty', layerId: null };
+}
+
+/**
+ * What the pointer landed on while crop mode is open.
+ *
+ * 🔴 **The grips belong to the CROP box here, not the selection box.** Both
+ * carry the same handle classes, and crop mode hides the selection box — so
+ * scoping to the crop box is what stops a stale selection grip answering.
+ */
+function resolveCropHit(
+  target: HTMLElement,
+  croppingId: string,
+): { hit: CropHitKind; handleDir?: string } {
+  const cropBox = target.closest(`.${CROP_BOX_CLASS}`) as HTMLElement | null;
+
+  if (cropBox) {
+    if (target.closest(`.${ROTATE_CLASS}`)) return { hit: 'crop-rotate-handle' };
+
+    const handle = target.closest(`.${HANDLE_CLASS}`) as HTMLElement | null;
+
+    if (handle) return { hit: 'crop-resize-handle', handleDir: handle.dataset.h };
+  }
+
+  /* The layer being cropped — a drag on the image pans it inside its frame. */
+  if (target.closest(`.${LAYER_CLASS}[data-id="${croppingId}"]`)) {
+    return { hit: 'cropped-layer' };
+  }
+
+  return { hit: 'outside' };
+}
+
+/**
+ * The screen centre a rotation turns about, and the angle it began at.
+ *
+ * 🔴 **One copy, and a gate counts the calls to prove it.** That check exists
+ * because the opening angle was once measured twice — here and again inside
+ * `rotateTo` — so the function received the result of the first. Crop mode
+ * added a second rotation gesture with the identical five lines, which is the
+ * duplication the count is there to notice.
+ *
+ * ⚠️ **Only a browser can answer this.** The pivot is the box's SCREEN centre,
+ * which depends on layout, scroll and the page transform — no amount of
+ * extraction computes it.
+ */
+function rotationPivot(
+  box: HTMLElement,
+  e: { clientX: number; clientY: number },
+): { pivotX: number; pivotY: number; startAngle: number } {
+  const rect = box.getBoundingClientRect();
+  const pivotX = rect.left + rect.width / 2;
+  const pivotY = rect.top + rect.height / 2;
+
+  return {
+    pivotX,
+    pivotY,
+    startAngle: Math.atan2(e.clientY - pivotY, e.clientX - pivotX),
+  };
 }
 
 export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
@@ -176,7 +257,105 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
     store.fitCanvas();
   });
 
+  /**
+   * Double-clicking a framed layer adjusts the image inside it.
+   *
+   * 🔴 **The only way into crop mode**, and the source's gesture. `canEnterCrop`
+   * refuses exactly what `enterCrop` refuses, so a double-click on a plain or
+   * locked layer does nothing rather than appearing to work.
+   *
+   * 📌 **A toggle**: double-clicking the layer being cropped leaves.
+   */
+  function onDoubleClick(e: React.MouseEvent) {
+    const layerEl = (e.target as HTMLElement).closest(
+      `.${LAYER_CLASS}:not(.${BG_LAYER_CLASS})`,
+    ) as HTMLElement | null;
+
+    if (!layerEl) return;
+
+    const id = layerEl.dataset.id ?? '';
+    const layer = store.layers.find((l) => l.id === id) ?? null;
+
+    if (store.cropping === id) {
+      store.exitCrop();
+
+      return;
+    }
+
+    if (canEnterCrop(layer)) store.enterCrop(id);
+  }
+
+  function onCropMouseDown(e: React.MouseEvent, croppingId: string) {
+    const layer = store.layers.find((l) => l.id === croppingId) ?? null;
+    const { hit, handleDir } = resolveCropHit(e.target as HTMLElement, croppingId);
+    const intent = cropIntentFor(hit, layer, handleDir);
+
+    if (intent.kind === 'exit-crop') {
+      store.exitCrop();
+
+      return;
+    }
+
+    /*
+     * 📌 `none` is a refused gesture, not a reason to leave — a pinned image
+     * cannot pan, and both grips live inside the same box.
+     */
+    if (intent.kind === 'none' || !layer) return;
+
+    e.preventDefault();
+
+    const placed = innerPlacement(layer);
+    const drag: ActiveDrag = {
+      intent,
+      layer,
+      startX: e.clientX,
+      startY: e.clientY,
+      scale: store.canvasScale,
+      cropStart: {
+        icx: placed.rect.x + placed.rect.w / 2,
+        icy: placed.rect.y + placed.rect.h / 2,
+        w: placed.rect.w,
+        h: placed.rect.h,
+      },
+      changed: false,
+    };
+
+    if (intent.kind === 'crop-rotate') {
+      /*
+       * 🔴 **The crop box's screen centre**, which only the DOM can give. The
+       * angle maths is `rotateTo`'s, exactly as the outer rotation — rotation
+       * offsets compose additively, so a screen-space delta equals the
+       * frame-local one and no un-rotation is needed here.
+       */
+      const box = (e.target as HTMLElement).closest(
+        `.${CROP_BOX_CLASS}`,
+      ) as HTMLElement | null;
+
+      if (!box) return;
+
+      const pivot = rotationPivot(box, e);
+
+      drag.pivotX = pivot.pivotX;
+      drag.pivotY = pivot.pivotY;
+      drag.startAngle = pivot.startAngle;
+    }
+
+    dragRef.current = drag;
+  }
+
   function onMouseDown(e: React.MouseEvent) {
+    /*
+     * 🔴 **Crop mode replaces the outer gestures entirely.** While it is open
+     * the same pixels mean different things — a drag pans the image inside its
+     * frame rather than moving the frame — so this returns rather than falling
+     * through, and the outer dispatcher never runs.
+     */
+    if (store.cropping !== null) {
+      onCropMouseDown(e, store.cropping);
+
+      return;
+    }
+
     const { hit, layerId, handleDir } = resolveHit(e.target as HTMLElement);
     const layer = layerId ? (store.layers.find((l) => l.id === layerId) ?? null) : null;
     const intent = dragIntentFor(hit, layer, { cw: store.cw, ch: store.ch }, handleDir);
@@ -224,11 +403,11 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
 
       if (!selBox) return;
 
-      const rect = selBox.getBoundingClientRect();
+      const pivot = rotationPivot(selBox, e);
 
-      drag.pivotX = rect.left + rect.width / 2;
-      drag.pivotY = rect.top + rect.height / 2;
-      drag.startAngle = Math.atan2(e.clientY - drag.pivotY, e.clientX - drag.pivotX);
+      drag.pivotX = pivot.pivotX;
+      drag.pivotY = pivot.pivotY;
+      drag.startAngle = pivot.startAngle;
     }
 
     dragRef.current = drag;
@@ -244,6 +423,48 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
       overlayRef.current?.classList.add('optionia-designlab-is-dragging');
 
       const { intent, layer } = drag;
+
+      /*
+       * 🔴 **Crop gestures first, because they replace the outer ones.** The
+       * maths is `crop-geometry`'s — including the two different un-rotations a
+       * pan and a resize need, which are identical at rot = 0 and diverge the
+       * moment anything is turned.
+       */
+      if (intent.kind === 'crop-rotate') {
+        store.setInnerRotation(
+          layer,
+          rotateTo(
+            { x: e.clientX, y: e.clientY },
+            { x: drag.pivotX!, y: drag.pivotY! },
+            drag.startAngle!,
+            intent.startRotationDeg,
+            e.shiftKey,
+          ),
+        );
+
+        return;
+      }
+
+      if (intent.kind === 'crop-move' || intent.kind === 'crop-resize') {
+        const cropDx = (e.clientX - drag.startX) / drag.scale;
+        const cropDy = (e.clientY - drag.startY) / drag.scale;
+        const start = drag.cropStart!;
+
+        store.setCropBox(
+          layer,
+          intent.kind === 'crop-move'
+            ? cropMoveTo(start, { dx: cropDx, dy: cropDy }, intent.axes, layer.rot)
+            : cropResizeTo(
+                start,
+                { dx: cropDx, dy: cropDy },
+                intent.dir,
+                layer.rot,
+                layer.crop?.rot ?? 0,
+              ),
+        );
+
+        return;
+      }
 
       if (intent.kind === 'rotate') {
         layer.rot = rotateTo(
@@ -319,10 +540,20 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
   }, [store]);
 
   const selected = store.getSelected();
-  const showSelection = selected && selected.kind !== 'background' && selected.visible;
+  const cropped =
+    store.cropping === null
+      ? null
+      : (store.layers.find((l) => l.id === store.cropping) ?? null);
+  const showSelection =
+    cropped === null && selected && selected.kind !== 'background' && selected.visible;
 
   return (
-    <div className={STAGE_CLASS} ref={stageRef} onMouseDown={onMouseDown}>
+    <div
+      className={STAGE_CLASS}
+      ref={stageRef}
+      onMouseDown={onMouseDown}
+      onDoubleClick={onDoubleClick}
+    >
       <ShapeClipDefs prefix={clipPrefix} />
       <div className="optionia-designlab-canvas-wrap" ref={wrapRef}>
         <div className="optionia-designlab-canvas-scale" ref={scaleRef}>
@@ -350,7 +581,14 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
             )}
           </div>
           <div className="optionia-designlab-canvas-overlay" ref={overlayRef}>
-            {showSelection ? (
+            {/*
+              ⚠️ **One overlay at a time.** Crop mode adjusts the image inside a
+              frame; showing the layer's own selection box as well would put two
+              sets of grips on screen meaning different things.
+            */}
+            {cropped !== null ? (
+              <CropBox layer={cropped} />
+            ) : showSelection ? (
               <SelectionBox layer={selected} cw={store.cw} ch={store.ch} />
             ) : null}
           </div>
@@ -489,6 +727,65 @@ function ShapeClipDefs({ prefix }: Readonly<{ prefix: string }>) {
         ))}
       </defs>
     </svg>
+  );
+}
+
+/**
+ * The dashed box around the IMAGE while crop mode is open (M26d.2).
+ *
+ * 🔴 **Two nested transforms, and the order is the whole thing.** The outer
+ * wrapper sits on the frame and carries the FRAME's rotation; the box inside
+ * carries the image's own. That composition is why the drag maths un-rotates by
+ * the frame for a pan and by frame + inner for a resize — the grips live on the
+ * inner box, which has been turned twice.
+ *
+ * ⚠️ **Grips only on a `free` inner image.** Every other inner style derives
+ * its box from the frame on each re-fit, so a resize handle would be overwritten
+ * — the same rule `showsHandles` applies one level up.
+ */
+function CropBox({ layer }: Readonly<{ layer: EditorLayer }>) {
+  const inner = innerPlacement(layer);
+  const withGrips = !layer.locked && (layer.crop?.style ?? 'cover') === 'free';
+
+  return (
+    <div
+      className="optionia-designlab-crop-wrap"
+      style={{
+        position: 'absolute',
+        left: layer.cx - layer.w / 2,
+        top: layer.cy - layer.h / 2,
+        width: layer.w,
+        height: layer.h,
+        transform: `rotate(${layer.rot}deg)`,
+      }}
+    >
+      <div
+        className={`${SEL_BOX_CLASS} ${CROP_BOX_CLASS}`}
+        data-id={layer.id}
+        style={{
+          position: 'absolute',
+          left: inner.rect.x,
+          top: inner.rect.y,
+          width: inner.rect.w,
+          height: inner.rect.h,
+          transform: inner.rot === 0 ? undefined : `rotate(${inner.rot}deg)`,
+        }}
+      >
+        {/*
+          📌 **Corners only.** The inner image is aspect-locked — stretching it
+          is what a frame exists to avoid — so an edge handle would have no
+          one-axis resize to offer.
+        */}
+        {withGrips &&
+          (['nw', 'ne', 'se', 'sw'] as const).map((dir) => (
+            <div className={HANDLE_CLASS} data-h={dir} key={dir} />
+          ))}
+        {withGrips && <div className="optionia-designlab-rotate-stem" />}
+        {withGrips && (
+          <div className={ROTATE_CLASS} data-h="rotate" title="Drag to rotate the image" />
+        )}
+      </div>
+    </div>
   );
 }
 

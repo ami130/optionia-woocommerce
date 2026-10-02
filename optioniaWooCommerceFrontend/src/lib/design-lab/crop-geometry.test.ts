@@ -9,8 +9,11 @@ import {
   cropAxes,
   cropBoxToCrop,
   cropDefault,
+  cropMoveTo,
+  cropResizeTo,
   innerPlacement,
   shapeChangeFor,
+  unrotate,
   type CroppableLayer,
 } from './crop-geometry';
 import { MIN_LAYER_SIZE } from './drag-geometry';
@@ -414,5 +417,157 @@ describe('every offered frame has a path', () => {
     for (const shape of OFFERED) {
       expect(SHAPE_CLIP_PATHS[shape as keyof typeof SHAPE_CLIP_PATHS]).toMatch(/\S/);
     }
+  });
+});
+
+describe('unrotate', () => {
+  it('leaves a delta alone at zero degrees', () => {
+    expect(unrotate({ dx: 10, dy: 4 }, 0)).toEqual({ dx: 10, dy: 4 });
+  });
+
+  /*
+   * 🔴 **90° is the case that proves the signs.** A rightward screen drag on a
+   * frame turned 90° is a DOWNWARD move in the frame's own space; a sign error
+   * sends it up, and at 0° or 180° the two are indistinguishable.
+   */
+  it('maps a rightward drag to a downward one at 90 degrees', () => {
+    const local = unrotate({ dx: 10, dy: 0 }, 90);
+
+    expect(local.dx).toBeCloseTo(0);
+    expect(local.dy).toBeCloseTo(-10);
+  });
+
+  it('is the inverse of itself at the opposite angle', () => {
+    /* ⚠️ A property, not a value: un-rotating then re-rotating returns the
+     * original whatever the angle, which a single hand-computed case cannot
+     * show. */
+    const delta = { dx: 7, dy: -3 };
+    const there = unrotate(delta, 37);
+    const back = unrotate(there, -37);
+
+    expect(back.dx).toBeCloseTo(delta.dx);
+    expect(back.dy).toBeCloseTo(delta.dy);
+  });
+
+  it('preserves the delta’s length', () => {
+    const delta = { dx: 3, dy: 4 };
+    const local = unrotate(delta, 53);
+
+    expect(Math.hypot(local.dx, local.dy)).toBeCloseTo(5);
+  });
+});
+
+describe('cropMoveTo', () => {
+  const BOTH = { x: true, y: true, clamp: false };
+
+  it('moves the centre by the delta when the frame is upright', () => {
+    expect(cropMoveTo({ icx: 100, icy: 60, w: 200 }, { dx: 10, dy: 5 }, BOTH, 0)).toEqual({
+      icx: 110,
+      icy: 65,
+      w: 200,
+    });
+  });
+
+  it('respects the axes, moving only where the style allows', () => {
+    const xOnly = cropMoveTo(
+      { icx: 100, icy: 60, w: 200 },
+      { dx: 10, dy: 5 },
+      { x: true, y: false, clamp: true },
+      0,
+    );
+
+    expect(xOnly.icx).toBeCloseTo(110);
+    expect(xOnly.icy).toBeCloseTo(60);
+  });
+
+  it('keeps the width — a pan never resizes', () => {
+    expect(cropMoveTo({ icx: 100, icy: 60, w: 200 }, { dx: 50, dy: 50 }, BOTH, 0).w).toBe(200);
+  });
+
+  /*
+   * 🔴 **Un-rotated by the FRAME only.** A pan moves the image's centre, which
+   * lives in frame space — so a rightward drag on a 90° frame moves the centre
+   * UP in frame coordinates.
+   */
+  it('un-rotates the drag by the frame’s angle', () => {
+    const moved = cropMoveTo({ icx: 100, icy: 60, w: 200 }, { dx: 10, dy: 0 }, BOTH, 90);
+
+    expect(moved.icx).toBeCloseTo(100);
+    expect(moved.icy).toBeCloseTo(50);
+  });
+
+  it('ignores the inner rotation, which is not its business', () => {
+    /*
+     * ⚠️ The pairing that stops the two un-rotations being swapped: this
+     * function takes no inner angle at all, so a caller passing one would be a
+     * type error rather than a silent drift.
+     */
+    expect(cropMoveTo.length).toBe(4);
+  });
+});
+
+describe('cropResizeTo', () => {
+  const START = { icx: 100, icy: 60, w: 200, h: 50 };
+
+  it('grows the box from a south-east handle', () => {
+    const box = cropResizeTo(START, { dx: 40, dy: 0 }, 'se', 0, 0);
+
+    expect(box.w).toBeCloseTo(240);
+  });
+
+  it('shrinks from a north-west handle, which pulls the other way', () => {
+    const box = cropResizeTo(START, { dx: 40, dy: 0 }, 'nw', 0, 0);
+
+    expect(box.w).toBeCloseTo(160);
+  });
+
+  it('refuses to shrink below the minimum', () => {
+    expect(cropResizeTo(START, { dx: -9_999, dy: 0 }, 'se', 0, 0).w).toBe(MIN_LAYER_SIZE);
+  });
+
+  /*
+   * 🔴 **The opposite corner stays still**, which is what the centre shift is
+   * for. Growing 40px from the south-east moves the centre 20px right and —
+   * because the aspect is locked at 4:1 — 5px down.
+   */
+  it('shifts the centre by half the growth, so the far corner holds', () => {
+    const box = cropResizeTo(START, { dx: 40, dy: 0 }, 'se', 0, 0);
+
+    expect(box.icx).toBeCloseTo(120);
+    expect(box.icy).toBeCloseTo(65);
+  });
+
+  it('locks the aspect: the height follows the width', () => {
+    /* 4:1 start. Doubling the width must not change that ratio. */
+    const box = cropResizeTo(START, { dx: 200, dy: 0 }, 'se', 0, 0);
+
+    expect(box.w).toBeCloseTo(400);
+  });
+
+  /*
+   * 🔴 **Un-rotated by frame + INNER**, because the handles sit on the
+   * inner-rotated box. This is the pair `cropMoveTo` differs from, and at
+   * rot = 0 the two are identical — which is why both are tested at an angle.
+   */
+  it('un-rotates the drag by the frame and the inner angle together', () => {
+    /* Frame 30°, inner 60° → 90° total: a rightward drag reads as upward. */
+    const box = cropResizeTo(START, { dx: 10, dy: 0 }, 'se', 30, 60);
+    const upright = cropResizeTo(START, { dx: 0, dy: -10 }, 'se', 0, 0);
+
+    expect(box.w).toBeCloseTo(upright.w);
+  });
+
+  it('rotates the centre shift by the INNER angle alone', () => {
+    /*
+     * ⚠️ The shift happens along the handle in the BOX's space, and the box is
+     * what `crop.rot` turns. Using the frame's angle here makes a rotated
+     * image drift sideways as it resizes — invisible at rot = 0.
+     */
+    const inner90 = cropResizeTo(START, { dx: 0, dy: 40 }, 'se', 0, 90);
+    const upright = cropResizeTo(START, { dx: 40, dy: 0 }, 'se', 0, 0);
+
+    /* Same growth, but the shift lands on the other axis. */
+    expect(inner90.w).toBeCloseTo(upright.w);
+    expect(inner90.icy - START.icy).toBeCloseTo(upright.icx - START.icx);
   });
 });

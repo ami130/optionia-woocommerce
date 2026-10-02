@@ -682,3 +682,29 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* ───────────────────────── crop mode ───────────────────────── */
+
+/*
+ * 🔴 **The wrapper carries the FRAME's rotation; the box inside carries the
+ * image's own.** Two nested transforms, and the order is what the drag maths
+ * depends on — a pan un-rotates by the frame, a resize by frame + inner,
+ * because the grips live on the inner box.
+ *
+ * ⚠️ `pointer-events: none` so the wrapper never swallows a drag; the grips
+ * take it back individually, exactly as the selection overlay does.
+ */
+.optionia-designlab-crop-wrap {
+  position: absolute;
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+/*
+ * 📌 **A dashed box, to read differently from the selection's solid one.** Crop
+ * mode and selection both draw a rectangle with grips; without a visual
+ * difference a merchant cannot tell which gesture the handles will start.
+ */
+.optionia-designlab-crop-box {
+  border-style: dashed;
+}
