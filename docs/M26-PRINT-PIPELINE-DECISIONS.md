@@ -289,6 +289,60 @@ simpler still: the renderer is handed font *files* directly and needs no
 conversion step at all. A font that cannot load is a print file that cannot be
 produced, and a font fetched at request time is one network call away from that.
 
+### Licensing — verified 2026-10-02, SIGN-OFF OUTSTANDING
+
+🔴 **M26d.3 asks for this explicitly and nothing recorded it.** The milestone's
+wording is unusually emphatic — *"a curated, licence-cleared list — **verify
+print/embedding rights**, not just web use"* — because a webfont licence and a
+print-embedding licence are different grants, and print-on-demand is commercial
+reproduction of the glyphs. `TEXT_FONTS` had shipped eight families into the
+type system with no licence check anywhere in the repository.
+
+**What was verified**, against `github.com/google/fonts` — Google's own
+repository, which is where the TTFs will come from:
+
+| Font | Directory | `license:` | Reserved Font Name |
+| --- | --- | --- | --- |
+| Roboto | `ofl/roboto` | OFL | no |
+| Open Sans | `ofl/opensans` | OFL | no |
+| Montserrat | `ofl/montserrat` | OFL | no |
+| Lato | `ofl/lato` | OFL | **yes** |
+| Oswald | `ofl/oswald` | OFL | no |
+| Playfair Display | `ofl/playfairdisplay` | OFL | **yes** |
+| Dancing Script | `ofl/dancingscript` | OFL | **yes** |
+| Pacifico | `ofl/pacifico` | OFL | no |
+
+**All eight are SIL Open Font License.** The OFL text grants, verbatim:
+
+> *"Permission is hereby granted, free of charge, to any person obtaining a copy
+> of the Font Software, to use, study, copy, merge, **embed**, modify,
+> redistribute, and sell modified and unmodified copies"*
+
+and
+
+> *"The fonts, including any derivative works, can be **bundled, embedded,
+> redistributed and/or sold** with any software"*
+
+📌 **That is the grant M26d.3 was asking about**, and it is explicit about
+embedding and about selling. Two conditions attach, and neither binds us:
+
+- **Fonts may not be sold by themselves.** We sell a design service; the fonts
+  travel inside it.
+- **A Reserved Font Name may not be used by a MODIFIED version.** Three of the
+  eight declare one. We ship the TTFs unmodified, so the clause does not
+  engage — but it would the moment anyone subset, re-hint or rename a file,
+  which a print pipeline is exactly the sort of thing to do later.
+
+⚠️ **This is a recorded finding, not a sign-off.** Verifying what a licence says
+is a reading task and is done; accepting the commercial and legal exposure of
+shipping someone else's fonts inside a paid product is the business's call, not
+the implementation's. **No TTF is in the repository and none should be added
+until that is accepted** — adding the files is the step this milestone guards.
+
+✅ **What this unblocks regardless**: the text model, the canvas rendering and
+the properties panel can all be built against `TEXT_FONTS` as names. Only the
+font FILES wait.
+
 ### Coverage, decided 2026-09-30
 
 The owner answered *"yes maybe"* to non-Latin merchants at launch. **That is the

@@ -178,6 +178,67 @@ else
   pass "the stored contract is still fractions ($RATIOS Pct reference(s))"
 fi
 
+# Every font a merchant may use has a recorded licence.
+#
+# 🔴 **M26d.3 asks for this in its own words** — "a curated, licence-cleared
+# list — verify print/embedding rights, not just web use" — and eight families
+# had shipped into the type system with nothing recorded anywhere. A webfont
+# licence and a print-embedding licence are different grants, and
+# print-on-demand is commercial reproduction of the glyphs.
+#
+# ⚠️ **The list is the easy thing to extend and the easy thing to extend
+# WITHOUT checking.** Adding a ninth family is one line; verifying its licence
+# is a different kind of work, and nothing connected the two until this.
+FONTS_FILE="$ROOT/shared/design/design-geometry.types.ts"
+LICENCE_DOC="$ROOT/docs/M26-PRINT-PIPELINE-DECISIONS.md"
+
+if [ ! -f "$FONTS_FILE" ] || [ ! -f "$LICENCE_DOC" ]; then
+  fail "the font list or the decisions document is missing"
+else
+  UNLICENSED=""
+  FONT_COUNT=0
+
+  # The declared families, read from the runtime array rather than a copy.
+  FONT_LIST=$(perl -0ne 'print $1 if /TEXT_FONTS = \[(.*?)\] as const;/s' "$FONTS_FILE" \
+    | grep -oE "'[^']+'" | tr -d "'")
+
+  if [ -z "$FONT_LIST" ]; then
+    fail "could not read TEXT_FONTS — has its shape changed?"
+  else
+    while IFS= read -r font; do
+      [ -n "$font" ] || continue
+
+      FONT_COUNT=$((FONT_COUNT + 1))
+
+      # 📌 Matched in the licence TABLE, not anywhere in the document: the
+      # families are named in prose elsewhere, and a mention is not a record.
+      grep -qE "^\| $font \| " "$LICENCE_DOC" || UNLICENSED="$UNLICENSED $font"
+    done <<EOF
+$FONT_LIST
+EOF
+
+    if [ -n "$UNLICENSED" ]; then
+      fail "font(s) with no recorded licence:$UNLICENSED"
+      printf '        Add a row to Decision 4'"'"'s licensing table, verified against\n'
+      printf '        github.com/google/fonts — not from memory.\n'
+    else
+      pass "all $FONT_COUNT font(s) have a recorded licence"
+    fi
+  fi
+
+  # ⚠️ **And no font FILE ships until the sign-off lands.** Adding the TTFs is
+  # the step M26d.3 guards, and the licensing section says plainly that reading
+  # a licence is not accepting its exposure.
+  TTF_COUNT=$(find "$ROOT/shared" "$ROOT/optioniaWooCommerceBackend/src" \
+    -name '*.ttf' -o -name '*.otf' 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "${TTF_COUNT:-0}" -eq 0 ]; then
+    pass "no font file ships yet (sign-off outstanding — Decision 4)"
+  else
+    fail "$TTF_COUNT font file(s) ship — remove this check once the licence sign-off is recorded"
+  fi
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d design-fraction check(s) failed.\033[0m\n' "$FAILURES"
