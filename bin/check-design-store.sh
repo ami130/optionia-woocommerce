@@ -973,6 +973,46 @@ else
   pass "all $CLAMP_CHECKED text setter(s) clamp what they are given"
 fi
 
+# 🔴 **The canvas draws the text through `placeText`, which delegates to the
+# SHARED geometry.** That is the whole WYSIWYG chain: the storefront and the
+# print renderer call the same functions, so a canvas that computed its own
+# wrap, fit or arc would agree with the printed object only by accident.
+CANVAS="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-canvas.tsx"
+#
+# 📌 **Extracted to the NEXT top-level `function`, not to the first `\n}`.** A
+# non-greedy match to `\n}` stops at the component's own destructured props
+# block — so the check read the signature and reported the body missing. Found
+# by the check failing against code that plainly called both.
+TEXT_EL=$(strip_comments "$CANVAS" \
+  | awk '/^function TextElement\(/ { inside = 1 }
+         inside && /^function / && !/^function TextElement\(/ { exit }
+         inside { print }')
+
+if [ -z "$TEXT_EL" ]; then
+  fail "the canvas no longer draws the design's text"
+elif ! printf '%s' "$TEXT_EL" | grep -q 'placeText('; then
+  fail "the canvas draws text without the shared placement"
+  printf '        the storefront and the print renderer use placeText'"'"'s geometry
+'
+  printf '        a canvas computing its own would agree only by accident
+'
+elif printf '%s' "$TEXT_EL" | grep -qE 'wrapTextLines\(|fitTextToBox\(|textArcPath\('; then
+  fail "the canvas re-derives text geometry instead of delegating"
+else
+  pass "the canvas draws text through the shared placement"
+fi
+
+# ⚠️ **The measured advance ratio must NOT commit.** It is a measurement, not a
+# merchant's edit; committing one puts a history entry between their actions and
+# makes undo step through changes they never made.
+if [ -n "$TEXT_EL" ]; then
+  if printf '%s' "$TEXT_EL" | grep -q 'nudgeText('; then
+    pass "a measured advance ratio notifies without committing"
+  else
+    fail "the measured advance ratio is not applied through nudgeText"
+  fi
+fi
+
 # ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each
 # clamping to a different number is the same defect as not clamping at all.
 #

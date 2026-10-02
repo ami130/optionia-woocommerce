@@ -3,7 +3,9 @@
 import { useEffect, useId, useRef } from 'react';
 
 import type { PathShape } from '@shared/design/design-geometry.types';
+import { arcTextAnchor } from '@shared/design/arc-geometry';
 import { SHAPE_CLIP_PATHS } from '@shared/design/layer-geometry';
+import { textAnchorFor } from '@shared/design/text-geometry';
 import {
   type CropHitKind,
   type CropIntent,
@@ -25,6 +27,15 @@ import {
   layerCursor,
   showsHandles,
 } from '@/lib/design-lab/selection-box';
+
+import {
+  MEASURE_PX,
+  advanceRatioChanged,
+  fontShorthand,
+  measureAdvanceRatio,
+} from '@/lib/design-lab/text-fonts';
+import { placeText } from '@/lib/design-lab/text-render';
+import type { EditorText } from '@/lib/design-lab/text-model';
 
 import { useDesignStore } from './use-design-store';
 
@@ -579,6 +590,21 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
                 />
               ) : null,
             )}
+            {/*
+              📌 **After the layers, so the text draws on top.** A text option's
+              artwork is the thing being personalised; the images are what it
+              sits on. The renderer orders them the same way — `buildScene`
+              appends the text groups after the image groups.
+            */}
+            {store.text ? (
+              <TextElement
+                text={store.text}
+                cw={store.cw}
+                ch={store.ch}
+                idPrefix={clipPrefix}
+                store={store}
+              />
+            ) : null}
           </div>
           <div className="optionia-designlab-canvas-overlay" ref={overlayRef}>
             {/*
@@ -716,6 +742,179 @@ function FramedImage({
  * the paths in `SHAPE_CLIP_PATHS` are written in a 0..1 box and scale to
  * whatever the frame is.
  */
+/**
+ * The design's text, drawn as the renderer will draw it.
+ *
+ * 🔴 **Every number comes from `placeText`, which delegates to the SHARED
+ * geometry.** The storefront and the print renderer call the same functions, so
+ * what the merchant positions here is what gets printed. Computing any of it
+ * from CSS instead would produce an editor that agrees until it quietly does
+ * not.
+ *
+ * ⚠️ **SVG for BOTH branches, not just the curve.** Flat text could be a div,
+ * but then the browser's own line breaking would decide the wrap — and
+ * `wrapTextLines` has already decided it. One `<tspan>` per computed line is
+ * what the renderer emits, so it is what the editor emits.
+ */
+function TextElement({
+  text,
+  cw,
+  ch,
+  idPrefix,
+  store,
+}: Readonly<{
+  text: EditorText;
+  cw: number;
+  ch: number;
+  idPrefix: string;
+  store: DesignStore;
+}>) {
+  /*
+   * Measure the real glyph advance for this run and persist it.
+   *
+   * 🔴 **It is what makes a full circle actually close.** The generic estimate
+   * overshoots narrow text, so a ring sized by it leaves a visible gap at the
+   * seam. Measured after the webfont resolves, because measuring before gives
+   * the fallback face's metrics — the wrong glyphs, stored as if right.
+   *
+   * ⚠️ **`nudgeText`, not `updateText`.** A measurement is not a merchant's
+   * edit; committing one would put a history entry between their actions and
+   * make undo step through changes they never made.
+   *
+   * 📌 **Guarded by an epsilon, or it loops**: storing re-renders, which
+   * re-measures, which stores again, and float noise means it never settles.
+   */
+  const { text: content, font, bold, italic } = text;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const apply = () => {
+      if (cancelled) return;
+
+      const current = store.text;
+
+      if (!current) return;
+
+      const ratio = measureAdvanceRatio(
+        current.text,
+        current.font,
+        current.bold,
+        current.italic,
+      );
+
+      if (advanceRatioChanged(ratio, current.advanceRatio)) {
+        store.nudgeText({ advanceRatio: ratio ?? undefined });
+      }
+    };
+
+    const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+
+    if (fonts?.load) {
+      fonts
+        .load(fontShorthand(font, bold, italic, MEASURE_PX), content || ' ')
+        .then(apply, apply);
+    } else {
+      apply();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [content, font, bold, italic, store]);
+
+  const placed = placeText(text, cw, ch);
+  const common = {
+    fontFamily: `"${text.font}", sans-serif`,
+    fontWeight: text.bold ? 700 : 400,
+    fontStyle: text.italic ? 'italic' : 'normal',
+    fill: text.color,
+  } as const;
+
+  if (placed.kind === 'curved') {
+    const pathId = `${idPrefix}-textpath`;
+    const { startOffset, anchor } = arcTextAnchor(placed.align);
+
+    return (
+      <svg
+        className="optionia-designlab-text"
+        width={cw}
+        height={ch}
+        viewBox={`0 0 ${cw} ${ch}`}
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          {/*
+            🔴 **The path is in ARC-LOCAL coordinates**, which is why the group
+            translates it into place rather than the path carrying the offset.
+            The renderer does exactly this, and the rotation origin is expressed
+            in CANVAS coordinates — so the rotate must sit OUTSIDE the
+            translate, as it does here.
+          */}
+          <path id={pathId} d={placed.d} fill="none" />
+        </defs>
+        <g
+          transform={
+            (text.rot ? `rotate(${text.rot} ${placed.originX} ${placed.originY}) ` : '') +
+            `translate(${placed.left} ${placed.top})`
+          }
+        >
+          <text
+            {...common}
+            fontSize={placed.fontSize}
+            letterSpacing={placed.letterSpacing || undefined}
+          >
+            <textPath href={`#${pathId}`} startOffset={startOffset} textAnchor={anchor}>
+              {text.text}
+            </textPath>
+          </text>
+        </g>
+      </svg>
+    );
+  }
+
+  const { anchor } = textAnchorFor(placed.align);
+
+  return (
+    <svg
+      className="optionia-designlab-text"
+      width={cw}
+      height={ch}
+      viewBox={`0 0 ${cw} ${ch}`}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <g transform={text.rot ? `rotate(${text.rot} ${text.cx} ${text.cy})` : undefined}>
+        <text
+          {...common}
+          y={placed.firstY}
+          fontSize={placed.fontSize}
+          letterSpacing={placed.letterSpacing || undefined}
+          textAnchor={anchor}
+          dominantBaseline="central"
+        >
+          {placed.lines.map((line, i) => (
+            <tspan
+              /*
+               * ⚠️ **Indexed key, deliberately.** These are wrapped fragments of
+               * one string, not entities — two identical lines are a normal
+               * outcome of wrapping, so the text itself is not a key.
+               */
+              key={i}
+              x={placed.anchorX}
+              dy={i === 0 ? undefined : placed.lineHeight}
+            >
+              {/* An empty tspan collapses; a space keeps the line's height. */}
+              {line || ' '}
+            </tspan>
+          ))}
+        </text>
+      </g>
+    </svg>
+  );
+}
+
 function ShapeClipDefs({ prefix }: Readonly<{ prefix: string }>) {
   return (
     <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true" focusable="false">

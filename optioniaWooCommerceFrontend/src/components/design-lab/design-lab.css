@@ -60,6 +60,27 @@
   overflow: visible;
 }
 
+/*
+ * The design's text, drawn in its own SVG over the layers.
+ *
+ * 🔴 **Positioned at the canvas origin and sized to it**, because `placeText`
+ * returns CANVAS coordinates — the same ones the renderer's viewBox uses. A
+ * shrink-wrapped or offset element would need every number translated, which
+ * is precisely the re-derivation the shared geometry exists to avoid.
+ *
+ * ⚠️ **`pointer-events: none`, so the text never swallows a click meant for a
+ * layer.** The SVG covers the whole canvas; without this it would intercept
+ * every drag on the artwork beneath it. The text is selected through the panel
+ * and the layer list, as the crop overlay is.
+ */
+.optionia-designlab-text {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .optionia-designlab-canvas {
   position: absolute;
   inset: 0;

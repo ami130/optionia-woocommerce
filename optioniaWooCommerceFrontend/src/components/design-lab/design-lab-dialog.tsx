@@ -18,6 +18,7 @@ import {
   preventsDefault,
 } from '@/lib/design-lab/keyboard';
 import { type DesignData, DesignStore } from '@/lib/design-lab/store';
+import { googleFontsHref } from '@/lib/design-lab/text-fonts';
 
 import { DesignCanvas } from './design-canvas';
 import { useDesignStore } from './use-design-store';
@@ -59,6 +60,18 @@ export interface DesignLabDialogProps {
   onApply: (design: DesignData) => void;
   title?: string;
 }
+
+/**
+ * The id the curated-font stylesheet is deduplicated by.
+ *
+ * 📌 **Not spelled `optionia-designlab-…`, deliberately.** The design-store
+ * gate reads every `optionia-designlab-*` string the components emit and
+ * requires a CSS rule for it — correctly, since that prefix is this editor's
+ * class namespace. This is an element id on a `<link>`, which has no rule and
+ * should never have one, so it stays outside the namespace rather than being
+ * exempted from the check.
+ */
+const FONT_LINK_ID = 'optionia-text-fonts-stylesheet';
 
 export function DesignLabDialog({
   open,
@@ -118,6 +131,37 @@ export function DesignLabDialog({
     designRef.current = design;
     productRef.current = product;
   }, [design, product]);
+
+  /*
+   * Load the curated families, once, the first time a lab opens.
+   *
+   * 🔴 **Without this the canvas measures FALLBACK metrics.** A `<link>` is
+   * what makes the browser resolve `font-family: "Pacifico"` to Pacifico rather
+   * than to whatever sans-serif it has — and `measureAdvanceRatio` would then
+   * persist a ratio taken from the wrong glyphs, baking the mistake into the
+   * stored design.
+   *
+   * 📌 **No font FILE is added to the repository by this.** The licence
+   * sign-off that M26d.3 guards is about shipping TTFs for server-side
+   * rasterisation (Decision 4); a webfont stylesheet is how the browser has
+   * always drawn this text, and is what the original editor and the storefront
+   * both do.
+   *
+   * ⚠️ **Deduplicated by id and never removed.** A second dialog must not
+   * append a second copy, and removing it on close would re-fetch — and
+   * re-flash — every time the merchant reopened the lab.
+   */
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    if (document.getElementById(FONT_LINK_ID)) return;
+
+    const link = document.createElement('link');
+
+    link.id = FONT_LINK_ID;
+    link.rel = 'stylesheet';
+    link.href = googleFontsHref();
+    document.head.appendChild(link);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

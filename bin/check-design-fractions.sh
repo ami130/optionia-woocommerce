@@ -226,6 +226,48 @@ EOF
     fi
   fi
 
+  # 🔴 **Every curated family needs an axis entry, and a missing one is
+  # SILENT.** Measured against the live API on 2026-10-02: a family requested
+  # without its axes loads only the regular face, so bold and italic fall back
+  # to a synthesised approximation — and the merchant's measured `advanceRatio`
+  # is then taken from the wrong glyphs and persisted into the design.
+  #
+  # ⚠️ **A misspelt family is the fatal case**: HTTP 400 for the whole
+  # stylesheet, which loads none of the eight. Neither failure announces itself,
+  # which is why this is a gate rather than a comment.
+  AXES_FILE="$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/text-fonts.ts"
+
+  if [ ! -f "$AXES_FILE" ]; then
+    fail "the font axis map is missing — the editor cannot load its fonts"
+  else
+    MISSING_AXES=""
+    AXES_COUNT=0
+
+    while IFS= read -r font; do
+      [ -n "$font" ] || continue
+
+      AXES_COUNT=$((AXES_COUNT + 1))
+
+      # Matched as a KEY in the map — quoted or bare, as the object spells it.
+      grep -qE "^  ('$font'|\"$font\"|$font): " "$AXES_FILE" \
+        || MISSING_AXES="$MISSING_AXES $font"
+    done <<EOF
+$FONT_LIST
+EOF
+
+    if [ -n "$MISSING_AXES" ]; then
+      fail "curated font(s) with no axis entry:$MISSING_AXES"
+      printf '        They would load their regular face only — bold and italic
+'
+      printf '        would silently fall back, and advanceRatio would be measured
+'
+      printf '        from the wrong glyphs.
+'
+    else
+      pass "all $AXES_COUNT curated font(s) have a CSS2 axis entry"
+    fi
+  fi
+
   # ⚠️ **And no font FILE ships until the sign-off lands.** Adding the TTFs is
   # the step M26d.3 guards, and the licensing section says plainly that reading
   # a licence is not accepting its exposure.
