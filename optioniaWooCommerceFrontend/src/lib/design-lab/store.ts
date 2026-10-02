@@ -18,6 +18,7 @@ import {
 import { CANVAS_BASE_H, applyStyleGeometry, freeDefaultSize } from './style-geometry';
 import {
   type EditorText,
+  clampText,
   defaultText,
   designTextToEditor,
   editorTextToDesign,
@@ -541,6 +542,15 @@ export class DesignStore {
    */
   importText(stored: TextDesign | null): void {
     this.text = stored ? designTextToEditor(stored, this.cw, this.ch) : null;
+
+    /*
+     * 🔴 **Stored JSON is UNTRUSTED, because nothing upstream validates it.**
+     * The API stores a design body opaquely by design, so a row written before
+     * this clamp existed — or by any other writer — can carry a 500 arc. A load
+     * is the one moment that can be corrected before the merchant sees it.
+     */
+    if (this.text) clampText(this.text);
+
     this.textSelected = false;
     /*
      * 📌 **Re-commits so the loaded text is the undo floor**, matching
@@ -862,6 +872,7 @@ export class DesignStore {
     if (!this.text) return;
 
     Object.assign(this.text, patch);
+    clampText(this.text);
     this.commit();
     this.notify();
   }
@@ -874,6 +885,7 @@ export class DesignStore {
     if (!this.text) return;
 
     Object.assign(this.text, patch);
+    clampText(this.text);
     this.notify();
   }
 

@@ -926,6 +926,75 @@ for fn in exportText importText; do
   fi
 done
 
+# 🔴 **Every path that sets text clamps it, because the editor is the ONLY
+# gatekeeper.** The renderer bounds `curve` to ±100 before drawing and the API
+# stores the design body unvalidated by design — so an unclamped editor means
+# the lab draws one arc and the printed object carries another.
+#
+# ⚠️ **`importText` is included because stored JSON is untrusted**: a row
+# written before the clamp existed can carry an out-of-range value, and a load
+# is the one moment it can be corrected before the merchant sees it.
+TEXT_SETTERS="updateText
+nudgeText
+importText"
+
+UNCLAMPED=""
+CLAMP_CHECKED=0
+
+while IFS= read -r name; do
+  [ -z "$name" ] && continue
+
+  body=$(method_body "$name")
+
+  if [ -z "$body" ]; then
+    fail "$name is missing from the store — this gate's method list is stale"
+    continue
+  fi
+
+  CLAMP_CHECKED=$((CLAMP_CHECKED + 1))
+
+  if ! printf '%s' "$body" | grep -q 'clampText('; then
+    UNCLAMPED="$UNCLAMPED  $name\n"
+  fi
+done <<EOF
+$TEXT_SETTERS
+EOF
+
+if [ "$CLAMP_CHECKED" -eq 0 ]; then
+  fail "checked no text setters at all — the parser is wrong, not the code"
+elif [ -n "$UNCLAMPED" ]; then
+  fail "text setter(s) accepting unbounded values:"
+  printf "%b" "$UNCLAMPED" | sed 's|^|      |'
+  printf '        the renderer clamps curve to ±100; an unclamped editor
+'
+  printf '        draws one arc and prints another
+'
+else
+  pass "all $CLAMP_CHECKED text setter(s) clamp what they are given"
+fi
+
+# ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each
+# clamping to a different number is the same defect as not clamping at all.
+#
+# 📌 **`|| true` on both, and that is not noise.** Under `set -euo pipefail` a
+# `grep` that matches nothing exits 1 and kills the script — so the very case
+# this check exists to catch (the renderer stopping clamping) aborted the gate
+# silently, printing a truncated pass list and no reason. Found by running the
+# mutation, not by reading.
+RENDERER_CURVE=$(grep -oE 'Math\.max\(-100, Math\.min\(100,' \
+  "$ROOT/shared/design/text-geometry.ts" | head -1 || true)
+EDITOR_CURVE=$(grep -oE '^export const MAX_TEXT_CURVE = [0-9]+;' \
+  "$ROOT/optioniaWooCommerceFrontend/src/lib/design-lab/text-model.ts" \
+  | grep -oE '[0-9]+' || true)
+
+if [ -z "$RENDERER_CURVE" ]; then
+  fail "the renderer no longer clamps curve — this gate's parser is stale"
+elif [ "$EDITOR_CURVE" = "100" ]; then
+  pass "the editor's curve bound matches the renderer's (±100)"
+else
+  fail "the editor clamps curve to ±${EDITOR_CURVE:-nothing}, the renderer to ±100"
+fi
+
 printf '\n'
 if [ "$FAILURES" -gt 0 ]; then
   printf '\033[31m%d design-store check(s) failed.\033[0m\n' "$FAILURES"

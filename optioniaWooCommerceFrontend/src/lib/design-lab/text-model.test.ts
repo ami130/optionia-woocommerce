@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { TEXT_FONTS } from '@shared/design/design-geometry.types';
+import { resolveSceneText } from '@shared/design/text-geometry';
 import {
   DEFAULT_SAMPLE_TEXT,
+  MAX_TEXT_CURVE,
+  MIN_TEXT_SIZE,
+  clampText,
   defaultText,
   designTextToEditor,
   editorTextToDesign,
@@ -144,6 +148,13 @@ describe('the round trip', () => {
   it('returns the same text after a round trip', () => {
     const original = text({
       text: 'Hello',
+      /*
+       * ⚠️ **NOT the default font.** Every other field here differs from the
+       * default too, but `font` is the one a conversion could hardcode without
+       * arithmetic — so with `Roboto` this assertion could not tell a copied
+       * field from a constant one.
+       */
+      font: 'Pacifico',
       size: 46,
       bold: true,
       italic: true,
@@ -178,5 +189,150 @@ describe('the round trip', () => {
     expect(onDouble.cy).toBeCloseTo(230);
     expect(onDouble.w).toBeCloseTo(400);
     expect(onDouble.size).toBeCloseTo(92);
+  });
+});
+
+describe('bounds', () => {
+  /*
+   * 🔴 **The editor is the ONLY gatekeeper in this chain.** The renderer clamps
+   * `curve` to ±100 before drawing but the API stores a design body
+   * unvalidated, so an unclamped editor means the lab draws one arc and the
+   * printed object carries another — the exact what-you-see-is-not-what-you-get
+   * failure this milestone exists to prevent.
+   */
+  it.each([
+    ['above the maximum', 500, MAX_TEXT_CURVE],
+    ['below the minimum', -500, -MAX_TEXT_CURVE],
+    ['at the maximum', 100, 100],
+    ['within range', 40, 40],
+  ])('clamps a curve %s', (_name, given, expected) => {
+    const t = text({ curve: given });
+
+    clampText(t);
+
+    expect(t.curve).toBe(expected);
+  });
+
+  it('clamps the curve to what the renderer would draw', () => {
+    /*
+     * ⚠️ **Compared against the RENDERER, not against a constant.** A test
+     * asserting `100 === 100` would pass with both sides wrong together; this
+     * fails if the two surfaces ever disagree.
+     */
+    const t = text({ curve: 500 });
+
+    clampText(t);
+
+    expect(t.curve).toBe(resolveSceneText(editorTextToDesign(t, CW, CH), CW, CH).curve);
+  });
+
+  it.each([
+    ['negative', -50],
+    ['zero', 0],
+  ])('floors a %s font size', (_name, given) => {
+    const t = text({ size: given });
+
+    clampText(t);
+
+    expect(t.size).toBe(MIN_TEXT_SIZE);
+  });
+
+  it('floors a negative box width', () => {
+    const t = text({ w: -10 });
+
+    clampText(t);
+
+    expect(t.w).toBe(MIN_TEXT_SIZE);
+  });
+
+  it('leaves a size above the floor alone', () => {
+    const t = text({ size: 46 });
+
+    clampText(t);
+
+    expect(t.size).toBe(46);
+  });
+
+  /*
+   * 🔴 **Zero height is auto-grow, a BEHAVIOUR, so it must survive the floor.**
+   * Flooring it to 4 would silently turn every auto-growing text into a fixed
+   * 4px box that clips everything.
+   */
+  it('keeps an auto-growing height at zero', () => {
+    const t = text({ h: 0 });
+
+    clampText(t);
+
+    expect(t.h).toBe(0);
+  });
+
+  it('floors a negative fixed height rather than reading it as auto-grow', () => {
+    const t = text({ h: -20 });
+
+    clampText(t);
+
+    expect(t.h).toBe(MIN_TEXT_SIZE);
+  });
+
+  /*
+   * ⚠️ **Negative letter spacing is LEGITIMATE** — tightening a run is a real
+   * typographic choice and the renderer scales it without complaint.
+   */
+  it('keeps negative letter spacing', () => {
+    const t = text({ letterSpacing: -3 });
+
+    clampText(t);
+
+    expect(t.letterSpacing).toBe(-3);
+  });
+
+  it.each([
+    ['size', 'size'],
+    ['curve', 'curve'],
+    ['rot', 'rot'],
+    ['letterSpacing', 'letterSpacing'],
+  ] as const)('replaces a non-finite %s', (_name, field) => {
+    const t = text({ [field]: Number.NaN });
+
+    clampText(t);
+
+    expect(Number.isFinite(t[field])).toBe(true);
+  });
+
+  /*
+   * 📌 **An unusable advance ratio is DROPPED, not floored.**
+   * `resolveSceneText` treats a non-positive ratio as absent and falls back to
+   * `CHAR_ADVANCE`; a clamped-to-tiny ratio would instead size every arc to a
+   * glyph width no font has.
+   */
+  it.each([
+    ['zero', 0],
+    ['negative', -0.5],
+    ['non-finite', Number.NaN],
+  ])('drops a %s advance ratio', (_name, given) => {
+    const t = text({ advanceRatio: given });
+
+    clampText(t);
+
+    expect(t.advanceRatio).toBeUndefined();
+  });
+
+  it('keeps a usable advance ratio', () => {
+    const t = text({ advanceRatio: 0.54 });
+
+    clampText(t);
+
+    expect(t.advanceRatio).toBe(0.54);
+  });
+
+  /*
+   * ⚠️ **A canvas can be smaller than the floor.** A store whose size is not
+   * set yet reports 0×0, and a percentage of nothing is nothing.
+   */
+  it('keeps a default on a zero canvas inside the bounds', () => {
+    const t = defaultText(0, 0);
+
+    expect(t.size).toBe(MIN_TEXT_SIZE);
+    expect(t.w).toBe(MIN_TEXT_SIZE);
   });
 });

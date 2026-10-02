@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DesignStore, designLayerToEditor, editorLayerToDesign } from './store';
-import { DEFAULT_SAMPLE_TEXT } from './text-model';
+import { resolveSceneText } from '@shared/design/text-geometry';
+
+import { DEFAULT_SAMPLE_TEXT, MAX_TEXT_CURVE, MIN_TEXT_SIZE } from './text-model';
 
 /**
  * The state engine M26d.1 calls load-bearing.
@@ -1233,5 +1235,81 @@ describe('text persistence', () => {
     /* xPct 0.25 of a wider canvas; yPct 0.25 of the same height. */
     expect(reopened.text?.cx).toBeCloseTo(230);
     expect(reopened.text?.cy).toBeCloseTo(115);
+  });
+});
+
+describe('text bounds reach the store', () => {
+  /*
+   * 🔴 **Clamped where the value is SET, not where it is saved.** Clamping at
+   * conversion would let the canvas draw a 500 arc and correct it only on save,
+   * so the merchant would reopen their design and find it changed behind their
+   * back. These tests read the EDITOR's text, not the export, to pin that.
+   */
+  it('clamps a curve set through updateText', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ curve: 500 });
+
+    expect(s.text?.curve).toBe(MAX_TEXT_CURVE);
+  });
+
+  it('clamps a curve dragged through nudgeText', () => {
+    const s = store();
+
+    s.addText();
+    s.nudgeText({ curve: -500 });
+
+    expect(s.text?.curve).toBe(-MAX_TEXT_CURVE);
+  });
+
+  it('floors a negative size set through updateText', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ size: -50 });
+
+    expect(s.text?.size).toBe(MIN_TEXT_SIZE);
+  });
+
+  /*
+   * 🔴 **Stored JSON is untrusted, because nothing upstream validates it.** The
+   * API stores a design body opaquely by design, so a row written before this
+   * clamp existed can carry a 500 arc — and a load is the one moment it can be
+   * corrected before the merchant sees it.
+   */
+  it('clamps an out-of-range design loaded from storage', () => {
+    const s = store();
+
+    s.importText({
+      text: 'Legacy',
+      font: 'Roboto',
+      sizePct: -0.1,
+      bold: false,
+      italic: false,
+      align: 'center',
+      color: '#000000',
+      pos: { xPct: 0.5, yPct: 0.5, wPct: 0.5 },
+      rot: 0,
+      curve: 500,
+    });
+
+    expect(s.text?.curve).toBe(MAX_TEXT_CURVE);
+    expect(s.text?.size).toBe(MIN_TEXT_SIZE);
+  });
+
+  /*
+   * ⚠️ **What is drawn is what is printed.** The editor and the renderer each
+   * bound the arc; this fails if they ever stop agreeing.
+   */
+  it('stores a curve the renderer will not redraw', () => {
+    const s = store();
+
+    s.addText();
+    s.updateText({ curve: 500 });
+
+    const stored = s.exportText()!;
+
+    expect(stored.curve).toBe(resolveSceneText(stored, s.cw, s.ch).curve);
   });
 });
