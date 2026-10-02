@@ -333,15 +333,38 @@ embedding and about selling. Two conditions attach, and neither binds us:
   engage — but it would the moment anyone subset, re-hint or rename a file,
   which a print pipeline is exactly the sort of thing to do later.
 
-⚠️ **This is a recorded finding, not a sign-off.** Verifying what a licence says
-is a reading task and is done; accepting the commercial and legal exposure of
-shipping someone else's fonts inside a paid product is the business's call, not
-the implementation's. **No TTF is in the repository and none should be added
-until that is accepted** — adding the files is the step this milestone guards.
+⚠️ **Verifying a licence was a reading task; accepting the exposure was not.**
+What the OFL says is above and was checked against Google's own repository.
+Whether to carry someone else's fonts inside a paid product is a commercial and
+legal judgement, and belongs to the business rather than to the implementation.
 
-✅ **What this unblocks regardless**: the text model, the canvas rendering and
-the properties panel can all be built against `TEXT_FONTS` as names. Only the
-font FILES wait.
+### ✅ SIGNED OFF — 2026-10-02, by the project owner (Omi Hasan)
+
+🔴 **Accepted: the eight OFL families may ship as font FILES in this
+repository.** The owner was shown the grant, the two conditions and the three
+Reserved Font Names before accepting, in those terms. This line is the record
+that it happened and when.
+
+**What the acceptance covers, exactly:**
+
+- The **eight families named in the table above**, and no others. A ninth font
+  is a new decision, not an extension of this one — `TEXT_FONTS` and the shipped
+  files are gated against each other for that reason.
+- The files **unmodified**, as published by `github.com/google/fonts`. This is
+  what keeps the Reserved Font Name clause from engaging on Lato, Playfair
+  Display and Dancing Script.
+
+⚠️ **What would re-open it.** Subsetting, re-hinting, renaming or otherwise
+modifying a file engages the RFN clause on those three, and selling the fonts by
+themselves is forbidden outright by the OFL. Neither is in scope; both are the
+kind of thing a print pipeline reaches for later, which is why they are written
+down here rather than remembered.
+
+📌 **Why the files are needed at all, measured rather than assumed**: the Stage 0
+spike found that `resvg` renders `<textPath>` **from a font file**, which is what
+deletes `optionia-app`'s ~470-line outline-conversion subsystem. M26e.4's
+requirement that *"no font needs installing at render time"* is met by shipping
+the files, not by converting glyphs.
 
 ### Coverage, decided 2026-09-30
 

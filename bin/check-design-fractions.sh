@@ -268,16 +268,65 @@ EOF
     fi
   fi
 
-  # ⚠️ **And no font FILE ships until the sign-off lands.** Adding the TTFs is
-  # the step M26d.3 guards, and the licensing section says plainly that reading
-  # a licence is not accepting its exposure.
-  TTF_COUNT=$(find "$ROOT/shared" "$ROOT/optioniaWooCommerceBackend/src" \
-    -name '*.ttf' -o -name '*.otf' 2>/dev/null | wc -l | tr -d ' ')
+  # 🔴 **The sign-off landed (2026-10-02), so this check CHANGED MEANING rather
+  # than being deleted.** It used to say "no font file may ship"; it now says
+  # "exactly the eight that were signed off, and no others". Removing it would
+  # have thrown away the only thing standing between an accepted list and a
+  # ninth font nobody approved.
+  #
+  # ⚠️ **The acceptance covers those eight families UNMODIFIED.** A file that is
+  # subset, re-hinted or renamed engages the Reserved Font Name clause on Lato,
+  # Playfair Display and Dancing Script — which is why what ships is checked
+  # against `TEXT_FONTS` rather than merely counted.
+  FONT_DIR="$ROOT/optioniaWooCommerceBackend/src/design/fonts"
 
-  if [ "${TTF_COUNT:-0}" -eq 0 ]; then
-    pass "no font file ships yet (sign-off outstanding — Decision 4)"
+  if [ ! -d "$FONT_DIR" ]; then
+    # 📌 Not an error: the renderer that needs them is M26e.4, still to come.
+    pass "no font file ships yet (the renderer that needs them is M26e.4)"
   else
-    fail "$TTF_COUNT font file(s) ship — remove this check once the licence sign-off is recorded"
+    SHIPPED=$(find "$FONT_DIR" -name '*.ttf' -o -name '*.otf' 2>/dev/null | wc -l | tr -d ' ')
+    #
+    # ⚠️ **`|| true` on the pipe, because `grep -v` that filters EVERYTHING away
+    # exits 1** — and under `set -euo pipefail` that killed the script on this
+    # very line, silently, with exit 0 and every later check unprinted. The
+    # healthy case (no stray fonts) was the one that aborted.
+    STRAY=$(find "$ROOT/shared" "$ROOT/optioniaWooCommerceBackend/src" \
+      \( -name '*.ttf' -o -name '*.otf' \) 2>/dev/null \
+      | { grep -v "^$FONT_DIR/" || true; } | wc -l | tr -d ' ')
+
+    UNSHIPPED=""
+
+    while IFS= read -r font; do
+      [ -n "$font" ] || continue
+
+      # The file name a family is expected to ship under: no spaces.
+      file=$(printf '%s' "$font" | tr -d ' ')
+
+      #
+      # ⚠️ **Counted, not `grep -q`-ed.** `find … | grep -q .` exits 1 when a
+      # family has no file, and under `set -euo pipefail` that killed the whole
+      # script — silently, exit 0, with every later check simply never printed.
+      # The third time this gate pattern has bitten here; a count cannot fail.
+      matches=$(find "$FONT_DIR" \( -iname "$file*.ttf" -o -iname "$file*.otf" \) \
+        2>/dev/null | wc -l | tr -d ' ')
+
+      [ "${matches:-0}" -gt 0 ] || UNSHIPPED="$UNSHIPPED $font"
+    done <<EOF
+$FONT_LIST
+EOF
+
+    if [ "${STRAY:-0}" -gt 0 ]; then
+      fail "$STRAY font file(s) ship from outside $FONT_DIR"
+      printf '        the sign-off names one home; a file elsewhere is one nobody reviewed\n'
+    elif [ -n "$UNSHIPPED" ]; then
+      fail "curated font(s) with no file to render from:$UNSHIPPED"
+      printf '        resvg renders textPath from a FILE — a missing one prints nothing\n'
+    elif [ "${SHIPPED:-0}" -ne "$FONT_COUNT" ]; then
+      fail "$SHIPPED font file(s) ship for $FONT_COUNT licensed famil(y/ies)"
+      printf '        the sign-off covers those eight and no others\n'
+    else
+      pass "all $SHIPPED shipped font file(s) are licensed and signed off"
+    fi
   fi
 fi
 
