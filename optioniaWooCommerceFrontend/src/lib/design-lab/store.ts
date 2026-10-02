@@ -677,7 +677,7 @@ export class DesignStore {
     this.layers.push(layer);
 
     if (layer.kind !== 'background') {
-      this.selectedId = layer.id;
+      this.selectLayer(layer.id);
     }
 
     this.commit();
@@ -701,7 +701,7 @@ export class DesignStore {
     copy.cy += DUPLICATE_OFFSET;
 
     this.layers.splice(this.layers.indexOf(layer) + 1, 0, copy);
-    this.selectedId = copy.id;
+    this.selectLayer(copy.id);
     this.commit();
     this.notify();
   }
@@ -721,7 +721,7 @@ export class DesignStore {
       /* Select the topmost remaining overlay, never the background. */
       const overlays = this.layers.filter((l) => l.kind !== 'background');
 
-      this.selectedId = overlays.length ? overlays[overlays.length - 1].id : null;
+      this.selectLayer(overlays.length ? overlays[overlays.length - 1].id : null);
     }
 
     this.commit();
@@ -749,6 +749,25 @@ export class DesignStore {
     this.notify();
   }
 
+  /**
+   * Make a layer the selection, clearing the text's.
+   *
+   * 🔴 **Every path that selects a layer goes through here, and four did not.**
+   * `select()` cleared `textSelected`; `addLayer`, `duplicateLayer`,
+   * `removeLayerById` and `enterCrop` assigned `selectedId` directly — so
+   * adding a layer while the text was selected left BOTH selected. The canvas
+   * then drew the layer's handles while the properties panel showed the text's
+   * font, and the keyboard moved the layer the panel was not editing.
+   *
+   * ⚠️ **A method rather than a repeated line**, because the repeated line is
+   * exactly what went missing four times: the rule has to live in one place to
+   * be followed in one place.
+   */
+  private selectLayer(id: string | null): void {
+    this.selectedId = id;
+    this.textSelected = false;
+  }
+
   select(id: string | null): void {
     /* Selecting away from a cropped layer ends crop mode and commits its edits. */
     if (this.cropping !== null && this.cropping !== id) {
@@ -756,13 +775,7 @@ export class DesignStore {
       this.commit();
     }
 
-    this.selectedId = id;
-    /*
-     * 🔴 **Clears the text selection, because the two are EXCLUSIVE.** Without
-     * this, clicking a layer leaves the text selected too, and the properties
-     * panel shows one subject while the keyboard nudges the other.
-     */
-    this.textSelected = false;
+    this.selectLayer(id);
     this.notify();
   }
 
@@ -1056,7 +1069,7 @@ export class DesignStore {
       return;
     }
 
-    this.selectedId = id;
+    this.selectLayer(id);
     this.cropping = id;
     layer.crop ??= cropDefault(layer);
     this.notify();

@@ -569,9 +569,15 @@ else
   # The measurement, and the import that depends on it, inside one handler.
   ONLOAD=$(perl -0ne 'print $1 if /img\.onload = \(\) => \{(.*?)\n    \};/s' "$DIALOG_BG")
 
+  # ⚠️ **`hydrate|importDesign`, because the import moved behind a helper.**
+  # Three call sites each had to import the design AND THEN the text in the
+  # right order, so the ordering rule went into one function — and this check,
+  # grepping for the literal `importDesign`, then failed against code that was
+  # more correct than before. A gate matching a spelling rather than a
+  # behaviour reports a refactor as a regression.
   if [ -n "$ONLOAD" ] \
     && printf '%s' "$ONLOAD" | grep -q "naturalWidth" \
-    && printf '%s' "$ONLOAD" | grep -q "importDesign"; then
+    && printf '%s' "$ONLOAD" | grep -qE "hydrate\(|importDesign"; then
     pass "the product photo is measured before the design is imported"
   else
     fail "the design is imported without measuring the photo — layers land on the default canvas"
@@ -581,7 +587,7 @@ else
   # 📌 A photo that will not load must not block the lab.
   ONERROR=$(perl -0ne 'print $1 if /img\.onerror = \(\) => \{(.*?)\n    \};/s' "$DIALOG_BG")
 
-  if [ -n "$ONERROR" ] && printf '%s' "$ONERROR" | grep -q "importDesign"; then
+  if [ -n "$ONERROR" ] && printf '%s' "$ONERROR" | grep -qE "hydrate\(|importDesign"; then
     pass "a photo that cannot load still opens the lab on a blank canvas"
   else
     fail "a failed photo load leaves the lab empty — the design would be unreachable"
@@ -886,16 +892,32 @@ fi
 # 🔴 **Selection is EXCLUSIVE between a layer and the text.** Both at once means
 # the properties panel shows one subject while the keyboard nudges the other.
 # Scoped to `select()`, since `textSelected = false` appears in four methods.
-SELECT_BODY=$(method_body "select")
+# 🔴 **Checked on EVERY path that selects a layer, not just `select()`.** The
+# first version watched `select()` alone and passed while FOUR other methods —
+# `addLayer`, `duplicateLayer`, `removeLayerById`, `enterCrop` — assigned
+# `selectedId` directly and left the text selected too. A merchant adding a
+# layer then had the canvas draw its handles while the panel showed the text's
+# font. The rule lives in one private method now, and this counts its callers.
+#
+# 📌 **`private selectLayer`, so `method_body` cannot find it** — that helper
+# matches `^  name(`. Extracted here with the modifier included rather than
+# loosening a helper every other check depends on.
+SELECT_RULE=$(strip_comments "$STORE" \
+  | awk '/^  private selectLayer\(/ { inside = 1 }
+         inside { print }
+         inside && /^  \}$/ { exit }')
+SELECTORS=$(strip_comments "$STORE" | grep -cE 'this\.selectLayer\(' || true)
 
-if [ -z "$SELECT_BODY" ]; then
-  fail "select() is missing — this gate's parser is stale"
-elif printf '%s' "$SELECT_BODY" | grep -qE 'this\.textSelected = false'; then
-  pass "selecting a layer deselects the text"
-else
+if [ -z "$SELECT_RULE" ]; then
+  fail "selectLayer() is missing — the exclusivity rule has no home"
+elif ! printf '%s' "$SELECT_RULE" | grep -qE 'this\.textSelected = false'; then
   fail "selecting a layer leaves the text selected too"
-  printf '        the panel would show the text while the keyboard moved a layer
-'
+  printf '        the panel would show the text while the keyboard moved a layer\n'
+elif [ "${SELECTORS:-0}" -lt 5 ]; then
+  fail "only ${SELECTORS:-0} path(s) select a layer through the shared rule"
+  printf '        five do: select, addLayer, duplicateLayer, removeLayerById, enterCrop\n'
+else
+  pass "all ${SELECTORS} layer-selecting path(s) clear the text selection"
 fi
 
 # ⚠️ **A load REPLACES what is open.** Without this the previous choice's text
@@ -1020,15 +1042,28 @@ fi
 # properties — the canvas does not hit-test it.
 PANEL="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/properties-panel.tsx"
 LIST="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/layer-list.tsx"
+#
+# ⚠️ **`exportText` and `importText` are on this list because they were NOT,
+# and the feature shipped broken.** The first version watched the five EDITING
+# operations only — so it proved a merchant could author text while saying
+# nothing about whether the text was saved. It was not: `onApply` sent
+# `exportDesign()` alone and the merchant's work was discarded in silence, with
+# this gate green.
 TEXT_OPS="addText
 selectText
 removeText
 updateText
-nudgeText"
+nudgeText
+exportText
+importText"
 
 UNREACHABLE=""
 OPS_CHECKED=0
-UI=$(strip_comments "$PANEL"; strip_comments "$LIST")
+#
+# 📌 **The DIALOG is in this set too.** Persistence lives there, not in the
+# panel, so a set limited to the panel and the list could never see it.
+DIALOG="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/design-lab-dialog.tsx"
+UI=$(strip_comments "$PANEL"; strip_comments "$LIST"; strip_comments "$DIALOG")
 
 while IFS= read -r op; do
   [ -z "$op" ] && continue
@@ -1108,6 +1143,46 @@ if [ -n "$TEXT_PROPS" ]; then
     printf '        an eight-digit colour falls back to black in that input
 '
   fi
+fi
+
+# 🔴 **Apply must send BOTH channels, and for four commits it sent one.** The
+# dialog called `onApply(store.exportDesign())` and nothing else, so a
+# merchant's text was composed, drawn, styled and then discarded in silence —
+# with every unit test and all 33 gates green. The reachability list above now
+# names `exportText`, but that only proves the symbol appears somewhere; this
+# proves it is inside the function that runs on Apply.
+APPLY_FN=$(strip_comments "$DIALOG" \
+  | awk '/^  function apply\(\)/ { inside = 1 }
+         inside { print }
+         inside && /^  \}$/ { exit }')
+
+if [ -z "$APPLY_FN" ]; then
+  fail "the dialog's apply() is missing — this gate's parser is stale"
+elif ! printf '%s' "$APPLY_FN" | grep -q 'exportDesign('; then
+  fail "apply() does not send the layers"
+elif ! printf '%s' "$APPLY_FN" | grep -q 'exportText('; then
+  fail "apply() discards the merchant's text"
+  printf '        the text persists to options.textDesign, a second channel
+'
+  printf '        onApply(DesignData) alone cannot carry it
+'
+else
+  pass "apply() returns the layers and the text on their own channels"
+fi
+
+# ⚠️ **And the text is HYDRATED on open, after the design.** `importDesign`
+# sets the canvas from the photo's aspect and `importText` reads `cw`/`ch`, so
+# the reverse order places the text against the previous canvas.
+HYDRATE=$(strip_comments "$DIALOG" \
+  | perl -0ne 'print $1 if /const hydrate = \(.*?\) => \{(.*?)\n    \};/s' || true)
+
+if [ -z "$HYDRATE" ]; then
+  fail "the dialog no longer hydrates both channels through one helper"
+elif printf '%s' "$HYDRATE" \
+  | awk '/importDesign\(/ { d = NR } /importText\(/ { t = NR } END { exit !(d && t && d < t) }'; then
+  pass "the text is hydrated after the design, against the sized canvas"
+else
+  fail "the text is hydrated before the design — it lands on the previous canvas"
 fi
 
 # ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each

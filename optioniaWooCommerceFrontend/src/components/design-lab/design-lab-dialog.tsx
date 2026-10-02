@@ -17,6 +17,7 @@ import {
   NUDGE_COMMIT_MS,
   preventsDefault,
 } from '@/lib/design-lab/keyboard';
+import type { DesignImage, TextDesign } from '@shared/design/design-geometry.types';
 import { type DesignData, DesignStore } from '@/lib/design-lab/store';
 import { googleFontsHref } from '@/lib/design-lab/text-fonts';
 
@@ -56,8 +57,26 @@ export interface DesignLabDialogProps {
    * open, rather than in every caller.
    */
   product: BackgroundSource | null;
+  /**
+   * The option's saved text design, or null when it has none (M26d.3).
+   *
+   * 🔴 **A SEPARATE channel from `design`, because it persists to a different
+   * column.** A value's artwork is `option_values.design`; a text option's is
+   * `options.textDesign`, and a text option has no values to hang the first one
+   * on. Folding the two into one prop would send the text where nothing reads
+   * it — which is exactly what happened while this prop did not exist: a
+   * merchant could compose a text and `onApply` discarded it in silence.
+   */
+  text?: TextDesign | null;
   /** Called with the edited design when the merchant applies it. */
   onApply: (design: DesignData) => void;
+  /**
+   * Called with the edited text when the merchant applies it.
+   *
+   * ⚠️ **Absent for a value's design**, which carries no text — the lab is then
+   * a layer editor and `exportText` has nothing to return.
+   */
+  onApplyText?: (text: TextDesign | null) => void;
   title?: string;
 }
 
@@ -78,6 +97,8 @@ export function DesignLabDialog({
   onOpenChange,
   design,
   product,
+  text,
+  onApplyText,
   onApply,
   title = 'Design Lab',
 }: Readonly<DesignLabDialogProps>) {
@@ -120,6 +141,7 @@ export function DesignLabDialog({
    */
   const designRef = useRef(design);
   const productRef = useRef(product);
+  const textRef = useRef(text);
 
   /*
    * ⚠️ **Written in an effect, not during render.** React's compiler refuses a
@@ -130,7 +152,8 @@ export function DesignLabDialog({
   useEffect(() => {
     designRef.current = design;
     productRef.current = product;
-  }, [design, product]);
+    textRef.current = text;
+  }, [design, product, text]);
 
   /*
    * Load the curated families, once, the first time a lab opens.
@@ -166,6 +189,21 @@ export function DesignLabDialog({
   useEffect(() => {
     if (!open) return;
 
+    /*
+     * Hydrate both channels, in this order.
+     *
+     * 🔴 **`importText` runs AFTER `importDesign`, always.** `importDesign`
+     * sets the canvas size from the product photo's aspect, and `importText`
+     * turns stored fractions into pixels against `cw`/`ch` — so running it
+     * first would place the text against the PREVIOUS canvas. One helper
+     * rather than three call sites, because the ordering rule is the thing
+     * worth having in one place.
+     */
+    const hydrate = (background: DesignImage | null) => {
+      store.importDesign(designRef.current, background);
+      store.importText(textRef.current ?? null);
+    };
+
     const chosen = productRef.current;
 
     /*
@@ -174,7 +212,7 @@ export function DesignLabDialog({
      * canvas exactly as it did before backgrounds existed.
      */
     if (!canBeBackground(chosen)) {
-      store.importDesign(designRef.current, null);
+      hydrate(null);
 
       return;
     }
@@ -197,8 +235,7 @@ export function DesignLabDialog({
     img.onload = () => {
       if (cancelled) return;
 
-      store.importDesign(
-        designRef.current,
+      hydrate(
         backgroundFor(chosen, { width: img.naturalWidth, height: img.naturalHeight }),
       );
     };
@@ -212,7 +249,7 @@ export function DesignLabDialog({
     img.onerror = () => {
       if (cancelled) return;
 
-      store.importDesign(designRef.current, null);
+      hydrate(null);
     };
 
     img.src = chosen?.imageUrl ?? '';
@@ -300,6 +337,17 @@ export function DesignLabDialog({
 
   function apply() {
     onApply(store.exportDesign());
+
+    /*
+     * 🔴 **The text goes back on its OWN channel.** It persists to a different
+     * column than the layers, so a single `onApply(DesignData)` cannot carry
+     * it — and for four commits it did not: the merchant's text was composed,
+     * drawn, styled and then dropped on the way out.
+     *
+     * 📌 **Sent even when null**, so removing a text persists the removal
+     * rather than leaving the stored one behind.
+     */
+    onApplyText?.(store.exportText());
     onOpenChange(false);
   }
 

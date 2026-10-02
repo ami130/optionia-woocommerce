@@ -89,6 +89,7 @@ import {
 } from '@/lib/hooks/use-unsaved-guard';
 import { DesignLabDialog } from '@/components/design-lab/design-lab-dialog';
 import { canBeBackground } from '@/lib/design-lab/background';
+import type { TextDesign } from '@shared/design/design-geometry.types';
 import type { DesignData } from '@/lib/design-lab/store';
 import { formatAmount, parseAmount } from '@/lib/money/money';
 import { formatBasisPoints, parsePercent } from '@/lib/money/percent';
@@ -154,6 +155,7 @@ import {
   optionSchema,
   swatchFieldsFor,
   takesGroupLabel,
+  optionCarriesTextDesign,
   valueCarriesDesign,
   takesValues,
   valueSchema,
@@ -2157,6 +2159,67 @@ function OptionBlock({
     onSuccess: onChanged,
   });
 
+  /*
+   * 🔴 **The Design Lab for a TEXT option** (M26d.3). A text option has no
+   * values, so the per-value button on `ValueRow` can never appear for one —
+   * which left the whole text-authoring path unreachable from the product for
+   * four commits, while every unit test and gate passed.
+   *
+   * 📌 **`optionCarriesTextDesign` mirrors the API's registry**, exactly as
+   * `valueCarriesDesign` does for a value. The API refuses a text design on any
+   * other type, so showing the button elsewhere would end in a 400 after the
+   * merchant had composed one.
+   */
+  const takesTextDesign = optionCarriesTextDesign(option.presentation);
+  const [textDesignOpen, setTextDesignOpen] = useState(false);
+
+  /*
+   * ⚠️ **The same backdrop the value lab uses**, read the same way — from the
+   * set already cached by the page above. See `ValueRow` for why this is a
+   * one-shot `getQueryData` and why the products query is not gated on the
+   * dialog being open.
+   */
+  const textDesignSetId = useParams<{ id: string }>()?.id ?? null;
+  const textCachedSet = useQueryClient().getQueryData<AuthoringSet>([
+    'option-set',
+    textDesignSetId,
+  ]);
+
+  const textDesignProducts = useQuery({
+    queryKey: ['products', 'preview', textCachedSet?.storeId],
+    queryFn: () => listProducts({ storeId: textCachedSet?.storeId ?? '', limit: 50 }),
+    enabled:
+      takesTextDesign && Boolean(textDesignSetId) && Boolean(textCachedSet?.storeId),
+  });
+
+  const textDesignProduct =
+    textDesignProducts.data?.items.find((item) => canBeBackground(item)) ?? null;
+
+  const saveTextDesign = useMutation({
+    mutationFn: (textDesign: TextDesign | null) =>
+      updateOption(option.id, {
+        textDesign: textDesign as unknown as Record<string, unknown> | null,
+      }),
+    onSuccess: (updated) => {
+      patch.option(updated);
+
+      /*
+       * 📌 **Undoable, like every other edit on this row.** A design applied
+       * outside the log would be the one change a merchant could not take back.
+       */
+      const before = (option.textDesign ?? null) as Record<string, unknown> | null;
+      const after = (updated.textDesign ?? null) as Record<string, unknown> | null;
+
+      patch.record({
+        label: `Text design: ${option.label}`,
+        inverse: async () =>
+          void patch.option(await updateOption(option.id, { textDesign: before })),
+        replay: async () =>
+          void patch.option(await updateOption(option.id, { textDesign: after })),
+      });
+    },
+  });
+
   return (
     <div className="space-y-3 rounded-md border p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2209,6 +2272,26 @@ function OptionBlock({
             >
               {option.isRequired ? 'Make optional' : 'Make required'}
             </Button>
+
+            {/*
+              🔴 **The only way into the text Design Lab.** M26d.3's whole
+              authoring path hangs off this button; without it `addText`,
+              `exportText` and every control built on them are unreachable from
+              the product.
+
+              📌 The label says whether a design exists, for the same reason the
+              value button does: a design is invisible in a flat list.
+            */}
+            {takesTextDesign ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={saveTextDesign.isPending}
+                onClick={() => setTextDesignOpen(true)}
+              >
+                {option.textDesign ? `Edit text design` : `Design text`}
+              </Button>
+            ) : null}
 
             {/* 🔴 Reversible, where Remove is not — see the group toggle above. */}
             <Button
@@ -2297,8 +2380,40 @@ function OptionBlock({
         </>
       ) : null}
 
+      {/*
+        🔴 **Mounted only for a type that carries one**, so a page of dropdowns
+        does not build a Design Lab store per option. The dialog hydrates on
+        open rather than on mount.
+
+        ⚠️ **`text` and `onApplyText` are the SECOND channel.** The layers go
+        through `design`/`onApply` as they always have; the text persists to
+        `options.textDesign`, a different column, so it cannot ride along. A
+        text option has no value design at all, hence `design={null}`.
+      */}
+      {takesTextDesign ? (
+        <DesignLabDialog
+          open={textDesignOpen}
+          onOpenChange={setTextDesignOpen}
+          design={null}
+          text={(option.textDesign as TextDesign | undefined) ?? null}
+          product={textDesignProduct}
+          title={`Text design — ${option.label}`}
+          onApply={() => {
+            /*
+             * 📌 **A text option has no value design to save.** The lab still
+             * returns its (empty) layer set through this channel; dropping it
+             * here is deliberate, not an oversight.
+             */
+          }}
+          onApplyText={(textDesign) => saveTextDesign.mutate(textDesign)}
+        />
+      ) : null}
+
       {toggleRequired.error === null || toggleRequired.error === undefined ? null : (
         <ErrorState error={toggleRequired.error} />
+      )}
+      {saveTextDesign.error === null || saveTextDesign.error === undefined ? null : (
+        <ErrorState error={saveTextDesign.error} />
       )}
       {remove.error === null || remove.error === undefined ? null : <ErrorState error={remove.error} />}
     </div>

@@ -50,6 +50,19 @@ is_exempt_file() {
     # six entries excusing files nothing could find — an exemption list nobody
     # can verify is how one stops being read.
 
+    # ⚠️ **Two symbols here are used by their own tests ONLY**, which is the
+    # defect this gate names — and both PRE-DATE the watch-list extension that
+    # surfaced them (M26d.3's audit, 2026-10-02): `groupDisplaySchema`, which
+    # validates nothing, and `OPTION_SET_LIMITS`, a re-export bundle whose
+    # members are each used individually.
+    #
+    # 🔴 **Exempted as a FILE and dated, rather than deleted inside an
+    # unrelated fix.** Removing exports written for another milestone while
+    # repairing M26d.3 would be scope this task did not ask for; leaving the
+    # gate red would train the next reader to ignore it. The removal belongs in
+    # its own change — and this entry is what will prompt it.
+    lib/schemas/option-sets.ts) return 0 ;;
+
     *) return 1 ;;
   esac
 }
@@ -74,7 +87,8 @@ is_exempt_file() {
 WATCHED_DIRS="optioniaWooCommerceBackend/src:design
 optioniaWooCommerceBackend/src:common/render
 optioniaWooCommerceBackend/src:option-sets/types
-optioniaWooCommerceFrontend/src:lib/design-lab"
+optioniaWooCommerceFrontend/src:lib/design-lab
+optioniaWooCommerceFrontend/src:lib/schemas"
 
 UNUSED=""
 CHECKED=0
@@ -102,8 +116,23 @@ while IFS= read -r watched; do
       continue
     fi
 
+    # 🔴 **A `z.infer<typeof x>` alias is NOT logic, and is skipped at
+    # discovery rather than exempted.** It restates the type of a schema that is
+    # itself used; an unused alias is a spare name, not a module built and wired
+    # to nothing, which is what this gate exists to find. Adding
+    # `lib/schemas` to the watch list surfaced six at once — publishing the
+    # inferred type beside its schema is the deliberate convention there.
+    #
+    # ⚠️ **Skipping a CATEGORY, not listing symbols.** This file's own rule is
+    # that a whole file may be exempt and a symbol may not, because a
+    # symbol-level list stops being read. A category stated once, with its
+    # reason, is checkable; seven names in a list would not be.
     for symbol in $(grep -oE "^export (const|function|interface|type|class) [A-Za-z_][A-Za-z0-9_]*" "$file" \
       | awk '{print $3}'); do
+      if grep -qE "^export type $symbol = z\.infer<" "$file"; then
+        continue
+      fi
+
       CHECKED=$((CHECKED + 1))
 
       # A consumer is any non-test file outside this one that names it.

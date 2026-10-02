@@ -697,6 +697,17 @@ export async function updateOption(
      * stored dialect; the wire shape the plugin reads is the serializer's job.
      */
     pricing?: Record<string, unknown> | null;
+
+    /**
+     * The Design Lab artwork a free-text option prints (M26d.3 / M26d.4).
+     *
+     * 🔴 **On the OPTION, not a value** — a text option has none; see
+     * `optionCarriesTextDesign`. The API refuses it for every other type.
+     *
+     * ⚠️ **`null` CLEARS it**, which is what lets a merchant remove the text
+     * from an option without deleting the option.
+     */
+    textDesign?: Record<string, unknown> | null;
   },
 ): Promise<AuthoringOption> {
   const { data } = await api.patch<AuthoringOption>(`/options/${id}`, changes);

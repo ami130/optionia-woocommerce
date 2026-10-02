@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DesignStore, designLayerToEditor, editorLayerToDesign } from './store';
+import {
+  type DesignData,
+  DesignStore,
+  designLayerToEditor,
+  editorLayerToDesign,
+} from './store';
 import { resolveSceneText } from '@shared/design/text-geometry';
 
 import { DEFAULT_SAMPLE_TEXT, MAX_TEXT_CURVE, MIN_TEXT_SIZE } from './text-model';
+import { panelSubject } from './text-panel';
 
 /**
  * The state engine M26d.1 calls load-bearing.
@@ -1311,5 +1317,172 @@ describe('text bounds reach the store', () => {
     const stored = s.exportText()!;
 
     expect(stored.curve).toBe(resolveSceneText(stored, s.cw, s.ch).curve);
+  });
+});
+
+describe('every layer selection clears the text selection', () => {
+  /*
+   * 🔴 **Four methods assigned `selectedId` directly and leaked.** `select()`
+   * cleared the text's selection; `addLayer`, `duplicateLayer`,
+   * `removeLayerById` and `enterCrop` did not — so adding a layer while the
+   * text was selected left BOTH selected, the canvas drew the layer's handles,
+   * and the properties panel showed the text's font. Found by probing the
+   * store, not by the gate that claimed to cover this.
+   */
+  function withText(): DesignStore {
+    const s = store();
+
+    s.addText();
+
+    return s;
+  }
+
+  it('addLayer deselects the text', () => {
+    const s = withText();
+
+    s.addLayer('a.png', 'A', 200, 100);
+
+    expect(s.textSelected).toBe(false);
+    expect(s.selectedId).not.toBeNull();
+  });
+
+  it('duplicateLayer deselects the text', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    s.addText();
+    s.duplicateLayer(layer);
+
+    expect(s.textSelected).toBe(false);
+  });
+
+  /*
+   * 📌 **`removeLayerById` routes through the rule for CONSISTENCY, not to fix
+   * a reachable leak — a mutation proved the difference.** Its branch runs only
+   * when the removed layer is the selected one, and while the text holds the
+   * selection `selectedId` is null, so the branch cannot fire in a leaked
+   * state. Reverting it to a direct assignment kills no test, and that is
+   * recorded here rather than papered over with a fixture that forces the
+   * state by hand: a test that reaches past the public API proves nothing
+   * about what a merchant can do.
+   */
+  it('removeLayerById leaves one subject selected', () => {
+    const s = store();
+    const first = s.addLayer('a.png', 'A', 200, 100);
+
+    s.addLayer('b.png', 'B', 200, 100);
+    s.select(first.id);
+    s.removeLayerById(first.id);
+
+    expect(s.textSelected).toBe(false);
+    expect(s.selectedId).not.toBe(first.id);
+  });
+
+  it('enterCrop deselects the text', () => {
+    const s = store();
+    const layer = s.addLayer('a.png', 'A', 200, 100);
+
+    s.setShapeOn(layer, 'circle');
+    s.addText();
+    s.enterCrop(layer.id);
+
+    expect(s.textSelected).toBe(false);
+    expect(s.cropping).toBe(layer.id);
+  });
+
+  /*
+   * ⚠️ **The panel must agree**, which is the symptom a merchant would see:
+   * the canvas drawing one subject's handles while the panel edited another.
+   */
+  it('leaves exactly one subject for the panel after adding a layer', () => {
+    const s = withText();
+
+    s.addLayer('a.png', 'A', 200, 100);
+
+    expect(panelSubject(s.getSelected(), s.getSelectedText())).toBe('layer');
+  });
+});
+
+describe('the save and reopen cycle the dialog performs', () => {
+  /*
+   * 🔴 **The test that would have caught the feature being broken.** For four
+   * commits the dialog sent `exportDesign()` alone on apply, so a merchant's
+   * text was composed, drawn, styled — and discarded in silence. Every unit
+   * test passed, because each covered one half of a channel nothing joined.
+   *
+   * ⚠️ **It models what the DIALOG does**, in order: `importDesign` then
+   * `importText` on open, both exports on apply. Testing the store's methods
+   * in isolation is what missed it.
+   */
+  function openLab(design: DesignData | null, text: ReturnType<DesignStore['exportText']>) {
+    const s = new DesignStore();
+
+    s.cw = 400;
+    s.ch = 460;
+    s.importDesign(design, null);
+    s.cw = 400;
+    s.ch = 460;
+    s.importText(text);
+
+    return s;
+  }
+
+  it('carries a composed text through apply and back', () => {
+    const first = openLab(null, null);
+
+    first.addText();
+    first.updateText({
+      text: 'Engraved',
+      size: 40,
+      curve: 60,
+      bold: true,
+      h: 120,
+      valign: 'bottom',
+    });
+
+    const reopened = openLab(first.exportDesign(), first.exportText());
+
+    expect(reopened.text?.text).toBe('Engraved');
+    expect(reopened.text?.curve).toBe(60);
+    expect(reopened.text?.bold).toBe(true);
+    expect(reopened.text?.valign).toBe('bottom');
+    /* A fraction round trip, so compared at pixel precision. */
+    expect(reopened.text?.h).toBeCloseTo(120, 6);
+  });
+
+  it('carries layers and text together, on their separate channels', () => {
+    const first = openLab(null, null);
+
+    first.addLayer('https://cdn/a.png', 'A', 200, 100);
+    first.addText();
+    first.updateText({ text: 'Both' });
+
+    const reopened = openLab(first.exportDesign(), first.exportText());
+
+    expect(reopened.layers).toHaveLength(1);
+    expect(reopened.text?.text).toBe('Both');
+  });
+
+  /*
+   * ⚠️ **Removing a text must PERSIST the removal.** Exporting null and
+   * skipping the write would leave the stored text behind, so the merchant's
+   * deletion would undo itself on reload.
+   */
+  it('persists a removed text as null rather than leaving the old one', () => {
+    const first = openLab(null, null);
+
+    first.addText();
+
+    const withText = first.exportText();
+
+    expect(withText).not.toBeNull();
+
+    first.removeText();
+
+    expect(first.exportText()).toBeNull();
+
+    const reopened = openLab(first.exportDesign(), first.exportText());
+
+    expect(reopened.text).toBeNull();
   });
 });
