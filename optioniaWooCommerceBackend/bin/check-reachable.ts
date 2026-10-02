@@ -89,13 +89,33 @@ const EXEMPT = new Map<string, string>([
    * without importing this beside it — so this exemption cannot outlive the
    * renderer's arrival unnoticed.
    *
-   * ⚠️ **DELETE WHEN M26e.4 LANDS.** The order-image renderer is its caller. If
-   * that milestone ships without importing this, the guard is dead rather than
-   * pending — and the 50000×50000 case is live again.
+   * ✅ **THE CALLER ARRIVED (2026-10-02) and this exemption is GONE.**
+   * `design/scene-raster.ts` imports it, so the guard is live rather than
+   * pending, and `check-render-bounds.sh` now has a real file to hold to both
+   * halves of the rule. The instruction that used to sit here — *"delete when
+   * M26e.4 lands"* — was followed rather than extended, which is the only way
+   * a dated exemption stays worth reading.
    */
-  ['common/render/render-bounds.ts', 'M26e.4 — the order-image renderer is its caller'],
 
+  /*
+   * 🔴 **The rasteriser itself, pending the pipeline that calls it.**
+   *
+   * `rasteriseScene` is complete and proven: bounds refused before a `Resvg`
+   * exists (measured — without that check the 50000×50000 case takes 42
+   * seconds in a unit test), hostile input caught, fonts isolated from the
+   * host, and eight-digit alpha verified against the browser's own result.
+   *
+   * ⚠️ **What it does NOT yet have is the async job Decision 2 chose**: a
+   * queue, a `not rendered yet` state on the order, and `UploadStore` as the
+   * destination (Decision 3). That is the rest of M26e.4, and inventing a
+   * caller to satisfy this gate would be worse than the exemption — a route
+   * nothing uses reads as a finished feature.
+   *
+   * ⚠️ **DELETE WHEN THE RENDER JOB LANDS.** If M26e.4 completes without
+   * something importing this, the renderer is dead code rather than pending.
+   */
 
+  ['design/scene-raster.ts', 'M26e.4 — the render job is its caller'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

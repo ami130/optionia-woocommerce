@@ -883,7 +883,7 @@ M26d.1. Telling a merchant their artwork will be letterboxed is a supported
 limitation; letting them find out from a customer's order is the same defect
 wearing different clothes.
 
-### F5 ⚠️ Text alpha is wired for the BROWSER and unverified against `resvg`
+### F5 ✅ CLOSED 2026-10-02 — `resvg` honours eight-digit hex, measured
 
 **M26d.3 asks for "colour with alpha"**, `TextDesign` documents its colour as
 *"Hex colour, with alpha"*, and the source editor records that text opacity is
@@ -905,8 +905,27 @@ colour value makes an SVG renderer fall back to black, so semi-transparent text
 would print as solid black rather than as a lighter shade. That is a wrong
 print file, not a missing feature.
 
-📌 **What to do at M26e**, before any print file is produced: render a text at
-50% alpha through `resvg` and compare the pixel against the browser's. If it
-disagrees, the fix is in the renderer's serializer — emit `fill` plus
-`fill-opacity` instead of eight-digit hex — and NOT in the stored shape, which
-`TextDesign` has always defined as carrying alpha.
+✅ **Measured on `@resvg/resvg-js` 2.6.2, the moment it was installed.** A red
+fill over white, read back from `render().pixels`:
+
+| Fill | Centre pixel |
+|---|---|
+| `#ff0000` (opaque) | `255,0,0,255` |
+| `#ff000080` (8-digit) | `255,127,127,255` |
+| `#ff0000` + `fill-opacity="0.5"` | `255,127,127,255` |
+
+**The eight-digit form and `fill-opacity` produce the identical pixel**, and the
+feared failure — an unrecognised colour falling back to solid black — does not
+occur. Repeated on real glyphs rather than a rectangle (`<text>` at 34px, Arial,
+darkest pixel sampled): opaque `255,0,0`, semi-transparent `255,127,127`.
+
+📌 **So no serializer change is needed**, and the stored shape stands as
+`TextDesign` always defined it. Recorded because the opposite result would have
+meant a wrong print file rather than a missing feature, and because "it probably
+works" is what this document exists not to say.
+
+⚠️ **One methodological note, since this document already carries the lesson
+once.** The first probe read `render().pixmap`, which is `undefined` — the
+accessor is `pixels`. An undefined buffer yields `undefined` comparisons that
+look like a null result rather than a broken test. The same shape as F2's
+byte-count proxy: check the instrument before believing what it reports.

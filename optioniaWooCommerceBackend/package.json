@@ -53,6 +53,7 @@
     "@nestjs/terminus": "^11.1.1",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
+    "@resvg/resvg-js": "2.6.2",
     "@types/bcrypt": "^6.0.0",
     "@types/compression": "^1.8.1",
     "bcrypt": "^6.0.0",
@@ -103,7 +104,10 @@
       "ts"
     ],
     "rootDir": ".",
-    "roots": ["<rootDir>/src", "<rootDir>/../shared"],
+    "roots": [
+      "<rootDir>/src",
+      "<rootDir>/../shared"
+    ],
     "moduleNameMapper": {
       "^@shared/(.*)$": "<rootDir>/../shared/$1"
     },
