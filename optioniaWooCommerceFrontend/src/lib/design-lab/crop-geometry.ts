@@ -1,4 +1,4 @@
-import type { LayerCrop, LayerStyle } from '@shared/design/design-geometry.types';
+import type { LayerCrop, LayerShape, LayerStyle } from '@shared/design/design-geometry.types';
 import { clampInside, frameImageRect } from '@shared/design/layer-geometry';
 
 import { MIN_LAYER_SIZE, type MoveAxes } from './drag-geometry';
@@ -29,7 +29,13 @@ export interface CroppableLayer {
   h: number;
   natW: number;
   natH: number;
-  shape: string;
+  /*
+   * ⚠️ **`LayerShape`, not `string`.** A bare string let a typo compile —
+   * `'cirlce'` would pass tsc, reach the canvas, resolve to no clip-path and
+   * clip the layer to nothing. The union is seven literals and costs one
+   * import that this module already takes from the same file.
+   */
+  shape: LayerShape;
   crop?: LayerCrop | null;
 }
 
@@ -198,7 +204,7 @@ export function cropBoxToCrop(
  */
 export interface ShapeChange {
   /** The shape to store. Toggling a shape off yields `none`. */
-  shape: string;
+  shape: LayerShape;
   /** The box, re-squared where the new shape requires it. */
   size: { w: number; h: number };
   /**
@@ -210,7 +216,7 @@ export interface ShapeChange {
   resetStyle: boolean;
 }
 
-export function shapeChangeFor(layer: CroppableLayer, next: string): ShapeChange {
+export function shapeChangeFor(layer: CroppableLayer, next: LayerShape): ShapeChange {
   const leaving = next === 'none' || layer.shape === next;
 
   if (leaving) {

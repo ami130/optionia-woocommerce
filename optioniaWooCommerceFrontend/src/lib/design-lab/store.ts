@@ -800,7 +800,7 @@ export class DesignStore {
   setShapeOn(layer: EditorLayer, shape: LayerShape): void {
     const change = shapeChangeFor(layer, shape);
 
-    layer.shape = change.shape as LayerShape;
+    layer.shape = change.shape;
     layer.w = change.size.w;
     layer.h = change.size.h;
     layer.crop = change.crop;

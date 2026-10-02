@@ -498,6 +498,39 @@ else
   pass "all 14 operation(s) M26d.1 names are reachable"
 fi
 
+# 8c-ii. M26d.2's operations, and the ones still waiting for a caller.
+#
+# 🔴 **`check-symbol-reachable.sh` cannot see any of these.** It matches
+# `^export (const|function|interface|type|class)`, and a store METHOD is none of
+# those — so it reports `DesignStore` reached and never looks inside. That is
+# why `nudge` was found by a hand audit rather than by a gate, and why four crop
+# methods shipped unwired with every gate green.
+#
+# ⚠️ **STAGED is a state, not an excuse.** Code written ahead of its UI is
+# legitimate; code that is *silently* unwired is the defect. So each method is
+# either reachable or named here with the stage that will wire it, and the
+# output says which — a stage that slips becomes visible rather than forgotten.
+CROP_REACHED=""
+CROP_STAGED=""
+
+for op in setShapeOn setCropBox setInnerRotation enterCrop exitCrop; do
+  if grep -rqE "\b(store|this)\.$op\(" "$UI_DIR" --include='*.tsx'; then
+    CROP_REACHED="$CROP_REACHED $op"
+  else
+    CROP_STAGED="$CROP_STAGED $op"
+  fi
+done
+
+# The crop drag and its overlay are M26d.2 Step 4. Until that lands, four of
+# these have no caller — and this says so on every run rather than relying on a
+# sentence in a commit message.
+if [ -n "$CROP_STAGED" ]; then
+  printf '\033[33mwarn\033[0m  crop operation(s) still waiting for M26d.2 Step 4:%s\n' "$CROP_STAGED"
+  printf '        reachable now:%s\n' "${CROP_REACHED:- none}"
+else
+  pass "every M26d.2 crop operation is reachable"
+fi
+
 # 8d. A merchant's image URL is checked before it becomes a layer.
 #
 # ⚠️ **A security boundary, not a form nicety.** The URL becomes an `<img src>`

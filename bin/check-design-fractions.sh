@@ -59,9 +59,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # A directory that does not exist yet is not an error; it is simply not scanned,
 # and the count below states how many were found so the coverage is visible
 # rather than assumed.
+#
+# ✏️ **`src/lib/design` and `src/design` were removed, and the editor is
+# DELIBERATELY not scanned.** Both were written before the Design Lab existed,
+# and neither was ever created — the editor landed in `src/lib/design-lab`. The
+# comment above calls the editor "the likeliest violator", which made those two
+# paths read as coverage of it; they were not, and could never have been.
+#
+# 🔴 **Scanning it would be WRONG, not merely redundant.** The editor works in
+# pixels by design — `MIN_LAYER_SIZE = 24`, `CANVAS_BASE_H = 460`,
+# `CROP_OFF_FRAME_MARGIN = 20` are all correct there — and M26c.2's contract is
+# that the conversion happens in exactly two functions, not that the editor
+# holds no pixels. What guards the editor is `check-design-store.sh`, which
+# asserts those two conversion points and the crop's third one.
+#
+# 📌 **The plugin paths stay**: M26e.1 puts a storefront overlay there and it
+# will hold geometry, so an absent directory is a guard waiting rather than a
+# guard that cannot fire.
 GEO_DIRS="$ROOT/shared/design
-$ROOT/optioniaWooCommerceFrontend/src/design
-$ROOT/optioniaWooCommerceFrontend/src/lib/design
 $ROOT/optioniaWooCommercePlugin/src/Design
 $ROOT/optioniaWooCommercePlugin/assets/design"
 
