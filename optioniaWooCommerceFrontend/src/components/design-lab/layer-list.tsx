@@ -56,6 +56,44 @@ export function LayerList({ store }: Readonly<{ store: DesignStore }>) {
 
       <AddLayer store={store} />
 
+      {/*
+        🔴 **The only way to add or select the text.** Without this the whole
+        M26d.3 path is unreachable from the UI — `addText` and `selectText`
+        would have no caller, which is the defect this repository has met
+        repeatedly and the symbol-reachability gate exists to catch.
+
+        📌 **A row, not a second list.** The text IS part of the design's
+        stacking order (the canvas draws it over the layers), so it belongs
+        where the merchant already looks for what is in their design.
+      */}
+      {store.text === null ? (
+        <button
+          type="button"
+          className="optionia-designlab-add-text"
+          onClick={() => store.addText()}
+        >
+          Add text
+        </button>
+      ) : (
+        <button
+          type="button"
+          className={
+            'optionia-designlab-text-row' +
+            (store.textSelected ? ' optionia-designlab-is-selected' : '')
+          }
+          aria-pressed={store.textSelected}
+          onClick={() => store.selectText()}
+        >
+          {/*
+            ⚠️ **The sample wording labels the row**, falling back when it is
+            empty — an unlabelled row in a list of named layers reads as a bug.
+          */}
+          <span className="optionia-designlab-text-row-label">
+            {store.text.text.trim() || 'Text'}
+          </span>
+        </button>
+      )}
+
       {rows.length === 0 ? (
         <p className="optionia-designlab-empty">No layers yet.</p>
       ) : (

@@ -729,3 +729,132 @@
 .optionia-designlab-crop-box {
   border-style: dashed;
 }
+
+/* ---------------------------------------------------------------------------
+ * Text (M26d.3)
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The sample-wording field.
+ *
+ * ⚠️ **Resizable vertically only.** A merchant dragging it wider would break
+ * the panel's column; taller is useful and harmless.
+ */
+.optionia-designlab-textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+/*
+ * 📌 **The hint that the wording is a SAMPLE.** M26d.3 is explicit that the
+ * customer's input replaces it, and a merchant who misses that would be
+ * surprised by their own product page.
+ */
+.optionia-designlab-hint {
+  margin: 0;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.optionia-designlab-select {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+/* A label + control on one line, for the colour swatch. */
+.optionia-designlab-colour {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  font-size: 12px;
+}
+
+.optionia-designlab-colour input {
+  /*
+   * ⚠️ **A fixed width, because a bare `<input type="color">` is a tiny square
+   * in some browsers and full-width in others.** Left to flex it would make the
+   * cluster's widths disagree between Safari and Firefox.
+   */
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: none;
+}
+
+.optionia-designlab-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+/*
+ * The two buttons that add and select the design's text.
+ *
+ * 🔴 **Full width, like `AddLayer`'s own button**, so the side panel reads as
+ * one column of actions rather than a layout that shifts when a text exists.
+ */
+.optionia-designlab-add-text,
+.optionia-designlab-text-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.optionia-designlab-add-text {
+  justify-content: center;
+}
+
+/* The selected text row, matching how a selected layer row reads. */
+.optionia-designlab-text-row.optionia-designlab-is-selected {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+
+/*
+ * ⚠️ **Truncated rather than wrapped.** A merchant's sample can be a sentence,
+ * and a row that grew to three lines would push the layer list down the panel.
+ */
+.optionia-designlab-text-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 📌 **Styled as a quiet destructive action, not a primary one.** Removing the
+ * text is undoable (`removeText` commits), so it does not need a confirmation —
+ * but it should not look like the panel's main button either.
+ */
+.optionia-designlab-remove-text {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #e3e3e3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #b42318;
+  cursor: pointer;
+}

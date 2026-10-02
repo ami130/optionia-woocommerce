@@ -1013,6 +1013,61 @@ if [ -n "$TEXT_EL" ]; then
   fi
 fi
 
+# 🔴 **Every text operation the merchant needs is reachable from the UI.**
+# `addText` with no caller is the defect this repository has met repeatedly: a
+# store method, a test and a gate all passing over a capability no merchant can
+# use. `selectText` is included because it is the ONLY way to reach the text's
+# properties — the canvas does not hit-test it.
+PANEL="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/properties-panel.tsx"
+LIST="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/layer-list.tsx"
+TEXT_OPS="addText
+selectText
+removeText
+updateText
+nudgeText"
+
+UNREACHABLE=""
+OPS_CHECKED=0
+UI=$(strip_comments "$PANEL"; strip_comments "$LIST")
+
+while IFS= read -r op; do
+  [ -z "$op" ] && continue
+
+  OPS_CHECKED=$((OPS_CHECKED + 1))
+
+  printf '%s' "$UI" | grep -qE "store\.$op\(" || UNREACHABLE="$UNREACHABLE  $op\n"
+done <<EOF
+$TEXT_OPS
+EOF
+
+if [ "$OPS_CHECKED" -eq 0 ]; then
+  fail "checked no text operations at all — the parser is wrong, not the code"
+elif [ -n "$UNREACHABLE" ]; then
+  fail "text operation(s) no merchant can reach:"
+  printf "%b" "$UNREACHABLE" | sed 's|^|      |'
+else
+  pass "all $OPS_CHECKED text operation(s) M26d.3 names are reachable"
+fi
+
+# ⚠️ **The text sliders must NOT commit per frame**, the same contract the
+# layer sliders are held to: one drag would otherwise fill all eighty history
+# entries and undo would step back a pixel at a time.
+TEXT_PROPS=$(strip_comments "$PANEL" \
+  | awk '/^function TextProperties\(/ { inside = 1 }
+         inside && /^function / && !/^function TextProperties\(/ { exit }
+         inside { print }')
+
+if [ -z "$TEXT_PROPS" ]; then
+  fail "the text properties panel is missing — this gate's parser is stale"
+elif printf '%s' "$TEXT_PROPS" | grep -qE 'type="range"' \
+  && ! printf '%s' "$TEXT_PROPS" | grep -qE 'nudgeText\('; then
+  fail "the text sliders do not go through nudgeText"
+  printf '        committing per frame fills all eighty history entries
+'
+else
+  pass "the text sliders notify and commit once after a pause"
+fi
+
 # ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each
 # clamping to a different number is the same defect as not clamping at all.
 #
