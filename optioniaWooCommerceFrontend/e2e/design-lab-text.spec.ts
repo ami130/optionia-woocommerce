@@ -27,25 +27,19 @@ import {
  * seeded straight into the database with a URL nothing dials. The API and the
  * dashboard are enough, and both were confirmed healthy when this was written.
  *
- * ⚠️ **NOT YET EXECUTED, as of 2026-10-02 — this file is a specification, not
- * evidence.** `global-setup` refuses to start while `SMTP_HOST` is set, because
- * every run registers a merchant at a domain that does not resolve and the
- * bounce lands in the mailbox `SMTP_USER` signs in as. Disabling that needs an
- * edit to a gitignored `.env` holding live credentials and an API restart —
- * the owner's call, and they chose to run it themselves later.
+ * ✅ **EXECUTED, and it found a defect on its first run (2026-10-02).** A
+ * reopened text design landed on a panel of DISABLED LAYER CONTROLS: a text
+ * option has no layers, `importText` left nothing selected, and the merchant
+ * had to hunt for the row before editing a word of their own text. Every unit
+ * test passed — they prove the stored geometry round-trips and say nothing
+ * about what a merchant SEES on reopening. `importText` now selects the text
+ * when no layer took the selection.
  *
- * 🔴 **So M26d.3 remains structurally verified only.** Everything above is
- * written from the code it exercises, which is exactly how a test can be wrong
- * and green at once; the selectors, the Apply label and the reload behaviour
- * are all unconfirmed guesses until this runs. Expect to fix this file on its
- * first execution, and treat a failure here as a defect in the test before
- * assuming one in the product.
- *
- * **To run it:** empty `SMTP_HOST` in `optioniaWooCommerceBackend/.env`,
- * restart the API (a rebuild is not enough — `nest start --watch` keeps the
- * environment it booted with), then `npx playwright test design-lab-text`.
- * Mail then goes to the ops log; `verifyEmail()` marks the address verified in
- * the database directly, which is all these tests need.
+ * ⚠️ **It needs only the API and the dashboard**, so run it with
+ * `E2E_REQUIRE=api,dashboard npx playwright test design-lab-text`. Without that
+ * the setup demands WooCommerce, as the canonical flow should. `SMTP_HOST` must
+ * also be empty in the API's `.env` — and the API restarted after, since
+ * `nest start --watch` keeps the environment it booted with.
  */
 test.describe('Design Lab — text', () => {
   test('a merchant composes a text design, saves it, and reopens it unchanged', async ({

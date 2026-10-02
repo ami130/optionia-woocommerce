@@ -1486,3 +1486,60 @@ describe('the save and reopen cycle the dialog performs', () => {
     expect(reopened.text).toBeNull();
   });
 });
+
+describe('what a reopened design lands on', () => {
+  /*
+   * 🔴 **Found in a BROWSER, after every unit test passed.** The round trip
+   * these tests prove is about stored geometry; what the merchant SEES on
+   * reopening was never exercised. A text option has no layers, so a reopened
+   * text design showed a panel of disabled layer controls and the merchant had
+   * to hunt for the row before editing a word of their own text.
+   */
+  it('selects the text when a text design is reopened', () => {
+    const first = new DesignStore();
+
+    first.importDesign(null, null);
+    first.importText(null);
+    first.addText();
+    first.updateText({ text: 'Engraved' });
+
+    const reopened = new DesignStore();
+
+    reopened.importDesign(null, null);
+    reopened.importText(first.exportText());
+
+    expect(reopened.textSelected).toBe(true);
+    expect(reopened.getSelectedText()?.text).toBe('Engraved');
+  });
+
+  /*
+   * ⚠️ **A VALUE's design keeps showing its layer.** `importDesign` selects the
+   * topmost one; stealing that selection for a text would change what the
+   * merchant was looking at before this existed.
+   */
+  it('leaves a layer selected when the design has one', () => {
+    const first = new DesignStore();
+
+    first.importDesign(null, null);
+    first.addLayer('https://cdn/a.png', 'A', 200, 100);
+    first.addText();
+
+    const reopened = new DesignStore();
+
+    reopened.importDesign(first.exportDesign(), null);
+    reopened.importText(first.exportText());
+
+    expect(reopened.selectedId).not.toBeNull();
+    expect(reopened.textSelected).toBe(false);
+  });
+
+  it('selects nothing when the design has neither', () => {
+    const s = new DesignStore();
+
+    s.importDesign(null, null);
+    s.importText(null);
+
+    expect(s.textSelected).toBe(false);
+    expect(s.selectedId).toBeNull();
+  });
+});

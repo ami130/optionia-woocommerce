@@ -551,7 +551,22 @@ export class DesignStore {
      */
     if (this.text) clampText(this.text);
 
-    this.textSelected = false;
+    /*
+     * 🔴 **Select the loaded text when nothing else can be.** `importDesign`
+     * already selects the topmost layer so a reopened design lands on
+     * something editable; a TEXT option has no layers at all, so without this
+     * the merchant reopens their own design to a panel of disabled layer
+     * controls and has to find the row before they can edit a word of it.
+     *
+     * ⚠️ **Found in a browser, not by a test.** The unit tests asserted that
+     * `importText` leaves nothing selected — which was true, and wrong. The
+     * round trip they prove is about the stored geometry; what a merchant
+     * SEES on reopening was never exercised until the e2e ran.
+     *
+     * 📌 **Only when no layer took the selection**, so a value's design — where
+     * `importDesign` has just chosen a layer — keeps showing that layer.
+     */
+    this.textSelected = this.text !== null && this.selectedId === null;
     /*
      * 📌 **Re-commits so the loaded text is the undo floor**, matching
      * `importDesign`: undo cannot walk back behind a load into a state the

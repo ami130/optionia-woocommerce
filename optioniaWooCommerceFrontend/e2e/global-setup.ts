@@ -90,11 +90,64 @@ export default async function globalSetup(): Promise<void> {
   assertMailIsNotSent();
 
   const checks = await checkServices();
-  const down = checks.filter((check) => !check.ok);
+
+  /*
+   * Which services this RUN needs, for the suites that do not span all three.
+   *
+   * 🔴 **Opt-in, and the default is every service.** The canonical flow really
+   * does need the store, and a setup that guessed from the spec name would let
+   * a storefront test skip the check that proves WooCommerce is up. So a run
+   * narrows the list deliberately — `E2E_REQUIRE=api,dashboard` — or gets all
+   * three, exactly as before.
+   *
+   * ⚠️ **It can only NARROW, never widen.** An unknown name is refused rather
+   * than ignored, because a typo would otherwise read as "that service is not
+   * required" and silently disable the check it was meant to keep.
+   *
+   * 📌 **The Design Lab text suite is the case this exists for.** It is
+   * dashboard-only: the store row it needs is written straight to the database
+   * and no step dials the storefront, so demanding WordPress would block a
+   * suite that cannot touch it.
+   */
+  const required = (process.env.E2E_REQUIRE ?? '')
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter((name) => name !== '');
+
+  if (required.length > 0) {
+    const known = checks.map((check) => check.name.toLowerCase());
+    const unknown = required.filter(
+      (name) => !known.some((service) => service.startsWith(name)),
+    );
+
+    if (unknown.length > 0) {
+      throw new Error(
+        `E2E_REQUIRE names ${unknown.join(', ')}, which is not a service this ` +
+          `setup checks (${checks.map((c) => c.name).join(', ')}).\n` +
+          'A typo here would read as "not required" and disable a check silently.',
+      );
+    }
+  }
+
+  const needed =
+    required.length === 0
+      ? checks
+      : checks.filter((check) =>
+          required.some((name) => check.name.toLowerCase().startsWith(name)),
+        );
+
+  const down = needed.filter((check) => !check.ok);
 
   for (const check of checks) {
-    const mark = check.ok ? '✓' : '✗';
-    console.log(`  ${mark} ${check.name.padEnd(18)} ${check.url}  (${check.detail})`);
+    /* 📌 A service this run does not need is reported, never silently dropped. */
+    const skipped = !needed.includes(check);
+    const mark = skipped ? '–' : check.ok ? '✓' : '✗';
+
+    console.log(
+      `  ${mark} ${check.name.padEnd(18)} ${check.url}  (${
+        skipped ? 'not required by this run' : check.detail
+      })`,
+    );
   }
 
   if (down.length === 0) {
@@ -119,7 +172,7 @@ export default async function globalSetup(): Promise<void> {
   const lines = down.map((check) => `  • ${check.name} — ${check.detail}\n    start it: ${check.hint}`);
 
   throw new Error(
-    `\nThe canonical E2E needs three services, and ${down.length} ${
+    `\nThis run needs ${needed.length} service(s), and ${down.length} ${
       down.length === 1 ? 'is' : 'are'
     } not answering:\n\n${lines.join('\n')}\n\n` +
       `Store URL in use: ${SERVICES.store}\n`,
