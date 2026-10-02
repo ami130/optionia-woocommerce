@@ -197,6 +197,49 @@ test.describe('Design Lab', () => {
       await expect(page.locator('.optionia-designlab-rotate-pt')).toBeVisible();
     });
 
+    await test.step('a layer can be put in a frame', async () => {
+      /*
+       * 🔴 **M26d.2, in a browser.** The clip-path, the instance-scoped id and
+       * the inner image placement had never been rendered — the unit tests
+       * prove the geometry and say nothing about whether a browser resolves
+       * `url(#…)` or draws anything at all.
+       */
+      await page.getByRole('button', { name: /^Circle$/ }).click();
+
+      const framed = page.locator('.optionia-designlab-frame-clip');
+
+      await expect(framed).toHaveCount(1);
+
+      /*
+       * ⚠️ **The clip must RESOLVE, not merely be set.** A broken id leaves the
+       * attribute in place and clips the layer to nothing — so the frame is
+       * asserted to still occupy space.
+       */
+      const box = await framed.boundingBox();
+
+      expect(box, 'the framed layer has a box on screen').not.toBeNull();
+      expect(box!.width).toBeGreaterThan(0);
+      expect(box!.height).toBeGreaterThan(0);
+
+      /* 📌 Entering a frame squares the box — `shapeChangeFor`'s first rule. */
+      expect(Math.abs(box!.width - box!.height)).toBeLessThan(2);
+
+      /* And the clip-path actually points at a def that exists in this DOM. */
+      const clipId = await framed.evaluate(
+        (el) => getComputedStyle(el).clipPath.match(/url\("?#([^")]+)/)?.[1] ?? '',
+      );
+
+      expect(clipId, 'the clip-path names an id').not.toBe('');
+      await expect(page.locator(`#${clipId}`)).toHaveCount(1);
+    });
+
+    await test.step('choosing the same frame again clears it', async () => {
+      /* 📌 A toggle, not a one-way door — `shapeChangeFor`'s third transition. */
+      await page.getByRole('button', { name: /^Circle$/ }).click();
+
+      await expect(page.locator('.optionia-designlab-frame-clip')).toHaveCount(0);
+    });
+
     await test.step('the design is applied and survives a reload', async () => {
       await page.getByRole('button', { name: /^Apply$/ }).click();
 

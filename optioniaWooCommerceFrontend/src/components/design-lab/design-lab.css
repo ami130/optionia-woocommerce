@@ -620,3 +620,65 @@
   font-size: 11px;
   color: #c4320a;
 }
+
+/* ───────────────────────── framed layers ───────────────────────── */
+
+/*
+ * 🔴 **`inset: 0` is what makes the clip clip.** The frame's box is the layer's
+ * box, and the clip-path is written in `objectBoundingBox` units — a 0..1 box —
+ * so this element must fill its parent exactly or the shape scales to the wrong
+ * rectangle. `overflow: hidden` is belt and braces: a browser that cannot
+ * resolve the clip-path still contains the image rather than spilling it across
+ * the canvas.
+ */
+.optionia-designlab-frame-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/*
+ * ⚠️ **The inner image must not take the click.** `closest()` resolves a hit to
+ * the layer div, and an image that swallowed the event would make a framed
+ * layer undraggable — the same rule the plain layer's `<img>` already follows.
+ */
+.optionia-designlab-frame-clip img {
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+/* ───────────────────────── the frame picker ───────────────────────── */
+
+.optionia-designlab-shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.optionia-designlab-shape-btn {
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid #e3e3e3;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.optionia-designlab-shape-btn:hover:not(:disabled) {
+  border-color: #d4d4d4;
+  background: #f1f1f1;
+}
+
+/*
+ * 📌 **The active frame reads as pressed**, because choosing it again CLEARS
+ * it — a merchant needs to see which button is the one that will undo itself.
+ */
+.optionia-designlab-shape-btn.optionia-designlab-shape-on {
+  border-color: var(--dl-sel-blue);
+  background: rgba(47, 139, 255, 0.08);
+}
+
+.optionia-designlab-shape-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

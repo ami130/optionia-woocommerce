@@ -613,6 +613,68 @@ else
   fail "the editor no longer blocks on its set query — ValueRow's cache read may now miss"
 fi
 
+# 8h. Frames are reachable, and drawn the way a frame must be (M26d.2).
+#
+# 🔴 **`setShapeOn` with no caller is the defect this repository has met seven
+# times** — built, typed, tested, reached by nothing. A frame picker is what
+# makes the whole crop path exist for a merchant.
+PROPS_PANEL="$ROOT/optioniaWooCommerceFrontend/src/components/design-lab/properties-panel.tsx"
+
+if [ ! -f "$PROPS_PANEL" ] || [ ! -f "$CANVAS" ]; then
+  fail "the properties panel or canvas is missing"
+else
+  FRAME_FAILS=0
+
+  grep -qE "store\.setShapeOn\(" "$PROPS_PANEL" \
+    || { fail "no frame picker — setShapeOn has no caller"; FRAME_FAILS=$((FRAME_FAILS + 1)); }
+
+  # ⚠️ **The CLIP must be instance-scoped.** `clip-path: url(#…)` resolves
+  # document-wide to the first match, and one Design Lab mounts per choice — a
+  # shared id can resolve into a closed dialog's hidden defs and clip the layer
+  # to nothing. The source carries the same warning for the same reason.
+  if grep -qE "useId\(\)" "$CANVAS" && grep -qE "clipPrefix" "$CANVAS"; then
+    pass "the frame clip ids are scoped per Design Lab instance"
+  else
+    fail "the clip ids are shared — a second Design Lab would clip layers to nothing"
+    FRAME_FAILS=$((FRAME_FAILS + 1))
+  fi
+
+  # 🔴 **The clip must not rotate with the image.** A tilted photo in an upright
+  # circle is the effect; a transform on the clipping element turns the circle
+  # into a tilted circle and the frame follows the photo instead of holding it.
+  #
+  # ⚠️ **Asserted on the clipping element's own style block.** A first version
+  # matched `transform` anywhere in the function and failed on correct code —
+  # the `<img>` inside legitimately rotates, which is the entire point. What
+  # must be true is narrower: the element carrying `clipPath` carries no
+  # transform of its own.
+  #
+  # 📌 **Comments stripped first.** A docblock inside the style object contains
+  # `}`, so a `[^}]*` scan stops before reaching `clipPath` and the check failed
+  # on correct code — the same trap this file's header already records.
+  CANVAS_CODE="$(mktemp)"
+  perl -0pe 's{/\*.*?\*/}{}gs' "$CANVAS" > "$CANVAS_CODE"
+
+  #
+  # ⚠️ And matched FORWARD from the `clipPath` key to the end of its style
+  # object, not by scanning for a brace: the value is a template literal whose
+  # `${…}` carries a `}` that a `[^}]*` scan cannot cross.
+  CLIP_STYLE=$(perl -0ne 'print $1 if /clipPath:(.*?)\n      \}\}/s' "$CANVAS_CODE")
+
+  rm -f "$CANVAS_CODE"
+
+  if [ -n "$CLIP_STYLE" ] && ! printf '%s' "$CLIP_STYLE" | grep -q "transform"; then
+    pass "the frame clips while the image inside it rotates"
+  else
+    fail "the frame's clip rotates with its image — a circle would tilt"
+    FRAME_FAILS=$((FRAME_FAILS + 1))
+  fi
+
+  if [ "$FRAME_FAILS" -eq 0 ]; then
+    pass "a merchant can put a layer in a frame"
+  fi
+fi
+
 # 9. The lab opens from a choice, and what it returns is persisted.
 #
 # 🔴 **This replaces the "not yet bound" check**, which failed the moment the

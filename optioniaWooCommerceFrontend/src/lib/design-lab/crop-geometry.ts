@@ -250,3 +250,41 @@ export function shapeChangeFor(layer: CroppableLayer, next: string): ShapeChange
     resetStyle: false,
   };
 }
+
+/**
+ * How the inner image is drawn: its box, its own rotation and its own opacity.
+ *
+ * 🔴 **The clip does NOT rotate with the image, and that is the whole point of
+ * a frame.** A tilted photo inside an upright circle is the effect; rotating the
+ * clip with it would turn the circle into a tilted circle and the frame would
+ * follow the photo instead of holding it.
+ *
+ * ⚠️ **Only a `free` inner image may rotate.** Every other inner style derives
+ * its box from the frame on each re-fit, so a rotation would be computed against
+ * a box about to be overwritten — the angle would survive in the data and be
+ * visibly ignored, which is the same rule `canRotate` applies one level up.
+ */
+export interface InnerPlacement {
+  /** Frame-local pixels: where the image sits inside its frame. */
+  rect: { x: number; y: number; w: number; h: number };
+  /** Degrees, 0 unless the inner style is `free`. */
+  rot: number;
+  /** 0–100, multiplied with the layer's own opacity when drawn. */
+  opacity: number;
+}
+
+export function innerPlacement(layer: CroppableLayer): InnerPlacement {
+  const rect = frameImageRect(layer, 0, 0, layer.w, layer.h);
+
+  /*
+   * 📌 **No crop means `cover`**, matching `cropAxes` and `frameImageRect`. A
+   * layer that has never been cropped fills its frame.
+   */
+  const style: LayerStyle = layer.crop ? (layer.crop.style ?? 'free') : 'cover';
+
+  return {
+    rect,
+    rot: style === 'free' ? (layer.crop?.rot ?? 0) : 0,
+    opacity: layer.crop?.opacity ?? 100,
+  };
+}

@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 
+import type { PathShape } from '@shared/design/design-geometry.types';
+import { SHAPE_CLIP_PATHS } from '@shared/design/layer-geometry';
+import { innerPlacement } from '@/lib/design-lab/crop-geometry';
 import type { DesignStore } from '@/lib/design-lab/store';
 import type { EditorLayer } from '@/lib/design-lab/layer.types';
 import { type DragIntent, dragIntentFor, type HitKind, selectsLayer } from '@/lib/design-lab/drag-dispatch';
@@ -116,6 +119,14 @@ function resolveHit(target: HTMLElement): {
 }
 
 export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
+  /*
+   * ⚠️ **A per-instance prefix for the clip ids**, with `:` stripped so the
+   * result is safe inside `url(#…)`. One Design Lab mounts per choice, and a
+   * shared id resolves document-wide to the first match — which may be a closed
+   * dialog's hidden defs, clipping the layer to nothing.
+   */
+  const clipPrefix = useId().replaceAll(':', '');
+
   const stageRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef<HTMLDivElement>(null);
@@ -312,6 +323,7 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
 
   return (
     <div className={STAGE_CLASS} ref={stageRef} onMouseDown={onMouseDown}>
+      <ShapeClipDefs prefix={clipPrefix} />
       <div className="optionia-designlab-canvas-wrap" ref={wrapRef}>
         <div className="optionia-designlab-canvas-scale" ref={scaleRef}>
           <div
@@ -327,7 +339,13 @@ export function DesignCanvas({ store }: Readonly<{ store: DesignStore }>) {
           >
             {store.layers.map((layer) =>
               layer.visible ? (
-                <LayerElement key={layer.id} layer={layer} cw={store.cw} ch={store.ch} />
+                <LayerElement
+                  key={layer.id}
+                  layer={layer}
+                  cw={store.cw}
+                  ch={store.ch}
+                  clipPrefix={clipPrefix}
+                />
               ) : null,
             )}
           </div>
@@ -347,7 +365,8 @@ function LayerElement({
   layer,
   cw,
   ch,
-}: Readonly<{ layer: EditorLayer; cw: number; ch: number }>) {
+  clipPrefix,
+}: Readonly<{ layer: EditorLayer; cw: number; ch: number; clipPrefix: string }>) {
   if (layer.kind === 'background') {
     return (
       <div
@@ -389,9 +408,87 @@ function LayerElement({
         cursor: layerCursor(layer, cw, ch),
       }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={layer.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'fill' }} />
+      {layer.shape === 'none' ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img src={layer.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'fill' }} />
+      ) : (
+        <FramedImage layer={layer} clipPrefix={clipPrefix} />
+      )}
     </div>
+  );
+}
+
+/**
+ * The image inside a frame (M26d.2).
+ *
+ * 🔴 **Two boxes, not one.** The outer `div` is the frame and carries the
+ * clip-path; this sits inside it, positioned by `innerPlacement` in frame-local
+ * pixels. A merchant moves the image within a fixed window — which is what makes
+ * the output look designed rather than pasted.
+ *
+ * ⚠️ **The clip stays put while the image rotates.** `transform` is on the
+ * `<img>`, never on the clipping element: rotating the clip would turn a circle
+ * into a tilted circle, and the frame would follow the photo instead of holding
+ * it.
+ */
+function FramedImage({
+  layer,
+  clipPrefix,
+}: Readonly<{ layer: EditorLayer; clipPrefix: string }>) {
+  const inner = innerPlacement(layer);
+
+  return (
+    <div
+      className="optionia-designlab-frame-clip"
+      style={{
+        /*
+         * 📌 **An instance-scoped id.** `clip-path: url(#…)` resolves document
+         * wide to the FIRST match — and one Design Lab mounts per choice, so a
+         * shared id could resolve into a closed dialog's hidden defs and clip
+         * the layer to nothing. The source carries the same warning.
+         */
+        clipPath: `url(#${clipPrefix}-clip-${layer.shape})`,
+      }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={layer.src}
+        alt=""
+        style={{
+          position: 'absolute',
+          left: inner.rect.x,
+          top: inner.rect.y,
+          width: inner.rect.w,
+          height: inner.rect.h,
+          /* The box is already the right shape; stretching it is the defect. */
+          maxWidth: 'none',
+          objectFit: 'fill',
+          transform: inner.rot === 0 ? undefined : `rotate(${inner.rot}deg)`,
+          opacity: inner.opacity < 100 ? inner.opacity / 100 : undefined,
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * One `clipPath` per shape, referenced by the framed layers above.
+ *
+ * ⚠️ **`objectBoundingBox` units**, so a single path serves every frame size —
+ * the paths in `SHAPE_CLIP_PATHS` are written in a 0..1 box and scale to
+ * whatever the frame is.
+ */
+function ShapeClipDefs({ prefix }: Readonly<{ prefix: string }>) {
+  return (
+    <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true" focusable="false">
+      <defs>
+        {(Object.keys(SHAPE_CLIP_PATHS) as PathShape[]).map((shape) => (
+          <clipPath key={shape} id={`${prefix}-clip-${shape}`} clipPathUnits="objectBoundingBox">
+            <path d={SHAPE_CLIP_PATHS[shape]} />
+          </clipPath>
+        ))}
+      </defs>
+    </svg>
   );
 }
 

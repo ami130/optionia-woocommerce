@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { frameImageRect } from '@shared/design/layer-geometry';
+import { SHAPE_CLIP_PATHS, frameImageRect } from '@shared/design/layer-geometry';
 import type { LayerCrop } from '@shared/design/design-geometry.types';
 import {
   CROP_OFF_FRAME_MARGIN,
@@ -9,6 +9,7 @@ import {
   cropAxes,
   cropBoxToCrop,
   cropDefault,
+  innerPlacement,
   shapeChangeFor,
   type CroppableLayer,
 } from './crop-geometry';
@@ -353,5 +354,65 @@ describe('shapeChangeFor', () => {
     expect(entering.crop?.xPct).toBe(0.5);
     expect(switching.crop?.xPct).toBeCloseTo(0.2);
     expect(leaving.crop).toBeNull();
+  });
+});
+
+describe('innerPlacement', () => {
+  it('places the image where frameImageRect says', () => {
+    const framed = layer({ style: 'free' });
+    const placement = innerPlacement(framed);
+    const expected = frameImageRect(framed, 0, 0, framed.w, framed.h);
+
+    expect(placement.rect).toEqual(expected);
+  });
+
+  /*
+   * 🔴 **Only a `free` inner image rotates.** Every other style derives its box
+   * from the frame on each re-fit, so the angle would survive in the data and
+   * be visibly ignored — the same rule `canRotate` applies one level up.
+   */
+  it('rotates a free image and refuses to rotate any other style', () => {
+    expect(innerPlacement(layer({ style: 'free', rot: 30 })).rot).toBe(30);
+
+    for (const style of ['cover', 'fit', 'fullw', 'fullh'] as const) {
+      expect(innerPlacement(layer({ style, rot: 30 })).rot).toBe(0);
+    }
+  });
+
+  it('carries the inner opacity, which is separate from the layer’s', () => {
+    expect(innerPlacement(layer({ style: 'free', opacity: 40 })).opacity).toBe(40);
+  });
+
+  it('treats a layer with no crop as a fully opaque, unrotated cover', () => {
+    const placement = innerPlacement(layer(null));
+
+    expect(placement.rot).toBe(0);
+    expect(placement.opacity).toBe(100);
+    /* A cover leaves no gap: the placed image is at least the frame. */
+    expect(placement.rect.w).toBeGreaterThanOrEqual(200 - 0.5);
+    expect(placement.rect.h).toBeGreaterThanOrEqual(120 - 0.5);
+  });
+});
+
+/**
+ * The frames a merchant may pick, against the paths that draw them.
+ *
+ * 🔴 **A picker offering a shape with no path clips every layer to nothing.**
+ * The panel's list is a hand-written mirror of `SHAPE_CLIP_PATHS` — the exact
+ * shape that drifted in `swatchFieldsFor` and in the design carriers — so it is
+ * compared against the source of truth rather than trusted.
+ */
+describe('every offered frame has a path', () => {
+  /* Mirrors `FRAMES` in `properties-panel.tsx`. */
+  const OFFERED = ['square', 'rounded', 'circle', 'heart', 'star'];
+
+  it('offers exactly the shapes the renderer can draw', () => {
+    expect([...OFFERED].sort()).toEqual(Object.keys(SHAPE_CLIP_PATHS).sort());
+  });
+
+  it('gives every offered frame a non-empty path', () => {
+    for (const shape of OFFERED) {
+      expect(SHAPE_CLIP_PATHS[shape as keyof typeof SHAPE_CLIP_PATHS]).toMatch(/\S/);
+    }
   });
 });

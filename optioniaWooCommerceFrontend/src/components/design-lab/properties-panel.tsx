@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 
-import type { LayerStyle } from '@shared/design/design-geometry.types';
+import type { LayerShape, LayerStyle } from '@shared/design/design-geometry.types';
 import { panelState } from '@/lib/design-lab/properties-panel';
 import type { DesignStore } from '@/lib/design-lab/store';
 
@@ -26,6 +26,23 @@ import { useDesignStore } from './use-design-store';
 
 /** How long a slider rests before its change becomes one undo step. */
 const SLIDER_COMMIT_MS = 250;
+
+/**
+ * The frames a merchant may pick (M26d.2).
+ *
+ * ⚠️ **Exactly the keys of `SHAPE_CLIP_PATHS`**, so a frame that can be chosen
+ * is always one both the canvas and the server-side renderer can draw. A sixth
+ * entry here with no path would clip every layer to nothing.
+ *
+ * 📌 **`image` is absent**: a custom PNG mask needs uploads, which is M26d.5.
+ */
+const FRAMES: ReadonlyArray<{ value: LayerShape; label: string }> = [
+  { value: 'square', label: 'Square' },
+  { value: 'rounded', label: 'Rounded' },
+  { value: 'circle', label: 'Circle' },
+  { value: 'heart', label: 'Heart' },
+  { value: 'star', label: 'Star' },
+];
 
 /** The fit modes, in the order the source offers them. */
 const STYLES: ReadonlyArray<{ value: LayerStyle; label: string }> = [
@@ -86,6 +103,45 @@ export function PropertiesPanel({ store }: Readonly<{ store: DesignStore }>) {
               />
               <span>{s.label}</span>
             </label>
+          ))}
+        </div>
+      </section>
+
+      {/*
+        🔴 **The frame picker** (M26d.2). Without it `setShapeOn` has no caller
+        and the whole frame path is unreachable — the defect this repository has
+        met seven times. The shapes are exactly those `SHAPE_CLIP_PATHS`
+        defines, so a frame a merchant can pick is always one both renderers
+        can draw.
+
+        📌 **A toggle, not a one-way door.** Choosing the current shape clears
+        it, which `shapeChangeFor` decides; the button shows that by marking the
+        active shape pressed.
+      */}
+      <section
+        className={
+          'optionia-designlab-props-section' +
+          (state.style ? '' : ' optionia-designlab-is-disabled')
+        }
+      >
+        <h3 className="optionia-designlab-props-heading">Frame</h3>
+        <div className="optionia-designlab-shapes">
+          {FRAMES.map((frame) => (
+            <button
+              key={frame.value}
+              type="button"
+              className={
+                'optionia-designlab-shape-btn' +
+                (layer?.shape === frame.value ? ' optionia-designlab-shape-on' : '')
+              }
+              aria-pressed={layer?.shape === frame.value}
+              disabled={!state.style || layer === null}
+              onClick={() => {
+                if (layer) store.setShapeOn(layer, frame.value);
+              }}
+            >
+              {frame.label}
+            </button>
           ))}
         </div>
       </section>
