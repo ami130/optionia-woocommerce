@@ -50,17 +50,24 @@ is_exempt_file() {
     # six entries excusing files nothing could find — an exemption list nobody
     # can verify is how one stops being read.
 
-    # ⚠️ **Two symbols here are used by their own tests ONLY**, which is the
-    # defect this gate names — and both PRE-DATE the watch-list extension that
-    # surfaced them (M26d.3's audit, 2026-10-02): `groupDisplaySchema`, which
-    # validates nothing, and `OPTION_SET_LIMITS`, a re-export bundle whose
-    # members are each used individually.
+    # ⚠️ **Two symbols here exist FOR their tests, which is a different thing
+    # from being dead** (M26d.3's audit, 2026-10-02 — both pre-date it):
     #
-    # 🔴 **Exempted as a FILE and dated, rather than deleted inside an
-    # unrelated fix.** Removing exports written for another milestone while
-    # repairing M26d.3 would be scope this task did not ask for; leaving the
-    # gate red would train the next reader to ignore it. The removal belongs in
-    # its own change — and this entry is what will prompt it.
+    #   - `OPTION_SET_LIMITS` bundles eight module-private constants so one
+    #     test can assert them against the API's DTOs. *"Copied from the API's
+    #     DTOs. A drift is a failing test, not a surprised merchant."* Deleting
+    #     it deletes that parity guard, because the constants have no other
+    #     export path.
+    #   - `groupDisplaySchema` validates a shape nothing submits, and its enum
+    #     derives from the same `GROUP_LAYOUTS` the picker maps — so an invalid
+    #     value is structurally unreachable. Wiring it in would guard against
+    #     nothing; its test asserts a tautology.
+    #
+    # 🔴 **Recorded rather than deleted, and the distinction is the point.**
+    # This gate's own warning is that an exemption list nobody can verify stops
+    # being read — so the entry says what each symbol is and why, not just that
+    # it is excused. The first is a guard worth keeping; the second is a
+    # candidate for removal in a change that owns this file.
     lib/schemas/option-sets.ts) return 0 ;;
 
     *) return 1 ;;
@@ -135,7 +142,21 @@ while IFS= read -r watched; do
 
       CHECKED=$((CHECKED + 1))
 
-      # A consumer is any non-test file outside this one that names it.
+      # A consumer is any non-test file outside this one that NAMES it.
+      #
+      # 🔴 **Named is not rendered, and that limit is load-bearing to know.**
+      # M26d.3's text lab was unreachable for four commits — no button rendered
+      # it — while `optionCarriesTextDesign` passed here, because the dead flag
+      # `const takesTextDesign = optionCarriesTextDesign(...)` still named it.
+      # Disabling the button outright left this gate green.
+      #
+      # ⚠️ **This is a deliberate boundary, not an oversight to fix here.**
+      # Proving a symbol reaches rendered JSX needs to know which condition
+      # wraps which element, which a reference count cannot see at any
+      # tightening. That belongs in a gate that understands the component —
+      # `check-design-store.sh` asserts the text lab's four links for exactly
+      # this reason. What this gate catches is a file nothing imports; what it
+      # cannot catch is a file imported into a branch that never runs.
       hits=$(grep -rlE "\b$symbol\b" "$SRC" --include='*.ts' --include='*.tsx' 2>/dev/null \
         | grep -v "^$file$" \
         | grep -vE '\.(spec|test)\.tsx?$' \

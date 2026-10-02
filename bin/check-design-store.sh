@@ -1185,6 +1185,90 @@ else
   fail "the text is hydrated before the design — it lands on the previous canvas"
 fi
 
+# 🔴 **The text lab must be REACHABLE, which no gate proved until it was not.**
+# M26d.3 shipped four commits deep — model, canvas, panel, alpha — with no way
+# into it: the Design button hangs off a VALUE row and a text option has no
+# values, so `optionCarriesTextDesign` sat in the dashboard with no caller.
+#
+# ⚠️ **Every check here matches RENDERED JSX, not a mention.** The audit that
+# found this also found the fix insufficient: disabling the button with
+# `{false ? (` left all 33 gates green, because the symbol gate counts a symbol
+# that is merely NAMED, and `optionCarriesTextDesign` was still named in the
+# dead flag. A `grep -q optionCarriesTextDesign` would repeat that mistake
+# exactly — so what follows asserts the chain, link by link.
+TEXT_LAB_FAILS=0
+
+# Link 1: the predicate decides a flag.
+if strip_comments "$EDITOR" \
+  | grep -qE 'const takesTextDesign = optionCarriesTextDesign\(option\.presentation\)'; then
+  pass "the text lab is offered only on types the API accepts one for"
+else
+  fail "the text design flag is not derived from optionCarriesTextDesign"
+  printf '        the button would appear on a dropdown, and the API would 400\n'
+  TEXT_LAB_FAILS=$((TEXT_LAB_FAILS + 1))
+fi
+
+# Link 2: a button, rendered under that flag, opens the dialog.
+#
+# 📌 **The condition is captured, not assumed.** `{false ? (` and
+# `{takesTextDesign ? (` both wrap a button; only one of them renders it.
+#
+# ⚠️ **`[\s\S]{0,400}?` rather than `<Button[^>]*?`**: the button's own
+# attributes contain `>` inside `() =>`, so a negated-bracket class stops at
+# the arrow and never reaches the handler. Bounded, so it cannot run past the
+# enclosing element into an unrelated one.
+TEXT_BUTTON=$(strip_comments "$EDITOR" \
+  | perl -0ne 'print $1 if /\{(\w+) \? \(\s*<Button[\s\S]{0,400}?setTextDesignOpen\(true\)/s' || true)
+
+if [ "$TEXT_BUTTON" = "takesTextDesign" ]; then
+  pass "a button opens the text lab, on the types that carry one"
+else
+  fail "no button renders the text lab (condition: ${TEXT_BUTTON:-none})"
+  printf '        every text control M26d.3 built is unreachable without it\n'
+  TEXT_LAB_FAILS=$((TEXT_LAB_FAILS + 1))
+fi
+
+# Link 3: the dialog is rendered, under the same flag, with the text channel.
+TEXT_DIALOG=$(strip_comments "$EDITOR" \
+  | perl -0ne 'print $1 if /\{(\w+) \? \(\s*<DesignLabDialog\s+open=\{textDesignOpen\}/s' || true)
+
+if [ "$TEXT_DIALOG" != "takesTextDesign" ]; then
+  fail "the text lab dialog is not rendered (condition: ${TEXT_DIALOG:-none})"
+  TEXT_LAB_FAILS=$((TEXT_LAB_FAILS + 1))
+else
+  DIALOG_PROPS=$(strip_comments "$EDITOR" \
+    | perl -0ne 'print $1 if /<DesignLabDialog\s+open=\{textDesignOpen\}(.*?)\/>/s' || true)
+
+  if printf '%s' "$DIALOG_PROPS" | grep -q 'onApplyText=' \
+    && printf '%s' "$DIALOG_PROPS" | grep -qE '\btext='; then
+    pass "the text lab is mounted with both halves of its own channel"
+  else
+    fail "the text lab is mounted without its text channel"
+    printf '        text= hydrates it; onApplyText= saves it; one alone is half a feature\n'
+    TEXT_LAB_FAILS=$((TEXT_LAB_FAILS + 1))
+  fi
+fi
+
+# Link 4: what the merchant applies is written to the API.
+#
+# ⚠️ **Scoped to the mutation's own body**, for the reason the per-value check
+# records: the undo and redo callbacks also call `updateOption` with a
+# `textDesign`, so matching anywhere in the file stays green with the primary
+# write gutted.
+TEXT_SAVE=$(strip_comments "$EDITOR" \
+  | perl -0ne 'print $1 if /mutationFn: \(textDesign: TextDesign \| null\) =>(.*?)onSuccess:/s' || true)
+
+if [ -n "$TEXT_SAVE" ] && printf '%s' "$TEXT_SAVE" | grep -qE 'updateOption\(option\.id, \{'; then
+  pass "an applied text design is sent to the API"
+else
+  fail "the applied text design is never sent to the API"
+  TEXT_LAB_FAILS=$((TEXT_LAB_FAILS + 1))
+fi
+
+if [ "$TEXT_LAB_FAILS" -gt 0 ]; then
+  printf '        M26d.3 shipped unreachable once; these four links are why\n'
+fi
+
 # ⚠️ **The editor's bound must equal the RENDERER's.** Two surfaces each
 # clamping to a different number is the same defect as not clamping at all.
 #
