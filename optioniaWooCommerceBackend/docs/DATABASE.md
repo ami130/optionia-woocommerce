@@ -424,6 +424,47 @@ never rewrites what a customer saw on their receipt.
 ⚠️ **May contain personal data** — an engraving, a gift message. Therefore
 **hard-erased** on a GDPR request, never soft-deleted (ADR-014).
 
+### `render_jobs` (M26e.4)
+
+`id`, `store_id` CHAR(36), `line_ref` VARCHAR(128), `scene` JSON, `width` INT,
+`height` INT, `processed_at`, `file_url` VARCHAR(500), `attempts` INT,
+`dead_at`, `last_error` TEXT.
+
+`UNIQUE (store_id, line_ref)` — idempotent, for the reason `order_events` is.
+M26e.4 requires that *"a retry must not produce a second file"*, and the plugin
+retries whenever a response is sent but never received. WordPress cron is not
+single-threaded, so a check-then-insert would race; the unique key makes the
+duplicate impossible rather than unlikely.
+
+`INDEX (processed_at, dead_at, created_at)` is the worker's own: it claims rows
+that are neither processed nor dead, oldest first.
+
+**A job, not an order.** Decision 2 chose asynchronous rendering on measured
+numbers — a synchronous render was 8 s, 20 s, 5 MB — and the customer has
+already checked out before the file matters. The plugin asks, the cloud answers
+*accepted*, and the render happens where the fonts, the memory and the CPU are.
+
+**`store_id` → `stores(id)` `ON DELETE RESTRICT`**, for the reason
+`order_events.store_id` is. A job holds the customer's artwork and the file a
+merchant fulfils from, and disconnect-and-reconnect is the ordinary case — a
+migration, a staging swap, a support fix. `CASCADE` would silently erase the
+print files for every order placed before it.
+
+**No key to `options` or `option_values`**, which is the ADR-016 part:
+configuration outlives an order, so a design the merchant later deletes must not
+take a customer's print file with it. The first draft of this table had no
+foreign key at all, including to the store — the schema test that requires every
+table to reach a tenant is what caught it.
+
+`scene` is snapshotted rather than re-derived — a design the merchant edits
+tomorrow must not change the file a customer bought today.
+
+`dead_at` is **not** `processed_at`: M26e.6 requires the source design be
+retained after a permanent failure so it can be re-rendered.
+
+⚠️ **May contain personal data** — the scene holds the customer's own text.
+Erased on the same terms as `order_selections` (ADR-014).
+
 ---
 
 ### `option_view_counts` — M25.1
@@ -799,6 +840,7 @@ option_set_versions.published_by  → users(id)       ON DELETE SET NULL
 -- Order facts --------------------------------------------------------------
 order_events.store_id      → stores(id)             ON DELETE RESTRICT
 order_selections.order_event_id → order_events(id)  ON DELETE CASCADE
+render_jobs.store_id       → stores(id)             ON DELETE RESTRICT
 order_selections.option_key     → (no FK — ADR-016)
 option_view_counts.store_id     → stores(id)        ON DELETE RESTRICT
 option_view_counts.option_set_id → (no FK — ADR-016)

@@ -404,6 +404,13 @@ export async function createHarness(namespace: string): Promise<Harness> {
         WHERE oe.storeId IN (${stores})`,
     );
     await dataSource.query(`DELETE FROM order_events WHERE storeId IN (${stores})`);
+    /*
+     * ⚠️ **Before the stores, because `render_jobs.storeId` is RESTRICT.** A
+     * job holds a customer's artwork and the file a merchant fulfils from, so
+     * a store deletion must not silently take it — which means the harness has
+     * to clear its own rows rather than relying on a cascade.
+     */
+    await dataSource.query(`DELETE FROM render_jobs WHERE storeId IN (${stores})`);
     await dataSource.query(
       `DELETE vv FROM option_set_versions vv JOIN option_sets s ON s.id = vv.optionSetId
         WHERE s.tenantId IN (${tenants})`,

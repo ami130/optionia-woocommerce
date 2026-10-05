@@ -20,6 +20,7 @@ import { ConfigDeliveryModule } from './config-delivery/config-delivery.module';
 import { OptionSetsModule } from './option-sets/option-sets.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ViewsModule } from './views/views.module';
+import { DesignModule } from './design/design.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
@@ -98,6 +99,7 @@ import { HealthModule } from './health/health.module';
     StoresModule,
     OptionSetsModule,
     ConfigDeliveryModule,
+    DesignModule,
     OrdersModule,
     AnalyticsModule,
     ViewsModule,

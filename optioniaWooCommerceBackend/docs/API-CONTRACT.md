@@ -2027,6 +2027,86 @@ where it would actually happen.
 **Order ids are scoped to the store.** WooCommerce ids restart at 1 on every
 install, so two stores reporting order `1` are two different orders.
 
+### `POST /v1/store/renders` **[built]**
+
+One print file, asked for (M26e.4). The plugin sends a **resolved scene** — the
+same structure the dashboard's own renderer draws — and the cloud records the
+request and returns. It does **not** render here.
+
+**Auth:** store credential, guarded exactly as `POST /store/orders` is:
+`StoreTokenGuard` then `SiteMatchGuard`, in that order, because the second reads
+what the first put in context.
+
+🔴 **Accepting is not rendering, and that is Decision 2.** A synchronous render
+was ruled out on measured numbers — 8 s, 20 s, 5 MB — and the customer has
+already checked out by the time the file matters. The work happens where the
+fonts, the memory and the CPU are.
+
+🔴 **A failure here must never fail a sale.** M26e.6's first rule is *never
+block a sale on artwork generation*: a `429`, a `500` or a timeout means the
+plugin proceeds with the purchase and has no preview, not that the customer
+cannot buy. Nothing on this route is required for checkout to complete.
+
+**Rate limit:** 600 per hour, per credential — double the order route's, because
+a cart can hold several designed lines and each asks once. A `429` delays
+artwork, which is not on the purchase path.
+
+**Response:** `200 OK` — **not `202`**. 202 would be the honest code for
+accepted-not-done and is the wrong one here for the same reason `/store/orders`
+answers 200: the call is idempotent, and a retry after a lost response must look
+identical to the first delivery. The body says which it was, for anyone
+diagnosing a plugin that retries more than it should.
+
+```jsonc
+// Request
+{ "line_ref": "a1b2c3d4e5",               // the STORE's cart-line handle — the idempotency key
+  "scene": { "width": 800, "height": 800, "groups": [] },  // resolved; the cloud does not re-derive
+  "width": 800,
+  "height": 800 }
+
+// Response
+{ "data": { "id": "0f3c…", "duplicate": false,
+            "status": "preparing", "fileUrl": null } }
+```
+
+| Field | Rules |
+|---|---|
+| `line_ref` | 1–128 chars. Opaque to the cloud — WooCommerce names a cart line with its own hash |
+| `scene` | object; **shape unvalidated**, as `option_values.design` is — an arbitrary tree no DTO usefully describes, and the renderer refuses what it cannot draw |
+| `width` / `height` | integer ≥ 1, and together ≤ 36 megapixels |
+
+**`status` is one of `preparing`, `ready`, `failed`.** `preparing` exists because
+Decision 2 calls it a milestone rather than a detail: *a fulfiller opening an
+order in the first seconds must see "the print file is being prepared", never a
+broken image and never silence.*
+
+**Idempotent on `(store_id, line_ref)`**, guaranteed by `uq_render_jobs_line` and
+an `INSERT … ON DUPLICATE KEY UPDATE`, for the reason `/store/orders` is: the
+plugin retries whenever a response is sent but never received, and WordPress
+cron is not single-threaded. M26e.4 states it as a requirement — *"a retry must
+not produce a second file"*.
+
+⚠️ **A duplicate does not overwrite the scene**, which is where this differs from
+the order upsert. A second request for a line that already has a job is answered
+with the existing one; overwriting would discard a finished render and redo the
+work — the opposite of what idempotency is for.
+
+⚠️ **`duplicate` is read from MySQL's `affectedRows`, not inferred from the
+row.** The first version tested `attempts > 0 || processedAt !== null`, which is
+false for the commonest retry of all — a plugin asking again seconds later,
+before the worker has touched the job. It reported a duplicate as fresh while
+correctly refusing to create a second row: right behaviour, wrong answer, caught
+by the idempotency test.
+
+🔴 **The bounds are checked at the door.** An unbounded canvas is an OOM kill the
+worker cannot survive or report — 50000×50000 was measured at 46 seconds and
+~10 GB before the kernel intervened, and a kernel kill produces no error the
+application can catch. Refusing at acceptance means the store learns immediately
+rather than a job dying silently hours later.
+
+**Line refs are scoped to the store.** WooCommerce cart hashes are not globally
+unique, so one store's retry must never collide with another's first request.
+
 ### `POST /v1/store/views` **[built]**
 
 How many customers saw each option, aggregated by the plugin (M25.1).
