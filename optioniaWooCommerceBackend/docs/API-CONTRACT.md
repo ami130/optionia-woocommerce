@@ -2075,10 +2075,31 @@ diagnosing a plugin that retries more than it should.
 | `scene` | object; **shape unvalidated**, as `option_values.design` is — an arbitrary tree no DTO usefully describes, and the renderer refuses what it cannot draw |
 | `width` / `height` | integer ≥ 1, and together ≤ 36 megapixels |
 
-**`status` is one of `preparing`, `ready`, `failed`.** `preparing` exists because
-Decision 2 calls it a milestone rather than a detail: *a fulfiller opening an
-order in the first seconds must see "the print file is being prepared", never a
-broken image and never silence.*
+**`status` is one of `preparing`, `rendered`, `ready`, `failed`.**
+
+| Status | Means | `fileUrl` |
+|---|---|---|
+| `preparing` | accepted, not yet rasterised | `null` |
+| `rendered` | pixels exist in the cloud, not yet collected | `null` |
+| `ready` | the plugin holds the file; a merchant can fetch it | set |
+| `failed` | given up on after `MAX_RENDER_ATTEMPTS`; the source design is retained | `null` |
+
+`preparing` exists because Decision 2 calls it a milestone rather than a detail:
+*a fulfiller opening an order in the first seconds must see "the print file is
+being prepared", never a broken image and never silence.*
+
+🔴 **`rendered` is NOT `ready`, and conflating them was a real defect.** The
+first version mapped `processedAt !== null → ready`, which was true while
+rasterising and delivering were one step. [Decision 3a](../../docs/M26-PRINT-PIPELINE-DECISIONS.md)
+split them — the worker makes pixels, the plugin collects them through a
+short-lived signed URL — so a job reported `ready` with `fileUrl: null`, telling
+a fulfiller the print file was ready when no file existed anywhere. Worse than
+silence, which is the one thing Decision 2 says must not happen.
+
+⚠️ **A job stuck at `rendered` is the symptom Decision 3a names**: *"if
+collection ever fails silently, the buffer becomes the home by accident."* It is
+visible as its own state rather than indistinguishable from success, which is
+what lets M26e.6 catch it.
 
 **Idempotent on `(store_id, line_ref)`**, guaranteed by `uq_render_jobs_line` and
 an `INSERT … ON DUPLICATE KEY UPDATE`, for the reason `/store/orders` is: the
@@ -2097,6 +2118,20 @@ false for the commonest retry of all — a plugin asking again seconds later,
 before the worker has touched the job. It reported a duplicate as fresh while
 correctly refusing to create a second row: right behaviour, wrong answer, caught
 by the idempotency test.
+
+📌 **`duplicate` is ADVISORY under concurrency, and deliberately left that
+way.** Measured: ten simultaneous accepts of one line produce **one row and one
+id** — the guarantee holds — but seven of the ten were told `duplicate: false`,
+because MySQL's per-connection `affectedRows` does not distinguish winner from
+losers across overlapping transactions. Sequential retries report it exactly
+(`false, true, true`).
+
+🔴 **Making it exact would cost more than it is worth.** It would need a
+`SELECT … FOR UPDATE` before the upsert — reintroducing the check-then-insert
+the unique index exists to avoid — to improve a field whose only stated purpose
+is *"for anyone diagnosing a plugin that retries more than it should"*. The
+plugin acts on the `200`, which is unaffected. Recorded rather than quietly left
+inaccurate.
 
 🔴 **The bounds are checked at the door.** An unbounded canvas is an OOM kill the
 worker cannot survive or report — 50000×50000 was measured at 46 seconds and

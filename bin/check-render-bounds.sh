@@ -28,6 +28,12 @@ pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/optioniaWooCommerceBackend/src"
 
+# Comments stripped, so prose about a status can never read as the code that
+# returns one — the rule this repository's gates learned the hard way.
+strip_comments() {
+  perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g;' "$1"
+}
+
 printf '\033[1m== check-render-bounds.sh ==\033[0m\n'
 printf 'Checking that a rasteriser is never called unguarded...\n'
 
@@ -89,6 +95,55 @@ if [ -n "$UNGUARDED" ]; then
   printf '        an unbounded canvas is an OOM kill, and a kernel kill reports nothing\n'
 else
   pass "no unguarded rasteriser call site"
+fi
+
+# 🔴 **`rendered` and `ready` are different facts, and conflating them told a
+# fulfiller a print file was ready when no file existed anywhere.**
+#
+# `processedAt` means the pixels exist in the cloud. `fileUrl` means the plugin
+# collected them and a merchant can fetch one. Decision 3a split those steps —
+# the worker rasterises, the plugin pulls through a short-lived signed URL — and
+# the first version mapped `processedAt !== null → 'ready'`, which had been true
+# only while they were one step.
+#
+# ⚠️ **Worse than silence, which Decision 2 says must not happen.** A job stuck
+# at `rendered` is also the symptom Decision 3a names: *"if collection ever
+# fails silently, the buffer becomes the home by accident."*
+#
+# 📌 **Every check below matches a DECIDING line, never a mention.** Both the
+# `fileUrl` and `deadAt` checks first grepped the whole function and found their
+# names in the parameter list — so a `statusOf` that had stopped reading
+# `fileUrl` at all still passed. A signature is not a decision.
+STATUS_FN=$(strip_comments "$SRC/design/render-jobs.service.ts" 2>/dev/null \
+  | awk '/^export function statusOf\(/ { inside = 1 }
+         inside { print }
+         inside && /^\}$/ { exit }' || true)
+
+if [ -z "$STATUS_FN" ]; then
+  fail "statusOf is missing — a render's status has no single definition"
+elif ! printf '%s' "$STATUS_FN" | grep -qE "^\s*if \(row\.fileUrl"; then
+  fail "a render's status ignores whether a file exists"
+  printf '        processedAt means pixels; fileUrl means a merchant can fetch one\n'
+  printf '        reporting the first as ready claims a file that is not there\n'
+elif ! printf '%s' "$STATUS_FN" | grep -q "'rendered'"; then
+  fail "there is no state between rendered and ready"
+  printf '        Decision 3a split rasterising from collecting; the status must too\n'
+else
+  # ⚠️ **`deadAt` must be tested FIRST.** A dead row has no `fileUrl` and no
+  # `processedAt`, so testing it last reports an abandoned job as `preparing` —
+  # the most misleading of the four answers.
+  #
+  # 📌 **Matched on the RETURNING lines, not on any mention.** The first
+  # version grepped the whole function and found `processedAt` in the
+  # parameter list — reporting a correct implementation as broken. What decides
+  # precedence is the order of the `if … return` lines, so that is what is read.
+  FIRST=$(printf '%s' "$STATUS_FN" \
+    | grep -E "^\s*if \(row\..* return " | head -1 || true)
+
+  case "$FIRST" in
+    *deadAt*) pass "a render's status distinguishes rendered, ready and failed" ;;
+    *) fail "statusOf returns on something before deadAt — an abandoned job would not read as failed" ;;
+  esac
 fi
 
 printf '\n'

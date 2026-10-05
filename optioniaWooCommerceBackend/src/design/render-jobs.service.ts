@@ -33,8 +33,20 @@ export interface AcceptedRender {
  * 📌 **`preparing` exists because Decision 2 calls it a milestone**: *"a
  * fulfiller opening an order in the first seconds must see 'the print file is
  * being prepared', never a broken image and never silence."*
+ *
+ * 🔴 **`rendered` is NOT `ready`, and conflating them was a real defect.** The
+ * first version mapped `processedAt !== null → 'ready'`, which was true while
+ * rasterising and delivering were one step. Decision 3a split them: the worker
+ * makes pixels, and the plugin collects them through a short-lived signed URL.
+ * So a job could report `ready` with `fileUrl: null` — telling a fulfiller the
+ * print file was ready when no file existed anywhere. Worse than silence,
+ * which is the one thing Decision 2 says must not happen.
+ *
+ * ⚠️ **Four states, because there are four things that can be true.** Pixels
+ * existing and a merchant being able to fetch them are different facts, and a
+ * status that cannot tell them apart will be read as the more optimistic one.
  */
-export type RenderStatus = 'preparing' | 'ready' | 'failed';
+export type RenderStatus = 'preparing' | 'rendered' | 'ready' | 'failed';
 
 export interface RenderRequest {
   readonly lineRef: string;
@@ -153,17 +165,28 @@ export class RenderJobsService {
 /**
  * How a row reads to a fulfiller.
  *
- * 🔴 **`deadAt` is checked BEFORE `processedAt`.** A job can be both — a render
- * that succeeded after earlier failures is ready — but a dead one never has a
- * `processedAt`, so testing dead first keeps the two from being confused if
- * that ever changes.
+ * 🔴 **`deadAt` is checked FIRST.** A job can carry both marks — a render that
+ * succeeded after earlier failures — but a dead one never has a `processedAt`,
+ * so testing dead first keeps the two from being confused if that ever changes.
+ *
+ * 🔴 **`ready` requires a FILE, not merely a render.** `processedAt` means the
+ * pixels exist in the cloud; `fileUrl` means the plugin has collected them and
+ * a merchant can fetch one. Reporting the first as the second is what made a
+ * job claim it was ready while no file existed anywhere.
+ *
+ * ⚠️ **A job stuck at `rendered` is the symptom Decision 3a names**: *"if
+ * collection ever fails silently, the buffer becomes the home by accident."*
+ * It is visible here rather than indistinguishable from success, which is what
+ * makes M26e.6 able to catch it.
  */
 export function statusOf(row: {
   processedAt: Date | null;
   deadAt: Date | null;
+  fileUrl: string | null;
 }): RenderStatus {
   if (row.deadAt !== null) return 'failed';
-  if (row.processedAt !== null) return 'ready';
+  if (row.fileUrl !== null) return 'ready';
+  if (row.processedAt !== null) return 'rendered';
 
   return 'preparing';
 }

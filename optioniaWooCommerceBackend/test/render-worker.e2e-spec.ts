@@ -8,6 +8,8 @@ import {
   RenderWorkerService,
 } from '../src/design/render-worker.service';
 
+import { statusOf } from '../src/design/render-jobs.service';
+
 import { bootstrapTestApp, createHarness, type Harness } from './harness';
 
 /**
@@ -202,6 +204,65 @@ describe('render worker (e2e)', () => {
       expect((await read(id)).attempts).toBe(2);
     });
 
+    /*
+     * 🔴 **The defect this test exists for: a rendered job must NOT claim to be
+     * ready.** The first version mapped `processedAt !== null → 'ready'`,
+     * which was true while rasterising and delivering were one step. Decision
+     * 3a split them — the worker makes pixels, the plugin collects them — so a
+     * job reported `ready` with `fileUrl: null`, telling a fulfiller the print
+     * file was ready when no file existed anywhere.
+     *
+     * ⚠️ **Not one of twenty-five tests asked what a store is TOLD after a
+     * successful render.** They asserted the row and never the answer, which is
+     * how a contract defect survives a green suite.
+     */
+    it('reports a rendered job as rendered, not ready, until a file exists', async () => {
+      const storeId = await store();
+      const id = await job(storeId);
+
+      await worker.renderPending();
+
+      const row = await read(id);
+
+      expect(row.processedAt).not.toBeNull();
+      expect(row.fileUrl).toBeNull();
+
+      /* What the STORE is told, which is the part that was wrong. */
+      expect(
+        statusOf({
+          processedAt: row.processedAt as Date | null,
+          deadAt: row.deadAt as Date | null,
+          fileUrl: row.fileUrl as string | null,
+        }),
+      ).toBe('rendered');
+    });
+
+    /*
+     * ⚠️ **`ready` requires a FILE.** This is the other half: once the plugin
+     * has collected the bytes and recorded where they went, the job is ready —
+     * and nothing before that is.
+     */
+    it('reports ready once a file has been collected', async () => {
+      const storeId = await store();
+      const id = await job(storeId);
+
+      await worker.renderPending();
+      await dataSource.query(`UPDATE render_jobs SET fileUrl = ? WHERE id = ?`, [
+        'https://store.test/wp-content/uploads/print.png',
+        id,
+      ]);
+
+      const row = await read(id);
+
+      expect(
+        statusOf({
+          processedAt: row.processedAt as Date | null,
+          deadAt: row.deadAt as Date | null,
+          fileUrl: row.fileUrl as string | null,
+        }),
+      ).toBe('ready');
+    });
+
     it('reports nothing to do when the queue is empty', async () => {
       await worker.renderPending();
 
@@ -285,6 +346,35 @@ describe('render worker (e2e)', () => {
       expect(row.attempts).toBe(MAX_RENDER_ATTEMPTS);
       expect(row.deadAt).not.toBeNull();
       expect(row.scene).toBeTruthy();
+    });
+
+    /*
+     * 🔴 **A dead job must read as `failed`, and a mutation proved nothing
+     * checked it.** Removing the `deadAt` test left every test green: a dead
+     * row has no `fileUrl` and no `processedAt`, so it falls through to
+     * `preparing` — telling a fulfiller their print file is being prepared
+     * when it was abandoned. The most misleading answer of the four.
+     */
+    it('reports a dead job as failed, not preparing', async () => {
+      const id = await job(await store(), { scene: BROKEN });
+
+      for (let pass = 0; pass < MAX_RENDER_ATTEMPTS; pass += 1) {
+        await worker.renderPending();
+      }
+
+      const row = await read(id);
+
+      expect(row.deadAt).not.toBeNull();
+      expect(row.processedAt).toBeNull();
+      expect(row.fileUrl).toBeNull();
+
+      expect(
+        statusOf({
+          processedAt: row.processedAt as Date | null,
+          deadAt: row.deadAt as Date | null,
+          fileUrl: row.fileUrl as string | null,
+        }),
+      ).toBe('failed');
     });
 
     it('never claims a dead job again', async () => {
