@@ -184,6 +184,72 @@ away from option A's *"bill that scales with merchants' customers"*.
 becomes the home by accident. A retained file whose job is `processed` with no
 `fileUrl` is the symptom, and M26e.6's failure matrix is where that belongs.
 
+#### ✅ Decision 3b — where the buffer actually is, decided 2026-10-05
+
+**The buffered bytes live in the `render_jobs` row, as a `MEDIUMBLOB`.** Not
+object storage, not local disk.
+
+🔴 **Local disk was ruled out by Decision 1's own words.** The disk is ephemeral
+*by design* — *"a pipeline that needed local persistence would be one restart
+from losing a merchant's print file"* — and a buffer on it loses bytes on every
+deploy. Worse, the worker claims `processedAt IS NULL`, so a job whose buffer
+vanished would never be re-claimed: stuck at `rendered` for ever, which is
+exactly the drift the paragraph above names.
+
+📌 **Object storage was ruled out by cost rather than fit.** It is Decision 3's
+rejected option A, and introducing it for a buffer measured in hours would be
+the same ongoing bill for a fraction of the benefit.
+
+✅ **The database is durable, backed up, tenant-scoped and already there.**
+Measured rather than assumed — a render at each size, through `resvg` with the
+shipped fonts:
+
+| Canvas | PNG | Time |
+|---|---|---|
+| 1000×1000 | 0.04 MB | 18 ms |
+| 3000×3000 | 0.15 MB | 96 ms |
+| 6000×6000 (the 36 MP ceiling) | **0.40 MB** | 418 ms |
+
+`max_allowed_packet` is 64 MB, so the largest render this system permits is
+**160× under the limit**. `MEDIUMBLOB` holds 16 MB, which is 40× the ceiling
+again.
+
+⚠️ **The column is cleared on collection, and that is what keeps this a buffer.**
+A row that kept its bytes after the plugin stored them would make the database
+the second home — the drift this decision exists to prevent. Clearing is also
+what lets `fileUrl` mean exactly one thing: the merchant has it, we do not.
+
+#### The deadline, and the reader that makes it real
+
+**`collectBy` is stamped 24 hours ahead when the worker fills the buffer**, and
+cleared when the plugin collects. The scheduler counts rows past it on every
+pass and logs a warning.
+
+🔴 **The count was missing for two commits, and that is worth recording.** The
+column, the index `ix_render_jobs_uncollected` and the clearing logic all
+shipped with **nothing reading them** — a deadline written and cleared but never
+queried, which is indistinguishable from no deadline. It is the same shape as
+the worker that shipped without a driver: *the rule was built, the schedule was
+not.* `check-render-bounds.sh` now requires a production caller for **every**
+public pass on the worker, not just the first one, which is what would have
+caught it.
+
+🔴 **The sweep REPORTS; it does not delete.** An overdue buffer means collection
+is broken, and the bytes are simultaneously the evidence and the only remedy —
+the merchant has no copy yet, by definition. Deleting them precisely then would
+convert a recoverable fault into permanent loss of a customer's artwork. The
+24 hours is a *diagnosis window*, not a retention limit: the plugin's cron runs
+far more often than daily, so a buffer still uncollected after a day means
+collection is **broken rather than slow**.
+
+⚠️ **What is deliberately not decided yet: when, if ever, bytes are reclaimed.**
+Nothing currently frees an abandoned buffer, so a permanently broken plugin
+grows the table without bound. That is the correct trade for now — the warning
+makes it visible long before it is material, at 0.40 MB worst case — but a
+retention sweep belongs in M26e.6 alongside the rest of the failure matrix,
+where the question *"how long do we hold artwork a merchant never collected?"*
+can be answered once rather than guessed here.
+
 ---
 
 ## Stage 0 spike — measured 2026-09-30

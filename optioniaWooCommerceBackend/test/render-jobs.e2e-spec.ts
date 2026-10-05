@@ -231,6 +231,128 @@ describe('render jobs (e2e)', () => {
     });
   });
 
+  // --- Collection ----------------------------------------------------------
+
+  describe('collecting a rendered file', () => {
+    /** Accept a job and put bytes in its buffer, as the worker would. */
+    async function rendered(token: string, storeId: string): Promise<string> {
+      const body = payload();
+      const response = await ask(token, body).expect(200);
+
+      await dataSource.query(
+        `UPDATE render_jobs SET processedAt = NOW(3), png = ?, collectBy = ? WHERE storeId = ?`,
+        [Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]), new Date(Date.now() + 3_600_000), storeId],
+      );
+
+      return response.body.data.id as string;
+    }
+
+    const fetch = (token: string, id: string): request.Test =>
+      request(app.getHttpServer())
+        .get(`/v1/store/renders/${id}/file`)
+        .set('Authorization', `Bearer ${token}`);
+
+    const confirm = (token: string, id: string, body: object): request.Test =>
+      request(app.getHttpServer())
+        .post(`/v1/store/renders/${id}/collected`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body);
+
+    it('serves the bytes the worker buffered', async () => {
+      const store = await connected();
+      const id = await rendered(store.token, store.id);
+
+      const response = await fetch(store.token, id).expect(200);
+
+      expect(response.headers['content-type']).toContain('image/png');
+      expect(response.body.length).toBe(7);
+    });
+
+    /*
+     * 🔴 **A render is a customer's artwork.** Serving one store's file to
+     * another is the same class of defect as cross-tenant revenue.
+     */
+    it('refuses another store’s file', async () => {
+      const mine = await connected('a');
+      const theirs = await connected('b');
+      const id = await rendered(mine.token, mine.id);
+
+      await fetch(theirs.token, id).expect(404);
+    });
+
+    it('refuses an unauthenticated fetch', async () => {
+      const store = await connected();
+      const id = await rendered(store.token, store.id);
+
+      await request(app.getHttpServer())
+        .get(`/v1/store/renders/${id}/file`)
+        .expect(401);
+    });
+
+    it('404s a job that has not rendered yet', async () => {
+      const store = await connected();
+      const response = await ask(store.token, payload()).expect(200);
+
+      await fetch(store.token, response.body.data.id).expect(404);
+    });
+
+    /*
+     * 🔴 **Confirming is what ends the transfer**, and what makes `ready` mean
+     * something: the merchant holds the file, and the cloud does not.
+     */
+    it('records the file url and releases the buffer', async () => {
+      const store = await connected();
+      const id = await rendered(store.token, store.id);
+      const url = 'https://store.test/wp-content/uploads/print.png';
+
+      await confirm(store.token, id, { file_url: url }).expect(200);
+
+      const [row] = await dataSource.query(
+        `SELECT fileUrl, png, collectBy FROM render_jobs WHERE id = ?`,
+        [id],
+      );
+
+      expect(row.fileUrl).toBe(url);
+      expect(row.png).toBeNull();
+      expect(row.collectBy).toBeNull();
+    });
+
+    /*
+     * ⚠️ **Once collected, the bytes are gone from the cloud** — which is what
+     * keeps the buffer a buffer rather than a second home.
+     */
+    it('has nothing left to serve after collection', async () => {
+      const store = await connected();
+      const id = await rendered(store.token, store.id);
+
+      await confirm(store.token, id, {
+        file_url: 'https://store.test/wp-content/uploads/print.png',
+      }).expect(200);
+
+      await fetch(store.token, id).expect(404);
+    });
+
+    it('refuses to record a collection for another store’s job', async () => {
+      const mine = await connected('a');
+      const theirs = await connected('b');
+      const id = await rendered(mine.token, mine.id);
+
+      await confirm(theirs.token, id, {
+        file_url: 'https://evil.test/stolen.png',
+      }).expect(404);
+    });
+
+    it.each([
+      ['not a url', 'definitely not a url'],
+      ['an empty string', ''],
+    ])('refuses %s as a file url', async (_name, url) => {
+      const store = await connected();
+      const id = await rendered(store.token, store.id);
+
+      await confirm(store.token, id, { file_url: url }).expect(400);
+    });
+  });
+
   // --- Isolation -----------------------------------------------------------
 
   describe('store isolation', () => {

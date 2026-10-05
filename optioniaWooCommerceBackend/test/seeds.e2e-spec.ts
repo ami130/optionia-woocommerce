@@ -123,18 +123,52 @@ describe('seeds (integration)', () => {
        * current price is what makes the next seed write a replacement — which
        * is also the shape of a real staff edit.
        */
-      await dataSource.query(
-        `UPDATE plan_prices pp JOIN plans p ON p.id = pp.planId
-            SET pp.amountMinor = 3900
-          WHERE p.code = 'pro' AND pp.interval = 'month' AND pp.isCurrent = 1`,
-      );
+      /*
+       * 🔴 **`year`, because there is no monthly row to change.** This read
+       * `interval = 'month'` and matched ZERO rows — the seed stopped writing a
+       * monthly price, as `plans-admin.e2e-spec.ts` records in its own teardown
+       * (*"the seed no longer writes a monthly row"*). No row changed, so no
+       * supersession was written, so the assertion below found nothing of its
+       * own and read an unrelated plan's leftover row instead. The test was
+       * green for eleven days while exercising nothing.
+       */
+      const [current]: Array<{ affectedRows: number }> = [
+        await dataSource.query(
+          `UPDATE plan_prices pp JOIN plans p ON p.id = pp.planId
+              SET pp.amountMinor = 39000
+            WHERE p.code = 'pro' AND pp.interval = 'year' AND pp.isCurrent = 1`,
+        ),
+      ];
+
+      /*
+       * ⚠️ **The mutation is asserted before what it causes.** A silent
+       * zero-row UPDATE is exactly how this test came to assert nothing, so the
+       * setup now fails loudly rather than leaving the real assertion to read
+       * whatever else is in the table.
+       */
+      expect(current.affectedRows).toBe(1);
 
       await seedPlans(dataSource);
 
+      /*
+       * 🔴 **Scoped to the plan this test actually supersedes.** The first
+       * version read `ORDER BY id DESC LIMIT 1` across the whole table — the
+       * most recent supersession by ANY plan, not the one just caused. A
+       * `business` row written by `plans-admin.e2e-spec.ts` (whose cleanup
+       * spares `userId IS NULL`, and a seed belongs to no person) sat above
+       * every `pro` row and the assertion read it instead: expected `pro`,
+       * received `business`, on a test that had done nothing wrong.
+       *
+       * ⚠️ **An assertion that reads a subject it did not set is not an
+       * assertion.** It passed for eleven days only because no other plan had
+       * been superseded more recently.
+       */
       const entries: Array<{ action: string; changes: string | object }> =
         await dataSource.query(
           `SELECT action, changes FROM audit_logs
-            WHERE action = 'plan_price.superseded' AND resourceType = 'plan_price'
+            WHERE action = 'plan_price.superseded'
+              AND resourceType = 'plan_price'
+              AND JSON_UNQUOTE(JSON_EXTRACT(changes, '$.plan')) = 'pro'
             ORDER BY id DESC LIMIT 1`,
         );
 
@@ -146,13 +180,13 @@ describe('seeds (integration)', () => {
           : (entries[0].changes as Record<string, unknown>);
 
       expect(changes.plan).toBe('pro');
-      expect(changes.amountMinor).toEqual({ from: 3900, to: 2900 });
+      expect(changes.amountMinor).toEqual({ from: 39000, to: 29000 });
 
       /* A seed belongs to no person, and the row says so rather than guessing. */
       expect(changes.source).toBe('seed');
 
       /*
-       * The seed has already restored 2900 as the current price; the 3900 row
+       * The seed has already restored 29000 as the current price; the 39000 row
        * is retired and stays, which is the point of supersession.
        */
     });

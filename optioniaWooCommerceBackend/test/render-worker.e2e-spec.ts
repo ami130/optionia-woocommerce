@@ -331,6 +331,44 @@ describe('render worker (e2e)', () => {
       expect(row.processedAt).not.toBeNull();
     });
 
+    /*
+     * 🔴 **The bytes are STORED, and for two commits they were not.** The PNG
+     * was produced and dropped into a `void` while Decision 3a was open — a
+     * worker that silently discarded its own output, with every test green.
+     */
+    it('stores the rendered bytes in the buffer', async () => {
+      const id = await job(await store());
+
+      await worker.renderPending();
+
+      const row = await read(id);
+      const png = row.png as Buffer | null;
+
+      expect(png).not.toBeNull();
+      expect(png!.length).toBeGreaterThan(0);
+
+      /* ⚠️ A real PNG, not an empty buffer: the 8-byte signature. */
+      expect(png!.subarray(0, 8)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
+    });
+
+    /*
+     * 🔴 **An uncollected buffer must be VISIBLE as one.** Decision 3a: *"if
+     * collection ever fails silently, the buffer becomes the home by
+     * accident."* A deadline makes that queryable rather than inferred.
+     */
+    it('sets a collection deadline when it stores bytes', async () => {
+      const id = await job(await store());
+
+      await worker.renderPending();
+
+      const row = await read(id);
+
+      expect(row.collectBy).not.toBeNull();
+      expect((row.collectBy as Date).getTime()).toBeGreaterThan(Date.now());
+    });
+
     it('reports nothing to do when the queue is empty', async () => {
       await worker.renderPending();
 
@@ -473,6 +511,97 @@ describe('render worker (e2e)', () => {
 
       expect(result.rendered).toBe(1);
       expect(result.claimed).toBe(2);
+    });
+  });
+
+  // --- Uncollected buffers --------------------------------------------------
+
+  describe('buffers nobody came for', () => {
+    /** Put a job in the state the worker leaves it: bytes held, deadline set. */
+    async function buffered(storeId: string, collectBy: Date): Promise<string> {
+      const id = await job(storeId);
+
+      await dataSource.query(
+        `UPDATE render_jobs
+            SET processedAt = NOW(3), png = ?, collectBy = ?
+          WHERE id = ?`,
+        [Buffer.from([0x89, 0x50, 0x4e, 0x47]), collectBy, id],
+      );
+
+      return id;
+    }
+
+    const hoursAway = (hours: number): Date =>
+      new Date(Date.now() + hours * 60 * 60 * 1000);
+
+    /*
+     * 🔴 **This is the symptom Decision 3a names** — *"if collection ever
+     * fails silently, the buffer becomes the home by accident."* Without a
+     * count, an overdue buffer looks exactly like a healthy one.
+     */
+    it('counts a buffer past its deadline', async () => {
+      const storeId = await store();
+      await buffered(storeId, hoursAway(-1));
+
+      expect(await worker.countUncollected(new Date(), storeId)).toBe(1);
+    });
+
+    it('ignores a buffer still within its deadline', async () => {
+      const storeId = await store();
+      await buffered(storeId, hoursAway(1));
+
+      expect(await worker.countUncollected(new Date(), storeId)).toBe(0);
+    });
+
+    /*
+     * ⚠️ **A collected job is not overdue, however old.** `markCollected`
+     * clears both the bytes and the deadline; counting it would report a
+     * permanent fault for a transfer that succeeded.
+     */
+    it('ignores a job whose buffer was collected', async () => {
+      const storeId = await store();
+      const id = await buffered(storeId, hoursAway(-99));
+
+      await dataSource.query(
+        `UPDATE render_jobs SET png = NULL, collectBy = NULL, fileUrl = ? WHERE id = ?`,
+        ['https://store.test/print.png', id],
+      );
+
+      expect(await worker.countUncollected(new Date(), storeId)).toBe(0);
+    });
+
+    /*
+     * ⚠️ **Bytes gone, deadline left behind — the state `png IS NOT NULL`
+     * exists for.** Clearing both together is the healthy path, and testing
+     * only that left the byte check unproven: a mutant that dropped it passed
+     * everything. A row can lose its buffer without losing its deadline — a
+     * partial write, a hand-run `UPDATE`, a future sweep that clears bytes
+     * alone — and counting it would report a fault with nothing to recover.
+     */
+    it('ignores a row whose bytes are gone but whose deadline remains', async () => {
+      const storeId = await store();
+      const id = await buffered(storeId, hoursAway(-1));
+
+      await dataSource.query(`UPDATE render_jobs SET png = NULL WHERE id = ?`, [id]);
+
+      expect(await worker.countUncollected(new Date(), storeId)).toBe(0);
+    });
+
+    /*
+     * 🔴 **It reports; it does not delete.** Destroying the only copy of a
+     * customer's artwork exactly when collection is known broken would turn a
+     * recoverable fault into an unrecoverable one.
+     */
+    it('leaves the bytes where they are', async () => {
+      const storeId = await store();
+      const id = await buffered(storeId, hoursAway(-1));
+
+      await worker.countUncollected(new Date(), storeId);
+
+      const row = await read(id);
+
+      expect(row.png).not.toBeNull();
+      expect(row.collectBy).not.toBeNull();
     });
   });
 });

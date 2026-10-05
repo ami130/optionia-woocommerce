@@ -40,6 +40,7 @@ import { Store } from '../../stores/entities/store.entity';
  */
 @Index('uq_render_jobs_line', ['storeId', 'lineRef'], { unique: true })
 @Index('ix_render_jobs_pending', ['processedAt', 'deadAt', 'createdAt'])
+@Index('ix_render_jobs_uncollected', ['collectBy'])
 export class RenderJob extends BaseEntity {
   /** Which store asked. Resolved from the credential, never from the body. */
   @Column({ type: 'char', length: 36 })
@@ -126,4 +127,34 @@ export class RenderJob extends BaseEntity {
   /** Why the last attempt failed, for the dashboard and for support. */
   @Column({ type: 'text', nullable: true })
   lastError: string | null;
+
+  /**
+   * The rendered PNG, waiting to be collected (Decision 3b).
+   *
+   * 🔴 **A BUFFER, not a home.** Decision 3 put the print file on the
+   * merchant's WordPress; this is where the bytes wait while the plugin comes
+   * for them. It is null before the render and null again afterwards — the
+   * bytes exist only in between.
+   *
+   * ⚠️ **In the database because Decision 1's disk is ephemeral by design.** A
+   * buffer on local disk loses its bytes on every deploy, and the worker claims
+   * `processedAt IS NULL`, so a job whose buffer vanished would never be
+   * re-claimed: stuck at `rendered` for ever.
+   *
+   * 📌 **Measured: 0.40 MB at the 36-megapixel ceiling**, against a 16 MB
+   * column and a 64 MB packet limit.
+   */
+  @Column({ type: 'mediumblob', nullable: true })
+  png: Buffer | null;
+
+  /**
+   * When an uncollected buffer becomes a problem rather than a wait.
+   *
+   * 🔴 **Decision 3a names the drift this exists to catch**: *"if collection
+   * ever fails silently, the buffer becomes the home by accident."* A row past
+   * this date with `png` still set is that symptom — queryable, rather than
+   * inferred from two nulls.
+   */
+  @Column({ type: 'datetime', precision: 3, nullable: true })
+  collectBy: Date | null;
 }

@@ -69,6 +69,27 @@ export class RenderScheduler {
             `${outcome.rendered} succeeded, ${outcome.deadLettered} dead-lettered`,
         );
       }
+
+      /*
+       * 🔴 **The deadline is only real if something reads it.** `collectBy` is
+       * stamped by the worker and cleared on collection; without this call it
+       * was written and never asked about, which is the same as not having it.
+       * Decision 3a: *"if collection ever fails silently, the buffer becomes
+       * the home by accident."*
+       *
+       * ⚠️ **`warn`, not `log`.** An overdue buffer is not throughput news —
+       * it means a merchant's print file is sitting in the cloud because
+       * collection is broken, and it is the one symptom that otherwise looks
+       * exactly like success.
+       */
+      const overdue = await this.worker.countUncollected();
+
+      if (overdue > 0) {
+        this.logger.warn(
+          `${overdue} rendered file(s) past their collection deadline — ` +
+            'the plugin is not collecting. The bytes are retained.',
+        );
+      }
     } catch (error) {
       /*
        * ⚠️ **This wraps the PASS, deliberately not the guard above it.** A

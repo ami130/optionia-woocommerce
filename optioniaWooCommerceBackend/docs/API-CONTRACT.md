@@ -2142,6 +2142,88 @@ rather than a job dying silently hours later.
 **Line refs are scoped to the store.** WooCommerce cart hashes are not globally
 unique, so one store's retry must never collide with another's first request.
 
+### `GET /v1/store/renders/:id/file` **[built]**
+
+The bytes of one rendered print file (M26e.4, [Decision 3a](../../docs/M26-PRINT-PIPELINE-DECISIONS.md)).
+Answers `image/png` with a `Content-Length`, or `404`.
+
+**Auth:** store credential, `StoreTokenGuard` then `SiteMatchGuard`.
+
+🔴 **The plugin PULLS; the cloud never pushes bytes.** Decision 3a chose this
+shape because it is what M9.4 already proves safe — the inbound push endpoint
+*"carries a version and nothing else"*, which is what lets it be a public route
+with a signature rather than a capability check. A cloud that POSTed bytes to a
+public route would need that route to trust its body.
+
+🔴 **Scoped to the asking store, always.** A render is a customer's artwork;
+serving one store's file to another is the same class of defect as cross-tenant
+revenue. The id alone is not authorisation.
+
+⚠️ **A `404` covers four situations deliberately** — no such job, another
+store's job, not yet rendered, already collected. A caller that could tell them
+apart could enumerate other stores' job ids by the difference in the answers.
+
+📌 **`Content-Length` is sent so the plugin can tell a truncated download from a
+complete one.** A partially written print file is worse than a missing one: it
+looks like a file and prints as damage.
+
+**Rate limit:** 600 per hour, matching the request route — a cart with several
+designed lines collects once per line, and a retry after a lost response is
+normal.
+
+**The bytes live in `render_jobs.png` (`MEDIUMBLOB`), briefly.** Measured at
+**0.40 MB** at the 36-megapixel ceiling against a 64 MB `max_allowed_packet`
+([Decision 3b](../../docs/M26-PRINT-PIPELINE-DECISIONS.md)). The column is a
+**buffer, not a home** — see the collection route below.
+
+### `POST /v1/store/renders/:id/collected` **[built]**
+
+The plugin reports that it has stored the file on the merchant's own WordPress
+(**Decision 3**), and the cloud releases the buffer.
+
+**Auth:** store credential, `StoreTokenGuard` then `SiteMatchGuard`.
+
+```jsonc
+// Request
+{ "file_url": "https://merchant.example/wp-content/uploads/optionia/print.png" }
+
+// Response
+{ "data": { "ok": true } }
+```
+
+| Field | Rules |
+|---|---|
+| `file_url` | `http`/`https` URL, TLD not required (a merchant may be on an intranet host or a local dev domain) |
+
+🔴 **Clearing `png` is what keeps the column a BUFFER.** A row that kept its
+bytes after the merchant held them would make the database a second home — the
+drift Decision 3a names explicitly. It is also what lets `fileUrl` mean exactly
+one thing: *the merchant has it, we do not.*
+
+⚠️ **`collectBy` is cleared with it.** A collected job left carrying a deadline
+would show up for ever in whatever asks *"what has not been collected?"* — the
+query M26e.6 needs in order to see a stalled transfer at all.
+
+**This is the step that makes `ready` reachable.** Until it runs, `statusOf`
+reports `rendered`: pixels exist, no merchant can fetch them. After it runs, and
+only then, the job is `ready`.
+
+**Idempotent.** A retry after a lost response rewrites the same `fileUrl` over
+an already-cleared buffer and answers `200`. The subsequent `GET …/file` answers
+`404`, which is correct: the cloud no longer holds the bytes.
+
+⚠️ **A `404` here means the job is not this store's, or does not exist** — the
+same four-way silence as the fetch route, for the same anti-enumeration reason.
+
+**An uncollected buffer is counted, not deleted.** The render scheduler calls
+`countUncollected()` on every pass and logs a **warning** for any row past its
+`collectBy` that still holds bytes. This is the reader that makes the deadline
+mean something: `collectBy` and `ix_render_jobs_uncollected` shipped for two
+commits written, cleared and never queried, which is indistinguishable from not
+having them. 🔴 **It never deletes** — destroying a merchant's only copy of a
+customer's artwork exactly when collection is known to be broken would turn a
+recoverable fault into an unrecoverable one.
+
 ### `POST /v1/store/views` **[built]**
 
 How many customers saw each option, aggregated by the plugin (M25.1).

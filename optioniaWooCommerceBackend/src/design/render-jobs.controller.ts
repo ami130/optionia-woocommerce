@@ -1,6 +1,7 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse } from '@nestjs/swagger';
+import { Body, Controller, Get, Header, HttpCode, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiProduces, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 
 import { SiteMatchGuard } from '../auth/guards/site-match.guard';
 import { StoreRoute } from '../auth/guards/store-route.decorator';
@@ -9,6 +10,7 @@ import { getStoreId } from '../common/context/request-context';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { ApiErrors } from '../common/openapi/api-errors.decorator';
+import { CollectedRenderDto } from './dto/collected-render.dto';
 import { RequestRenderDto } from './dto/request-render.dto';
 import { RenderJobsService, type AcceptedRender } from './render-jobs.service';
 
@@ -79,5 +81,98 @@ export class RenderJobsController {
       width: dto.width,
       height: dto.height,
     });
+  }
+
+  /**
+   * Collect one rendered print file.
+   *
+   * 🔴 **The plugin PULLS; the cloud never pushes bytes.** Decision 3a chose
+   * this shape because it is what M9.4 already proves safe — the inbound push
+   * endpoint *"carries a version and nothing else"*, which is exactly what lets
+   * it be a public route with a signature rather than a capability check. A
+   * cloud that POSTed bytes to a public route would need that route to trust
+   * its body.
+   *
+   * ⚠️ **A 404 covers four situations deliberately**: no such job, another
+   * store's job, not yet rendered, already collected. A caller that could tell
+   * them apart could enumerate other stores' job ids by the difference.
+   *
+   * ## Rate limit
+   *
+   * 600 an hour, matching the request route: a cart with several designed
+   * lines collects once per line, and a retry after a lost response is normal.
+   */
+  @Get('renders/:id/file')
+  @Throttle({ default: { limit: 600, ttl: 3_600_000 } })
+  @Header('Content-Type', 'image/png')
+  @ApiProduces('image/png')
+  @ApiResponse({
+    status: 200,
+    description: 'The rendered print file.',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiErrors(401, 404, 429)
+  async file(@Param('id') id: string, @Res() response: Response): Promise<void> {
+    const storeId = getStoreId();
+
+    if (!storeId) {
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    const render = await this.service.collect(storeId, id);
+
+    if (render === null) {
+      throw new DomainException(ErrorCode.NOT_FOUND, 'No collectable render for that id.');
+    }
+
+    /*
+     * 📌 **`Content-Length` so the plugin can tell a truncated download from a
+     * complete one.** A partially written print file is worse than a missing
+     * one: it looks like a file and prints as damage.
+     */
+    response.setHeader('Content-Length', String(render.png.length));
+    response.end(render.png);
+  }
+
+  /**
+   * Confirm the plugin has stored it, and release the buffer.
+   *
+   * 🔴 **This is what ends the transfer**, and what makes `ready` mean
+   * something. Until it arrives the bytes sit in the cloud's buffer and the job
+   * reads `rendered`; after it, the merchant's WordPress holds the file.
+   *
+   * ⚠️ **The cloud learns the URL no other way.** Decision 3 put the permanent
+   * home on the merchant's own server, so only the plugin knows where the file
+   * landed.
+   *
+   * ## Why 200 rather than 204
+   *
+   * The call is idempotent and a retry must look identical to the first
+   * delivery — the same reasoning the other two routes here record. A 204 would
+   * also give the plugin nothing to distinguish "stored" from "there was
+   * nothing to store".
+   */
+  @Post('renders/:id/collected')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 600, ttl: 3_600_000 } })
+  @ApiOkResponse({ description: 'The collection was recorded.' })
+  @ApiErrors(200, 400, 401, 404, 429)
+  async collected(
+    @Param('id') id: string,
+    @Body() dto: CollectedRenderDto,
+  ): Promise<{ collected: true }> {
+    const storeId = getStoreId();
+
+    if (!storeId) {
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    const recorded = await this.service.markCollected(storeId, id, dto.file_url);
+
+    if (!recorded) {
+      throw new DomainException(ErrorCode.NOT_FOUND, 'No render job with that id.');
+    }
+
+    return { collected: true };
   }
 }

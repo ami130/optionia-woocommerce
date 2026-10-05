@@ -163,24 +163,35 @@ WORKER="$SRC/design/render-worker.service.ts"
 if [ ! -f "$WORKER" ]; then
   fail "the render worker is missing — this gate's path is stale"
 else
-  PASS_NAME=$(strip_comments "$WORKER" \
-    | grep -oE "^  async [a-zA-Z]+\(" | head -1 | sed 's/^  async //; s/($//' || true)
-  PASS_NAME=${PASS_NAME%(}
+  # ⚠️ **EVERY public pass, not just the first one.** This checked only the
+  # first `async` method, which guarded `renderPending()` and would have said
+  # nothing when `countUncollected()` shipped with a column, an index and no
+  # reader — a deadline written, cleared and never asked about. The same defect
+  # this gate exists for, one method along.
+  PASS_NAMES=$(strip_comments "$WORKER" \
+    | grep -oE "^  async [a-zA-Z]+\(" | sed 's/^  async //; s/($//' | sed 's/($//' || true)
+  PASS_NAMES=$(printf '%s' "$PASS_NAMES" | tr -d '(')
 
-  if [ -z "$PASS_NAME" ]; then
-    fail "could not find the worker's pass — this gate's parser is stale"
+  if [ -z "$PASS_NAMES" ]; then
+    fail "could not find the worker's passes — this gate's parser is stale"
   else
-    DRIVERS=$(grep -rlE "\.$PASS_NAME\(" "$SRC" --include='*.ts' 2>/dev/null \
-      | grep -v "render-worker.service.ts" \
-      | grep -vE '\.spec\.ts$' | wc -l | tr -d ' ')
+    while IFS= read -r PASS_NAME; do
+      [ -n "$PASS_NAME" ] || continue
 
-    if [ "${DRIVERS:-0}" -eq 0 ]; then
-      fail "nothing in production calls the render worker's $PASS_NAME()"
-      printf '        a queue nobody drains: every job stays at preparing for ever\n'
-      printf '        registering a provider is not the same as running it\n'
-    else
-      pass "the render worker has $DRIVERS production driver(s)"
-    fi
+      DRIVERS=$(grep -rlE "\.$PASS_NAME\(" "$SRC" --include='*.ts' 2>/dev/null \
+        | grep -v "render-worker.service.ts" \
+        | grep -vE '\.spec\.ts$' | wc -l | tr -d ' ')
+
+      if [ "${DRIVERS:-0}" -eq 0 ]; then
+        fail "nothing in production calls the render worker's $PASS_NAME()"
+        printf '        a pass nobody drives: registering a provider is not running it\n'
+        printf '        a count nobody reads is the same as no count at all\n'
+      else
+        pass "the worker's $PASS_NAME() has $DRIVERS production driver(s)"
+      fi
+    done <<EOF
+$PASS_NAMES
+EOF
   fi
 fi
 

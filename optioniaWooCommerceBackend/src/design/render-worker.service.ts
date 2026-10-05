@@ -31,6 +31,17 @@ export const RENDER_AFTER_MS = 5_000;
 const BATCH = 10;
 
 /**
+ * How long a rendered file waits in the buffer before it is a problem.
+ *
+ * 🔴 **Twenty-four hours, and it is a diagnosis window rather than a deadline.**
+ * The plugin's own cron runs far more often than daily, so a buffer still
+ * uncollected after a day means collection is broken — not that it is slow.
+ * Decision 3a: *"if collection ever fails silently, the buffer becomes the home
+ * by accident."*
+ */
+export const COLLECT_WITHIN_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Turning accepted render requests into print files (M26e.4).
  *
  * ## Why this is a worker rather than a request handler
@@ -180,9 +191,24 @@ export class RenderWorkerService {
          * collection — and one that stays that way is the symptom M26e.6 has
          * to catch.
          */
+        /*
+         * 🔴 **The bytes are STORED, not discarded.** They waited in a `void`
+         * for two commits while Decision 3a was open; the buffer is where they
+         * wait now, until the plugin collects them.
+         *
+         * ⚠️ **`collectBy` is set in the same write.** A buffer with no
+         * deadline is one nobody can tell is abandoned, which is the exact
+         * drift Decision 3a warns about.
+         */
         await this.jobs.update(
           { id: job.id },
-          { processedAt: new Date(), lastError: null, attempts },
+          {
+            processedAt: new Date(),
+            lastError: null,
+            attempts,
+            png: outcome.png,
+            collectBy: new Date(Date.now() + COLLECT_WITHIN_MS),
+          },
         );
 
         rendered += 1;
@@ -239,7 +265,7 @@ export class RenderWorkerService {
   private render(
     job: RenderJob,
     fontFiles: readonly string[],
-  ): { ok: true; ms: number } | { ok: false; message: string } {
+  ): { ok: true; ms: number; png: Buffer } | { ok: false; message: string } {
     let svg: string;
 
     try {
@@ -265,16 +291,58 @@ export class RenderWorkerService {
     }
 
     /*
-     * ⚠️ **The PNG is produced and not yet stored, which is Decision 3a's
-     * open half.** The bytes cross to the merchant's WordPress through a
-     * short-lived signed URL the plugin pulls; until that transfer lands, a
-     * rendered job is `processed` with no `fileUrl`. Recorded here rather than
-     * hidden, because a worker that silently discarded its own output would be
-     * the worst kind of green.
+     * 📌 **The bytes go back to the caller, which stores them in the buffer.**
+     * For two commits this line was a `void` — the PNG produced and dropped —
+     * because Decision 3a was still open. It is recorded here because a worker
+     * that silently discards its own output is the worst kind of green.
      */
-    void outcome.result.png;
+    return { ok: true, ms: outcome.result.ms, png: outcome.result.png };
+  }
 
-    return { ok: true, ms: outcome.result.ms };
+  /**
+   * Count the buffers nobody came for (M26e.4, Decision 3a).
+   *
+   * 🔴 **This is the thing that notices.** `collectBy` and
+   * `ix_render_jobs_uncollected` were written, cleared and indexed for two
+   * commits with NOTHING reading them — a deadline no query asked about, which
+   * is indistinguishable from no deadline at all. Decision 3a names exactly
+   * this drift: *"if collection ever fails silently, the buffer becomes the
+   * home by accident."* A buffer only stays a buffer if someone is counting.
+   *
+   * 🔴 **It REPORTS; it does not delete.** Deleting an overdue buffer would
+   * destroy the merchant's only copy of a customer's artwork precisely when
+   * collection is known to be broken — turning a recoverable fault into an
+   * unrecoverable one. The bytes are the evidence and the remedy at once, so
+   * they are kept and the condition is made loud.
+   *
+   * ⚠️ **Past `collectBy` means collection is BROKEN, not slow.** The plugin's
+   * cron runs far more often than daily, so a buffer still uncollected after
+   * `COLLECT_WITHIN_MS` is a fault to investigate rather than a wait.
+   */
+  async countUncollected(now: Date = new Date(), storeId?: string): Promise<number> {
+    /*
+     * ⚠️ **Counts every store by default, because the signal is operational.**
+     * One merchant's plugin failing to collect and a platform-wide fault look
+     * identical from inside a single tenant. `storeId` narrows it — which is
+     * what a test needs to assert about rows it created, and what an operator
+     * needs to name the affected merchant.
+     */
+    const [row]: Array<{ overdue: string | number }> = await this.dataSource.query(
+      `SELECT COUNT(*) AS overdue
+         FROM render_jobs
+        WHERE collectBy IS NOT NULL
+          AND collectBy < ?
+          AND png IS NOT NULL
+          AND (? IS NULL OR storeId = ?)`,
+      [now, storeId ?? null, storeId ?? null],
+    );
+
+    /*
+     * 📌 **`COUNT(*)` arrives as a string from this driver.** Returned as a
+     * number so a caller cannot accidentally compare `"0" > 0` — which is
+     * false — and conclude all is well.
+     */
+    return Number(row?.overdue ?? 0);
   }
 }
 

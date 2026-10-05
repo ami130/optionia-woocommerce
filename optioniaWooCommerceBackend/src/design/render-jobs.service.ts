@@ -160,6 +160,60 @@ export class RenderJobsService {
       };
     });
   }
+
+  /**
+   * The bytes of one rendered job, for the store that owns it.
+   *
+   * 🔴 **Scoped to the asking store, always.** A render is a customer's
+   * artwork; serving one store's file to another is the same class of defect
+   * as cross-tenant revenue. The id alone is not authorisation.
+   *
+   * ⚠️ **Null covers four different situations and that is deliberate** — no
+   * such job, another store's job, not yet rendered, already collected. A
+   * caller that could tell them apart could enumerate other stores' job ids by
+   * the difference in the answers.
+   */
+  async collect(storeId: string, jobId: string): Promise<CollectableRender | null> {
+    const [row]: Array<{ png: Buffer | null }> = await this.dataSource.query(
+      `SELECT png FROM render_jobs WHERE id = ? AND storeId = ? LIMIT 1`,
+      [jobId, storeId],
+    );
+
+    if (!row || row.png === null || row.png.length === 0) {
+      return null;
+    }
+
+    return { png: row.png };
+  }
+
+  /**
+   * Record that the plugin has stored the file, and release the buffer.
+   *
+   * 🔴 **Clearing `png` is what keeps this a BUFFER.** A row that kept its
+   * bytes after the merchant had them would make the database a second home —
+   * the drift Decision 3a names. It is also what lets `fileUrl` mean exactly
+   * one thing: the merchant has it, we do not.
+   *
+   * ⚠️ **`collectBy` is cleared too.** A collected job left with a deadline
+   * would show up for ever in whatever asks "what has not been collected?".
+   *
+   * @returns false when the job is not this store's, or does not exist.
+   */
+  async markCollected(storeId: string, jobId: string, fileUrl: string): Promise<boolean> {
+    const result: { affectedRows: number } = await this.dataSource.query(
+      `UPDATE render_jobs
+          SET fileUrl = ?, png = NULL, collectBy = NULL, updatedAt = NOW(3)
+        WHERE id = ? AND storeId = ?`,
+      [fileUrl, jobId, storeId],
+    );
+
+    return result.affectedRows > 0;
+  }
+}
+
+/** A rendered file, ready for the plugin to collect. */
+export interface CollectableRender {
+  readonly png: Buffer;
 }
 
 /**
