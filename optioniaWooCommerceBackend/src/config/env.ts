@@ -254,6 +254,22 @@ export interface AppConfig {
    */
   readonly designFontsDir: string;
 
+  /**
+   * Whether this instance drains the render queue (M26e.4).
+   *
+   * 🔴 **Off by default, for the reason `billing.retryEnabled` is**: every
+   * instance running an in-process worker means N instances claiming the same
+   * rows. `FOR UPDATE SKIP LOCKED` makes that safe rather than corrupt — the
+   * second worker takes different rows — but it is still N times the
+   * rasterisation for one queue, and rendering is the expensive thing here.
+   *
+   * ⚠️ **And it must be off in tests.** `@nestjs/schedule` starts timers the
+   * moment the module loads, so every suite that boots the app would otherwise
+   * render against the shared test database from a process the test does not
+   * control and cannot wait for.
+   */
+  readonly designRenderEnabled: boolean;
+
   readonly logLevel: string;
 }
 
@@ -391,6 +407,14 @@ export function loadConfig(): AppConfig {
      * stay loadable by the TypeORM CLI as well as by Nest.
      */
     designFontsDir: optional('DESIGN_FONTS_DIR', 'assets/fonts'),
+
+    /*
+     * 📌 **Off by default: turning it on is a deployment decision**, exactly as
+     * `BILLING_RETRY_ENABLED` is — and read through `bool()` rather than from
+     * `process.env` at the call site, because a misspelt flag read raw disables
+     * a worker silently.
+     */
+    designRenderEnabled: bool('DESIGN_RENDER_ENABLED', false),
 
     billing: {
       secretKey: nullableSecret('STRIPE_SECRET_KEY'),

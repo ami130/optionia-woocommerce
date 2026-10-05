@@ -146,6 +146,44 @@ else
   esac
 fi
 
+# 🔴 **A worker nothing calls is a queue nothing drains**, and that is not
+# hypothetical: `renderPending()` shipped for one commit with no production
+# caller at all. A store could request a render, a row was written, and every
+# job sat at `preparing` for ever.
+#
+# ⚠️ **`check-reachable` cannot catch this and should not be asked to.**
+# Registering a provider in a module satisfies *reachable* — the class is
+# imported and constructed — without anything ever CALLING its method. It is
+# the same "named is not rendered" boundary the symbol gate already records.
+#
+# 📌 **Matched on the CALL, not on an import.** A scheduler that imports the
+# worker and never invokes the pass is exactly the state this exists to catch.
+WORKER="$SRC/design/render-worker.service.ts"
+
+if [ ! -f "$WORKER" ]; then
+  fail "the render worker is missing — this gate's path is stale"
+else
+  PASS_NAME=$(strip_comments "$WORKER" \
+    | grep -oE "^  async [a-zA-Z]+\(" | head -1 | sed 's/^  async //; s/($//' || true)
+  PASS_NAME=${PASS_NAME%(}
+
+  if [ -z "$PASS_NAME" ]; then
+    fail "could not find the worker's pass — this gate's parser is stale"
+  else
+    DRIVERS=$(grep -rlE "\.$PASS_NAME\(" "$SRC" --include='*.ts' 2>/dev/null \
+      | grep -v "render-worker.service.ts" \
+      | grep -vE '\.spec\.ts$' | wc -l | tr -d ' ')
+
+    if [ "${DRIVERS:-0}" -eq 0 ]; then
+      fail "nothing in production calls the render worker's $PASS_NAME()"
+      printf '        a queue nobody drains: every job stays at preparing for ever\n'
+      printf '        registering a provider is not the same as running it\n'
+    else
+      pass "the render worker has $DRIVERS production driver(s)"
+    fi
+  fi
+fi
+
 printf '\n'
 
 if [ "$FAILURES" -gt 0 ]; then

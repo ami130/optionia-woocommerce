@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module';
 import { RenderJob } from './entities/render-job.entity';
 import { RenderJobsController } from './render-jobs.controller';
 import { RenderJobsService } from './render-jobs.service';
+import { RenderScheduler } from './render.scheduler';
 import { RenderWorkerService } from './render-worker.service';
 
 /**
@@ -28,7 +29,13 @@ import { RenderWorkerService } from './render-worker.service';
    * `BillingEventRetryService` keeps, and what lets this be driven from a test
    * or a command without dragging a timer in.
    */
-  providers: [RenderJobsService, RenderWorkerService],
+  /*
+   * 🔴 **The scheduler is what makes the worker RUN.** Registering a provider
+   * satisfies `check-reachable` without anything calling it — which is exactly
+   * how `renderPending()` shipped for one commit with no production caller, and
+   * every job sat at `preparing` for ever.
+   */
+  providers: [RenderJobsService, RenderWorkerService, RenderScheduler],
   exports: [RenderWorkerService],
 })
 export class DesignModule {}
