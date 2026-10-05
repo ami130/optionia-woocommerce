@@ -408,6 +408,39 @@ deletes `optionia-app`'s ~470-line outline-conversion subsystem. M26e.4's
 requirement that *"no font needs installing at render time"* is met by shipping
 the files, not by converting glyphs.
 
+### ✅ SHIPPED — 2026-10-05, `optioniaWooCommerceBackend/assets/fonts` (3.3 MB)
+
+Fetched from `github.com/google/fonts`, the repository this decision verified
+against, and **unmodified** — which is what keeps the Reserved Font Name clause
+from engaging on Lato, Playfair Display and Dancing Script.
+
+⚠️ **Six of the eight are VARIABLE fonts, and that is what Google publishes.**
+Roboto, Open Sans, Montserrat, Oswald, Playfair Display and Dancing Script ship
+as a single variable file each; Lato and Pacifico ship static. This is not a
+substitution — it is the upstream form — but it is recorded because a variable
+file carries every weight in one face, so `resvg` resolving a `font-weight`
+behaves differently from a directory of static faces.
+
+🔴 **Every family was proven to DRAW, not merely to load.** A 200×60 canvas per
+family, dark pixels counted against a blank one:
+
+| Family | Dark px | | Family | Dark px |
+|---|---|---|---|---|
+| Roboto | 1422 | | Oswald | 1604 |
+| Open Sans | 1321 | | Playfair Display | 1249 |
+| Montserrat | 424 | | Dancing Script | 752 |
+| Lato | 1309 | | Pacifico | 2050 |
+
+⚠️ **Montserrat's 424 was investigated rather than accepted.** It is a third of
+its peers, which is the shape of a silent fallback. Rendering it with *only its
+own file supplied* gave the identical 424, and an unknown family gave 752 — so
+it is drawing its own glyphs at its own default weight, not falling back. A
+count that looks wrong is worth one more measurement.
+
+📌 **`OFL.txt` ships beside them, carrying all eight copyright notices.** The
+licence obliges the notice to travel with the Font Software, and a single
+family's file would misattribute the other seven.
+
 ### Coverage, decided 2026-09-30
 
 The owner answered *"yes maybe"* to non-Latin merchants at launch. **That is the

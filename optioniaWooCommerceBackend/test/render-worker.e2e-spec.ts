@@ -263,6 +263,74 @@ describe('render worker (e2e)', () => {
       ).toBe('ready');
     });
 
+    /*
+     * 🔴 **A design with TEXT renders, which it could not before the fonts
+     * shipped.** `resvg` draws `<textPath>` and `<text>` from a font FILE, so
+     * until the eight licensed families were in `assets/fonts` every
+     * text-bearing design failed with `no-fonts` — correctly refused rather
+     * than silently blank, but refused all the same.
+     *
+     * ⚠️ **Pacifico is deliberately chosen**: it is the one family that ships
+     * regular-only, so a fallback to another face would be visible as a
+     * different glyph count rather than hidden behind a near-identical weight.
+     */
+    it('renders a design containing text', async () => {
+      const storeId = await store();
+      const lineRef = `text-${Math.random().toString(36).slice(2, 8)}`;
+      const age = new Date(Date.now() - RENDER_AFTER_MS - 5_000);
+      const scene = {
+        width: 200,
+        height: 60,
+        letterbox: { x: 0, y: 0, w: 200, h: 60 },
+        groups: [
+          {
+            key: 't',
+            visible: true,
+            images: [],
+            texts: [
+              {
+                text: 'Happy Birthday',
+                font: 'Pacifico',
+                fontSize: 28,
+                bold: false,
+                italic: false,
+                align: 'center',
+                valign: 'middle',
+                color: '#000000',
+                cx: 100,
+                cy: 30,
+                w: 190,
+                h: 0,
+                rot: 0,
+                curve: 0,
+                letterSpacing: 0,
+                advanceRatio: 0,
+              },
+            ],
+          },
+        ],
+      };
+
+      await dataSource.query(
+        `INSERT INTO render_jobs
+           (id, storeId, lineRef, scene, width, height, attempts, createdAt, updatedAt)
+         VALUES (UUID(), ?, ?, ?, 200, 60, 0, ?, NOW(3))`,
+        [storeId, lineRef, JSON.stringify(scene), age],
+      );
+
+      const result = await worker.renderPending();
+
+      expect(result.rendered).toBe(1);
+
+      const [row] = await dataSource.query(
+        `SELECT processedAt, lastError FROM render_jobs WHERE storeId = ? AND lineRef = ?`,
+        [storeId, lineRef],
+      );
+
+      expect(row.lastError).toBeNull();
+      expect(row.processedAt).not.toBeNull();
+    });
+
     it('reports nothing to do when the queue is empty', async () => {
       await worker.renderPending();
 
