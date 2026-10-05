@@ -73,58 +73,19 @@ const EXEMPT = new Map<string, string>([
   ['common/money/price-config-delta.ts', 'Phase 21 — live preview is its caller'],
 
   /*
-   * 🔴 **A guard written before the thing it guards, deliberately.**
+   * ✅ **ALL THREE DESIGN EXEMPTIONS ARE GONE, 2026-10-05.**
    *
-   * M26's Stage 0 spike measured a 50000×50000 SVG rendering successfully in
-   * `@resvg/resvg-js` — 46 seconds, ~10 GB of RGBA — and the OS killed the
-   * process at exit 137. ⚠️ **Succeeding is worse than failing here**: a kernel
-   * kill is not an exception, so nothing catches it, nothing logs it, and the
-   * merchant waiting on a print file learns only that it never arrived.
+   * `common/render/render-bounds.ts`, `design/scene-raster.ts` and
+   * `design/design-fonts.ts` each carried one reading *"M26e.4 — the render
+   * job is its caller"*. `design/render-worker.service.ts` is that caller, and
+   * it imports all three: the bounds guard through the rasteriser, the
+   * rasteriser directly, the font inventory to establish what is on disk.
    *
-   * ⚠️ **`optionia-app` has no such bound**, so porting its render path
-   * faithfully would port the hole. Writing the guard first is what stops that.
-   *
-   * 📌 **The absence of a caller is enforced rather than trusted.**
-   * `check-render-bounds.sh` fails the moment any file imports a rasteriser
-   * without importing this beside it — so this exemption cannot outlive the
-   * renderer's arrival unnoticed.
-   *
-   * ✅ **THE CALLER ARRIVED (2026-10-02) and this exemption is GONE.**
-   * `design/scene-raster.ts` imports it, so the guard is live rather than
-   * pending, and `check-render-bounds.sh` now has a real file to hold to both
-   * halves of the rule. The instruction that used to sit here — *"delete when
-   * M26e.4 lands"* — was followed rather than extended, which is the only way
-   * a dated exemption stays worth reading.
+   * ⚠️ **Followed rather than extended, which is the only thing that keeps a
+   * dated exemption worth reading.** The first of them was written a milestone
+   * early and said so; three milestones later it was still true, and deleting
+   * it was the point.
    */
-
-  /*
-   * 🔴 **The rasteriser itself, pending the pipeline that calls it.**
-   *
-   * `rasteriseScene` is complete and proven: bounds refused before a `Resvg`
-   * exists (measured — without that check the 50000×50000 case takes 42
-   * seconds in a unit test), hostile input caught, fonts isolated from the
-   * host, and eight-digit alpha verified against the browser's own result.
-   *
-   * ⚠️ **What it does NOT yet have is the async job Decision 2 chose**: a
-   * queue, a `not rendered yet` state on the order, and `UploadStore` as the
-   * destination (Decision 3). That is the rest of M26e.4, and inventing a
-   * caller to satisfy this gate would be worse than the exemption — a route
-   * nothing uses reads as a finished feature.
-   *
-   * ⚠️ **DELETE WHEN THE RENDER JOB LANDS.** If M26e.4 completes without
-   * something importing this, the renderer is dead code rather than pending.
-   */
-
-  ['design/scene-raster.ts', 'M26e.4 — the render job is its caller'],
-
-  /*
-   * 🔴 **The font inventory, pending the same job.** `resvg` renders a missing
-   * font file without throwing — measured at 112 bytes, no error — so this is
-   * what stands between a packaging mistake and a blank print file.
-   *
-   * ⚠️ **DELETE WITH `scene-raster.ts`.** They land together or neither does.
-   */
-  ['design/design-fonts.ts', 'M26e.4 — the render job is its caller'],
 ]);
 
 const isTest = (rel: string): boolean => rel.includes('.spec.') || rel.includes('.test.');

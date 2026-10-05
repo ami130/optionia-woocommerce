@@ -17,11 +17,44 @@
    * inherited `**/*spec.ts` exclude stopped matching once the shared tree joined
    * the program at a different path depth.
    *
-   * 📌 **When a production file imports `@shared/*`, this must change** — the
-   * shared sources will need to be in the program and the emit root moves again.
-   * `check-build-output.sh` is what makes that loud: it builds, then asserts the
-   * entry point exists where `start:prod` looks and that no test code shipped.
+   * ✅ **IT HAPPENED, 2026-10-05 — and `include` did NOT need changing.**
+   * `design/render-worker.service.ts` imports `@shared/design/design-scene`,
+   * because a print file must come from the SAME serializer the dashboard
+   * preview and the storefront draw with, or it matches the preview a merchant
+   * approved only by accident. (Mirroring was right for `design-fonts.ts`,
+   * which needed eight strings; it is wrong for a renderer.)
+   *
+   * 🔴 **TypeScript followed the import on its own.** The shared sources joined
+   * the program because something under `src/**` references them — not because
+   * this list was widened — and the emit root moved to the repository root
+   * exactly as predicted. `start:prod` was repointed to
+   * `dist/optioniaWooCommerceBackend/src/main.js` rather than fighting that,
+   * because `check-build-output.sh` reads the entry point FROM the script
+   * deliberately, so it protects whatever the script says.
+   *
+   * ⚠️ **Verified rather than assumed**: the compiled worker was loaded in
+   * node and its import resolved — TypeScript rewrites the alias to
+   * `../../../shared/design/design-scene`, which lands on the emitted
+   * `dist/shared/`. An alias surviving compilation but not runtime would be a
+   * server that starts and throws on the first render.
+   *
+   * 📌 **`**/*spec.ts` still excluded**, which is what kept six `.spec.js`
+   * files out of the artefact the last time this root moved.
    */
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  /*
+   * 🔴 **`../shared/**/*.spec.ts` by PATH, because the glob alone did not
+   * reach it.** `exclude` filters what `include` matched, and the shared tree
+   * arrives through the import graph instead — so `**/*spec.ts` left 91 spec
+   * files in the production build, which is the precise defect the comment
+   * above warned about when the root last moved. Caught by
+   * `check-build-output.sh`, not by review.
+   */
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "../shared/**/*.spec.ts"
+  ]
 }

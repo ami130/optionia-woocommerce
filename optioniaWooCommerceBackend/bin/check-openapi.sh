@@ -12,4 +12,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-npx ts-node --transpile-only bin/check-openapi.ts
+# 🔴 **`-r tsconfig-paths/register`, because this boots the app** and a
+# production module now imports `@shared/*` (`design/render-worker.service.ts`
+# needs the serializer the storefront draws with). `ts-node` does not apply
+# tsconfig `paths` on its own, so without this the whole check fails on
+# `Cannot find module '@shared/design/design-scene'` — the same idiom
+# `typeorm` and the seed scripts already use.
+npx ts-node -r tsconfig-paths/register --transpile-only bin/check-openapi.ts

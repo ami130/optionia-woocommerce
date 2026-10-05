@@ -13,4 +13,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-npx ts-node --transpile-only bin/check-api-contract.ts
+# 🔴 **`-r tsconfig-paths/register`, because this BOOTS the app.** I assumed
+# it only parsed source and left it out; it imports the module tree, so a
+# production file importing `@shared/*` broke it on
+# `Cannot find module '@shared/design/design-scene'`. Boots the app → needs
+# the resolver; reads files → does not. `check-docs` and `check-reachable`
+# genuinely only read.
+npx ts-node -r tsconfig-paths/register --transpile-only bin/check-api-contract.ts

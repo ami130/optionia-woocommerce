@@ -40,33 +40,14 @@ printf 'Checking that exported symbols have consumers...\n'
 # is how an exemption list stops being read.
 is_exempt_file() {
   case "$1" in
-    # ✅ **`render-bounds.ts` is NO LONGER EXEMPT (2026-10-02).**
-    # `design/scene-raster.ts` imports it, so the guard has the caller its
-    # exemption was waiting for. Removed here and in `check-reachable.ts`
-    # together — a dated exemption that outlives its date stops being read.
-
-    # 🔴 **The rasteriser, pending the job that calls it (M26e.4).**
-    # `rasteriseScene` is complete and proven — bounds refused before a `Resvg`
-    # exists, hostile input caught, fonts isolated, alpha measured. What it
-    # lacks is the async job Decision 2 chose: a queue, a `not rendered yet`
-    # order state, and `UploadStore` as the destination (Decision 3).
+    # ✅ **EVERY DESIGN EXEMPTION IS GONE (2026-10-05).**
+    # `render-bounds.ts`, `scene-raster.ts` and `design-fonts.ts` each waited on
+    # a caller named *"M26e.4 — the render job"*. `render-worker.service.ts` is
+    # that caller and imports all three, so the guards are live rather than
+    # pending and the 50000×50000 case has something real holding it.
     #
-    # ⚠️ **Inventing a caller to clear this gate would be worse than the
-    # exemption** — a route nothing uses reads as a finished feature, and this
-    # repository has met that defect seven times.
-    #
-    # ⚠️ **DELETE WHEN THE RENDER JOB LANDS.** Without it the renderer is dead
-    # code rather than pending, and the 50000×50000 case has no live guard.
-    design/scene-raster.ts) return 0 ;;
-
-    # 🔴 **The font inventory, pending the same job.** `fontInventory` is what
-    # stops the blank print file: `resvg` renders a MISSING font file without
-    # throwing — 112 bytes, no error — so what is on disk must be established
-    # before the renderer is handed anything. The render job is its caller.
-    #
-    # ⚠️ **DELETE WITH `scene-raster.ts`.** The two land together or neither is
-    # doing anything.
-    design/design-fonts.ts) return 0 ;;
+    # ⚠️ **Dated exemptions were followed rather than extended**, which is the
+    # only thing that keeps the list worth reading — this file's own rule.
 
     # ✏️ **The six `design/` exemptions are GONE because the tree moved.** The
     # geometry now lives in `shared/design/`, outside this gate's watch path, and

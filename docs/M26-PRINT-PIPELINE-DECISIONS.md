@@ -142,6 +142,48 @@ onto a product, and a leaked one is a leaked order.
 merchant's storage quota, which is already built, already enforced, and already
 explained to the merchant by `Admin\StorageNotice`.
 
+### 🔴 Decision 3a — how the bytes actually cross, decided 2026-10-05
+
+**Decision 3 said where the file LIVES and not how it gets there**, and building
+the worker exposed the gap: the bytes are produced in the cloud, the home is the
+merchant's WordPress, and nothing connected the two.
+
+**What was actually checked, rather than assumed:**
+
+- The cloud **writes nothing to disk** — Decision 1 verified this by grep, and
+  its disk is ephemeral *by design*: that property is what makes Decision 3
+  correct rather than merely convenient.
+- There is **no object storage**: `s3|r2|bucket|cdn|spaces|blob` matches zero
+  lines in `.env.example`, still.
+- The existing push endpoint **deliberately carries no payload** — *"the push
+  carries a version and nothing else. The plugin then PULLS"* — and that is
+  precisely what lets it be a public route with a signature rather than a
+  capability check.
+- `UploadStore` is a **filesystem helper**: it writes bytes the plugin already
+  holds. It cannot fetch.
+
+**Decided: the cloud holds the bytes BRIEFLY, pushes a short-lived signed URL,
+and the plugin pulls.** Hours, not forever — the file is deleted once collected.
+
+⚠️ **Decision 3 is unchanged, not reversed.** The permanent home is still
+`wp-content/uploads/`, where every other customer file lives and where M15.6's
+quota already counts it. What this adds is a transfer buffer, which is a
+different thing from a home.
+
+📌 **Push-then-pull is the pattern M9.4 already proves safe**, and reusing it
+means the inbound endpoint keeps the property that makes it public-safe: it
+receives a reference, never content. A cloud that POSTed bytes to a public route
+would need that route to trust its body.
+
+🔴 **The cost is honest and is the reason this was a decision rather than an
+implementation detail**: a temporary store the cloud does not have today. It is
+bounded by collection rather than by customer count, which is what keeps it
+away from option A's *"bill that scales with merchants' customers"*.
+
+⚠️ **What must not drift**: if collection ever fails silently, the buffer
+becomes the home by accident. A retained file whose job is `processed` with no
+`fileUrl` is the symptom, and M26e.6's failure matrix is where that belongs.
+
 ---
 
 ## Stage 0 spike — measured 2026-09-30
