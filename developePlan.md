@@ -31269,6 +31269,17 @@ a self-hosted plugin cannot do well, which is the differentiator.
 
 #### Findings — the transfer (2026-10-05, commit 59c3fce)
 
+✅ **F165 — FIXED 2026-10-05 in `fc5d876`.** Reproduced first: two concurrent
+`setPrice` calls both committed and left the plan with **two current prices**.
+Now a generated `currentKey` column (`plan_id:currency:interval` while current,
+`NULL` otherwise) under `uq_plan_prices_current` — MySQL has no partial index,
+and `NULL`s do not collide, so retired rows stay unconstrained and the
+supersession history survives. The same probe after the fix: one writer refused
+with `ER_DUP_ENTRY`, one current price. The loser gets a 409 rather than a 500,
+because `asUniqueViolation` already runs in the global filter. The e2e test
+races two staff through the real route and asserts on the **database**, not the
+responses; dropping the index reproduces `Expected 1, Received 2`.
+
 🔴 **F165 — two prices can both be current, and provisioning picks one at
 random.** `ix_plan_prices_current` is **non-unique** on
 `(planId, currency, interval, isCurrent)`, so nothing stops two rows holding
@@ -31298,6 +31309,14 @@ asserted before the thing it causes** — a silent zero-row mutation is precisel
 how the test came to assert nothing. Proven with three mutants on the seed's
 audit write (dropping the `from` amount, recording a supersession as a creation,
 mislabelling `source`), all of which the old test passed.
+
+✅ **F167 — FIXED 2026-10-05 in `fc5d876`**, narrowly. The teardown now deletes
+seed-attributed `plan_price%` rows created at or after a `NOW(3)` captured in
+`beforeAll`, so it removes exactly what its own run caused and cannot reach a
+row written before it started. Verified in the order that broke: 67/67 across
+both suites, and `plans-admin` run alone leaves the count unchanged. ⚠️ **One
+residual, not fixed:** the count still rises by one per full run, traced to
+`seeds.e2e-spec.ts` writing its own row — a separate, smaller leak.
 
 ⚠️ **F167 — `plans-admin.e2e-spec.ts` strands audit rows for ever.** Its
 teardown deletes `action LIKE 'plan%' AND userId IS NOT NULL`, sparing seed rows
