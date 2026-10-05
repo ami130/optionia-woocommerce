@@ -31267,6 +31267,57 @@ resolution and format; idempotent (a retry must not produce a second file).
 the plugin. It is also the correct division of labour: rasterising is exactly the kind of work
 a self-hosted plugin cannot do well, which is the differentiator.
 
+#### Findings — the transfer (2026-10-05, commit 59c3fce)
+
+🔴 **F165 — two prices can both be current, and provisioning picks one at
+random.** `ix_plan_prices_current` is **non-unique** on
+`(planId, currency, interval, isCurrent)`, so nothing stops two rows holding
+`isCurrent = 1` for the same plan and interval — and the test database reached
+exactly that state. `TenantProvisioningService` and `PlansAdminService` both
+resolve the price with `findOne({ where: { isCurrent: true } })`, which with two
+matching rows returns whichever MySQL yields first. **A merchant could be
+provisioned at the wrong price**, nondeterministically.
+
+Pre-existing since 84659db (2026-09-24, F84) and **deliberately not fixed in the
+render commit** — a billing-correctness change belongs in its own commit with
+its own tests, not folded into a print-pipeline one. The repair is a unique
+index on the current row (MySQL has no partial index, so the usual shape is a
+generated column that is `NULL` when `isCurrent = 0`), plus a check that no plan
+currently violates it before the index is added.
+
+🔴 **F166 — a seed test that exercised nothing for eleven days.**
+`seeds.e2e-spec.ts` changed a price with `WHERE interval = 'month'`, but the
+seed stopped writing a monthly row — which `plans-admin.e2e-spec.ts` states in
+its own teardown. **The UPDATE matched zero rows**, so no supersession was ever
+written, and the assertion then read `ORDER BY id DESC LIMIT 1` across the whole
+table: an unrelated `business` row left behind by another suite. It failed only
+when that leftover row changed, which is how it was found.
+
+Fixed on the yearly row that exists, and **the UPDATE's `affectedRows` is now
+asserted before the thing it causes** — a silent zero-row mutation is precisely
+how the test came to assert nothing. Proven with three mutants on the seed's
+audit write (dropping the `from` amount, recording a supersession as a creation,
+mislabelling `source`), all of which the old test passed.
+
+⚠️ **F167 — `plans-admin.e2e-spec.ts` strands audit rows for ever.** Its
+teardown deletes `action LIKE 'plan%' AND userId IS NOT NULL`, sparing seed rows
+— correctly, since real seed history is not its to delete. But its own price
+restoration *re-seeds* `pro` and `business`, and those supersessions carry no
+user, so they accumulate without bound. This is what stranded the row that
+exposed F166. **An attempted fix was reverted**: deleting those rows by plan was
+too broad and removed the history `seeds.e2e-spec.ts` legitimately needs. The
+correct fix is narrower — delete only rows this suite's own restoration created,
+identified by a marker it sets — and is left open rather than guessed at.
+
+📌 **F168 — `collectBy` shipped with no reader.** The column, its index and the
+clearing logic existed for two commits with nothing querying them: a deadline
+written and cleared but never asked about is indistinguishable from no deadline.
+Found by grep, not by any test or gate. `countUncollected()` is now that reader,
+and `check-render-bounds.sh` requires a production caller for **every** public
+pass on the worker rather than just the first — the gap that let it through.
+Same shape as the worker that shipped without a driver: *the rule was built, the
+schedule was not.*
+
 ### M26e.5 — Fulfilment output
 
 The merchant needs a print-ready file from the order screen: the flat raster, the source
