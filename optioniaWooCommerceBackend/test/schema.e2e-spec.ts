@@ -523,6 +523,12 @@ describe('schema (integration)', () => {
       'billing_events', // arrives before the tenant is resolved
       'migrations', // TypeORM's own
 
+      // Also TypeORM's own: created automatically the first time a migration
+      // adds a GENERATED column, to remember that column's expression. F165's
+      // `plan_prices.currentKey` is the first such column here, so this table
+      // appeared with it. Infrastructure, with no tenant to reach.
+      'typeorm_metadata',
+
       // Auth tokens belong to a *user*, who may be a member of several tenants.
       // Scoping them to one would make a token valid in one tenant and not
       // another, which is not what a login is.

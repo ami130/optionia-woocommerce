@@ -24,6 +24,15 @@ const ER_LOCK_WAIT_TIMEOUT = 'ER_LOCK_WAIT_TIMEOUT';
 const FIELD_BY_INDEX: Readonly<Record<string, string>> = {
   uq_options_group_key: 'key',
   uq_option_values_option_key: 'valueKey',
+  /*
+   * 📌 **F165.** Two staff changing one plan's price at the same moment both
+   * read the current row, both retire it and both insert a replacement — the
+   * loser now collides here instead of leaving the plan with two current
+   * prices. Named `amountMinor` because that is the field the staff form
+   * submitted; the collision is really on the plan/currency/interval key, but
+   * a form cannot usefully highlight a generated column.
+   */
+  uq_plan_prices_current: 'amountMinor',
 };
 
 /**

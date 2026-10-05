@@ -534,7 +534,28 @@ migration.
 ### `plan_prices` — [ADR-117](DECISIONS.md#adr-117--grandfathering)
 
 `id`, `plan_id` FK, `currency` CHAR(3), `interval`, `amount_minor` BIGINT,
-`provider_price_id` VARCHAR(128), `retired_at`, `created_at`.
+`provider_price_id` VARCHAR(128), `is_current` BOOLEAN, `retired_at`,
+`created_at`, and `current_key` VARCHAR(80) GENERATED.
+`UNIQUE (current_key)` as `uq_plan_prices_current`.
+
+🔴 **At most one CURRENT price per plan, currency and interval — enforced
+(F165).** The entity claimed this for weeks while only an ordinary index backed
+it, and the gap was reachable: two concurrent `setPrice` calls both read the
+current row with an unlocked `findOne`, both retire it, and both insert a
+replacement. Measured, not reasoned about — both transactions committed and the
+plan ended with **two current prices**. `TenantProvisioningService` then resolves
+price with `findOne({ isCurrent: true })` and gets whichever row MySQL yields
+first, so a merchant could be charged the wrong amount. A transaction never
+protected this; only the constraint does.
+
+📌 **`current_key` is a GENERATED column because MySQL has no partial index.** It
+holds `plan_id:currency:interval` while the row is current and `NULL` otherwise.
+`NULL`s do not collide in a unique index, so **any number of retired rows may
+share a key while at most one current row holds it** — which is what lets the
+supersession history below coexist with the constraint. A plain
+`UNIQUE (plan_id, currency, interval)` would forbid exactly the history this
+table exists to keep. The column is `insert: false, update: false` on the
+entity: MySQL maintains it, and writing to it is an error.
 
 🔴 **A price is a ROW, never a column on the plan.** ADR-117 grandfathers prices
 indefinitely, and that is enforced structurally rather than by policy: a

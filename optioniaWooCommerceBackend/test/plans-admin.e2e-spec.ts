@@ -25,9 +25,35 @@ describe('Plan administration (e2e)', () => {
   let h: Harness;
   let dataSource: DataSource;
 
+  /**
+   * When this suite started, so its teardown can delete only its own rows.
+   *
+   * 🔴 **F167.** The teardown below deletes `plan%` audit rows with
+   * `userId IS NOT NULL`, sparing seed-written ones — correctly, since real
+   * seed history is not this suite's to remove. But its own price restoration
+   * RE-SEEDS `pro` and `business`, and those supersessions carry no user, so
+   * they accumulated without bound and outlived every run.
+   *
+   * ⚠️ **One of them broke a different suite.** A stranded `business` row
+   * wedged above every `pro` row, and `seeds.e2e-spec.ts` — which read the
+   * most recent supersession in the table — began reading it instead.
+   *
+   * 📌 **A timestamp, not a plan name.** Deleting seed rows BY PLAN was tried
+   * and reverted: it removed history `seeds.e2e-spec.ts` legitimately needs.
+   * Bounding by when this suite ran removes exactly what it caused and cannot
+   * reach a row written before it started.
+   */
+  let startedAt: Date;
+
   beforeAll(async () => {
     h = await createHarness('planadm');
     dataSource = h.app.get(DataSource);
+
+    const [{ now }]: Array<{ now: Date }> = await dataSource.query(
+      'SELECT NOW(3) AS now',
+    );
+
+    startedAt = now;
   }, 120_000);
 
   afterAll(async () => {
@@ -118,6 +144,19 @@ describe('Plan administration (e2e)', () => {
     );
     await dataSource.query(
       `DELETE FROM audit_logs WHERE action LIKE 'plan%' AND userId IS NOT NULL`,
+    );
+
+    /*
+     * 🔴 **The seed-attributed rows this suite's own restoration wrote** (F167).
+     * Bounded by `startedAt`, so a row that existed before this suite ran is
+     * never touched — which is what the earlier by-plan delete got wrong.
+     */
+    await dataSource.query(
+      `DELETE FROM audit_logs
+        WHERE action LIKE 'plan_price%'
+          AND userId IS NULL
+          AND createdAt >= ?`,
+      [startedAt],
     );
     await dataSource.query(
       `DELETE FROM platform_staff WHERE userId IN
@@ -311,6 +350,76 @@ describe('Plan administration (e2e)', () => {
         amountMinor: { to: 4900 },
         source: 'staff',
       });
+    }, 60_000);
+
+    /*
+     * 🔴 **F165 — two staff changing one price at once must not leave a plan
+     * with two current prices.** `setPrice` reads the current row with a plain
+     * `findOne` (no lock), retires it and inserts a replacement. Run twice
+     * concurrently, both readers saw the same row, both retired it and both
+     * inserted — MEASURED against the dev database before the fix: both
+     * transactions committed and the plan ended with two current rows.
+     *
+     * ⚠️ **Why that is a money defect rather than untidiness.**
+     * `TenantProvisioningService` resolves price with
+     * `findOne({ where: { isCurrent: true } })`. With two matching rows MySQL
+     * returns whichever it likes, so a merchant could be provisioned at the
+     * wrong price — silently, and discovered on a card statement.
+     *
+     * 📌 **The transaction never protected this; only the constraint does.**
+     * `uq_plan_prices_current` over a generated column makes the second writer
+     * collide, and the global filter turns that into a 409 rather than a 500.
+     */
+    it('never leaves two current prices when staff race each other', async () => {
+      const token = await makeStaff('race', StaffRole.BILLING_OPS);
+
+      const [{ id: planId }] = await dataSource.query(
+        `SELECT id FROM plans WHERE code = 'pro'`,
+      );
+
+      const results = await Promise.all([
+        client(h.app, token).post('/admin/plans/pro/price', {
+          currency: 'USD',
+          interval: 'year',
+          amountMinor: 51_100,
+        }),
+        client(h.app, token).post('/admin/plans/pro/price', {
+          currency: 'USD',
+          interval: 'year',
+          amountMinor: 52_200,
+        }),
+      ]);
+
+      const [{ n }] = await dataSource.query(
+        `SELECT COUNT(*) AS n FROM plan_prices
+          WHERE planId = ? AND currency = 'USD' AND \`interval\` = 'year'
+            AND isCurrent = 1`,
+        [planId],
+      );
+
+      /*
+       * 🔴 **The invariant, asserted on the DATABASE rather than on the
+       * responses.** What the callers were told matters less than what the
+       * table holds: a merchant is provisioned from the row, not the reply.
+       */
+      expect(Number(n)).toBe(1);
+
+      /*
+       * ⚠️ **At least one must succeed.** A constraint that refused BOTH would
+       * satisfy the count above while making the feature unusable, so the
+       * happy path is pinned here too.
+       */
+      expect(results.some((r) => r.status === 201)).toBe(true);
+
+      /*
+       * 📌 **A loser gets 409, never 500.** The race is not the caller's bug,
+       * and a 500 would tell staff the system is broken when it has in fact
+       * protected them. Serial changes still answer 201, so this does not
+       * weaken the ordinary path.
+       */
+      for (const r of results) {
+        expect([201, 409]).toContain(r.status);
+      }
     }, 60_000);
 
     /**

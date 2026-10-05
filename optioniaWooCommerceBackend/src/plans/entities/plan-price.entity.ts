@@ -71,9 +71,48 @@ export class PlanPrice extends BaseEntity {
   @Column({ type: 'varchar', length: 128, nullable: true })
   providerPriceId: string | null;
 
-  /** What a new signup is offered. At most one per plan/currency/interval. */
+  /**
+   * What a new signup is offered. **At most one per plan/currency/interval**,
+   * and since F165 that is enforced rather than merely stated.
+   *
+   * 🔴 **The comment said this for weeks while nothing held it.**
+   * `ix_plan_prices_current` is an ordinary index, so two rows could both be
+   * current for one plan — and a probe reproduced it: two concurrent
+   * `setPrice` calls both read the current row with a plain `findOne`, both
+   * retired it, and both inserted a replacement. Provisioning then resolves
+   * the price with `findOne({ isCurrent: true })` and gets whichever row MySQL
+   * yields first, so a merchant could be charged the wrong amount.
+   *
+   * 📌 **`currentKey` is what enforces it** — a generated column holding
+   * `planId:currency:interval` while the row is current and `NULL` otherwise,
+   * under `uq_plan_prices_current`. MySQL has no partial index, and `NULL`s do
+   * not collide, so any number of retired rows may share a key while at most
+   * one current row holds it. The history this table exists to keep stays
+   * unconstrained.
+   */
   @Column({ type: 'boolean', default: true })
   isCurrent: boolean;
+
+  /**
+   * The uniqueness key for the current row, maintained by MySQL (F165).
+   *
+   * ⚠️ **Generated and read-only — never assign to it.** It is mapped so the
+   * schema gate can see the column the unique index is built on; writing to a
+   * generated column is an error, which is why it is `insert: false` and
+   * `update: false` rather than merely conventionally left alone.
+   */
+  @Index('uq_plan_prices_current', { unique: true })
+  @Column({
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+    insert: false,
+    update: false,
+    generatedType: 'STORED',
+    asExpression:
+      "IF(`isCurrent` = 1, CONCAT(`planId`, ':', `currency`, ':', `interval`), NULL)",
+  })
+  currentKey: string | null;
 
   /** When it stopped being offered. Subscriptions pinned to it are unaffected. */
   @Column({ type: 'datetime', precision: 3, nullable: true })

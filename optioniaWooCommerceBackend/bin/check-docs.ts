@@ -13,8 +13,15 @@ import { DataSource } from 'typeorm';
 import { buildDataSourceOptions } from '../src/config/data-source';
 import { loadConfig } from '../src/config/env';
 
-/** TypeORM's own bookkeeping table; not part of the documented domain. */
-const NOT_A_DOMAIN_TABLE = new Set(['migrations']);
+/**
+ * TypeORM's own bookkeeping tables; not part of the documented domain.
+ *
+ * `typeorm_metadata` is created automatically the first time a migration adds a
+ * GENERATED column, to remember that column's expression — F165's
+ * `plan_prices.currentKey` is the first one here. Like `migrations`, it is
+ * infrastructure rather than domain, so it has no section to write.
+ */
+const NOT_A_DOMAIN_TABLE = new Set(['migrations', 'typeorm_metadata']);
 
 interface ForeignKey {
   table: string;
