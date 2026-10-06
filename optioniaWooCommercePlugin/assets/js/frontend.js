@@ -1115,6 +1115,15 @@
 		payload.append( 'file', file );
 		payload.append( 'option_id', option.getAttribute( 'data-optionia-option' ) || '' );
 
+		/*
+		 * 🔴 **The route's own nonce, in a field WordPress does not claim.**
+		 * `X-WP-Nonce` above carries `wp_rest`, which
+		 * `rest_cookie_check_errors()` validates before any permission
+		 * callback runs — a custom action sent there was refused 403 and the
+		 * customer's file never arrived.
+		 */
+		payload.append( 'check', config.check || '' );
+
 		request.send( payload );
 	}
 
@@ -1365,9 +1374,24 @@
 				 */
 				try {
 					navigator.sendBeacon(
+						/*
+						 * 🔴 **`_wpnonce` carries `wp_rest`, which WordPress
+						 * claims.** It reads that parameter FIRST and validates
+						 * it against `wp_rest` before any permission callback —
+						 * so a custom action here was refused 403 and every view
+						 * went uncounted. The route's own nonce rides in the
+						 * body as `check`, which WordPress does not touch.
+						 */
 						settings.url + '?_wpnonce=' + encodeURIComponent( settings.nonce || '' ),
 						new Blob(
-							[ JSON.stringify( { set: set, options: bySet[ set ], day: settings.day } ) ],
+							[
+								JSON.stringify( {
+									set: set,
+									options: bySet[ set ],
+									day: settings.day,
+									check: settings.check
+								} )
+							],
 							{ type: 'application/json' }
 						)
 					);

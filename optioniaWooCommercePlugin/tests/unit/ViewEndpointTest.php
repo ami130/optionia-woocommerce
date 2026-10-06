@@ -188,10 +188,33 @@ final class ViewEndpointTest extends TestCase {
 		$this->assertFalse( $this->endpoint()->permitted( $this->request( array() ) ) );
 	}
 
-	/** 📌 And accepts one carrying a valid nonce. */
+	/**
+	 * 📌 And accepts one carrying a valid nonce in `check`.
+	 *
+	 * 🔴 **`check`, because WordPress claims `_wpnonce` AND `X-WP-Nonce`.**
+	 * `rest_cookie_check_errors()` reads `$_REQUEST['_wpnonce']` first and the
+	 * header second, validates whichever it finds against `wp_rest`, and
+	 * answers 403 before any permission callback runs. This test previously
+	 * asserted `_wpnonce` authorises — true of this method in isolation, and
+	 * false of every request that ever reached it. Measured on the live site:
+	 * the beacon sent `?_wpnonce=` with a custom action and every view was
+	 * refused.
+	 */
 	public function test_it_permits_a_request_with_a_valid_nonce(): void {
-		$request = $this->request( array( '_wpnonce' => wp_create_nonce( Keys::NONCE_VIEWS ) ) );
+		$request = $this->request( array( 'check' => wp_create_nonce( Keys::NONCE_VIEWS ) ) );
 
 		$this->assertTrue( $this->endpoint()->permitted( $request ) );
+	}
+
+	/**
+	 * ⚠️ **A nonce in a parameter WordPress claims does NOT authorise.**
+	 * It would never arrive, so accepting it would make this method agree with
+	 * a request WordPress refuses — which is exactly how the defect stayed
+	 * invisible while a test asserted the opposite.
+	 */
+	public function test_a_nonce_in_a_reserved_parameter_does_not_authorise(): void {
+		$request = $this->request( array( '_wpnonce' => wp_create_nonce( Keys::NONCE_VIEWS ) ) );
+
+		$this->assertFalse( $this->endpoint()->permitted( $request ) );
 	}
 }

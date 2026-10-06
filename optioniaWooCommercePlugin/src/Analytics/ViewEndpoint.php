@@ -91,11 +91,23 @@ final class ViewEndpoint {
 	 * @param WP_REST_Request $request Inbound request.
 	 */
 	public function permitted( WP_REST_Request $request ): bool {
-		$nonce = (string) $request->get_header( 'X-WP-Nonce' );
-
-		if ( '' === $nonce ) {
-			$nonce = (string) $request->get_param( '_wpnonce' );
-		}
+		/*
+		 * 🔴 **Read from `check`, never `X-WP-Nonce` or `_wpnonce`.**
+		 * WordPress claims BOTH: `rest_cookie_check_errors()` reads
+		 * `$_REQUEST['_wpnonce']` first and `HTTP_X_WP_NONCE` second,
+		 * validates whichever it finds against `wp_rest`, and answers 403
+		 * `rest_cookie_invalid_nonce` on a mismatch — all before any
+		 * permission callback runs.
+		 *
+		 * ⚠️ **This was not theoretical.** Measured against the live site with
+		 * the exact transport the runtime uses: the beacon answered 403 for every
+		 * request. Every view a merchant thought they were counting was refused.
+		 *
+		 * 📌 **So `wp_rest` guards the door and this guards the route.** The
+		 * runtime sends the first where WordPress requires it, and this one as
+		 * `check`.
+		 */
+		$nonce = (string) $request->get_param( 'check' );
 
 		return '' !== $nonce && false !== wp_verify_nonce( $nonce, Keys::NONCE_VIEWS );
 	}

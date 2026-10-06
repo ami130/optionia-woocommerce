@@ -267,7 +267,18 @@ final class Assets {
 	private function view_settings(): array {
 		return array(
 			'url'   => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_VIEWS ) ),
-			'nonce' => wp_create_nonce( Keys::NONCE_VIEWS ),
+
+			/*
+			 * 🔴 **`wp_rest`, because WordPress claims both `_wpnonce` and
+			 * `X-WP-Nonce`.** It validates whichever it finds against that
+			 * action before any permission callback runs. Measured: the beacon
+			 * sent `?_wpnonce=` with a custom action and every view was
+			 * refused 403.
+			 */
+			'nonce' => wp_create_nonce( 'wp_rest' ),
+
+			/* The route's own check, in a parameter WordPress does not claim. */
+			'check' => wp_create_nonce( Keys::NONCE_VIEWS ),
 			'day'   => wp_date( 'Y-m-d' ),
 		);
 	}
@@ -318,7 +329,16 @@ final class Assets {
 	private function upload_settings(): array {
 		return array(
 			'url'      => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_UPLOAD ) ),
-			'nonce'    => wp_create_nonce( Keys::NONCE_UPLOAD ),
+
+			/*
+			 * 🔴 **`wp_rest`, for the reason `view_settings()` records.**
+			 * Measured: a customer attaching a file sent a custom action in
+			 * `X-WP-Nonce` and got a 403 with no explanation.
+			 */
+			'nonce'    => wp_create_nonce( 'wp_rest' ),
+
+			/* The route's own check, in a parameter WordPress does not claim. */
+			'check'    => wp_create_nonce( Keys::NONCE_UPLOAD ),
 			'maxBytes' => UploadLimits::host_max_bytes(),
 		);
 	}

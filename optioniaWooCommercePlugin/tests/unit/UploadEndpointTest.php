@@ -10,6 +10,7 @@ declare( strict_types=1 );
 namespace Optionia\Tests\Unit;
 
 use Optionia\Config\Repository;
+use Optionia\Support\Keys;
 use Optionia\Support\Logger;
 use Optionia\Support\Settings;
 use Optionia\Upload\MovesUploadedFiles;
@@ -660,5 +661,66 @@ final class UploadEndpointTest extends TestCase {
 
 		$this->assertSame( 422, $response->get_status() );
 		$this->assertSame( array(), $mover->moves, 'Nothing may be moved when there is nowhere safe to put it.' );
+	}
+
+	/**
+	 * 🔴 **The route's nonce arrives in `check`, and nowhere else.**
+	 *
+	 * WordPress claims both `_wpnonce` and `X-WP-Nonce`:
+	 * `rest_cookie_check_errors()` reads the parameter first and the header
+	 * second, validates whichever it finds against `wp_rest`, and answers 403
+	 * `rest_cookie_invalid_nonce` before any permission callback runs.
+	 *
+	 * ⚠️ **This endpoint had NO permission test at all**, which is part of why
+	 * a shipped feature was broken: measured against the live site with the
+	 * exact transport the runtime uses, a customer attaching a file got a 403
+	 * and no explanation.
+	 */
+	public function test_the_route_nonce_arrives_in_check(): void {
+		$request = new WP_REST_Request();
+
+		$request->params = array( 'check' => wp_create_nonce( Keys::NONCE_UPLOAD ) );
+
+		$this->assertTrue( $this->endpoint()->permitted( $request ) );
+	}
+
+	/**
+	 * ⚠️ **A nonce WordPress would have claimed does not authorise.** It never
+	 * arrives, so accepting it would make this method agree with a request
+	 * WordPress refuses.
+	 *
+	 * @dataProvider reserved_carriers
+	 *
+	 * @param string $carrier Where the nonce was put.
+	 */
+	public function test_a_nonce_in_a_reserved_carrier_does_not_authorise( string $carrier ): void {
+		$nonce = wp_create_nonce( Keys::NONCE_UPLOAD );
+
+		$request = 'header' === $carrier
+			? new WP_REST_Request( array( 'X-WP-Nonce' => $nonce ) )
+			: new WP_REST_Request();
+
+		if ( 'header' !== $carrier ) {
+			$request->params = array( '_wpnonce' => $nonce );
+		}
+
+		$this->assertFalse( $this->endpoint()->permitted( $request ) );
+	}
+
+	/**
+	 * The two places WordPress looks before this plugin does.
+	 *
+	 * @return array<string, string[]>
+	 */
+	public static function reserved_carriers(): array {
+		return array(
+			'the X-WP-Nonce header' => array( 'header' ),
+			'the _wpnonce param'    => array( 'param' ),
+		);
+	}
+
+	/** No nonce at all is refused. */
+	public function test_a_request_with_no_nonce_is_refused(): void {
+		$this->assertFalse( $this->endpoint()->permitted( new WP_REST_Request() ) );
 	}
 }
