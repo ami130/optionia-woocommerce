@@ -2142,6 +2142,60 @@ rather than a job dying silently hours later.
 **Line refs are scoped to the store.** WooCommerce cart hashes are not globally
 unique, so one store's retry must never collide with another's first request.
 
+### `POST /v1/store/preview` **[built]**
+
+The SVG a storefront overlays on the theme's product image (M26e.1). Answers
+`image/svg+xml`. Nothing is stored and nothing is queued.
+
+**Auth:** store credential, `StoreTokenGuard` then `SiteMatchGuard`.
+
+🔴 **Built by the SHARED serializer — the same `sceneToSvgString()` the render
+worker calls.** This route exists *because* of that. The alternative was porting
+`shared/design/` into plugin JavaScript, which would mean a second
+implementation of the geometry to keep in step; the moment it drifted, a
+customer would approve one picture and the merchant print another. M26e.1's
+rule — *"no geometry computed in PHP"* — is honoured by the plugin computing
+nothing at all.
+
+⚠️ **A preview belongs to no cart line**, because a customer is still choosing.
+There is no idempotency to preserve and no buffer to release, which is the whole
+difference between this and `POST /store/renders`. A route that queued a job
+here would write one row per keystroke.
+
+📌 **The background node carries `data-design-bg="1"`**, which the storefront
+drops in overlay mode so the theme's real product image shows through
+underneath. The shared serializer has emitted that marker since the scene module
+was written; this route is what finally makes it reachable.
+
+🔴 **The posted `width`/`height` override whatever the scene carries.** They are
+what `checkRenderBounds` judged, so they are what must reach `viewBox` — a scene
+able to override them would route around the megapixel ceiling. Proven: a
+fixture whose scene disagrees with the posted dimensions fails if the override
+is removed.
+
+**Rate limit:** 1200 per hour — double the render routes', because a preview
+updates as a customer types rather than once per line. A `429` costs a stale
+preview for a moment; M26e.6's first rule is that artwork never blocks a sale.
+
+```jsonc
+// Request
+{ "scene": { "width": 400, "height": 400, "groups": [] },  // resolved; the cloud does not re-derive
+  "width": 400,
+  "height": 400 }
+
+// Response: image/svg+xml
+// <svg viewBox="0 0 400 400" …>…</svg>
+```
+
+| Field | Rules |
+|---|---|
+| `scene` | object; **shape unvalidated**, as `option_values.design` is — the serializer refuses what it cannot draw |
+| `width` / `height` | integer ≥ 1, and together ≤ 36 megapixels — the same ceiling as the print path, so preview and print agree about what is too large |
+
+⚠️ **A scene the serializer cannot draw answers 400 with a generic message.**
+The serializer's own text names internal structure and is logged rather than
+returned.
+
 ### `GET /v1/store/renders/:id/file` **[built]**
 
 The bytes of one rendered print file (M26e.4, [Decision 3a](../../docs/M26-PRINT-PIPELINE-DECISIONS.md)).

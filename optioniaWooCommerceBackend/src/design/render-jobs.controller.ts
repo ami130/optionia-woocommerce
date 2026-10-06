@@ -10,8 +10,11 @@ import { getStoreId } from '../common/context/request-context';
 import { DomainException } from '../common/errors/domain.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { ApiErrors } from '../common/openapi/api-errors.decorator';
+import { checkRenderBounds } from '../common/render/render-bounds';
 import { CollectedRenderDto } from './dto/collected-render.dto';
+import { PreviewSceneDto } from './dto/preview-scene.dto';
 import { RequestRenderDto } from './dto/request-render.dto';
+import { sceneToSvgString } from '@shared/design/design-scene';
 import { RenderJobsService, type AcceptedRender } from './render-jobs.service';
 
 /**
@@ -81,6 +84,102 @@ export class RenderJobsController {
       width: dto.width,
       height: dto.height,
     });
+  }
+
+  /**
+   * The SVG a storefront overlays on the theme's product image (M26e.1).
+   *
+   * 🔴 **Built by the SHARED serializer — the same function the render worker
+   * calls.** That is the entire reason this route exists rather than the
+   * geometry being ported into plugin JavaScript: a second implementation of
+   * the maths is a second thing to keep in step, and the moment it drifts the
+   * customer approves one picture and the merchant prints another. M26e.1's
+   * rule — *"no geometry computed in PHP"* — is honoured by the plugin
+   * computing nothing at all.
+   *
+   * ⚠️ **Nothing is stored and nothing is queued.** A preview belongs to no
+   * cart line, because a customer is still choosing; there is no idempotency
+   * to preserve and no buffer to release. That is what separates this from
+   * `POST renders`, which exists precisely to be a durable, idempotent
+   * request.
+   *
+   * 📌 **The background node carries `data-design-bg`**, which the storefront
+   * drops in overlay mode so the theme's real product image shows through
+   * underneath. The shared serializer has emitted that marker since the scene
+   * module was written; this route is what finally makes it reachable.
+   *
+   * ## Rate limit
+   *
+   * 1200 an hour — double the render routes', because a preview updates as a
+   * customer types rather than once per line. A `429` costs a stale preview
+   * for a moment, which is why it is a tolerable ceiling rather than a risk to
+   * a sale: M26e.6's first rule is that artwork never blocks a purchase.
+   */
+  @Post('preview')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 1200, ttl: 3_600_000 } })
+  @Header('Content-Type', 'image/svg+xml')
+  @ApiProduces('image/svg+xml')
+  @ApiResponse({
+    status: 200,
+    description: 'The overlay SVG for this scene.',
+    schema: { type: 'string' },
+  })
+  @ApiErrors(400, 401, 429)
+  preview(@Body() dto: PreviewSceneDto, @Res() response: Response): void {
+    const storeId = getStoreId();
+
+    if (!storeId) {
+      /*
+       * Unreachable while `StoreTokenGuard` runs, and asserted anyway for the
+       * reason `request()` above records: a route that lost its guard would
+       * otherwise draw whatever scene it was handed for whoever asked.
+       *
+       * ⚠️ **An acknowledged equivalent mutant.** Removing this leaves every
+       * test passing, because the guard refuses first — measured, not assumed.
+       * It stays because the guard and this assertion protect the same
+       * property by different means, and the cheaper one survives a future
+       * decorator change.
+       */
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    void storeId;
+
+    /*
+     * 🔴 **Bounded here too, though nothing is rasterised.** The dimensions
+     * reach `viewBox` and every coordinate in the document; an unbounded
+     * canvas produces a string no browser will mount, and letting preview and
+     * print disagree about what is too large is how the two drift apart.
+     */
+    const refused = checkRenderBounds(dto.width, dto.height);
+
+    if (refused !== null) {
+      throw new DomainException(ErrorCode.VALIDATION_FAILED, refused.message);
+    }
+
+    let svg: string;
+
+    try {
+      svg = sceneToSvgString(
+        { ...dto.scene, width: dto.width, height: dto.height } as never,
+        'ov',
+      );
+    } catch {
+      /*
+       * ⚠️ **The serializer's own message is NOT returned.** It names internal
+       * structure, and this route answers a storefront that reached it with a
+       * store credential a customer's browser never sees — but the scene it
+       * carries is shaped by whatever the plugin composed. A generic refusal
+       * is what the caller can act on; the detail belongs in logs.
+       */
+      throw new DomainException(
+        ErrorCode.VALIDATION_FAILED,
+        'That scene could not be drawn.',
+      );
+    }
+
+    response.send(svg);
   }
 
   /**

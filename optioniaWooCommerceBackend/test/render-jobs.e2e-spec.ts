@@ -231,6 +231,138 @@ describe('render jobs (e2e)', () => {
     });
   });
 
+  // --- Preview -------------------------------------------------------------
+
+  describe('the storefront overlay', () => {
+    const preview = (token: string, body: object): request.Test =>
+      request(app.getHttpServer())
+        .post('/v1/store/preview')
+        .set('Authorization', `Bearer ${token}`)
+        .send(body);
+
+    /*
+     * ⚠️ **Supertest has no parser for `image/svg+xml`**, so it hands the body
+     * back as a Buffer and leaves `response.text` undefined. Reading `.text`
+     * silently compared against `undefined`, which `toContain` rejects — the
+     * route was correct and the assertion was looking in the wrong place.
+     */
+    const svgOf = (response: request.Response): string =>
+      Buffer.isBuffer(response.body) ? response.body.toString('utf8') : String(response.text ?? '');
+
+    /** A scene with a real image layer, so the SVG has something to draw. */
+    /*
+     * 🔴 **Deliberately DISAGREES with the posted width/height.** A scene
+     * carrying its own dimensions made the route's `width: dto.width` override
+     * unobservable — dropping it changed nothing and the mutant survived. The
+     * posted dimensions are what `checkRenderBounds` judged, so they are what
+     * must reach `viewBox`; a scene that could override them would route around
+     * the ceiling.
+     */
+    const scene = (): Record<string, unknown> => ({
+      width: 999,
+      height: 999,
+      groups: [
+        {
+          key: 'badge',
+          visible: true,
+          images: [
+            {
+              href: 'https://cdn.test/badge.png',
+              x: 40,
+              y: 60,
+              w: 120,
+              h: 90,
+              shape: 'none',
+            },
+          ],
+          texts: [],
+        },
+      ],
+    });
+
+    it('answers an SVG a browser can mount', async () => {
+      const store = await connected();
+
+      const response = await preview(store.token, {
+        scene: scene(),
+        width: 400,
+        height: 400,
+      }).expect(200);
+
+      expect(response.headers['content-type']).toContain('image/svg+xml');
+      expect(svgOf(response)).toContain('<svg');
+      expect(svgOf(response)).toContain('viewBox="0 0 400 400"');
+    });
+
+    /*
+     * 🔴 **The property the whole route exists for.** The storefront preview
+     * and the print file must be the same picture, and the only way to
+     * guarantee that is for both to come out of the SAME serializer. This
+     * asserts the scene's content actually reaches the document, so a route
+     * that answered a valid but empty `<svg>` would fail here.
+     */
+    it('draws the layers the scene carries', async () => {
+      const store = await connected();
+
+      const response = await preview(store.token, {
+        scene: scene(),
+        width: 400,
+        height: 400,
+      }).expect(200);
+
+      expect(svgOf(response)).toContain('https://cdn.test/badge.png');
+      expect(svgOf(response)).toContain('width="120"');
+    });
+
+    /*
+     * 📌 **`data-design-bg` is what makes overlay mode possible.** The
+     * storefront drops that node so the theme's real product image shows
+     * through underneath; without the marker it would have to guess which
+     * element was the background.
+     */
+    it('marks the background so the storefront can drop it', async () => {
+      const store = await connected();
+
+      const response = await preview(store.token, {
+        scene: { ...scene(), backgroundHref: 'https://cdn.test/mug.png' },
+        width: 400,
+        height: 400,
+      }).expect(200);
+
+      expect(svgOf(response)).toContain('data-design-bg="1"');
+    });
+
+    it('refuses a canvas beyond the render ceiling', async () => {
+      const store = await connected();
+
+      await preview(store.token, {
+        scene: scene(),
+        width: 50_000,
+        height: 50_000,
+      }).expect(400);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      await request(app.getHttpServer())
+        .post('/v1/store/preview')
+        .send({ scene: scene(), width: 400, height: 400 })
+        .expect(401);
+    });
+
+    /*
+     * ⚠️ **Nothing is stored.** A preview belongs to no cart line, so a route
+     * that queued a job would fill the table with work nobody asked for — one
+     * row per keystroke.
+     */
+    it('records no render job', async () => {
+      const store = await connected();
+
+      await preview(store.token, { scene: scene(), width: 400, height: 400 }).expect(200);
+
+      expect(await jobsFor(store.id)).toHaveLength(0);
+    });
+  });
+
   // --- Collection ----------------------------------------------------------
 
   describe('collecting a rendered file', () => {
