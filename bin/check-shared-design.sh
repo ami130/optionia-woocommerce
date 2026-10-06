@@ -218,6 +218,64 @@ else
   pass "all $ENTRY_CHECKED scene entry point(s) have a production caller"
 fi
 
+# --- Every serializer call site resolves first ------------------------------
+#
+# 🔴 **`sceneToSvgString` without `buildScene` renders NOTHING, and that
+# shipped.** The plugin sends `groups` of `layers` in FRACTIONS plus
+# `textOptions`; the serializer consumes `images` and `texts` already resolved
+# to viewBox pixels. `buildScene` is the function between them, and both the
+# render worker and the preview route skipped it — so a real designed order
+# threw `Cannot read properties of undefined (reading 'forEach')` and
+# dead-lettered, while 1,333 tests passed.
+#
+# ⚠️ **The check below already enforced this pairing — for the DASHBOARD
+# preview only.** That surface was correct precisely because the rule was
+# checked there, and the backend's two call sites were never looked at. The
+# same rule, applied everywhere, is what makes "preview and print file come
+# out of the same two calls" true rather than hoped for.
+#
+# 📌 **Comments stripped**, so prose explaining the pairing cannot satisfy it.
+UNRESOLVED=""
+SERIALIZER_SITES=0
+
+#
+# ⚠️ **Read line by line, never through `for file in $(...)`.** This repository
+# lives under a path containing a SPACE — "optionia woocommerce" — so word
+# splitting tore every filename in half and the first version of this check
+# reported both correct files as broken. A gate that cries wolf is one a
+# developer switches off.
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+
+  case "$file" in
+    *.spec.ts|*.spec.tsx|*.test.ts|*.test.tsx) continue ;;
+  esac
+
+  SERIALIZER_SITES=$((SERIALIZER_SITES + 1))
+
+  BODY=$(perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g;' "$file" 2>/dev/null || true)
+
+  if ! printf '%s' "$BODY" | grep -q 'buildScene('; then
+    UNRESOLVED="$UNRESOLVED  ${file#$ROOT/}\n"
+  fi
+done <<EOF
+$(grep -rlE '\bsceneToSvgString\(' \
+  "$ROOT/optioniaWooCommerceBackend/src" \
+  "$ROOT/optioniaWooCommerceFrontend/src" \
+  --include='*.ts' --include='*.tsx' 2>/dev/null || true)
+EOF
+
+if [ "$SERIALIZER_SITES" -eq 0 ]; then
+  fail "found no sceneToSvgString call sites — the parser is wrong, not the code"
+elif [ -n "$UNRESOLVED" ]; then
+  fail "sceneToSvgString called without buildScene — the scene is never resolved:"
+  printf "%b" "$UNRESOLVED" | sed 's|^|      |'
+  printf '        layers are FRACTIONS; the serializer wants resolved pixels\n'
+  printf '        the result is a blank image, or a throw the worker swallows\n'
+else
+  pass "all $SERIALIZER_SITES serializer call site(s) resolve through buildScene"
+fi
+
 # ⚠️ **One renderer, which is M26d.6's exact wording — "never a second
 # renderer".** The dashboard preview must hand its decisions to the shared
 # module, not lay artwork out itself; a component computing its own geometry
