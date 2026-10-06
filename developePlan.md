@@ -31412,8 +31412,27 @@ gap is that nothing downstream notices. A merchant receives a file that opens,
 prints, and is empty; `M26e.6`'s failure matrix has no row for it, and
 `statusOf` reports `ready`.
 
-📌 **The shape of the fix is not yet decided**, which is why this is recorded
-rather than patched. Options: resolve layer images to data URIs at compose time
+✅ **FIXED and verified on a live order 2026-10-06.** The worker now fetches
+each layer image and inlines it as a `data:` URI before rasterising; the stored
+design keeps its `http(s)` URL, so the Design Lab's rule is untouched. Order
+239, line 397: **318,739 bytes** with the artwork drawn, against **19,108 bytes
+blank** for order 238 — the same pipeline, the same product, the same swatch.
+
+🔴 **The SSRF surface the spike recorded as a benefit is closed by guards, not
+by luck.** Verified against real hostile URLs: `https://localhost/x.png`,
+`https://169.254.169.254/…` and `https://10.0.0.1/x.png` are all refused as
+`private-address`; plain `http` is refused as `not-https`. The RESOLVED ADDRESS
+is checked rather than the hostname, redirects are refused, and an SVG is
+refused by MAGIC BYTES because a `Content-Type` header is the server's claim
+rather than evidence.
+
+📌 **The silence was the real defect, and it is gone.** `lastError` now survives
+a successful render and names what could not be drawn — it was cleared to `null`
+on every success, which is how a blank file reported `ready` with nothing
+recorded anywhere.
+
+📌 **The shape of the fix was a real choice**, which is why it was recorded
+before being patched. Options: resolve layer images to data URIs at compose time
 (the plugin already holds the bytes for an upload), configure an
 `imageHrefResolver` that reads from the uploads directory, or refuse a scene
 whose images cannot be resolved. The first keeps the renderer network-free,
