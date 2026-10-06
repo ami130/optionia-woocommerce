@@ -116,6 +116,84 @@ describe('config delivery (e2e)', () => {
   }
 
   /**
+   * Publish a set whose value carries Design Lab artwork.
+   *
+   * 🔴 **The storefront cannot draw what the document does not carry.** The
+   * serializer emits `design` and `PublishedOptionValue` declares it, but until
+   * this helper existed nothing asserted it SURVIVES — publish writes a
+   * snapshot, and the document is assembled from that snapshot rather than from
+   * the live row, so a key can be emitted by the serializer and still never
+   * reach a storefront.
+   *
+   * @returns The design that was authored, for comparison against the wire.
+   */
+  async function publishSetWithDesign(
+    storeId: string,
+    name: string,
+  ): Promise<Record<string, unknown>> {
+    const post = (path: string, body: object = {}) =>
+      request(app.getHttpServer())
+        .post(`/v1${path}`)
+        .set('Authorization', `Bearer ${merchantToken}`)
+        .send(body);
+
+    const idOf = (response: request.Response, what: string): string => {
+      if (!response.body?.data?.id) {
+        throw new Error(`Fixture failed to create ${what}: ${JSON.stringify(response.body)}`);
+      }
+
+      return response.body.data.id as string;
+    };
+
+    const set = idOf(await post('/option-sets', { name, storeId }), 'set');
+    const group = idOf(await post(`/option-sets/${set}/groups`, { label: 'Artwork' }), 'group');
+    const option = idOf(
+      await post(`/groups/${group}/options`, {
+        key: `d${set.slice(0, 8)}`,
+        label: 'Engraving',
+        presentation: 'image_swatch',
+        isRequired: false,
+      }),
+      'option',
+    );
+
+    /*
+     * ⚠️ **A design with real geometry, not an empty object.** `{}` would
+     * survive a serializer that dropped every key inside it, and the storefront
+     * needs the layers, not the presence of a key.
+     */
+    const design: Record<string, unknown> = {
+      width: 800,
+      height: 600,
+      groups: [
+        {
+          id: 'g1',
+          layers: [{ id: 'l1', kind: 'image', x: 10, y: 20, w: 100, h: 50, src: 'badge.png' }],
+        },
+      ],
+    };
+
+    const created = await post(`/options/${option}/values`, {
+      valueKey: 'crest',
+      label: 'Crest',
+      isDefault: true,
+      design,
+    });
+
+    if (created.status !== 201) {
+      throw new Error(`Fixture failed to create a design value: ${JSON.stringify(created.body)}`);
+    }
+
+    const published = await post(`/option-sets/${set}/publish`, {});
+
+    if (published.status !== 201) {
+      throw new Error(`Fixture failed to publish: ${JSON.stringify(published.body)}`);
+    }
+
+    return design;
+  }
+
+  /**
    * Attach an assignment to a set, writing the row directly.
    *
    * There is no authoring endpoint yet — the picker is M13.6 — so the fixture
@@ -143,6 +221,42 @@ describe('config delivery (e2e)', () => {
     );
   }
 
+  /** Option-set ids a store has, newest last — the fixture publishes one. */
+  async function setsOf(storeId: string): Promise<string[]> {
+    const rows: Array<{ id: string }> = await dataSource.query(
+      `SELECT id FROM option_sets WHERE storeId = ? ORDER BY createdAt ASC`,
+      [storeId],
+    );
+
+    return rows.map((row) => row.id);
+  }
+
+  /** Every option value the document carries, flattened. */
+  function allValuesOf(document: {
+    option_sets?: Array<{
+      groups?: Array<{ options?: Array<{ values?: Array<Record<string, unknown>> }> }>;
+    }>;
+  }): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+
+    for (const set of document.option_sets ?? []) {
+      for (const group of set.groups ?? []) {
+        for (const option of group.options ?? []) {
+          out.push(...(option.values ?? []));
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /** The first value carrying a design, or undefined when none does. */
+  function designValueOf(document: Parameters<typeof allValuesOf>[0]):
+    | { design?: Record<string, unknown> }
+    | undefined {
+    return allValuesOf(document).find((value) => 'design' in value);
+  }
+
   const fetch = (token: string, ifNoneMatch?: string): request.Test => {
     const call = request(app.getHttpServer())
       .get('/v1/store/config')
@@ -167,6 +281,61 @@ describe('config delivery (e2e)', () => {
         store_id: store.id,
       });
       expect(response.body).not.toHaveProperty('config_version');
+    });
+
+    /*
+     * 🔴 **A design that does not survive publish is artwork a storefront can
+     * never draw.** The whole print pipeline starts here: the plugin composes
+     * a scene from what this document carries, asks the cloud to render it,
+     * and pulls the file back. If `design` is lost between the authored value
+     * and the wire, every later stage is building on nothing.
+     *
+     * ⚠️ **The document is assembled from the PUBLISH SNAPSHOT, not the live
+     * row.** So emitting the key in the serializer is not sufficient on its
+     * own, and that distinction is exactly what this asserts: author, publish,
+     * then read it back the way a storefront does.
+     *
+     * 📌 **Its contents are compared, not its presence.** `PublishedOptionValue`
+     * gained `design` only after a near-identical defect — the serializer
+     * emitted a key the published contract did not acknowledge, because a
+     * spread is not checked against its target type the way a literal property
+     * is. A test asserting `toHaveProperty('design')` would pass on a document
+     * carrying `design: {}`, which draws nothing.
+     */
+    it('carries a value’s Design Lab artwork through to the storefront', async () => {
+      const store = await connected(1);
+      const design = await publishSetWithDesign(store.id, 'Engraved set');
+      await assign((await setsOf(store.id))[0], 'all');
+
+      const response = await fetch(store.token).expect(200);
+
+      const value = designValueOf(response.body.data);
+
+      expect(value).not.toBeUndefined();
+      expect(value?.design).toEqual(design);
+    });
+
+    /*
+     * ⚠️ **A set with no designs must be byte-identical to what it was before
+     * designs existed.** `...optional('design', …)` is what makes that true,
+     * and a serializer that emitted `design: null` instead would quietly grow
+     * every document on every storefront — the reason every optional key here
+     * is absent rather than null.
+     */
+    it('omits design entirely for a value that has none', async () => {
+      const store = await connected(1);
+      await publishSet(store.id, 'Plain set');
+      await assign((await setsOf(store.id))[0], 'all');
+
+      const response = await fetch(store.token).expect(200);
+
+      const values = allValuesOf(response.body.data);
+
+      expect(values.length).toBeGreaterThan(0);
+
+      for (const value of values) {
+        expect(Object.keys(value)).not.toContain('design');
+      }
     });
 
     it('carries an ETag scoped to the store and its version', async () => {

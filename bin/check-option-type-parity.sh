@@ -399,6 +399,67 @@ $API_CARRIERS
 EOF
 fi
 
+# --- The THIRD repository, which this gate did not look at ----------------
+#
+# 🔴 **Two repositories were being compared on a three-repository question.**
+# The loop above checks the API against the dashboard and reports *"all 15
+# design carrier(s) agree, in both directions"* — true, and misleading: the
+# PLUGIN is not in the comparison at all, and the plugin is the only one of the
+# three that has to draw the thing. The document carries a value's `design`
+# (proven on the wire by `config-delivery.e2e-spec.ts`), and no storefront
+# template reads it.
+#
+# ⚠️ **So this records a known gap rather than asserting a feature.** All four
+# carrying presentations currently have templates that ignore `design`; that is
+# M26e.1, and it is unbuilt. What would be a silent regression is the COUNT
+# moving the wrong way — a carrier added to the API with no plan for drawing it,
+# or a template quietly losing an overlay it had. The expected number is stated
+# here so that either direction has to be a deliberate edit to this line.
+#
+# 📌 **Named `DRAWN`, not `OK`.** A gate that said "ok" for a feature nobody has
+# written would be the same reassurance-without-substance this file's own
+# history warns about.
+CARRIERS_DRAWN=0
+CARRIERS_TOTAL=0
+UNDRAWN=""
+
+while read -r pres carrier; do
+  [ -n "$pres" ] || continue
+  [ "$carrier" != "none" ] || continue
+
+  CARRIERS_TOTAL=$((CARRIERS_TOTAL + 1))
+  TEMPLATE="$TEMPLATES/$pres.php"
+
+  if [ ! -f "$TEMPLATE" ]; then
+    fail "'$pres' carries a design but has no storefront template at all"
+    CARRIER_FAILS=$((CARRIER_FAILS + 1))
+  elif grep -q "design" "$TEMPLATE"; then
+    CARRIERS_DRAWN=$((CARRIERS_DRAWN + 1))
+  else
+    UNDRAWN="$UNDRAWN $pres"
+  fi
+done <<EOF
+$API_CARRIERS
+EOF
+
+# The number of carrying types whose template does not yet read `design`.
+# Lower it as M26e.1 draws them; it must never rise without a deliberate edit.
+EXPECTED_UNDRAWN=4
+
+ACTUAL_UNDRAWN=$((CARRIERS_TOTAL - CARRIERS_DRAWN))
+
+if [ "$ACTUAL_UNDRAWN" -gt "$EXPECTED_UNDRAWN" ]; then
+  fail "a design-carrying type lost its storefront overlay, or gained a carrier with no plan to draw it"
+  printf '        expected %d undrawn, found %d:%s\n' "$EXPECTED_UNDRAWN" "$ACTUAL_UNDRAWN" "$UNDRAWN"
+  CARRIER_FAILS=$((CARRIER_FAILS + 1))
+elif [ "$ACTUAL_UNDRAWN" -lt "$EXPECTED_UNDRAWN" ]; then
+  fail "a storefront overlay was built — lower EXPECTED_UNDRAWN in this gate to $ACTUAL_UNDRAWN"
+  printf '        progress is good; the gate must record it so the next loss is caught\n'
+  CARRIER_FAILS=$((CARRIER_FAILS + 1))
+else
+  pass "$CARRIERS_DRAWN of $CARRIERS_TOTAL design carrier(s) are drawn by the storefront (M26e.1 draws the rest)"
+fi
+
 # 🔴 **The OTHER direction, which the loop above cannot see.** It iterates the
 # API's types, so a dashboard entry naming a type the API does not register is
 # never visited — and an earlier version of this gate was described as checking

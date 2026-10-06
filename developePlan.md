@@ -31337,6 +31337,54 @@ pass on the worker rather than just the first — the gap that let it through.
 Same shape as the worker that shipped without a driver: *the rule was built, the
 schedule was not.*
 
+#### Findings — the plugin side (2026-10-06)
+
+🔴 **F169 — 91 plugin tests sat broken for a week, and 235 assertions had never
+run.** `RendererTest` errored on every one with `Call to undefined function
+wp_date()` from 2026-09-29 until 2026-10-06. Not a plugin defect — `wp_date()`
+exists in real WordPress and the harness simply never stubbed it. **Nothing in
+this repository ran the plugin's tests**: the backend has its gates, and
+`composer check` runs `phpcs` and the architecture script, neither of which
+executes a test. Stubbing it moved the suite from 3,347 assertions to 3,582 —
+those tests were not failing loudly, they were loading, erroring early and
+taking their assertions with them. *A suite can be a third dormant and still
+look like a suite.* Closed by `check-plugin-tests.sh` (gate 34), which runs the
+suite **and** compares every WordPress function production code calls against
+the stubs, naming the missing one. It immediately found four more latent cases
+(`wp_register_style`, `wp_register_script`, `wp_add_inline_script`,
+`wp_list_pluck`), all unguarded, three of them in `Assets.php` within a few
+lines of the original, passing only because no test reaches them.
+
+⚠️ **F170 — my own gate could not catch its founding case.** With the `wp_date`
+stub deleted, the stub check reported *"all 57 stubbed"*. `StoreClock` guards
+`wp_date()` with `function_exists()` and `Assets` calls it bare; a global
+by-name exclusion let the one guarded call site exempt the unguarded one. A name
+is now excluded only when **every** occurrence is guarded. Found by deleting the
+stub and watching the gate pass — *a gate is not proven by passing, only by
+failing when it should.*
+
+✏️ **F171 — I reported a gap that did not exist, and the method was the
+problem.** I stated that `config-document.ts` emits no design data, measured
+with `grep -c design` on that file returning 0. The document is assembled by
+**spreading the publish snapshot**, so `design` is carried implicitly;
+`option-set.serializer.ts:393` has emitted it since M26d.4. Counting
+occurrences in one file answered "does this file mention it", not "does the
+document carry it" — the same shape as an assertion that reads its own subject.
+The real gap was the **guarantee**: nothing proved a design survives publish,
+which matters because the document is built from the immutable snapshot rather
+than the live row. Now pinned by two mutation-proven tests in
+`config-delivery.e2e-spec.ts`.
+
+🔴 **F172 — a parity gate compared two repositories on a three-repository
+question.** `check-option-type-parity.sh` reported *"all 15 design carrier(s)
+agree, in both directions"* — true of the API and the dashboard, and silent
+about the **plugin**, which is the only one of the three that has to draw the
+artwork. The honest count is **0 of 4** carrying presentations whose template
+reads `design`; the data arrives and nothing reads it. That is M26e.1, unbuilt.
+The gate now states the number and fails in **both** directions — building an
+overlay demands the expected count be lowered, so progress is recorded and the
+next regression is caught.
+
 ### M26e.5 — Fulfilment output
 
 The merchant needs a print-ready file from the order screen: the flat raster, the source
