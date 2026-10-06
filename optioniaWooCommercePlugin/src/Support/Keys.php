@@ -402,6 +402,36 @@ final class Keys {
 	public const META_REPORTED_AT = '_optionia_reported_at';
 
 	/**
+	 * Orders whose designed lines still need a print file (M26e.4).
+	 *
+	 * 🔴 **A queue rather than a request at checkout.** AC3 forbids a network
+	 * call on a customer-facing render, and M26e.6's first rule is that artwork
+	 * never blocks a sale: the checkout hook does one bounded thing — note the
+	 * order — and cron does the asking. A cloud outage then costs a late print
+	 * file, never a lost purchase.
+	 */
+	public const OPTION_RENDER_QUEUE = 'optionia_render_queue';
+
+	/** Outcome of the last render run, surfaced in System Status. */
+	public const OPTION_LAST_RENDER_RUN = 'optionia_last_render_run';
+
+	/**
+	 * The cloud's render id for one order line, keyed by line item id.
+	 *
+	 * ⚠️ **Order meta, not an option.** It belongs to the order and must
+	 * survive the queue being drained, cleared or lost — the same reasoning
+	 * `META_REPORTED_AT` records. It is also what makes a retry idempotent:
+	 * a line that already has an id is never requested again.
+	 */
+	public const META_RENDER_IDS = '_optionia_render_ids';
+
+	/** Where the collected print file was stored, keyed by line item id. */
+	public const META_RENDER_FILES = '_optionia_render_files';
+
+	/** Cron hook that asks the cloud for print files and collects them. */
+	public const CRON_RENDER_FILES = 'optionia_cron_render_files';
+
+	/**
 	 * The document shape this build refused, if it has refused one (M9.5).
 	 *
 	 * Remembered rather than only logged: the refusal is silent by design — the

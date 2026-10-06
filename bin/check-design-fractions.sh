@@ -168,9 +168,17 @@ fi
 
 # The inverse: a gate that only forbids passes trivially on a module that does
 # no geometry at all. Assert the ratio vocabulary is still present.
+#
+# ⚠️ **`|| true` on the grep, because `set -euo pipefail` is in force.** A
+# directory in this list with no `Pct` match makes `grep` exit 1, which kills
+# the whole substitution and takes the script with it — printing nothing and
+# exiting non-zero, so the gate reads as a failure with no stated reason. It
+# happened the moment `optioniaWooCommercePlugin/src/Design/` was created: a
+# directory this gate discovers by NAME, holding a scene composer that stores
+# no geometry at all, precisely because M26e.1 forbids computing any in PHP.
 RATIOS=$(printf "%b" "$PRESENT" | while IFS= read -r d; do
   [ -z "$d" ] && continue
-  grep -rhoE '\b(Pct|sizePct|wPct|hPct|xPct|yPct)\b' "$d" 2>/dev/null
+  grep -rhoE '\b(Pct|sizePct|wPct|hPct|xPct|yPct)\b' "$d" 2>/dev/null || true
 done | wc -l | tr -d ' ')
 if [ "$RATIOS" -lt 10 ]; then
   fail "the fraction vocabulary has thinned to $RATIOS use(s) — is geometry still stored as ratios?"

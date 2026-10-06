@@ -63,12 +63,28 @@ final class OrderQueue {
 	private Logger $logger;
 
 	/**
+	 * Which option this queue is stored in.
+	 *
+	 * 🔴 **Parameterised rather than copied.** M26e.4 needs the same queue for
+	 * orders awaiting a print file: same overflow policy, same corrupt-entry
+	 * handling, same bounded size. Duplicating ~180 lines to change one string
+	 * would mean two places to fix the next defect found in either — and the
+	 * non-integer guard below exists precisely because a defect was found here
+	 * once already.
+	 *
+	 * @var string
+	 */
+	private string $option;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Logger $logger Logger.
+	 * @param string $option Option the queue is stored in.
 	 */
-	public function __construct( Logger $logger ) {
+	public function __construct( Logger $logger, string $option = Keys::OPTION_ORDER_QUEUE ) {
 		$this->logger = $logger;
+		$this->option = $option;
 	}
 
 	/**
@@ -134,7 +150,7 @@ final class OrderQueue {
 	 * @return array<int, int>
 	 */
 	public function all(): array {
-		$stored = get_option( Keys::OPTION_ORDER_QUEUE, array() );
+		$stored = get_option( $this->option, array() );
 
 		if ( ! is_array( $stored ) ) {
 			return array();
@@ -185,6 +201,6 @@ final class OrderQueue {
 	 * @param array<int, int> $queue Order ids.
 	 */
 	private function write( array $queue ): bool {
-		return update_option( Keys::OPTION_ORDER_QUEUE, array_values( $queue ), false );
+		return update_option( $this->option, array_values( $queue ), false );
 	}
 }

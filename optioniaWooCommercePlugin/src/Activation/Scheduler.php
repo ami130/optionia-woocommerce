@@ -45,6 +45,7 @@ final class Scheduler {
 		// already exists -- never schedules it, self-heal included.
 		self::schedule_heartbeat();
 		self::schedule_order_reports();
+		self::schedule_render_files();
 		self::schedule_view_reports();
 		self::schedule_catalogue_push();
 		self::schedule_catalogue_reconcile();
@@ -155,6 +156,13 @@ final class Scheduler {
 		}
 	}
 
+	/**
+	 * Report completed orders every fifteen minutes (M12.7).
+	 *
+	 * Shares the quarter-hourly interval the config sync already registers: a
+	 * store pays for one wake-up, and a second schedule would double the cron
+	 * traffic to say the same thing.
+	 */
 	private static function schedule_order_reports(): void {
 		if ( wp_next_scheduled( Keys::CRON_REPORT_ORDERS ) ) {
 			return;
@@ -174,6 +182,41 @@ final class Scheduler {
 			// Same fallback as the config sync: hourly is worse than quarter-
 			// hourly and far better than never.
 			wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', Keys::CRON_REPORT_ORDERS );
+		}
+	}
+
+	/**
+	 * Ask for and collect print files every fifteen minutes (M26e.4).
+	 *
+	 * 🔴 **Without this the drain never fires and the feature is silently
+	 * absent.** The requester registers its listener on
+	 * `Keys::CRON_RENDER_FILES`, but a hook nobody schedules is a hook nobody
+	 * calls — the same shape as the render worker that shipped with no driver.
+	 * A merchant would check out, the queue would fill, and no print file would
+	 * ever be asked for.
+	 *
+	 * 📌 **The same quarter-hourly interval the others share.** A store pays
+	 * for one wake-up; a fourth schedule would add cron traffic to say what the
+	 * existing one already says.
+	 */
+	private static function schedule_render_files(): void {
+		if ( wp_next_scheduled( Keys::CRON_RENDER_FILES ) ) {
+			return;
+		}
+
+		add_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- 15-minute interval is intentional and documented.
+
+		$scheduled = wp_schedule_event(
+			time() + self::INTERVAL,
+			Keys::CRON_SCHEDULE_QUARTER_HOUR,
+			Keys::CRON_RENDER_FILES
+		);
+
+		remove_filter( 'cron_schedules', array( self::class, 'ensure_schedule_registered' ) );
+
+		if ( is_wp_error( $scheduled ) ) {
+			// Hourly is worse than quarter-hourly and far better than never.
+			wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', Keys::CRON_RENDER_FILES );
 		}
 	}
 
@@ -245,5 +288,6 @@ final class Scheduler {
 		wp_clear_scheduled_hook( Keys::CRON_REPORT_VIEWS );
 		wp_clear_scheduled_hook( Keys::CRON_PUSH_CATALOGUE );
 		wp_clear_scheduled_hook( Keys::CRON_RECONCILE_CATALOGUE );
+		wp_clear_scheduled_hook( Keys::CRON_RENDER_FILES );
 	}
 }

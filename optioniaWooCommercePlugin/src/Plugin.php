@@ -36,6 +36,8 @@ use Optionia\Reporting\OrderQueue;
 use Optionia\Analytics\ViewCollector;
 use Optionia\Analytics\ViewEndpoint;
 use Optionia\Analytics\ViewReporter;
+use Optionia\Design\LineScene;
+use Optionia\Design\RenderRequester;
 use Optionia\Reporting\OrderReporter;
 use Optionia\Connection\PushEndpoint;
 use Optionia\Upload\UploadEndpoint;
@@ -460,6 +462,34 @@ final class Plugin {
 			static fn (): OrderPayload => new OrderPayload()
 		);
 
+		/*
+		 * --- Print files (M26e.4) ------------------------------------------
+		 *
+		 * 📌 **Its own queue, in its own option.** `OrderQueue` is
+		 * parameterised rather than duplicated: same overflow policy, same
+		 * corrupt-entry handling, one implementation to fix.
+		 *
+		 * 🔴 **The config read lives apart from the transport**, because AC3
+		 * bans network access in every caller of `sets_for_product()` and the
+		 * architecture gate checks it mechanically. Building the scene in
+		 * `LineScene` and posting from `RenderRequester` is what keeps that
+		 * rule enforceable rather than remembered.
+		 */
+		$this->container->set(
+			LineScene::class,
+			static fn ( Container $c ): LineScene => new LineScene( $c->get( Repository::class ) )
+		);
+
+		$this->container->set(
+			RenderRequester::class,
+			static fn ( Container $c ): RenderRequester => new RenderRequester(
+				$c->get( Client::class ),
+				$c->get( LineScene::class ),
+				new OrderQueue( $c->get( Logger::class ), Keys::OPTION_RENDER_QUEUE ),
+				$c->get( Logger::class )
+			)
+		);
+
 		$this->container->set(
 			OrderReporter::class,
 			static fn ( Container $c ): OrderReporter => new OrderReporter(
@@ -668,6 +698,16 @@ final class Plugin {
 		// on cron. An admin-only registration would queue nothing and drain
 		// nothing -- the feature would be silently absent in production.
 		$this->container->get( OrderReporter::class )->register();
+
+		/*
+		 * 🔴 **Outside `is_admin()` for the reason stated above**: the queue
+		 * hook fires in the checkout request, which is a front-end one, and the
+		 * drain runs on cron. An admin-only registration would queue nothing
+		 * and drain nothing — a print-file feature silently absent in
+		 * production, which is exactly how M26e.4 would ship looking finished.
+		 */
+		$this->container->get( RenderRequester::class )->register();
+
 		/*
 		 * Registered outside `is_admin()` for the same reason, twice over: the
 		 * beacon posts to a REST route from a storefront page, and the drain
