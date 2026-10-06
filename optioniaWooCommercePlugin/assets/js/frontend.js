@@ -1567,7 +1567,7 @@
 	 * token is allowed to paint.
 	 */
 	function drawPreview( root ) {
-		if ( ! preview.url || ! preview.nonce || 'undefined' === typeof fetch ) {
+		if ( ! preview.url || ! preview.nonce || ! preview.check || 'undefined' === typeof fetch ) {
 			return;
 		}
 
@@ -1596,13 +1596,40 @@
 			body: JSON.stringify( {
 				scene: scene,
 				width: PREVIEW_CANVAS,
-				height: PREVIEW_CANVAS
+				height: PREVIEW_CANVAS,
+				/*
+				 * The route's own nonce. `X-WP-Nonce` carries `wp_rest`,
+				 * which WordPress reserves; this travels in the body so its
+				 * header check does not claim it.
+				 */
+				check: preview.check
 			} )
 		} )
 			.then( function ( response ) {
 				return response.ok && 204 !== response.status ? response.text() : '';
 			} )
-			.then( function ( svg ) {
+			.then( function ( body ) {
+				/*
+				 * 🔴 **WordPress JSON-encodes the payload whatever the
+				 * Content-Type says.** `WP_REST_Response` serialises its data
+				 * through the JSON formatter, so an SVG arrives as a QUOTED
+				 * STRING with escaped slashes — `"<svg \/>"` — and a check for
+				 * a leading `<svg` rejects every real preview.
+				 *
+				 * ⚠️ **Measured against the live site, not reasoned about.**
+				 * The route answered 200 with `image/svg+xml` and a body whose
+				 * first byte was `"`. Parsing is what turns that back into the
+				 * document the cloud rendered.
+				 */
+				var svg = body;
+
+				if ( body && '"' === body.charAt( 0 ) ) {
+					try {
+						svg = JSON.parse( body );
+					} catch ( error ) {
+						svg = '';
+					}
+				}
 				/*
 				 * 🔴 **Only the newest request paints**, and only an SVG. A
 				 * body that is not one means something else answered — a login

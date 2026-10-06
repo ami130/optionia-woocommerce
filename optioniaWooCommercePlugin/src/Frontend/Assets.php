@@ -288,7 +288,25 @@ final class Assets {
 	private function preview_settings(): array {
 		return array(
 			'url'   => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_PREVIEW ) ),
-			'nonce' => wp_create_nonce( Keys::NONCE_PREVIEW ),
+
+			/*
+			 * 🔴 **`wp_rest`, because WordPress reserves `X-WP-Nonce` for it.**
+			 * `rest_cookie_check_errors()` validates that header against
+			 * `wp_rest` BEFORE any `permission_callback` runs, and answers 403
+			 * `rest_cookie_invalid_nonce` when it does not match — so a custom
+			 * action sent in that header can never reach the route it guards.
+			 * Measured on the live site: every request carrying a custom nonce
+			 * in `X-WP-Nonce` was refused before this plugin saw it.
+			 */
+			'nonce' => wp_create_nonce( 'wp_rest' ),
+
+			/*
+			 * ⚠️ **The route's own check travels in the BODY.** `wp_rest` says
+			 * the caller loaded a page; this says they loaded a page knowing
+			 * about previews. Sent as a parameter precisely so WordPress's
+			 * header check does not claim it.
+			 */
+			'check' => wp_create_nonce( Keys::NONCE_PREVIEW ),
 		);
 	}
 

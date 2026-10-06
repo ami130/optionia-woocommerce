@@ -257,4 +257,33 @@ final class PreviewEndpointTest extends TestCase {
 	public function test_a_request_without_a_nonce_is_refused(): void {
 		$this->assertFalse( $this->endpoint()->permitted( new WP_REST_Request() ) );
 	}
+
+	/**
+	 * 🔴 **The route's nonce travels in the BODY, never `X-WP-Nonce`.**
+	 *
+	 * WordPress reserves that header: `rest_cookie_check_errors()` validates
+	 * it against `wp_rest` before any permission callback runs and answers
+	 * 403 `rest_cookie_invalid_nonce` on a mismatch. Measured on the live
+	 * site — every request carrying a custom action there was refused before
+	 * the plugin saw it, which is also true of the shipped upload and views
+	 * endpoints.
+	 */
+	public function test_the_route_nonce_is_read_from_the_body(): void {
+		$request = new WP_REST_Request();
+
+		$request->params = array( 'check' => wp_create_nonce( Keys::NONCE_PREVIEW ) );
+
+		$this->assertTrue( $this->endpoint()->permitted( $request ) );
+	}
+
+	/**
+	 * ⚠️ **A nonce in the reserved header does NOT authorise the route.** It
+	 * would never arrive, so accepting it here would make this method agree
+	 * with a request WordPress refuses.
+	 */
+	public function test_a_nonce_in_the_reserved_header_does_not_authorise(): void {
+		$request = new WP_REST_Request( array( 'X-WP-Nonce' => wp_create_nonce( Keys::NONCE_PREVIEW ) ) );
+
+		$this->assertFalse( $this->endpoint()->permitted( $request ) );
+	}
 }

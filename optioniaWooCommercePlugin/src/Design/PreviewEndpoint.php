@@ -119,7 +119,19 @@ final class PreviewEndpoint {
 	 * @param WP_REST_Request $request Inbound request.
 	 */
 	public function permitted( WP_REST_Request $request ): bool {
-		$nonce = (string) $request->get_header( 'X-WP-Nonce' );
+		/*
+		 * 🔴 **Read from the BODY, never `X-WP-Nonce`.** WordPress reserves
+		 * that header: `rest_cookie_check_errors()` validates it against
+		 * `wp_rest` before any permission callback runs and answers 403
+		 * `rest_cookie_invalid_nonce` on a mismatch. A custom action sent
+		 * there is refused before this method is reached — measured on the
+		 * live site, where every such request 403'd.
+		 *
+		 * ⚠️ **So `wp_rest` guards the door and this guards the route.** The
+		 * runtime sends the first in the header, as WordPress requires, and
+		 * the second as `check`.
+		 */
+		$nonce = (string) $request->get_param( 'check' );
 
 		if ( '' === $nonce ) {
 			$nonce = (string) $request->get_param( '_wpnonce' );
