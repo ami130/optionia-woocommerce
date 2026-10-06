@@ -6,6 +6,7 @@ import { buildScene, sceneToSvgString } from '@shared/design/design-scene';
 
 import { loadConfig } from '../config/env';
 import { fontInventory, resolveFontsDir } from './design-fonts';
+import { inlineSceneImages } from './layer-images';
 import { RenderJob } from './entities/render-job.entity';
 import { rasteriseScene } from './scene-raster';
 
@@ -177,7 +178,7 @@ export class RenderWorkerService {
       /* 📌 Already incremented by `claim()`; this is the value now in the row. */
       const attempts = job.attempts;
 
-      const outcome = this.render(job, fonts.files);
+      const outcome = await this.render(job, fonts.files);
 
       if (outcome.ok) {
         /*
@@ -204,7 +205,15 @@ export class RenderWorkerService {
           { id: job.id },
           {
             processedAt: new Date(),
-            lastError: null,
+            /*
+             * 🔴 **A partial render keeps its reason** (F173). Clearing this
+             * to null on every success is what let a BLANK print file report
+             * `ready` with nothing recorded anywhere — the merchant's first
+             * real order. A file that drew some of its layers is still worth
+             * delivering, and the reason it is incomplete must outlive the
+             * log line that noticed.
+             */
+            lastError: outcome.imageFailures === '' ? null : outcome.imageFailures,
             attempts,
             png: outcome.png,
             collectBy: new Date(Date.now() + COLLECT_WITHIN_MS),
@@ -262,11 +271,15 @@ export class RenderWorkerService {
    * timer can interrupt, which is why `MAX_RENDER_MS` is enforced by
    * measurement inside `rasteriseScene` rather than by cancellation here.
    */
-  private render(
+  private async render(
     job: RenderJob,
     fontFiles: readonly string[],
-  ): { ok: true; ms: number; png: Buffer } | { ok: false; message: string } {
+  ): Promise<
+    | { ok: true; ms: number; png: Buffer; imageFailures: string }
+    | { ok: false; message: string }
+  > {
     let svg: string;
+    let imageFailures = '';
 
     try {
       /*
@@ -296,7 +309,34 @@ export class RenderWorkerService {
        * untouched and the shared module resolves it here, for the print file
        * and the storefront preview alike.
        */
-      svg = sceneToSvgString(buildScene(job.scene as never), `job-${job.id}`);
+      /*
+       * 🔴 **Images are inlined before anything is drawn (F173).** `resvg`
+       * renders only `data:` URIs — measured, a remote `https://` produces a
+       * 556-byte BLANK canvas and reports success — while the Design Lab
+       * requires `http(s)` and refuses `data:`, because `data:` can carry SVG.
+       * So without this step no image layer could ever print, and a merchant's
+       * first real order produced an empty 2000×2000 file reported as `ready`.
+       *
+       * ⚠️ **A refused image does not stop the render.** A design is often
+       * text plus artwork, and refusing the whole job over one unreachable
+       * badge would turn a partial print file into none at all — M26e.6's
+       * first rule is that artwork never blocks a sale, and the same logic
+       * holds here. What must not happen is SILENCE, so the reasons are
+       * recorded on the job.
+       */
+      const inlined = await inlineSceneImages(job.scene as Record<string, unknown>);
+
+      if (inlined.refused.length > 0) {
+        imageFailures = inlined.refused
+          .map((entry) => `${entry.reason}: ${entry.src.slice(0, 120)}`)
+          .join('; ');
+
+        this.logger.warn(
+          `Render ${job.id}: ${inlined.refused.length} layer image(s) could not be drawn — ${imageFailures}`,
+        );
+      }
+
+      svg = sceneToSvgString(buildScene(inlined.scene as never), `job-${job.id}`);
     } catch (error) {
       return {
         ok: false,
@@ -316,7 +356,7 @@ export class RenderWorkerService {
      * because Decision 3a was still open. It is recorded here because a worker
      * that silently discards its own output is the worst kind of green.
      */
-    return { ok: true, ms: outcome.result.ms, png: outcome.result.png };
+    return { ok: true, ms: outcome.result.ms, png: outcome.result.png, imageFailures };
   }
 
   /**

@@ -2084,6 +2084,27 @@ diagnosing a plugin that retries more than it should.
 | `ready` | the plugin holds the file; a merchant can fetch it | set |
 | `failed` | given up on after `MAX_RENDER_ATTEMPTS`; the source design is retained | `null` |
 
+🔴 **A `ready` job may still be INCOMPLETE, and `lastError` is where that is
+said (F173).** `resvg` renders only `data:` URIs — measured, a remote
+`https://` produces a 556-byte blank canvas and reports success — so the worker
+fetches each layer image and inlines it before drawing. An image it cannot
+fetch leaves its layer undrawn rather than failing the job, because a design is
+often text plus artwork and refusing the whole render over one unreachable
+badge turns a partial print file into none at all.
+
+⚠️ **So `lastError` on a `ready` job is not a contradiction.** It names what
+could not be drawn — `unreachable: https://…`, `not-a-raster: https://…` — and
+is `null` only when everything rendered. Before this, a blank file reported
+`ready` with nothing recorded anywhere, which is how a merchant's first real
+order produced an empty 2000×2000 PNG.
+
+📌 **Images are fetched over https only, with the resolved ADDRESS checked
+rather than the hostname.** A name resolving to `169.254.169.254` is how cloud
+credentials leak; redirects are refused so a permitted host cannot hand the
+request to a private address; and the body must begin with PNG, JPEG or GIF
+magic bytes — an SVG is refused by CONTENT, because a `Content-Type` header is
+the server's claim rather than evidence.
+
 `preparing` exists because Decision 2 calls it a milestone rather than a detail:
 *a fulfiller opening an order in the first seconds must see "the print file is
 being prepared", never a broken image and never silence.*
