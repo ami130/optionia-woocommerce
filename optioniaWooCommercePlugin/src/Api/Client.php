@@ -59,6 +59,24 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	private const MAX_RESPONSE_BYTES = 5242880;
 
 	/**
+	 * Body of the last binary response, held between `attempt()` and
+	 * `get_binary()`.
+	 *
+	 * ⚠️ **Cleared before and after every binary call.** A stale body left here
+	 * would be returned for a LATER request that failed before reading one —
+	 * handing a caller the previous order's print file. Both `get_binary()`
+	 * clears bracket it for that reason rather than tidiness.
+	 *
+	 * 📌 **Not a parameter, because the retry loop sits between the two.**
+	 * `request()` returns `Response` so `is_retryable()`, the breaker and the
+	 * budget all keep working unchanged; the bytes travel beside that rather
+	 * than through it.
+	 *
+	 * @var string|null
+	 */
+	private ?string $binary_bytes = null;
+
+	/**
 	 * Settings.
 	 *
 	 * @var Settings
@@ -118,6 +136,49 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	}
 
 	/**
+	 * GET a response whose body is bytes rather than JSON.
+	 *
+	 * 🔴 **The same transport, deliberately.** The circuit breaker, the retry
+	 * budget, the `MAX_TOTAL_SECONDS` deadline, the 5 MB cap, the AC3
+	 * frontend-render refusal and the 401 revocation hook all apply exactly as
+	 * they do to `get()` — this differs only in not calling `json_decode` on a
+	 * PNG. Writing a second transport for binary is how one of those
+	 * protections quietly goes missing from one code path; a revoked credential
+	 * that stopped moving the store to `REVOKED` on binary routes would be the
+	 * exact ambiguity M8.1b names.
+	 *
+	 * 📌 **Used by the print-file pull (M26e.4).** The cloud holds a rendered
+	 * file briefly and the plugin fetches it into the merchant's own uploads —
+	 * Decision 3a. A 0.40 MB worst case sits comfortably inside the 5 MB cap,
+	 * which is kept precisely because a malfunctioning endpoint must not be
+	 * able to exhaust a merchant's memory limit.
+	 *
+	 * @param string                $path    Path relative to the API base.
+	 * @param array<string, string> $query   Query parameters.
+	 * @param array<string, string> $headers Extra headers.
+	 */
+	public function get_binary( string $path, array $query = array(), array $headers = array() ): BinaryResponse {
+		$this->binary_bytes = null;
+
+		$response = $this->request( 'GET', $path, null, $query, $headers, true );
+
+		$bytes = $this->binary_bytes;
+
+		$this->binary_bytes = null;
+
+		if ( ! $response->is_ok() ) {
+			return BinaryResponse::failure(
+				$response->status(),
+				(string) $response->error_code(),
+				(string) $response->error_message(),
+				$this->headers_of( $response )
+			);
+		}
+
+		return BinaryResponse::success( $response->status(), (string) $bytes, $this->headers_of( $response ) );
+	}
+
+	/**
 	 * POST request.
 	 *
 	 * @param string                $path      Path relative to the API base.
@@ -150,13 +211,15 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	 * @param array<string, mixed>|null $body    Request body.
 	 * @param array<string, string>     $query   Query parameters.
 	 * @param array<string, string>     $headers Extra headers.
+	 * @param bool                      $binary  Return the body as bytes, not JSON.
 	 */
 	private function request(
 		string $method,
 		string $path,
 		?array $body,
 		array $query,
-		array $headers
+		array $headers,
+		bool $binary = false
 	): Response {
 		/*
 		 * AC3: nothing on a customer-facing page render may block on the API.
@@ -205,7 +268,7 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 		$deadline = microtime( true ) + self::MAX_TOTAL_SECONDS;
 
 		for ( $attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++ ) {
-			$last = $this->attempt( $url, $args, $path );
+			$last = $this->attempt( $url, $args, $path, $binary );
 
 			if ( $last->is_ok() || $last->is_not_modified() ) {
 				$this->breaker->record_success();
@@ -267,9 +330,10 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	 *
 	 * @param string               $url  Absolute URL.
 	 * @param array<string, mixed> $args wp_remote_request arguments.
-	 * @param string               $path Path, for logging.
+	 * @param string               $path   Path, for logging.
+	 * @param bool                 $binary Keep the body as bytes, not JSON.
 	 */
-	private function attempt( string $url, array $args, string $path ): Response {
+	private function attempt( string $url, array $args, string $path, bool $binary = false ): Response {
 		$raw = wp_remote_request( $url, $args );
 
 		if ( is_wp_error( $raw ) ) {
@@ -318,6 +382,20 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 				$this->extract_error_message( $body, $status ),
 				$headers
 			);
+		}
+
+		if ( $binary ) {
+			/*
+			 * 🔴 **No `json_decode` on a PNG.** The size cap above and every
+			 * status check have already run, so what reaches here is a 2xx body
+			 * inside the limit. Validating it as JSON would reject every real
+			 * print file — the bytes are handed back through `$binary_bytes`
+			 * and `Response` stays the control-flow carrier the retry loop,
+			 * `is_retryable()` and the breaker all expect.
+			 */
+			$this->binary_bytes = $body;
+
+			return Response::success( $status, array(), $headers );
 		}
 
 		$validated = $this->validator->decode( $body );
@@ -475,8 +553,47 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	 * @param array<string, mixed>|\WP_Error $raw wp_remote_request result.
 	 * @return array<string, string>
 	 */
+	/**
+	 * The headers a `Response` carried, as an array again.
+	 *
+	 * `Response` exposes one header at a time, which is all its JSON callers
+	 * ever need; `BinaryResponse` is built from an array, so the few that are
+	 * kept are read back here rather than widening `Response`'s API for one
+	 * caller.
+	 *
+	 * @param Response $response Response to read.
+	 *
+	 * @return array<string, string>
+	 */
+	private function headers_of( Response $response ): array {
+		$out = array();
+
+		foreach ( array( 'etag', 'retry-after', 'x-request-id', 'content-length' ) as $name ) {
+			$value = $response->header( $name );
+
+			if ( is_string( $value ) && '' !== $value ) {
+				$out[ $name ] = $value;
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Response headers worth keeping, lower-cased.
+	 *
+	 * @param array<string, mixed>|\WP_Error $raw Raw wp_remote_* response.
+	 *
+	 * @return array<string, string>
+	 */
 	private function extract_headers( $raw ): array {
-		$wanted = array( 'etag', 'retry-after', 'x-request-id' );
+		/*
+		 * 📌 **`content-length` is kept for the binary pull.** A print file
+		 * that arrives short still looks like a file and prints as damage, so
+		 * the puller compares what it received against what was promised. It
+		 * costs nothing on JSON routes that ignore it.
+		 */
+		$wanted = array( 'etag', 'retry-after', 'x-request-id', 'content-length' );
 		$out    = array();
 
 		foreach ( $wanted as $name ) {

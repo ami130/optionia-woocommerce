@@ -331,6 +331,31 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	}
 
 	/**
+	 * The store's local date, as WordPress reports it.
+	 *
+	 * 🔴 **Its absence was failing 91 tests in `RendererTest`** — every one of
+	 * them with `Call to undefined function wp_date()`, from
+	 * `Assets::enqueue_frontend()` by way of the renderer. Not a defect in the
+	 * plugin: `wp_date()` exists in real WordPress, and the harness simply never
+	 * stubbed it. A harness gap reads exactly like broken code, which is why it
+	 * is fixed rather than worked around.
+	 *
+	 * ⚠️ **`StoreClock` guards the same call with `function_exists()` and
+	 * `Assets` does not.** That asymmetry is what decided where the error
+	 * surfaced; it is left alone here because this stub makes the guarded and
+	 * unguarded paths behave alike, and changing production code to suit a
+	 * harness would be the wrong direction.
+	 *
+	 * 📌 **UTC, and fixed.** A date that moved with the wall clock would make a
+	 * test that asserts on it pass or fail by the hour.
+	 */
+	function wp_date( string $format, ?int $timestamp = null, $timezone = null ) {
+		unset( $timezone );
+
+		return gmdate( $format, $timestamp ?? ( $GLOBALS['optionia_test_now'] ?? 1767225600 ) );
+	}
+
+	/**
 	 * Record a customer-facing notice.
 	 *
 	 * Recorded rather than discarded because a refusal that shows the customer
