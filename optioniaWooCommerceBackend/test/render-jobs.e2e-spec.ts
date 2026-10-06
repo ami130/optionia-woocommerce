@@ -6,6 +6,8 @@ import { StoreStatus } from '../src/common/database/enums';
 import { generateStoreToken } from '../src/common/crypto/tokens';
 import { MAX_RENDER_MEGAPIXELS } from '../src/common/render/render-bounds';
 
+import { RenderWorkerService } from '../src/design/render-worker.service';
+import { statusOf } from '../src/design/render-jobs.service';
 import { bootstrapTestApp, createHarness, type Harness } from './harness';
 
 /**
@@ -229,6 +231,102 @@ describe('render jobs (e2e)', () => {
 
       await ask(store.token, payload({ line_ref: '' })).expect(400);
     });
+  });
+
+  // --- The whole chain -----------------------------------------------------
+
+  describe('a print file, from request to ready', () => {
+    /*
+     * 🔴 **Every other test here proves one link.** Acceptance, rasterising,
+     * serving bytes and recording collection each have their own coverage, and
+     * all of it passed while the pipeline had never once run end to end — the
+     * production database holds fourteen published option sets, zero designs
+     * and zero render jobs.
+     *
+     * ⚠️ **This walks the chain a merchant's order actually takes**: the store
+     * asks, the worker renders, the plugin fetches the bytes, the plugin
+     * confirms, and only then is the job `ready` with its buffer released. A
+     * break anywhere between those steps is invisible to the per-link tests,
+     * because each one sets up the state the previous step was supposed to
+     * produce.
+     */
+    it('walks accept → render → fetch → confirm → ready', async () => {
+      const store = await connected();
+      const worker = app.get(RenderWorkerService);
+
+      // 1. The store asks for a print file.
+      const accepted = await ask(store.token, payload()).expect(200);
+      const jobId = accepted.body.data.id as string;
+
+      expect(accepted.body.data.status).toBe('preparing');
+
+      // 2. The worker renders it. `RENDER_AFTER_MS` excludes anything newer
+      //    than five seconds, so the row is aged as the scheduler would find it.
+      await dataSource.query(
+        `UPDATE render_jobs SET createdAt = DATE_SUB(NOW(3), INTERVAL 1 MINUTE) WHERE id = ?`,
+        [jobId],
+      );
+
+      const pass = await worker.renderPending();
+
+      expect(pass.rendered).toBe(1);
+
+      const [rendered] = await dataSource.query(
+        `SELECT processedAt, deadAt, fileUrl, png, collectBy FROM render_jobs WHERE id = ?`,
+        [jobId],
+      );
+
+      expect(rendered.processedAt).not.toBeNull();
+      expect(rendered.png).not.toBeNull();
+      expect(statusOf(rendered)).toBe('rendered');
+
+      // 3. The plugin fetches the bytes.
+      const file = await request(app.getHttpServer())
+        .get(`/v1/store/renders/${jobId}/file`)
+        .set('Authorization', `Bearer ${store.token}`)
+        .expect(200);
+
+      const bytes = Buffer.isBuffer(file.body) ? file.body : Buffer.from(String(file.text));
+
+      expect(file.headers['content-type']).toContain('image/png');
+
+      /*
+       * 📌 **The signature is checked here too**, because this is the byte
+       * stream the plugin's own PNG check reads. A route that answered a JSON
+       * error with a 200 would pass a length assertion and fail a print shop.
+       */
+      expect(bytes.subarray(0, 8)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
+      expect(Number(file.headers['content-length'])).toBe(bytes.length);
+
+      // 4. The plugin confirms it holds the file.
+      await request(app.getHttpServer())
+        .post(`/v1/store/renders/${jobId}/collected`)
+        .set('Authorization', `Bearer ${store.token}`)
+        .send({ file_url: 'https://optionia.local/wp-admin/admin.php?page=print' })
+        .expect(200);
+
+      // 5. Only now is it ready, and the cloud no longer holds the bytes.
+      const [done] = await dataSource.query(
+        `SELECT processedAt, deadAt, fileUrl, png, collectBy FROM render_jobs WHERE id = ?`,
+        [jobId],
+      );
+
+      expect(statusOf(done)).toBe('ready');
+      expect(done.png).toBeNull();
+      expect(done.collectBy).toBeNull();
+
+      /*
+       * ⚠️ **And the buffer is gone for good.** `countUncollected()` watches
+       * for a transfer that never completed; a job that kept its bytes after
+       * confirming would make the database a second home for artwork.
+       */
+      await request(app.getHttpServer())
+        .get(`/v1/store/renders/${jobId}/file`)
+        .set('Authorization', `Bearer ${store.token}`)
+        .expect(404);
+    }, 60_000);
   });
 
   // --- Preview -------------------------------------------------------------
