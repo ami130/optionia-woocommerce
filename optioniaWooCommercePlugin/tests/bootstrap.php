@@ -1384,6 +1384,53 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	 * @param mixed $order_id Order id.
 	 * @return object|false
 	 */
+	/**
+	 * Orders matching a query, as `wc_get_orders()` returns them.
+	 *
+	 * 📌 **Only the shape `RenderCollector` asks for.** It requests ids and
+	 * filters on two meta keys — one that must exist, one that must not — so
+	 * that is what this answers. A fuller fake would be inventing behaviour no
+	 * caller depends on, and `check-plugin-tests.sh` exempts the real function
+	 * anyway because production guards it with `function_exists()`.
+	 *
+	 * @param array<string, mixed> $query Query arguments.
+	 *
+	 * @return array<int, int>
+	 */
+	function wc_get_orders( array $query = array() ) {
+		$orders = $GLOBALS['optionia_test_orders'] ?? array();
+		$out    = array();
+
+		foreach ( $orders as $id => $order ) {
+			$keep = true;
+
+			foreach ( (array) ( $query['meta_query'] ?? array() ) as $clause ) {
+				if ( ! is_array( $clause ) || ! isset( $clause['key'] ) ) {
+					continue;
+				}
+
+				$value   = method_exists( $order, 'get_meta' ) ? $order->get_meta( (string) $clause['key'] ) : null;
+				$present = null !== $value && '' !== $value;
+
+				if ( 'EXISTS' === ( $clause['compare'] ?? '' ) && ! $present ) {
+					$keep = false;
+				}
+
+				if ( 'NOT EXISTS' === ( $clause['compare'] ?? '' ) && $present ) {
+					$keep = false;
+				}
+			}
+
+			if ( $keep ) {
+				$out[] = (int) $id;
+			}
+		}
+
+		$limit = isset( $query['limit'] ) ? (int) $query['limit'] : 0;
+
+		return $limit > 0 ? array_slice( $out, 0, $limit ) : $out;
+	}
+
 	function wc_get_order( $order_id ) {
 		$orders = $GLOBALS['optionia_test_orders'] ?? array();
 		$id     = is_numeric( $order_id ) ? (int) $order_id : 0;

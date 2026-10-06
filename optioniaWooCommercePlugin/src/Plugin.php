@@ -37,6 +37,7 @@ use Optionia\Analytics\ViewCollector;
 use Optionia\Analytics\ViewEndpoint;
 use Optionia\Analytics\ViewReporter;
 use Optionia\Design\LineScene;
+use Optionia\Design\RenderCollector;
 use Optionia\Design\RenderRequester;
 use Optionia\Reporting\OrderReporter;
 use Optionia\Connection\PushEndpoint;
@@ -481,6 +482,22 @@ final class Plugin {
 			static fn ( Container $c ): LineScene => new LineScene( $c->get( Repository::class ) )
 		);
 
+		/*
+		 * 📌 **The collector takes `UploadStore` and `UploadLink`**, both
+		 * already registered for the upload chain. A print file is a
+		 * customer's artwork and lands in the same guarded directory, for the
+		 * same reason.
+		 */
+		$this->container->set(
+			RenderCollector::class,
+			static fn ( Container $c ): RenderCollector => new RenderCollector(
+				$c->get( Client::class ),
+				$c->get( UploadStore::class ),
+				$c->get( UploadLink::class ),
+				$c->get( Logger::class )
+			)
+		);
+
 		$this->container->set(
 			RenderRequester::class,
 			static fn ( Container $c ): RenderRequester => new RenderRequester(
@@ -708,6 +725,14 @@ final class Plugin {
 		 * production, which is exactly how M26e.4 would ship looking finished.
 		 */
 		$this->container->get( RenderRequester::class )->register();
+
+		/*
+		 * 🔴 **Registered on the same cron hook as the requester**, outside
+		 * `is_admin()` for the reason stated above. Asking and collecting are
+		 * one pass: a render requested fifteen minutes ago is usually ready
+		 * now, so a second schedule would add cron traffic to do half the job.
+		 */
+		$this->container->get( RenderCollector::class )->register();
 
 		/*
 		 * Registered outside `is_admin()` for the same reason, twice over: the
