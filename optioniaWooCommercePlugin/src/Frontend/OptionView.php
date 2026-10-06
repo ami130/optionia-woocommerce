@@ -408,4 +408,45 @@ final class OptionView {
 
 		return implode( ' ', $ids );
 	}
+
+	/**
+	 * The Design Lab artwork a value or option carries, as a JSON attribute.
+	 *
+	 * 🔴 **The storefront cannot draw what the page does not carry (M26e.1).**
+	 * The config document has carried `design` since M26d.4 and no template
+	 * read it, so `check-option-type-parity.sh` reported *0 of 4 design
+	 * carrier(s) drawn* — the data arrived and nothing looked at it.
+	 *
+	 * ⚠️ **One helper, not four copies.** `color_swatch`, `image_swatch`,
+	 * `text_field` and `textarea` all carry designs, and an encoding rule
+	 * written four times is three chances to escape differently. This file
+	 * already exists because each template associated only the first guidance
+	 * block and help text rendered nowhere — the same shape of mistake.
+	 *
+	 * 📌 **Encoded, never echoed raw.** A design is merchant-authored JSON
+	 * reaching an HTML attribute, so it goes through `wp_json_encode` and the
+	 * caller's `esc_attr`. `JSON_HEX_*` closes the one hole `esc_attr` does not
+	 * cover on its own: a `<` inside a string value would otherwise end the tag
+	 * early when an attribute is read by a lenient parser.
+	 *
+	 * ⚠️ **Empty string when there is nothing to draw**, so a caller can test
+	 * it rather than emit `data-optionia-design=""` — an attribute the runtime
+	 * would then have to distinguish from a real but empty design.
+	 *
+	 * @param array<string, mixed> $carrier One published value, or one option.
+	 */
+	public static function design_attr( array $carrier ): string {
+		$design = $carrier['design'] ?? null;
+
+		if ( ! is_array( $design ) || array() === $design ) {
+			return '';
+		}
+
+		$encoded = wp_json_encode(
+			$design,
+			JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+		);
+
+		return is_string( $encoded ) ? $encoded : '';
+	}
 }

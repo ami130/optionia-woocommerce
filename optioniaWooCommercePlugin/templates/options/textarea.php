@@ -70,8 +70,18 @@ $optionia_guidance = OptionView::guidance( $optionia_option );
 $optionia_display  = OptionView::display( $optionia_option );
 $optionia_styles   = OptionView::styles( $optionia_option );
 $optionia_describe = OptionView::described_by( $optionia_option );
-$optionia_place    = (string) ( $optionia_option['placeholder'] ?? '' );
-$optionia_default  = (string) ( $optionia_option['default_value'] ?? '' );
+
+/*
+ * The artwork this option's text prints (M26e.1).
+ *
+ * 🔴 **On the OPTION, not a value.** `DesignCarrier.OPTION_TEXT` types carry
+ * one design whose sample text the customer's typing replaces — so there is
+ * nothing per-value to attach it to, which is exactly the distinction
+ * `SceneComposer` makes when it builds `textOptions` rather than groups.
+ */
+$optionia_design  = OptionView::design_attr( $optionia_option );
+$optionia_place   = (string) ( $optionia_option['placeholder'] ?? '' );
+$optionia_default = (string) ( $optionia_option['default_value'] ?? '' );
 
 /*
  * The character limit, and the counter M14.4b makes **required** alongside it.
@@ -114,7 +124,7 @@ if ( $optionia_counter ) {
 		: $optionia_describe . ' ' . $optionia_counter_id;
 }
 ?>
-<div class="optionia-option optionia-option--textarea optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>>
+<div class="optionia-option optionia-option--textarea optionia-option--cols-<?php echo esc_attr( (string) $optionia_display['columns'] ); ?><?php echo $optionia_display['collapsed'] ? ' optionia-option--collapsed' : ''; ?>" data-optionia="option" data-optionia-option="<?php echo esc_attr( $optionia_id ); ?>"<?php echo '' !== $optionia_design ? ' data-optionia-design="' . esc_attr( $optionia_design ) . '"' : ''; ?><?php echo '' !== $optionia_styles ? ' style="' . esc_attr( $optionia_styles ) . '"' : ''; ?>>
 	<label class="optionia-option__label" for="<?php echo esc_attr( $optionia_input_id ); ?>">
 		<?php echo esc_html( (string) ( $optionia_option['label'] ?? '' ) ); ?>
 		<?php if ( $optionia_required ) : ?>

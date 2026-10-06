@@ -409,12 +409,16 @@ fi
 # (proven on the wire by `config-delivery.e2e-spec.ts`), and no storefront
 # template reads it.
 #
-# ⚠️ **So this records a known gap rather than asserting a feature.** All four
-# carrying presentations currently have templates that ignore `design`; that is
-# M26e.1, and it is unbuilt. What would be a silent regression is the COUNT
-# moving the wrong way — a carrier added to the API with no plan for drawing it,
-# or a template quietly losing an overlay it had. The expected number is stated
-# here so that either direction has to be a deliberate edit to this line.
+# ⚠️ **This counts templates that READ the design, which is not the same as
+# drawing it.** Stage A of M26e.1 carries the artwork onto the page as a
+# `data-optionia-design` attribute; the runtime that mounts and draws it is
+# Stage B, and finding the theme's product image to mount it over is M26e.2.
+# A template emitting the data is the step that makes either possible, and the
+# step whose loss would silently empty the page again.
+#
+# 📌 **The expected number is stated so BOTH directions are deliberate** — a
+# carrier added to the API with no template reading it, or a template quietly
+# losing the attribute it had.
 #
 # 📌 **Named `DRAWN`, not `OK`.** A gate that said "ok" for a feature nobody has
 # written would be the same reassurance-without-substance this file's own
@@ -433,7 +437,15 @@ while read -r pres carrier; do
   if [ ! -f "$TEMPLATE" ]; then
     fail "'$pres' carries a design but has no storefront template at all"
     CARRIER_FAILS=$((CARRIER_FAILS + 1))
-  elif grep -q "design" "$TEMPLATE"; then
+  #
+  # 🔴 **Matched on the CALL, with comments stripped.** A first version grepped
+  # for the word `design` anywhere in the file, so the comment explaining WHY
+  # the attribute is emitted satisfied the check on its own — deleting the call
+  # left the gate green. That is the same "prose must not satisfy the rule"
+  # mistake `check-architecture.sh` records about `update_option`, and it was
+  # caught here only by deleting the call and watching the gate pass.
+  elif perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g; s{^\s*#[^\n]*}{}gm;' "$TEMPLATE" 2>/dev/null \
+    | grep -q 'design_attr('; then
     CARRIERS_DRAWN=$((CARRIERS_DRAWN + 1))
   else
     UNDRAWN="$UNDRAWN $pres"
@@ -444,20 +456,20 @@ EOF
 
 # The number of carrying types whose template does not yet read `design`.
 # Lower it as M26e.1 draws them; it must never rise without a deliberate edit.
-EXPECTED_UNDRAWN=4
+EXPECTED_UNDRAWN=0
 
 ACTUAL_UNDRAWN=$((CARRIERS_TOTAL - CARRIERS_DRAWN))
 
 if [ "$ACTUAL_UNDRAWN" -gt "$EXPECTED_UNDRAWN" ]; then
-  fail "a design-carrying type lost its storefront overlay, or gained a carrier with no plan to draw it"
+  fail "a design-carrying type no longer reads its design, or a new carrier has no template reading one"
   printf '        expected %d undrawn, found %d:%s\n' "$EXPECTED_UNDRAWN" "$ACTUAL_UNDRAWN" "$UNDRAWN"
   CARRIER_FAILS=$((CARRIER_FAILS + 1))
 elif [ "$ACTUAL_UNDRAWN" -lt "$EXPECTED_UNDRAWN" ]; then
-  fail "a storefront overlay was built — lower EXPECTED_UNDRAWN in this gate to $ACTUAL_UNDRAWN"
+  fail "a carrier started reading its design — lower EXPECTED_UNDRAWN in this gate to $ACTUAL_UNDRAWN"
   printf '        progress is good; the gate must record it so the next loss is caught\n'
   CARRIER_FAILS=$((CARRIER_FAILS + 1))
 else
-  pass "$CARRIERS_DRAWN of $CARRIERS_TOTAL design carrier(s) are drawn by the storefront (M26e.1 draws the rest)"
+  pass "$CARRIERS_DRAWN of $CARRIERS_TOTAL design carrier(s) reach the page (M26e.1 stage A; the runtime draws them)"
 fi
 
 # 🔴 **The OTHER direction, which the loop above cannot see.** It iterates the

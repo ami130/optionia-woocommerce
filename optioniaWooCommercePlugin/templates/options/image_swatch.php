@@ -125,6 +125,19 @@ $optionia_describe = OptionView::described_by( $optionia_option );
 					<?php if ( '' !== $optionia_value_id ) : ?>
 						data-optionia-value="<?php echo esc_attr( $optionia_value_id ); ?>"
 					<?php endif; ?>
+					<?php
+					/*
+					 * The artwork this choice prints (M26e.1). Carried as data
+					 * so the runtime can draw it without a round trip on every
+					 * click — AC3 forbids a network call during a page render,
+					 * and a swatch grid is clicked far more often than it is
+					 * loaded.
+					 */
+					$optionia_design = OptionView::design_attr( $optionia_value );
+					?>
+					<?php if ( '' !== $optionia_design ) : ?>
+						data-optionia-design="<?php echo esc_attr( $optionia_design ); ?>"
+					<?php endif; ?>
 					<?php if ( '' !== $optionia_ptype ) : ?>
 						data-optionia-price-type="<?php echo esc_attr( $optionia_ptype ); ?>"
 					<?php endif; ?>
