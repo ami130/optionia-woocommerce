@@ -208,4 +208,154 @@ final class PrintFilesTest extends TestCase {
 
 		$this->assertStringContainsString( '_wpnonce=', $this->markup() );
 	}
+
+	/*
+	--- the download ----------------------------------------------------
+	 *
+	 * 🔴 **This half had no tests at all**, which is how a security boundary
+	 * ships unguarded: `render()` only decides whether a LINK appears, while
+	 * `maybe_download()` decides whether a FILE is served — capability, nonce,
+	 * order lookup, path resolution and streaming.
+	 *
+	 * ⚠️ **The refusals are what these can reach.** A successful download ends
+	 * in `exit`, which would take the runner with it, and this suite uses no
+	 * process isolation — the same honest limit `UploadDownloadTest` records.
+	 * So every branch deciding *whether* a merchant sees a file is covered,
+	 * and only the writing of the body is not.
+	 *
+	 * 📌 **A removed guard surfaces as an ERROR, not a failure**, and that is
+	 * still a kill. Execution reaches `header()`, which throws because PHPUnit
+	 * has already written output — so the test detects the guard's absence by
+	 * the only signal available. Verified one mutant at a time: removing the
+	 * capability check fails exactly `test_it_refuses_without_the_capability`.
+	 */
+
+	/**
+	 * Point a request at one line's print file.
+	 *
+	 * @param int         $order Order id.
+	 * @param int         $line  Line item id.
+	 * @param string|null $nonce Override the nonce; null sends a valid one.
+	 */
+	private function request( int $order, int $line, ?string $nonce = null ): void {
+		$_GET = array(
+			Keys::ARG_PRINT_ORDER => (string) $order,
+			Keys::ARG_PRINT_LINE  => (string) $line,
+			'_wpnonce'            => $nonce ?? ( 'nonce:' . Keys::NONCE_DOWNLOAD ),
+		);
+	}
+
+	/** Run the handler and return why it stopped, or '' when it did not. */
+	private function refusal(): string {
+		try {
+			$this->printFiles()->maybe_download();
+		} catch ( \Optionia_Test_Halt $halt ) {
+			return $halt->getMessage();
+		}
+
+		return '';
+	}
+
+	/**
+	 * ⚠️ **`admin_init` fires on every admin request.** A handler acting on
+	 * anything but its own arguments would run on every page in wp-admin.
+	 */
+	public function test_it_ignores_a_request_that_asks_for_nothing(): void {
+		$_GET = array();
+
+		$this->assertSame( '', $this->refusal() );
+	}
+
+	/**
+	 * 🔴 **Capability before the nonce, and before any lookup.** A failed nonce
+	 * tells a caller the argument was recognised; refusing on capability first
+	 * keeps an unauthenticated probe from learning anything at all.
+	 */
+	public function test_it_refuses_without_the_capability(): void {
+		$this->orderWithPrintFile();
+		$this->request( 90, 11 );
+
+		$GLOBALS['optionia_test_can'] = false;
+
+		$this->assertStringContainsString( 'permission', $this->refusal() );
+	}
+
+	/** A stale or forged link is refused. */
+	public function test_it_refuses_a_bad_nonce(): void {
+		$this->orderWithPrintFile();
+		$this->request( 90, 11, 'not-the-nonce' );
+
+		$this->assertStringContainsString( 'expired', $this->refusal() );
+	}
+
+	/** An order that does not exist cannot yield a file. */
+	public function test_it_refuses_an_unknown_order(): void {
+		$this->orderWithPrintFile();
+		$this->request( 999, 11 );
+
+		$this->assertStringContainsString( 'order could not be found', $this->refusal() );
+	}
+
+	/**
+	 * ⚠️ **A line on a REAL order that has no print file.** This is the shape a
+	 * guessed id takes, and it must not fall through to a path lookup.
+	 */
+	public function test_it_refuses_a_line_with_no_print_file(): void {
+		$this->orderWithPrintFile();
+		$this->request( 90, 77 );
+
+		$this->assertStringContainsString( 'no print file', $this->refusal() );
+	}
+
+	/**
+	 * 🔴 **A traversal name is refused rather than resolved.** The name is read
+	 * back from order meta, which only this plugin writes — but a segment
+	 * reaching here would read any file the web user can.
+	 */
+	public function test_it_refuses_a_traversal_name(): void {
+		$order        = optionia_test_order( 93 );
+		$order->items = array( 14 => optionia_test_order_item() );
+
+		$order->update_meta_data(
+			Keys::META_RENDER_FILES,
+			(string) wp_json_encode( array( 14 => '../../../etc/hosts' ) )
+		);
+
+		$GLOBALS['optionia_test_orders'][93] = $order;
+
+		$this->request( 93, 14 );
+
+		$this->assertStringContainsString( 'no longer stored', strtolower( $this->refusal() ) );
+	}
+
+	/** A file the sweeper removed between render and click is said plainly. */
+	public function test_it_reports_a_file_that_is_no_longer_on_disk(): void {
+		$this->orderWithPrintFile( false );
+		$this->request( 90, 11 );
+
+		$this->assertStringContainsString( 'no longer stored', strtolower( $this->refusal() ) );
+	}
+
+	/**
+	 * 📌 **The resolver answers a real path for a stored file.**
+	 *
+	 * ⚠️ **The streaming call itself is out of reach**, and a first version of
+	 * this test tried anyway: it ran `maybe_download()` to completion and died
+	 * on `Cannot modify header information` — PHPUnit has already written
+	 * output, so `header()` throws. `UploadDownloadTest` records the same
+	 * limit and asserts nothing past the decision branches.
+	 *
+	 * So this asserts what IS reachable and what the refusal tests cannot say
+	 * on their own: that a stored file resolves rather than being refused —
+	 * proven through the rendered row, which offers a download only when
+	 * `path_for()` returned one.
+	 */
+	public function test_a_stored_file_resolves_rather_than_refusing(): void {
+		$this->orderWithPrintFile();
+
+		$markup = $this->markup();
+
+		$this->assertStringContainsString( 'Download', $markup );
+		$this->assertStringNotContainsString( 'No longer stored', $markup );
+	}
 }
