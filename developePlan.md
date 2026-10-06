@@ -31385,6 +31385,40 @@ The gate now states the number and fails in **both** directions — building an
 overlay demands the expected count be lowered, so progress is recorded and the
 next regression is caught.
 
+#### Findings — the first real order (2026-10-06)
+
+✅ **The whole pipeline ran on a genuine WooCommerce order.** Order 238, line
+396, product 14, with the designed swatch selected: checkout hook queued it,
+cron drained the queue, the cloud accepted and rendered it (19,108 bytes), the
+plugin collected it into the guarded uploads directory
+(`12e271a86ff485c4c406450a61cf28c1.png`, 2000×2000 RGBA), and the cloud
+released its buffer (`png` and `collectBy` both cleared, `fileUrl` recorded).
+Every link M26e.4 and M26e.5 describe, on live data.
+
+🔴 **F173 — an unreachable layer image renders a BLANK print file, reported as
+success.** The order above produced a 2000×2000 PNG with nothing drawn on it.
+The scene was correct — one visible group, fractions, authoring canvas — but the
+layer's `src` was an `https://` URL that answered 404, and `resvg` **silently
+ignores a remote href** rather than failing. Measured side by side at 200×200:
+
+| layer `src` | bytes | `ok` |
+|---|---|---|
+| `https://…/nope.png` (unreachable) | **556** (blank) | `true` |
+| a `data:image/png;base64,…` | **1,746** (drawn) | `true` |
+
+⚠️ **That silence is the defect, not the 404.** `resvg` ignoring remote hrefs is
+deliberate and was verified as SSRF protection during the Stage 0 spike — the
+gap is that nothing downstream notices. A merchant receives a file that opens,
+prints, and is empty; `M26e.6`'s failure matrix has no row for it, and
+`statusOf` reports `ready`.
+
+📌 **The shape of the fix is not yet decided**, which is why this is recorded
+rather than patched. Options: resolve layer images to data URIs at compose time
+(the plugin already holds the bytes for an upload), configure an
+`imageHrefResolver` that reads from the uploads directory, or refuse a scene
+whose images cannot be resolved. The first keeps the renderer network-free,
+which is the property the SSRF finding protects.
+
 ### M26e.5 — Fulfilment output
 
 The merchant needs a print-ready file from the order screen: the flat raster, the source
