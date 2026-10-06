@@ -82,6 +82,7 @@ use Optionia\Frontend\Templates;
 use Optionia\Support\Assert;
 use Optionia\Support\Cron;
 use Optionia\Support\Environment;
+use Optionia\Support\Keys;
 use Optionia\Support\Logger;
 use Optionia\Support\Settings;
 
