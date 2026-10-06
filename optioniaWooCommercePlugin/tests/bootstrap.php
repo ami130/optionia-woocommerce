@@ -1481,6 +1481,33 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 		return $limit > 0 ? array_slice( $out, 0, $limit ) : $out;
 	}
 
+	/**
+	 * Which order a line item belongs to.
+	 *
+	 * 📌 **Resolved from the registered orders**, so a test that attaches an
+	 * order to `$GLOBALS['optionia_test_orders']` gets the mapping for free
+	 * rather than maintaining a second table that could disagree with it.
+	 *
+	 * @param mixed $item_id Line item id.
+	 */
+	function wc_get_order_id_by_order_item_id( $item_id ): int {
+		$wanted = is_numeric( $item_id ) ? (int) $item_id : 0;
+
+		foreach ( ( $GLOBALS['optionia_test_orders'] ?? array() ) as $order_id => $order ) {
+			if ( ! is_object( $order ) || ! method_exists( $order, 'get_items' ) ) {
+				continue;
+			}
+
+			foreach ( array_keys( $order->get_items() ) as $line ) {
+				if ( (int) $line === $wanted ) {
+					return (int) $order_id;
+				}
+			}
+		}
+
+		return 0;
+	}
+
 	function wc_get_order( $order_id ) {
 		$orders = $GLOBALS['optionia_test_orders'] ?? array();
 		$id     = is_numeric( $order_id ) ? (int) $order_id : 0;

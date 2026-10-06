@@ -38,6 +38,7 @@ use Optionia\Analytics\ViewEndpoint;
 use Optionia\Analytics\ViewReporter;
 use Optionia\Design\LineScene;
 use Optionia\Design\PreviewEndpoint;
+use Optionia\Design\PrintFiles;
 use Optionia\Design\RenderCollector;
 use Optionia\Design\RenderRequester;
 use Optionia\Reporting\OrderReporter;
@@ -491,6 +492,19 @@ final class Plugin {
 			)
 		);
 
+		/*
+		 * 🔴 **The merchant's way to the print file.** `RenderCollector` writes
+		 * `META_RENDER_FILES` and, until this, nothing read it — the pipeline
+		 * produced artwork nobody could reach.
+		 */
+		$this->container->set(
+			PrintFiles::class,
+			static fn ( Container $c ): PrintFiles => new PrintFiles(
+				$c->get( UploadStore::class ),
+				$c->get( Logger::class )
+			)
+		);
+
 		$this->container->set(
 			LineScene::class,
 			static fn ( Container $c ): LineScene => new LineScene( $c->get( Repository::class ) )
@@ -754,6 +768,14 @@ final class Plugin {
 		 * registration would leave every preview answering 404.
 		 */
 		$this->container->get( PreviewEndpoint::class )->register();
+
+		/*
+		 * ⚠️ **Outside `is_admin()` like its siblings.** The order-screen hook
+		 * is an admin one and the download runs on `admin_init`, but the
+		 * registration itself must happen on every request for WordPress to
+		 * have the listener when the screen is built.
+		 */
+		$this->container->get( PrintFiles::class )->register();
 
 		/*
 		 * Registered outside `is_admin()` for the same reason, twice over: the

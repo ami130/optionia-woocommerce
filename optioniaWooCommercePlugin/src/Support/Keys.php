@@ -574,6 +574,24 @@ final class Keys {
 	public const ARG_DOWNLOAD_TOKEN = 'optionia_file';
 
 	/**
+	 * The order line whose PRINT FILE a merchant is asking for (M26e.5).
+	 *
+	 * 🔴 **A line item id, not a filename.** The stored name is a random token
+	 * inside a salt-derived directory — the two independent secrets
+	 * `Upload\UploadStore` relies on — and a link carrying it would spend the
+	 * second one permanently. The id is already public on the order screen and
+	 * means nothing without the capability check and nonce beside it.
+	 *
+	 * ⚠️ **Paired with the order id**, because a line item id alone does not
+	 * say which order it belongs to, and resolving the file means reading that
+	 * order's meta.
+	 */
+	public const ARG_PRINT_LINE = 'optionia_print_line';
+
+	/** The order the print file belongs to. */
+	public const ARG_PRINT_ORDER = 'optionia_print_order';
+
+	/**
 	 * Query argument naming the order whose files are wanted as one archive.
 	 *
 	 * Shares `NONCE_DOWNLOAD` with the single-file argument: both are the same
