@@ -53,6 +53,39 @@ fi
 
 pass "start:prod runs $ENTRY"
 
+# 🔴 **`start:dev` was broken for weeks and this gate did not look.** When a
+# production file began importing `@shared/*`, TypeScript's emit root moved from
+# `dist/main.js` to `dist/optioniaWooCommerceBackend/src/main.js`. `start:prod`
+# was corrected; `nest start`, `start:dev` and `start:debug` were not, and they
+# resolve their entry through `nest-cli.json` rather than through a script this
+# gate could read. The failure surfaced only when someone tried to run the API
+# locally — *"Cannot find module .../dist/main"* — and from a merchant's side it
+# looked like *"Optionia could not reach the connection service"*.
+#
+# ⚠️ **A gate that checks only the deploy path leaves the development path to
+# luck.** `entryFile` must name the file that actually exists, because `nest
+# start` defaults to `main` and says nothing about why it cannot find it.
+NEST_CLI="$BACKEND/nest-cli.json"
+
+if [ ! -f "$NEST_CLI" ]; then
+  fail "nest-cli.json is missing — nest start has no entry point to resolve"
+else
+  DEV_ENTRY=$(node -e "
+    const c = require('$NEST_CLI');
+    process.stdout.write(c.entryFile || 'main');
+  " 2>/dev/null || true)
+
+  if [ -z "$DEV_ENTRY" ]; then
+    fail "could not read entryFile from nest-cli.json — the parser is wrong, not the code"
+  elif [ -f "$BACKEND/dist/$DEV_ENTRY.js" ]; then
+    pass "nest start resolves dist/$DEV_ENTRY.js — the dev server can start"
+  else
+    fail "nest start would look for dist/$DEV_ENTRY.js, which the build does not emit"
+    printf '        start, start:dev and start:debug all resolve through this\n'
+    printf '        set entryFile in nest-cli.json to the emitted path\n'
+  fi
+fi
+
 # 🔴 **A real build, not a typecheck.** `deleteOutDir` is on, so this is the
 # same artefact a deploy would produce.
 if ( cd "$BACKEND" && npm run build >/tmp/check-build.log 2>&1 ); then
