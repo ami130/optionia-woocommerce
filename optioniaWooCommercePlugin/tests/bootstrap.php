@@ -331,6 +331,71 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	}
 
 	/**
+	 * Script and style registration, recorded rather than performed.
+	 *
+	 * 🔴 **These are the next `wp_date()`.** All four are called unguarded from
+	 * `Assets.php` — three of them within a few lines of the one that errored
+	 * 91 tests for a week — and the suite passes today only because no test
+	 * currently reaches them. `check-plugin-tests.sh` named them the moment it
+	 * was pointed at production code, which is the whole reason it compares
+	 * calls against stubs rather than waiting for a test to break.
+	 *
+	 * 📌 **Recorded into globals**, so a test that wants to assert what was
+	 * enqueued can, rather than being limited to "it did not crash".
+	 */
+	function wp_register_style( string $handle, $src = '', array $deps = array(), $ver = false, string $media = 'all' ): bool {
+		unset( $deps, $ver, $media );
+
+		$GLOBALS['optionia_test_styles'][ $handle ] = $src;
+
+		return true;
+	}
+
+	function wp_register_script( string $handle, $src = '', array $deps = array(), $ver = false, $args = false ): bool {
+		unset( $deps, $ver, $args );
+
+		$GLOBALS['optionia_test_scripts'][ $handle ] = $src;
+
+		return true;
+	}
+
+	function wp_add_inline_script( string $handle, string $data, string $position = 'after' ): bool {
+		unset( $position );
+
+		$GLOBALS['optionia_test_inline_scripts'][ $handle ][] = $data;
+
+		return true;
+	}
+
+	/**
+	 * Pull one field out of each row.
+	 *
+	 * ⚠️ **Objects as well as arrays**, because WordPress's own does: a caller
+	 * handed `WP_Post` objects would otherwise get a column of nulls from a
+	 * stub that looked right.
+	 *
+	 * @param array<int, mixed> $rows  Rows.
+	 * @param string            $field Field to pull.
+	 *
+	 * @return array<int, mixed>
+	 */
+	function wp_list_pluck( array $rows, string $field ): array {
+		$out = array();
+
+		foreach ( $rows as $row ) {
+			if ( is_object( $row ) ) {
+				$out[] = $row->$field ?? null;
+
+				continue;
+			}
+
+			$out[] = is_array( $row ) ? ( $row[ $field ] ?? null ) : null;
+		}
+
+		return $out;
+	}
+
+	/**
 	 * The store's local date, as WordPress reports it.
 	 *
 	 * 🔴 **Its absence was failing 91 tests in `RendererTest`** — every one of
