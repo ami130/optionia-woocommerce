@@ -14,7 +14,7 @@ import { checkRenderBounds } from '../common/render/render-bounds';
 import { CollectedRenderDto } from './dto/collected-render.dto';
 import { PreviewSceneDto } from './dto/preview-scene.dto';
 import { RequestRenderDto } from './dto/request-render.dto';
-import { sceneToSvgString } from '@shared/design/design-scene';
+import { buildScene, sceneToSvgString } from '@shared/design/design-scene';
 import { RenderJobsService, type AcceptedRender } from './render-jobs.service';
 
 /**
@@ -161,8 +161,16 @@ export class RenderJobsController {
     let svg: string;
 
     try {
+      /*
+       * 🔴 **`buildScene` resolves fractions to pixels**, exactly as the render
+       * worker does. Without it this answered a valid but EMPTY `<svg>` for a
+       * real composed scene — or threw, since `sceneToSvgString` reads
+       * `images`/`texts` and the plugin sends `layers`/`textOptions`. Preview
+       * and print file must come out of the same two calls, or the customer
+       * approves one picture and the merchant prints another.
+       */
       svg = sceneToSvgString(
-        { ...dto.scene, width: dto.width, height: dto.height } as never,
+        buildScene({ ...dto.scene, width: dto.width, height: dto.height } as never),
         'ov',
       );
     } catch {

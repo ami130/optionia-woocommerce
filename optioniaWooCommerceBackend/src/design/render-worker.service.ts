@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
-import { sceneToSvgString } from '@shared/design/design-scene';
+import { buildScene, sceneToSvgString } from '@shared/design/design-scene';
 
 import { loadConfig } from '../config/env';
 import { fontInventory, resolveFontsDir } from './design-fonts';
@@ -276,7 +276,27 @@ export class RenderWorkerService {
        * preview and the storefront draw with, which is what makes the print
        * file match the preview a merchant approved.
        */
-      svg = sceneToSvgString(job.scene as never, `job-${job.id}`);
+      /*
+       * 🔴 **`buildScene` FIRST, and its absence shipped a blank print file.**
+       * The stored scene is what the plugin composed: groups of `layers` in
+       * FRACTIONS of the canvas, plus `textOptions`. `sceneToSvgString` reads
+       * neither — it wants `images` and `texts` already resolved to viewBox
+       * pixels — so serialising the stored shape directly threw
+       * `Cannot read properties of undefined (reading 'forEach')` and every
+       * real designed order dead-lettered after three attempts.
+       *
+       * ⚠️ **Measured on a live render, not reasoned about.** A probe queued
+       * through the running worker produced a valid 600×600 PNG with nothing
+       * drawn on it; the unit and e2e suites all passed, because every fixture
+       * was written in the RESOLVED shape the serializer wanted rather than
+       * the shape the plugin actually sends.
+       *
+       * 📌 **This is the one place the fractions become pixels**, which is why
+       * M26e.1 can forbid geometry in PHP: the plugin copies a design through
+       * untouched and the shared module resolves it here, for the print file
+       * and the storefront preview alike.
+       */
+      svg = sceneToSvgString(buildScene(job.scene as never), `job-${job.id}`);
     } catch (error) {
       return {
         ok: false,

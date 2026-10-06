@@ -347,7 +347,14 @@ describe('render jobs (e2e)', () => {
     const svgOf = (response: request.Response): string =>
       Buffer.isBuffer(response.body) ? response.body.toString('utf8') : String(response.text ?? '');
 
-    /** A scene with a real image layer, so the SVG has something to draw. */
+    /**
+     * A scene in the shape the PLUGIN sends.
+     *
+     * 🔴 **This fixture described the serializer's input, not the plugin's
+     * output**, and that hid the same defect the worker had: `buildScene` was
+     * never called, so a real composed scene drew nothing. `layers` in
+     * fractions is what `Engine\SceneComposer` emits.
+     */
     /*
      * 🔴 **Deliberately DISAGREES with the posted width/height.** A scene
      * carrying its own dimensions made the route's `width: dto.width` override
@@ -363,17 +370,18 @@ describe('render jobs (e2e)', () => {
         {
           key: 'badge',
           visible: true,
-          images: [
+          layers: [
             {
-              href: 'https://cdn.test/badge.png',
-              x: 40,
-              y: 60,
-              w: 120,
-              h: 90,
-              shape: 'none',
+              name: 'badge',
+              src: 'https://cdn.test/badge.png',
+              natW: 120,
+              natH: 90,
+              pos: { xPct: 0.25, yPct: 0.25, wPct: 0.3, hPct: 0.225 },
+              rot: 0,
+              style: {},
+              visible: true,
             },
           ],
-          texts: [],
         },
       ],
     });
@@ -409,6 +417,7 @@ describe('render jobs (e2e)', () => {
       }).expect(200);
 
       expect(svgOf(response)).toContain('https://cdn.test/badge.png');
+      /* 0.3 × 400 = 120: the fraction resolved to a pixel width. */
       expect(svgOf(response)).toContain('width="120"');
     });
 

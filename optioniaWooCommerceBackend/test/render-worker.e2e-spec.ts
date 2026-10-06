@@ -58,6 +58,26 @@ describe('render worker (e2e)', () => {
   }
 
   /** A scene of one coloured rectangle — no text, so it needs no font. */
+  /**
+   * A scene in the shape the PLUGIN actually sends.
+   *
+   * 🔴 **This fixture was written in the RESOLVED shape and that hid a total
+   * failure of the feature.** It carried `images` with absolute pixels — what
+   * `sceneToSvgString` consumes — while `Engine\SceneComposer` sends `layers`
+   * in FRACTIONS plus `textOptions`, which is what `buildScene` consumes. The
+   * worker serialised the stored scene directly, so every real designed order
+   * threw `Cannot read properties of undefined (reading 'forEach')` and
+   * dead-lettered after three attempts. Every test here passed throughout,
+   * because the fixture described the serializer's input rather than the
+   * plugin's output.
+   *
+   * ⚠️ **Found on a live render, not by a test.** A job queued through the
+   * running worker produced a valid 600×600 PNG with nothing drawn on it.
+   *
+   * 📌 **So this now matches `DesignLayer`**: `src`, `pos` in fractions,
+   * `natW`/`natH`, `visible`. A fixture that cannot represent what production
+   * sends cannot test production.
+   */
   const SCENE = {
     width: 40,
     height: 40,
@@ -65,17 +85,16 @@ describe('render worker (e2e)', () => {
       {
         key: 'g',
         visible: true,
-        texts: [],
-        images: [
+        layers: [
           {
-            href: 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 40,
+            name: 'badge',
+            src: 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
+            natW: 1,
+            natH: 1,
+            pos: { xPct: 0.5, yPct: 0.5, wPct: 1, hPct: 1 },
             rot: 0,
-            opacity: 1,
-            shape: 'none',
+            style: {},
+            visible: true,
           },
         ],
       },
@@ -278,35 +297,35 @@ describe('render worker (e2e)', () => {
       const storeId = await store();
       const lineRef = `text-${Math.random().toString(36).slice(2, 8)}`;
       const age = new Date(Date.now() - RENDER_AFTER_MS - 5_000);
+      /*
+       * 🔴 **`textOptions`, not a resolved `texts` node.** This fixture also
+       * described the serializer's input rather than the plugin's output —
+       * `Engine\SceneComposer` sends a `TextDesign` in fractions and the
+       * customer's typed value, and `buildScene` turns that into the node
+       * `sceneToSvgString` draws. A text option therefore rendered nothing in
+       * production while this test stayed green.
+       */
       const scene = {
         width: 200,
         height: 60,
-        letterbox: { x: 0, y: 0, w: 200, h: 60 },
-        groups: [
+        groups: [],
+        textOptions: [
           {
-            key: 't',
-            visible: true,
-            images: [],
-            texts: [
-              {
-                text: 'Happy Birthday',
-                font: 'Pacifico',
-                fontSize: 28,
-                bold: false,
-                italic: false,
-                align: 'center',
-                valign: 'middle',
-                color: '#000000',
-                cx: 100,
-                cy: 30,
-                w: 190,
-                h: 0,
-                rot: 0,
-                curve: 0,
-                letterSpacing: 0,
-                advanceRatio: 0,
-              },
-            ],
+            key: 'greeting',
+            value: 'Happy Birthday',
+            design: {
+              text: 'sample',
+              font: 'Pacifico',
+              sizePct: 0.47,
+              bold: false,
+              italic: false,
+              align: 'center',
+              valign: 'middle',
+              color: '#000000',
+              pos: { xPct: 0.5, yPct: 0.5, wPct: 0.95 },
+              rot: 0,
+              curve: 0,
+            },
           },
         ],
       };
