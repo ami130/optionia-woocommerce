@@ -881,6 +881,13 @@
 				 */
 				applyRules( root );
 				refresh( root );
+
+				/*
+				 * 📌 **After the rules, for the reason above**: a hidden
+				 * option's answer is cleared, and a preview composed before
+				 * that would draw artwork the customer can no longer choose.
+				 */
+				schedulePreview( root );
 			}
 		} );
 
@@ -915,6 +922,14 @@
 			 */
 			if ( event.target.matches( '[data-optionia="value"]' ) ) {
 				applyRules( root );
+
+				/*
+				 * ⚠️ **Typed text redraws too**, because an engraving option
+				 * carries one design whose sample the customer's words replace
+				 * — so the preview is wrong until they are read. Debounced, so
+				 * a sentence costs one request rather than one per keystroke.
+				 */
+				schedulePreview( root );
 			}
 		} );
 
@@ -926,6 +941,14 @@
 		applyRules( root );
 
 		refresh( root );
+
+		/*
+		 * 📌 **Drawn on first paint**, so a designed value that is the default
+		 * shows its artwork without the customer touching anything — and a
+		 * product with no designs still makes no request, because
+		 * `composeScene` answers null.
+		 */
+		schedulePreview( root );
 
 		// Correct on first paint for a pre-filled default, without waiting for
 		// the customer to type.
@@ -1365,6 +1388,250 @@
 				send();
 			}
 		} );
+	}
+
+	/*
+	 * ---------------------------------------------------------------------
+	 * The design preview (M26e.1, stage B)
+	 * ---------------------------------------------------------------------
+	 *
+	 * 🔴 **The cloud draws it, this only asks and injects.** The preview, the
+	 * storefront overlay and the print file all come out of `buildScene` and
+	 * `sceneToSvgString` in `shared/design/`. Resolving the geometry here
+	 * would be a second implementation of the same maths, and the moment it
+	 * drifted a customer would approve one picture and the merchant print
+	 * another — which has already shipped once as a blank print file.
+	 *
+	 * 📌 **Through WordPress, never the cloud directly.** The cloud's preview
+	 * route is authenticated by the store token, which must stay on the
+	 * server.
+	 */
+	var preview = settings.preview || {};
+
+	/** How long after the last change before asking. */
+	var PREVIEW_DEBOUNCE_MS = 250;
+
+	/** The canvas a preview is drawn at. Square, matching the print request. */
+	var PREVIEW_CANVAS = 800;
+
+	var previewTimer = null;
+	var previewToken = 0;
+
+	/**
+	 * Read a design off an element, or null when it carries none.
+	 *
+	 * ⚠️ **Malformed JSON is not an error worth showing.** A design that
+	 * cannot be parsed means a document this build does not understand, and a
+	 * customer must still be able to buy — M26e.6's first rule.
+	 */
+	function designOf( element ) {
+		if ( ! element ) {
+			return null;
+		}
+
+		var raw = element.getAttribute( 'data-optionia-design' );
+
+		if ( ! raw ) {
+			return null;
+		}
+
+		try {
+			var parsed = JSON.parse( raw );
+
+			return parsed && 'object' === typeof parsed ? parsed : null;
+		} catch ( error ) {
+			return null;
+		}
+	}
+
+	/**
+	 * The scene the customer's current choices compose.
+	 *
+	 * 🔴 **The same shape `Engine\SceneComposer` builds**, because the cloud
+	 * resolves both through one function. Groups are per designed VALUE and
+	 * only the chosen one is visible; a text option carries one design and the
+	 * typed value replaces its sample.
+	 */
+	function composeScene( root ) {
+		var groups = [];
+		var texts = [];
+		var options = root.querySelectorAll( '[data-optionia-option]' );
+
+		for ( var i = 0; i < options.length; i++ ) {
+			var option = options[ i ];
+			var optionId = option.getAttribute( 'data-optionia-option' ) || '';
+
+			if ( ! optionId || option.hasAttribute( 'data-optionia-hidden' ) ) {
+				continue;
+			}
+
+			/*
+			 * A text option carries its design on the OPTION, and what the
+			 * customer typed is the value — the distinction SceneComposer
+			 * makes between `textOptions` and groups.
+			 */
+			var optionDesign = designOf( option );
+
+			if ( optionDesign ) {
+				var field = option.querySelector( 'input[type="text"], textarea' );
+				var typed = field && field.value ? String( field.value ) : '';
+
+				if ( typed ) {
+					texts.push( { key: optionId, design: optionDesign, value: typed } );
+				}
+
+				continue;
+			}
+
+			var values = option.querySelectorAll( '[data-optionia-design]' );
+
+			for ( var v = 0; v < values.length; v++ ) {
+				var input = values[ v ];
+				var design = designOf( input );
+
+				if ( ! design ) {
+					continue;
+				}
+
+				groups.push( {
+					key: optionId + ':' + ( input.value || String( v ) ),
+					layers: design.layers || [],
+					visible: !! input.checked
+				} );
+			}
+		}
+
+		if ( ! groups.length && ! texts.length ) {
+			return null;
+		}
+
+		/*
+		 * ⚠️ **Nothing visible draws nothing.** Asking the cloud to render a
+		 * scene whose every group is hidden spends a request from a bounded
+		 * allowance to produce a blank document.
+		 */
+		var anyVisible = texts.length > 0;
+
+		for ( var g = 0; g < groups.length; g++ ) {
+			if ( groups[ g ].visible && groups[ g ].layers.length ) {
+				anyVisible = true;
+			}
+		}
+
+		if ( ! anyVisible ) {
+			return null;
+		}
+
+		var scene = {
+			width: PREVIEW_CANVAS,
+			height: PREVIEW_CANVAS,
+			groups: groups
+		};
+
+		if ( texts.length ) {
+			scene.textOptions = texts;
+		}
+
+		return scene;
+	}
+
+	/** Where the preview is drawn, created on first use. */
+	function previewHost( root ) {
+		var existing = root.querySelector( '[data-optionia-preview]' );
+
+		if ( existing ) {
+			return existing;
+		}
+
+		var host = document.createElement( 'div' );
+
+		host.className = 'optionia-preview';
+		host.setAttribute( 'data-optionia-preview', '' );
+		/*
+		 * 📌 **Decorative to assistive technology.** The preview repeats
+		 * choices the customer has already made through labelled controls, so
+		 * announcing it would be noise — and it carries no information a
+		 * screen-reader user can act on.
+		 */
+		host.setAttribute( 'aria-hidden', 'true' );
+		root.insertBefore( host, root.firstChild );
+
+		return host;
+	}
+
+	/**
+	 * Ask the cloud for the current scene and draw it.
+	 *
+	 * ⚠️ **A stale answer is discarded.** Clicking three swatches quickly
+	 * starts three requests, and they may land out of order; only the newest
+	 * token is allowed to paint.
+	 */
+	function drawPreview( root ) {
+		if ( ! preview.url || ! preview.nonce || 'undefined' === typeof fetch ) {
+			return;
+		}
+
+		var scene = composeScene( root );
+
+		if ( ! scene ) {
+			var host = root.querySelector( '[data-optionia-preview]' );
+
+			if ( host ) {
+				host.innerHTML = '';
+			}
+
+			return;
+		}
+
+		previewToken += 1;
+
+		var token = previewToken;
+
+		fetch( preview.url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-WP-Nonce': preview.nonce
+			},
+			body: JSON.stringify( {
+				scene: scene,
+				width: PREVIEW_CANVAS,
+				height: PREVIEW_CANVAS
+			} )
+		} )
+			.then( function ( response ) {
+				return response.ok && 204 !== response.status ? response.text() : '';
+			} )
+			.then( function ( svg ) {
+				/*
+				 * 🔴 **Only the newest request paints**, and only an SVG. A
+				 * body that is not one means something else answered — a login
+				 * wall, a proxy page — and injecting it would put foreign
+				 * markup inside the product page.
+				 */
+				if ( token !== previewToken || ! svg || 0 !== svg.indexOf( '<svg' ) ) {
+					return;
+				}
+
+				previewHost( root ).innerHTML = svg;
+			} )
+			.catch( function () {
+				/*
+				 * Never blocks a sale (M26e.6). A preview that does not arrive
+				 * leaves the customer exactly where they were.
+				 */
+			} );
+	}
+
+	/** Redraw after the customer stops changing things. */
+	function schedulePreview( root ) {
+		if ( previewTimer ) {
+			clearTimeout( previewTimer );
+		}
+
+		previewTimer = setTimeout( function () {
+			drawPreview( root );
+		}, PREVIEW_DEBOUNCE_MS );
 	}
 
 	function init() {

@@ -37,6 +37,7 @@ use Optionia\Analytics\ViewCollector;
 use Optionia\Analytics\ViewEndpoint;
 use Optionia\Analytics\ViewReporter;
 use Optionia\Design\LineScene;
+use Optionia\Design\PreviewEndpoint;
 use Optionia\Design\RenderCollector;
 use Optionia\Design\RenderRequester;
 use Optionia\Reporting\OrderReporter;
@@ -476,7 +477,20 @@ final class Plugin {
 		 * architecture gate checks it mechanically. Building the scene in
 		 * `LineScene` and posting from `RenderRequester` is what keeps that
 		 * rule enforceable rather than remembered.
+		 *
+		 * 🔴 **A proxy, so the store credential never reaches a browser.** The
+		 * cloud's preview route is authenticated by the store token, which
+		 * lives in an option; a customer's page asks WordPress and WordPress
+		 * asks the cloud.
 		 */
+		$this->container->set(
+			PreviewEndpoint::class,
+			static fn ( Container $c ): PreviewEndpoint => new PreviewEndpoint(
+				$c->get( Client::class ),
+				$c->get( Logger::class )
+			)
+		);
+
 		$this->container->set(
 			LineScene::class,
 			static fn ( Container $c ): LineScene => new LineScene( $c->get( Repository::class ) )
@@ -733,6 +747,13 @@ final class Plugin {
 		 * now, so a second schedule would add cron traffic to do half the job.
 		 */
 		$this->container->get( RenderCollector::class )->register();
+
+		/*
+		 * ⚠️ **Outside `is_admin()`**: the route is called from a storefront
+		 * product page, which is a front-end request. An admin-only
+		 * registration would leave every preview answering 404.
+		 */
+		$this->container->get( PreviewEndpoint::class )->register();
 
 		/*
 		 * Registered outside `is_admin()` for the same reason, twice over: the

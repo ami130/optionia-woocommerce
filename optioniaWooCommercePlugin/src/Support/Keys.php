@@ -492,6 +492,16 @@ final class Keys {
 	 */
 	public const REST_ROUTE_VIEWS = '/views';
 
+	/**
+	 * The storefront's preview proxy (M26e.1 stage B).
+	 *
+	 * 🔴 **A proxy exists so the STORE CREDENTIAL never reaches a browser.**
+	 * The cloud's `POST /store/preview` is authenticated by the store token,
+	 * which lives in an option and must stay server-side; a customer's page
+	 * asks WordPress, and WordPress asks the cloud.
+	 */
+	public const REST_ROUTE_PREVIEW = '/preview';
+
 	// Nonce actions.
 
 	public const NONCE_SETTINGS   = 'optionia_settings';
@@ -532,6 +542,19 @@ final class Keys {
 	 * count it could have earned by reloading the page anyway.
 	 */
 	public const NONCE_VIEWS = 'optionia_views';
+
+	/** Nonce the storefront presents when asking for a preview. */
+	public const NONCE_PREVIEW = 'optionia_preview';
+
+	/**
+	 * Prefix for one cached preview SVG.
+	 *
+	 * ⚠️ **Keyed by the SCENE, not the product.** Two customers choosing the
+	 * same swatch compose byte-identical scenes, and the cloud's ceiling is
+	 * 1200 previews an hour per store — so an uncached proxy would spend a
+	 * merchant's whole allowance on one popular choice.
+	 */
+	public const TRANSIENT_PREVIEW = 'optionia_preview_';
 
 	/**
 	 * Nonce action for a merchant downloading a customer's file (M15.5).

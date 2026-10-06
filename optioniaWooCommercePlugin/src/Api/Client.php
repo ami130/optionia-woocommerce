@@ -158,9 +158,49 @@ final class Client implements PostsToCloud, FetchesFromCloud {
 	 * @param array<string, string> $headers Extra headers.
 	 */
 	public function get_binary( string $path, array $query = array(), array $headers = array() ): BinaryResponse {
+		return $this->binary( 'GET', $path, null, $query, $headers );
+	}
+
+	/**
+	 * POST JSON and receive bytes rather than JSON.
+	 *
+	 * 📌 **The preview route takes a scene and answers `image/svg+xml`**, so
+	 * the request body is JSON and the response is not. `post()` would hand the
+	 * document to the JSON validator and answer `invalid_response` for every
+	 * real preview — the same mismatch `get_binary()` exists for, one verb
+	 * along.
+	 *
+	 * @param string                $path      Path relative to the API base.
+	 * @param array<string, mixed>  $body_data Body, JSON-encoded before sending.
+	 * @param array<string, string> $headers   Extra headers.
+	 */
+	public function post_binary( string $path, array $body_data = array(), array $headers = array() ): BinaryResponse {
+		return $this->binary( 'POST', $path, $body_data, array(), $headers );
+	}
+
+	/**
+	 * Perform one request whose response body is bytes.
+	 *
+	 * ⚠️ **Shared by both verbs so the buffer discipline is written once.** The
+	 * clears bracketing the call stop a stale body being returned for a LATER
+	 * request that failed before reading one.
+	 *
+	 * @param string                    $method  HTTP method.
+	 * @param string                    $path    Path relative to the API base.
+	 * @param array<string, mixed>|null $body    Request body.
+	 * @param array<string, string>     $query   Query parameters.
+	 * @param array<string, string>     $headers Extra headers.
+	 */
+	private function binary(
+		string $method,
+		string $path,
+		?array $body,
+		array $query,
+		array $headers
+	): BinaryResponse {
 		$this->binary_bytes = null;
 
-		$response = $this->request( 'GET', $path, null, $query, $headers, true );
+		$response = $this->request( $method, $path, $body, $query, $headers, true );
 
 		$bytes = $this->binary_bytes;
 

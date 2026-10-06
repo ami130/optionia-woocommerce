@@ -106,6 +106,7 @@ final class Assets {
 				'currency' => $this->currency_settings(),
 				'upload'   => $this->upload_settings(),
 				'views'    => $this->view_settings(),
+				'preview'  => $this->preview_settings(),
 
 				/*
 				 * What a rule did, for a screen reader (M17.5).
@@ -271,6 +272,31 @@ final class Assets {
 		);
 	}
 
+	/**
+	 * Where the runtime asks for a design preview (M26e.1 stage B).
+	 *
+	 * 🔴 **A WordPress route, never the cloud directly.** The cloud's preview
+	 * endpoint is authenticated by the store token, which must stay on the
+	 * server; the browser talks to WordPress and WordPress talks to the cloud.
+	 *
+	 * ⚠️ **The same honest nonce limit `view_settings()` records**: every guest
+	 * holds the same value for 24 hours, so it refuses a caller that never
+	 * loaded a page and nothing more. What bounds abuse is the proxy's cache.
+	 *
+	 * @return array<string, string>
+	 */
+	private function preview_settings(): array {
+		return array(
+			'url'   => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_PREVIEW ) ),
+			'nonce' => wp_create_nonce( Keys::NONCE_PREVIEW ),
+		);
+	}
+
+	/**
+	 * Where the runtime posts a customer's file, and the ceiling it must obey.
+	 *
+	 * @return array<string, mixed>
+	 */
 	private function upload_settings(): array {
 		return array(
 			'url'      => esc_url_raw( rest_url( Keys::REST_NAMESPACE . Keys::REST_ROUTE_UPLOAD ) ),

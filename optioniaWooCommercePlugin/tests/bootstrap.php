@@ -1397,6 +1397,56 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	 *
 	 * @return array<int, int>
 	 */
+	/**
+	 * Short-lived cached values, as WordPress stores them.
+	 *
+	 * 📌 **Expiry is honoured**, because the preview cache's whole purpose is
+	 * to stop a dragged slider exhausting the cloud's 1200/hour ceiling — a
+	 * fake that never expired would make a test about expiry pass for free.
+	 *
+	 * @param string $key     Transient name.
+	 * @param mixed  $default_value Unused; WordPress returns false when absent.
+	 */
+	function get_transient( string $key, $default_value = false ) {
+		unset( $default_value );
+
+		$row = $GLOBALS['optionia_test_transients'][ $key ] ?? null;
+
+		if ( ! is_array( $row ) ) {
+			return false;
+		}
+
+		if ( $row['expires'] > 0 && $row['expires'] < time() ) {
+			unset( $GLOBALS['optionia_test_transients'][ $key ] );
+
+			return false;
+		}
+
+		return $row['value'];
+	}
+
+	/**
+	 * Store a short-lived value.
+	 *
+	 * @param string $key     Transient name.
+	 * @param mixed  $value   Value to store.
+	 * @param int    $seconds Lifetime, or 0 for no expiry.
+	 */
+	function set_transient( string $key, $value, int $seconds = 0 ): bool {
+		$GLOBALS['optionia_test_transients'][ $key ] = array(
+			'value'   => $value,
+			'expires' => $seconds > 0 ? time() + $seconds : 0,
+		);
+
+		return true;
+	}
+
+	function delete_transient( string $key ): bool {
+		unset( $GLOBALS['optionia_test_transients'][ $key ] );
+
+		return true;
+	}
+
 	function wc_get_orders( array $query = array() ) {
 		$orders = $GLOBALS['optionia_test_orders'] ?? array();
 		$out    = array();
@@ -2808,6 +2858,17 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		public int $status;
 
 		/**
+		 * Headers set on the response, lower-cased.
+		 *
+		 * 📌 **Recorded rather than sent**, so a test can assert that a
+		 * preview answers `image/svg+xml` — a browser given `application/json`
+		 * would refuse to inject the document.
+		 *
+		 * @var array<string, string>
+		 */
+		public array $headers = array();
+
+		/**
 		 * Constructor.
 		 *
 		 * @param mixed $data   Payload.
@@ -2816,6 +2877,16 @@ if ( ! class_exists( 'WP_REST_Request' ) ) {
 		public function __construct( $data = null, int $status = 200 ) {
 			$this->data   = $data;
 			$this->status = $status;
+		}
+
+		/**
+		 * Set one header, as `WP_REST_Response` does.
+		 *
+		 * @param string $name  Header name.
+		 * @param string $value Header value.
+		 */
+		public function header( string $name, string $value ): void {
+			$this->headers[ strtolower( $name ) ] = $value;
 		}
 
 		/**

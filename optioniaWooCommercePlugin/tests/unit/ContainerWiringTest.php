@@ -61,6 +61,7 @@ use Optionia\Upload\UploadLink;
 use Optionia\Upload\UploadRetention;
 use Optionia\Upload\UploadTokenCheck;
 use Optionia\Design\LineScene;
+use Optionia\Design\PreviewEndpoint;
 use Optionia\Design\RenderCollector;
 use Optionia\Design\RenderRequester;
 use Optionia\Connection\Handshake;
@@ -204,6 +205,7 @@ final class ContainerWiringTest extends TestCase {
 			'line scene'            => array( LineScene::class ),
 			'render requester'      => array( RenderRequester::class ),
 			'render collector'      => array( RenderCollector::class ),
+			'preview endpoint'      => array( PreviewEndpoint::class ),
 
 			/*
 			 * 🔴 **Twenty-eight services the list had never resolved**, found
