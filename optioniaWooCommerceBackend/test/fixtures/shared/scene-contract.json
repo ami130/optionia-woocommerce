@@ -1,0 +1,63 @@
+{
+  "$comment": "SHARED ACROSS THREE REPOSITORIES. Captured from Engine\\SceneComposer::compose() by running it, not written by hand — the same discipline assignment-wire.json records. Byte-identical copies live in optioniaWooCommercePlugin/tests/fixtures/shared/, optioniaWooCommerceBackend/test/fixtures/shared/ and optioniaWooCommerceFrontend/test/fixtures/shared/, all gated by check-fixture-parity.sh.",
+  "$why": "The plugin composes this shape in PHP; buildScene() consumes it in TypeScript. That contract lived in two languages with NO mechanical link, and it broke: both the render worker and POST /store/preview passed the composed scene straight to sceneToSvgString(), which wants images/texts already resolved to pixels rather than layers/textOptions in fractions. Every real designed order threw and dead-lettered while 1,333 e2e tests passed, because every fixture had been written in the RESOLVED shape — describing the serializer's input rather than the composer's output. Found by rendering one job on a live worker, which returned a valid 600x600 PNG with nothing drawn on it.",
+  "$covers": [
+    "DesignCarrier.VALUE  — an image swatch whose chosen value carries layers",
+    "DesignCarrier.OPTION_TEXT — a text option carrying one design plus the customer's typed value",
+    "an unchosen value, which must compose as a hidden group rather than vanish",
+    "the authoring canvas (Decision 5), which letterboxes a square design on a tall product"
+  ],
+  "scene": {
+    "width": 2000,
+    "height": 2000,
+    "groups": [
+      {
+        "key": "opt-badge:crest",
+        "layers": [
+          {
+            "name": "crest",
+            "src": "https://cdn.example/crest.png",
+            "natW": 400,
+            "natH": 400,
+            "pos": {
+              "xPct": 0.5,
+              "yPct": 0.4,
+              "wPct": 0.6,
+              "hPct": 0.6
+            },
+            "rot": 0,
+            "style": {},
+            "visible": true
+          }
+        ],
+        "visible": true
+      }
+    ],
+    "textOptions": [
+      {
+        "key": "opt-engraving",
+        "design": {
+          "text": "Your text",
+          "font": "Inter",
+          "sizePct": 0.08,
+          "bold": false,
+          "italic": false,
+          "align": "center",
+          "color": "#111111",
+          "pos": {
+            "xPct": 0.5,
+            "yPct": 0.8,
+            "wPct": 0.9
+          },
+          "rot": 0,
+          "curve": 0
+        },
+        "value": "Omi Hasan"
+      }
+    ],
+    "authoring": {
+      "width": 400,
+      "height": 400
+    }
+  }
+}
