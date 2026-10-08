@@ -59,6 +59,7 @@ const DEFAULT_CURRENCY = {
  * @param {object} [options]
  * @param {object} [options.currency] Overrides for `optioniaSettings.currency`.
  * @param {boolean} [options.settings] Set false to omit `optioniaSettings` entirely.
+ * @param {boolean} [options.debug] Set true to expose the runtime's test surface.
  * @param {boolean} [options.segmenter] Set false to simulate a browser without `Intl.Segmenter`.
  * @param {object|false} [options.upload] Overrides for `optioniaSettings.upload`; false omits it.
  * @return {Promise<{window: Window, document: Document, root: Element|null, uploads: object}>}
@@ -94,6 +95,15 @@ export async function loadStorefront(html, options = {}) {
   if (options.settings !== false) {
     dom.window.optioniaSettings = {
       currency: { ...DEFAULT_CURRENCY, ...(options.currency ?? {}) },
+
+      /*
+       * 📌 **`Assets.php` sends `SCRIPT_DEBUG` through here**, and the runtime
+       * only exposes `window.optioniaTest` when it is set. `wp_localize_script`
+       * stringifies everything, so the real page carries `'1'` or `''` — the
+       * string is reproduced rather than a boolean, so a test cannot pass
+       * against a truthiness the storefront never sees.
+       */
+      debug: options.debug ? '1' : '',
 
       /*
        * What a rule did, for a screen reader. Localised by `Assets.php` because

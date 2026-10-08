@@ -193,8 +193,16 @@ export function seedConnectedStore(email: string, storeUrl = 'https://usability.
  * this test bite?" check with the PREVIOUS build, which is the worst failure a
  * test can have: reporting on something other than its subject.
  *
- * ⚠️ **Added on reasoning, not on an observed failure.** One suspected
- * instance was investigated and proved to be a race inside the test instead.
+ * ⚠️ **Not currently load-bearing, and measured as such.** Changing
+ * `frontend.js` on disk and reloading in the same browser context WITHOUT this
+ * handler picked the change up immediately, so Studio is not serving stale
+ * JavaScript today. One suspected instance of a stale asset was investigated
+ * and proved to be a race inside the test instead.
+ *
+ * 📌 **Kept deliberately.** It costs one line per test and removes a whole
+ * class of silent wrongness — a mutation check answering from a previous build
+ * — that would otherwise be invisible when it did occur. If it ever starts
+ * costing more than that, delete it: it is insurance, not a dependency.
  */
 export async function freshPluginAssets( page: import( '@playwright/test' ).Page ): Promise<void> {
   await page.route( '**/wp-content/plugins/**/*.js*', async ( route ) => {

@@ -1448,8 +1448,40 @@
 	/** The canvas a preview is drawn at. Square, matching the print request. */
 	var PREVIEW_CANVAS = 800;
 
-	var previewTimer = null;
-	var previewToken = 0;
+	/**
+	 * Per-block preview state, keyed by the options root itself.
+	 *
+	 * 🔴 **One page can carry several options blocks.** A grouped product, a
+	 * bundle, or two shortcodes on one page each render their own root — and
+	 * until M26e.4 the debounce timer and the staleness token were single
+	 * module-level variables shared by all of them. Measured on a real page by
+	 * cloning the block: the second block cancelled the first's pending draw,
+	 * invalidated its in-flight response, and both wrote into the SAME host.
+	 *
+	 * ⚠️ **A `WeakMap`, so a removed block's state is collectable.** A block
+	 * theme that re-renders the options area would otherwise leak one entry per
+	 * render.
+	 */
+	var previewState = 'undefined' === typeof WeakMap ? null : new WeakMap();
+
+	/* Fallback for an engine with no `WeakMap`: one shared record, as before. */
+	var sharedState = { timer: null, token: 0 };
+
+	/** The preview bookkeeping for one options block. */
+	function stateFor( root ) {
+		if ( ! previewState ) {
+			return sharedState;
+		}
+
+		var state = previewState.get( root );
+
+		if ( ! state ) {
+			state = { timer: null, token: 0 };
+			previewState.set( root, state );
+		}
+
+		return state;
+	}
 
 	/**
 	 * Read a design off an element, or null when it carries none.
@@ -1655,6 +1687,17 @@
 			}
 		}
 
+		/*
+		 * ✏️ **Equivalent mutant: `return best;` behaves identically.**
+		 * `bestArea` starts at 0 and the comparison above is strict, so a
+		 * zero-area image is never assigned to `best` — whenever `bestArea` is
+		 * 0, `best` is still null. Verified by mutation: replacing this with
+		 * `return best;` leaves all 12 unit tests and all 5 browser tests
+		 * green, and no test can be written that distinguishes them.
+		 *
+		 * Kept as written because it states the postcondition the caller relies
+		 * on — "no drawable image means null" — where the loop only implies it.
+		 */
 		return bestArea > 0 ? best : null;
 	}
 
@@ -1728,6 +1771,56 @@
 	}
 
 	/**
+	 * The key that ties a preview host to the block that owns it.
+	 *
+	 * 📌 **The product id where there is one.** Two blocks for the same product
+	 * on one page would then share a host, which is correct: they describe the
+	 * same picture. Blocks with no id fall back to their index, so they stay
+	 * separate rather than silently merging.
+	 */
+	function hostKey( root ) {
+		var productId = root.getAttribute( 'data-optionia-product' ) || '';
+
+		if ( productId ) {
+			return productId;
+		}
+
+		var blocks = root.ownerDocument.querySelectorAll( '[data-optionia="options"]' );
+
+		for ( var i = 0; i < blocks.length; i++ ) {
+			if ( blocks[ i ] === root ) {
+				return 'block-' + i;
+			}
+		}
+
+		return 'block';
+	}
+
+	/** This block's own preview host, or null. */
+	function ownHost( root ) {
+		return root.ownerDocument.querySelector(
+			'[data-optionia-preview-for="' + cssEscape( hostKey( root ) ) + '"]'
+		);
+	}
+
+	/**
+	 * Make a value safe to put inside an attribute selector.
+	 *
+	 * ⚠️ **A product id is merchant-controlled in principle.** `CSS.escape` is
+	 * used where the browser has it; the fallback escapes anything outside a
+	 * conservative allow-list rather than trusting the value.
+	 */
+	function cssEscape( value ) {
+		if ( 'undefined' !== typeof CSS && CSS.escape ) {
+			return CSS.escape( value );
+		}
+
+		return String( value ).replace( /[^a-zA-Z0-9_-]/g, function ( character ) {
+			return '\\' + character;
+		} );
+	}
+
+	/**
 	 * Where the preview is drawn — over the product image — or null.
 	 *
 	 * 🔴 **Null when the product image cannot be identified**, and the caller
@@ -1744,11 +1837,18 @@
 		}
 
 		/*
+		 * 🔴 **The host belongs to THIS block, not to the document.** The
+		 * preview is mounted in the theme's gallery, which is shared, so a
+		 * document-wide `querySelector` returns whichever host happens to be
+		 * first — and with two options blocks on a page they overwrite each
+		 * other's artwork. Measured by cloning the block on a real page: two
+		 * blocks, one host.
+		 *
 		 * ⚠️ **Re-anchored if the image moved.** A gallery swap or a variation
 		 * change replaces the image element, and a host still parented to the
 		 * old one would float over nothing.
 		 */
-		var existing = root.ownerDocument.querySelector( '[data-optionia-preview]' );
+		var existing = ownHost( root );
 
 		if ( existing && existing.parentNode === image.parentNode ) {
 			return existing;
@@ -1762,6 +1862,13 @@
 
 		host.className = 'optionia-preview';
 		host.setAttribute( 'data-optionia-preview', '' );
+		/*
+		 * Stamped with the block's own id, so each block finds its own host and
+		 * never another's. Falls back to the root's position among the blocks
+		 * when a product id is missing, which keeps two unidentified blocks
+		 * apart rather than merging them.
+		 */
+		host.setAttribute( 'data-optionia-preview-for', hostKey( root ) );
 		/*
 		 * 📌 **Decorative to assistive technology.** The preview repeats
 		 * choices the customer has already made through labelled controls, so
@@ -1784,8 +1891,50 @@
 
 		positionOver( host, image, frame );
 		frame.appendChild( host );
+		trackSize( root, host, image, frame );
 
 		return host;
+	}
+
+	/**
+	 * Keep the overlay on the image as the image changes size.
+	 *
+	 * 🔴 **The box is read once, and the theme keeps moving.** Measured: with
+	 * the image resized from 1254px to 500px the overlay stayed at 1254px, so
+	 * the customer's design spilled far outside the product. A zoom plugin, a
+	 * lazily-loaded font reflowing the column, a CSS transition and a
+	 * responsive breakpoint all do exactly this.
+	 *
+	 * ⚠️ **One observer per block**, replaced rather than stacked, for the same
+	 * reason the gallery observer is.
+	 */
+	function trackSize( root, host, image, frame ) {
+		if ( 'undefined' === typeof ResizeObserver ) {
+			return;
+		}
+
+		var state = stateFor( root );
+
+		if ( state.sizer ) {
+			state.sizer.disconnect();
+			state.sizer = null;
+		}
+
+		var sizer = new ResizeObserver( function () {
+			/*
+			 * Re-read from the live elements rather than trusting the values
+			 * captured when the host was built — by the time this fires the
+			 * image may have been replaced as well as resized.
+			 */
+			if ( ! host.parentNode || ! image.parentNode ) {
+				return;
+			}
+
+			positionOver( host, image, frame );
+		} );
+
+		sizer.observe( image );
+		state.sizer = sizer;
 	}
 
 	/**
@@ -1838,7 +1987,7 @@
 			 * never find it and a stale design would stay on screen after the
 			 * customer cleared their choices.
 			 */
-			var stale = root.ownerDocument.querySelector( '[data-optionia-preview]' );
+			var stale = ownHost( root );
 
 			if ( stale ) {
 				stale.innerHTML = '';
@@ -1847,9 +1996,11 @@
 			return;
 		}
 
-		previewToken += 1;
+		var state = stateFor( root );
 
-		var token = previewToken;
+		state.token += 1;
+
+		var token = state.token;
 
 		fetch( preview.url, {
 			method: 'POST',
@@ -1900,7 +2051,7 @@
 				 * wall, a proxy page — and injecting it would put foreign
 				 * markup inside the product page.
 				 */
-				if ( token !== previewToken || ! svg || 0 !== svg.indexOf( '<svg' ) ) {
+				if ( token !== state.token || ! svg || 0 !== svg.indexOf( '<svg' ) ) {
 					return;
 				}
 
@@ -1927,11 +2078,13 @@
 
 	/** Redraw after the customer stops changing things. */
 	function schedulePreview( root ) {
-		if ( previewTimer ) {
-			clearTimeout( previewTimer );
+		var state = stateFor( root );
+
+		if ( state.timer ) {
+			clearTimeout( state.timer );
 		}
 
-		previewTimer = setTimeout( function () {
+		state.timer = setTimeout( function () {
 			drawPreview( root );
 		}, PREVIEW_DEBOUNCE_MS );
 	}
@@ -1952,6 +2105,21 @@
 	function watchGallery( root ) {
 		if ( 'undefined' === typeof MutationObserver ) {
 			return;
+		}
+
+		var state = stateFor( root );
+
+		/*
+		 * 🔴 **One observer per block, replaced rather than added to.**
+		 * `watchForGallery` calls back into this function once a gallery
+		 * appears, and a gallery that comes and goes would otherwise bind a
+		 * second, third, fourth observer — each one running `productImage()`
+		 * over every image in the gallery on every mutation. A block theme
+		 * that re-renders the options area makes that unbounded.
+		 */
+		if ( state.observer ) {
+			state.observer.disconnect();
+			state.observer = null;
 		}
 
 		var image = productImage( root );
@@ -1988,7 +2156,7 @@
 			 * Redrawing on every mutation would fire on the plugin's OWN
 			 * insertion of the host and loop forever.
 			 */
-			var host = root.ownerDocument.querySelector( '[data-optionia-preview]' );
+			var host = ownHost( root );
 			var current = productImage( root );
 
 			if ( ! current ) {
@@ -2003,6 +2171,9 @@
 		} );
 
 		observer.observe( gallery, { childList: true, subtree: true } );
+
+		/* Held so a later call can disconnect it rather than stack another. */
+		state.observer = observer;
 	}
 
 	/**
@@ -2020,12 +2191,21 @@
 			return;
 		}
 
+		var state = stateFor( root );
+
+		/* Same rule as the gallery observer: one per block, never stacked. */
+		if ( state.waiting ) {
+			state.waiting.disconnect();
+			state.waiting = null;
+		}
+
 		var waiting = new MutationObserver( function () {
 			if ( ! productImage( root ) ) {
 				return;
 			}
 
 			waiting.disconnect();
+			state.waiting = null;
 
 			/*
 			 * Bind the real watcher to the gallery that has now arrived, then
@@ -2036,6 +2216,8 @@
 		} );
 
 		waiting.observe( body, { childList: true, subtree: true, attributes: true, attributeFilter: [ 'style', 'class' ] } );
+
+		state.waiting = waiting;
 	}
 
 	function init() {
@@ -2065,9 +2247,27 @@
 	 * exposed: it mutates nothing, so the page behaves identically whether or
 	 * not anything reads it.
 	 */
-	window.optioniaTest = {
-		productImage: productImage
-	};
+	/*
+	 * 🔴 **Not on a real storefront.** `SCRIPT_DEBUG` is false on every
+	 * production install, so a shop never carries this surface; a developer
+	 * running the browser suite does.
+	 */
+	if ( settings.debug ) {
+		window.optioniaTest = {
+			productImage: productImage,
+
+			/*
+			 * 📌 **Exposed so the host-ownership rule can be tested.** Each
+			 * block must find its OWN host: the preview is mounted in the
+			 * theme's shared gallery, so a document-wide lookup hands two
+			 * blocks the same element and they overwrite each other's artwork.
+			 * That rule lives in `previewHost`, and `drawPreview` — its only
+			 * other caller — needs preview settings, a scene and the network
+			 * before it is reached.
+			 */
+			previewHost: previewHost
+		};
+	}
 
 	if ( 'loading' === document.readyState ) {
 		document.addEventListener( 'DOMContentLoaded', init );

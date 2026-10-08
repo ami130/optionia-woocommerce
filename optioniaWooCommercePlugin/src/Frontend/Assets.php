@@ -109,6 +109,19 @@ final class Assets {
 				'preview'  => $this->preview_settings(),
 
 				/*
+				 * Whether the runtime may expose its internals for testing.
+				 *
+				 * 🔴 **Off on a real storefront.** The browser tests that prove
+				 * M26e.2's "never draw on the wrong product" rule have to call
+				 * the real image finder — re-implementing it in the test would
+				 * assert the test's idea of the code rather than the code, the
+				 * trap that let a blank print file pass 1,333 tests here. But a
+				 * shop has no use for that surface, so it is tied to
+				 * `SCRIPT_DEBUG`, which is false on every production install.
+				 */
+				'debug'    => defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG,
+
+				/*
 				 * What a rule did, for a screen reader (M17.5).
 				 *
 				 * 🔴 **Counts, not names.** A message naming options would have

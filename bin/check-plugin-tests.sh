@@ -78,6 +78,34 @@ else
   fi
 fi
 
+# --- The plugin's JavaScript suite -------------------------------------------
+#
+# 🔴 **174 tests were running nowhere.** The plugin ships `vitest` + `jsdom`
+# and a harness that loads the real `assets/js/frontend.js`, and this gate ran
+# PHPUnit only — so the entire JS suite passed or failed on whether a developer
+# happened to type `npx vitest` by hand. `frontend.js` is over 2,000 lines of
+# storefront runtime: the half of this plugin a customer actually touches was
+# protected by nothing automated.
+#
+# ⚠️ **A missing `node_modules` is a skip, not a pass.** A gate that reports
+# success because it could not run is worse than one that is absent, since it
+# answers the question it never asked.
+if [ ! -f "$PLUGIN/package.json" ]; then
+  printf '\033[33mskip\033[0m  the plugin JS suite: no package.json\n'
+elif ! command -v npx >/dev/null 2>&1; then
+  printf '\033[33mskip\033[0m  the plugin JS suite: npx not found\n'
+elif [ ! -d "$PLUGIN/node_modules" ]; then
+  printf '\033[33mskip\033[0m  the plugin JS suite: dependencies not installed\n'
+else
+  if ( cd "$PLUGIN" && npx vitest run ) >/tmp/check-plugin-js.log 2>&1; then
+    JSCOUNT=$(grep -aoE "Tests +[0-9]+ passed" /tmp/check-plugin-js.log | head -1 || true)
+    pass "the plugin JS suite passes${JSCOUNT:+ — ${JSCOUNT#Tests }}"
+  else
+    fail "the plugin JS suite does not pass"
+    grep -aE "FAIL|AssertionError|Tests +[0-9]+ failed" /tmp/check-plugin-js.log | head -6 | sed 's/^/        /' || true
+  fi
+fi
+
 # --- Every WordPress function production code calls must be stubbed ----------
 #
 # 📌 **Matched on the CALL, not on an import**, because PHP has no imports for
