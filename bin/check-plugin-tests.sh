@@ -95,7 +95,17 @@ if [ ! -f "$PLUGIN/package.json" ]; then
 elif ! command -v npx >/dev/null 2>&1; then
   printf '\033[33mskip\033[0m  the plugin JS suite: npx not found\n'
 elif [ ! -d "$PLUGIN/node_modules" ]; then
-  printf '\033[33mskip\033[0m  the plugin JS suite: dependencies not installed\n'
+  # 🔴 **A skip on a developer machine; a FAILURE in CI.** This is the plugin's
+  # own convention, from `bin/check-js.sh`: a person who has not installed the
+  # JavaScript tooling should be told, not blocked, but in CI there is nobody to
+  # tell and a green gate that ran nothing is worse than a red one. Measured
+  # before this was added — moving `node_modules` away left the gate reporting
+  # success with all 191 tests unrun.
+  if [ -n "${CI:-}" ]; then
+    fail "node_modules/ absent in CI — the plugin JS suite did not run (add: npm ci)"
+  else
+    printf '\033[33mskip\033[0m  the plugin JS suite: dependencies not installed\n'
+  fi
 else
   if ( cd "$PLUGIN" && npx vitest run ) >/tmp/check-plugin-js.log 2>&1; then
     JSCOUNT=$(grep -aoE "Tests +[0-9]+ passed" /tmp/check-plugin-js.log | head -1 || true)

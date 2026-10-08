@@ -604,6 +604,15 @@
 	 * the document input rather than authority, and a forged id containing a
 	 * quote would otherwise break out of the selector.
 	 *
+	 * ✏️ **M26e.4 added a second caller and, briefly, a second copy.** The
+	 * preview host is found by `[data-optionia-preview-for="…"]`, and a
+	 * `CSS.escape`-based duplicate of this function was declared further down
+	 * the same scope — silently overriding this one for the whole file,
+	 * including the rules engine that had used it since M17. Both were measured
+	 * in a real browser and agreed on every input tried (`.`, space, `"`, `\`),
+	 * so nothing broke; the duplicate was deleted rather than kept, because the
+	 * next edit to it would have changed rule matching with nothing to notice.
+	 *
 	 * @param {string} value The id.
 	 * @return {string}
 	 */
@@ -1462,17 +1471,22 @@
 	 * theme that re-renders the options area would otherwise leak one entry per
 	 * render.
 	 */
-	var previewState = 'undefined' === typeof WeakMap ? null : new WeakMap();
-
-	/* Fallback for an engine with no `WeakMap`: one shared record, as before. */
-	var sharedState = { timer: null, token: 0 };
+	/*
+	 * 🔴 **No fallback, deliberately.** An earlier version returned one shared
+	 * record when `WeakMap` was absent — which silently reinstates the very bug
+	 * this map exists to fix: every block sharing one timer and one token, so
+	 * the second cancels the first's draw and overwrites its artwork.
+	 *
+	 * 📌 **It was also unreachable.** The preview needs `fetch` (`drawPreview`
+	 * returns early without it) and the redraw needs `MutationObserver`, both
+	 * strictly newer than `WeakMap` — no browser can draw a preview and lack
+	 * this. A fallback nothing can reach, which breaks the thing it guards, is
+	 * worse than no fallback: it reads as safety while removing it.
+	 */
+	var previewState = new WeakMap();
 
 	/** The preview bookkeeping for one options block. */
 	function stateFor( root ) {
-		if ( ! previewState ) {
-			return sharedState;
-		}
-
 		var state = previewState.get( root );
 
 		if ( ! state ) {
@@ -1801,23 +1815,6 @@
 		return root.ownerDocument.querySelector(
 			'[data-optionia-preview-for="' + cssEscape( hostKey( root ) ) + '"]'
 		);
-	}
-
-	/**
-	 * Make a value safe to put inside an attribute selector.
-	 *
-	 * ⚠️ **A product id is merchant-controlled in principle.** `CSS.escape` is
-	 * used where the browser has it; the fallback escapes anything outside a
-	 * conservative allow-list rather than trusting the value.
-	 */
-	function cssEscape( value ) {
-		if ( 'undefined' !== typeof CSS && CSS.escape ) {
-			return CSS.escape( value );
-		}
-
-		return String( value ).replace( /[^a-zA-Z0-9_-]/g, function ( character ) {
-			return '\\' + character;
-		} );
 	}
 
 	/**
@@ -2265,7 +2262,17 @@
 			 * other caller — needs preview settings, a scene and the network
 			 * before it is reached.
 			 */
-			previewHost: previewHost
+			previewHost: previewHost,
+
+			/*
+			 * 📌 **The watchers, so their lifecycle can be tested.** Each binds
+			 * a `MutationObserver` and must replace rather than stack it — a
+			 * gallery that comes and goes would otherwise leave one observer
+			 * per appearance, each scanning every image on every mutation.
+			 * Nothing about that is visible from outside without a handle.
+			 */
+			watchGallery: watchGallery,
+			stateFor: stateFor
 		};
 	}
 

@@ -21,6 +21,45 @@ const STOREFRONT = process.env.E2E_STOREFRONT_URL ?? 'https://optionia.local';
 const PRODUCT = STOREFRONT + '/product/spider-man/';
 
 /**
+ * This suite drives the plugin's real image finder, which only exists when
+ * `SCRIPT_DEBUG` is on.
+ *
+ * 🔴 **Checked once, with the fix in the message.** The runtime exposes
+ * `window.optioniaTest` only under `SCRIPT_DEBUG`, so that it never ships to a
+ * merchant's storefront — which means a developer on a fresh machine gets
+ * failures from a correctly-working plugin. The dependency lives in
+ * `wp-config.php`, outside this repository and outside its gitignore, so
+ * nothing else can tell them.
+ *
+ * ⚠️ **A hard failure, not a skip.** Silently skipping would mean the rule
+ * M26e.2 exists to enforce — never draw on the wrong product — stops being
+ * checked without anybody noticing.
+ */
+test.beforeAll( async ( { browser } ) => {
+  const page = await browser.newPage();
+
+  try {
+    await page.goto( PRODUCT, { waitUntil: 'domcontentloaded' } );
+
+    const exposed = await page.evaluate(
+      () => typeof ( window as unknown as { optioniaTest?: unknown } ).optioniaTest
+    );
+
+    if ( exposed === 'undefined' ) {
+      throw new Error(
+        '\nThis suite calls the plugin\u2019s real image finder, which is behind SCRIPT_DEBUG.\n\n' +
+          '  Add to your WordPress wp-config.php:\n' +
+          "    define( 'SCRIPT_DEBUG', true );\n\n" +
+          '  It is a local-only flag: it is false on every production install,\n' +
+          '  which is why the plugin does not expose its internals to a shop.\n'
+      );
+    }
+  } finally {
+    await page.close();
+  }
+} );
+
+/**
  * Runs the shipped finder from the plugin's own bundle against the live page.
  *
  * 🔴 **The real `productImage` is called, never a copy.** A transcription of
@@ -168,22 +207,26 @@ test.describe( 'finding the product image', () => {
  * watcher was added. A test that only changed `src` would miss this.
  */
 async function swapGalleryImage( page: import( '@playwright/test' ).Page ) {
-  await page.evaluate( () => {
+  const swapped = await page.evaluate( () => {
     const root = document.querySelector( '[data-optionia="options"]' );
 
     if ( ! root ) {
-      return;
+      return 'no options root on the page';
     }
 
     const api = ( window as unknown as {
       optioniaTest?: { productImage?: ( root: Element ) => HTMLImageElement | null };
     } ).optioniaTest;
 
-    const image = api?.productImage?.( root );
+    if ( ! api?.productImage ) {
+      return 'the plugin exposes no productImage — is SCRIPT_DEBUG on?';
+    }
+
+    const image = api.productImage( root );
     const wrapper = image?.parentElement;
 
     if ( ! image || ! wrapper?.parentNode ) {
-      return;
+      return 'no product image to swap';
     }
 
     const replacement = document.createElement( 'div' );
@@ -198,7 +241,18 @@ async function swapGalleryImage( page: import( '@playwright/test' ).Page ) {
 
     replacement.appendChild( swapped );
     wrapper.parentNode.replaceChild( replacement, wrapper );
+
+    return null;
   } );
+
+  /*
+   * 🔴 **A swap that did not happen must fail HERE, naming why.** This used to
+   * return silently: the image was never replaced, the preview was never
+   * destroyed, and the "the design must come back" assertion below passed
+   * against a page nothing had been done to. Measured by turning `SCRIPT_DEBUG`
+   * off — the test failed, but on a later assertion that explained nothing.
+   */
+  expect( swapped, 'the gallery image must actually be swapped' ).toBeNull();
 }
 
 test.describe( 'the preview survives the theme changing the image (M26e.3)', () => {

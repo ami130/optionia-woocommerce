@@ -26,7 +26,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 printf 'Checking the linters CI runs…\n'
 
-for project in optioniaWooCommerceBackend optioniaWooCommerceFrontend; do
+# 🔴 **The plugin was absent from this loop until M26e.4.** Its 2,277-line
+# storefront runtime had no linter at all, and a duplicate `cssEscape` —
+# declared twice in one scope, silently overriding the copy the rules engine
+# had used since M17 — reached `main` because of it. `no-redeclare` is an
+# ESLint default and refuses it instantly.
+for project in optioniaWooCommerceBackend optioniaWooCommerceFrontend optioniaWooCommercePlugin; do
   DIR="$ROOT/$project"
 
   if [ ! -f "$DIR/package.json" ]; then
@@ -41,11 +46,22 @@ for project in optioniaWooCommerceBackend optioniaWooCommerceFrontend; do
     continue
   fi
 
-  # ⚠️ **`node_modules` absent is SKIPPED, not failed.** A fresh clone has no
-  # dependencies, and a gate that fails there would be a gate people stop
-  # running. CI always installs, so the check is never skipped where it matters.
+  # ⚠️ **`node_modules` absent is SKIPPED locally and FAILED in CI.** A fresh
+  # clone has no dependencies, and a gate that blocks there is a gate people
+  # stop running.
+  #
+  # ✏️ **This used to say "CI always installs, so the check is never skipped
+  # where it matters" — an assumption rather than an enforcement.** Nothing
+  # checked it, so a workflow that lost its install step would have turned this
+  # gate green by deleting it. `CI` is set by GitHub Actions; the guard makes
+  # the claim true instead of hoping for it, matching `bin/check-js.sh`.
   if [ ! -d "$DIR/node_modules" ]; then
-    printf '\033[33mskip\033[0m  %s: dependencies not installed\n' "$project"
+    if [ -n "${CI:-}" ]; then
+      fail "$project: node_modules/ absent in CI — lint did not run (add: npm ci)"
+    else
+      printf '\033[33mskip\033[0m  %s: dependencies not installed\n' "$project"
+    fi
+
     continue
   fi
 
