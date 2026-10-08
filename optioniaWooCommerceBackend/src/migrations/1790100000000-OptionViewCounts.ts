@@ -42,6 +42,28 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * an option set must not take last quarter's view counts with it — and Phase 4
  * proved the alternative, where a delete either blocks or cascades the history
  * away.
+ *
+ * ## Why this table pins no collation
+ *
+ * 🔴 **It used to, and that broke every CI run for eight days.** The
+ * `CREATE TABLE` carried `DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+ * — the only one of 36 tables in this schema to specify either. Every other
+ * table inherits the database default, and so must this one, because MySQL
+ * refuses a foreign key between columns whose collations differ:
+ *
+ *     Referencing column 'storeId' and referenced column 'id' in foreign key
+ *     constraint 'fk_option_view_counts_store' are incompatible.
+ *
+ * ⚠️ **It passed locally and failed in CI, which is why it survived.** A
+ * development database created with `utf8mb4_unicode_ci` as its default gives
+ * `stores.id` that collation too, so the pin agreed with its neighbour by
+ * luck. CI's `mysql:8.4` service creates its database with the server default
+ * — `utf8mb4_0900_ai_ci` — so `stores.id` differs from the pinned `storeId`
+ * and the constraint is rejected. The migration dies on any database built
+ * from scratch, which is every CI run and every new developer.
+ *
+ * 📌 **So: no charset or collation clause here, ever.** A table that names its
+ * own disagrees with the 35 that do not the moment a server default changes.
  */
 export class OptionViewCounts1790100000000 implements MigrationInterface {
   name = 'OptionViewCounts1790100000000';
@@ -60,7 +82,7 @@ export class OptionViewCounts1790100000000 implements MigrationInterface {
         PRIMARY KEY (\`id\`),
         UNIQUE KEY \`uq_option_view_counts\` (\`storeId\`, \`optionSetId\`, \`optionKey\`, \`day\`),
         KEY \`ix_option_view_counts_day\` (\`storeId\`, \`day\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      ) ENGINE=InnoDB
     `);
 
     /*
