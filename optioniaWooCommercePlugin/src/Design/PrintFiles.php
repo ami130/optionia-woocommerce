@@ -112,15 +112,43 @@ final class PrintFiles {
 			return;
 		}
 
-		$files = $this->files_of( $order );
+		$files    = $this->files_of( $order );
+		$failures = $this->map_of( $order, Keys::META_RENDER_FAILURES );
+		$partials = $this->map_of( $order, Keys::META_RENDER_PARTIAL );
 
-		if ( ! isset( $files[ $line_id ] ) ) {
+		$has_file    = isset( $files[ $line_id ] );
+		$has_failure = isset( $failures[ $line_id ] );
+
+		if ( ! $has_file && ! $has_failure ) {
+			return;
+		}
+
+		echo '<table cellspacing="0" class="display_meta">';
+
+		/*
+		 * 🔴 **A render the cloud gave up on is said plainly** (M26e.6). Until
+		 * this, a permanently failed render showed NOTHING on the order — the
+		 * collector retried it on every cron pass for ever and the merchant
+		 * had no way to know a print file was never coming.
+		 *
+		 * ⚠️ **The reason is shown, not just the fact.** *"Something went
+		 * wrong"* is a support ticket; *"the stored scene could not be
+		 * serialized"* is something a merchant or this project can act on.
+		 */
+		if ( $has_failure ) {
+			printf(
+				'<tr><th>%1$s</th><td>%2$s<br><small>%3$s</small></td></tr>',
+				esc_html__( 'Print file', 'optionia' ),
+				esc_html__( 'Could not be generated. The design is kept, so it can be re-rendered.', 'optionia' ),
+				esc_html( (string) $failures[ $line_id ] )
+			);
+
+			echo '</table>';
+
 			return;
 		}
 
 		$path = $this->path_for( (string) $files[ $line_id ] );
-
-		echo '<table cellspacing="0" class="display_meta">';
 
 		/*
 		 * 🔴 **A missing file is REPORTED, not omitted.** A line whose artwork
@@ -142,6 +170,21 @@ final class PrintFiles {
 				esc_url( $this->link( (int) $order->get_id(), $line_id ) ),
 				esc_html__( 'Download', 'optionia' )
 			);
+
+			/*
+			 * ⚠️ **A file that arrived may still be missing a layer** (F173),
+			 * and the download is offered anyway: a print file missing one
+			 * badge beats no file at all. What must not happen is the merchant
+			 * discovering it at the press.
+			 */
+			if ( isset( $partials[ $line_id ] ) ) {
+				printf(
+					'<tr><th>%1$s</th><td>%2$s<br><small>%3$s</small></td></tr>',
+					esc_html__( 'Incomplete', 'optionia' ),
+					esc_html__( 'One or more layers could not be drawn.', 'optionia' ),
+					esc_html( (string) $partials[ $line_id ] )
+				);
+			}
 		}
 
 		echo '</table>';
@@ -238,11 +281,23 @@ final class PrintFiles {
 	 * @return array<int, string>
 	 */
 	private function files_of( object $order ): array {
+		return $this->map_of( $order, Keys::META_RENDER_FILES );
+	}
+
+	/**
+	 * One line-keyed map from the order, or an empty one.
+	 *
+	 * @param object $order WooCommerce order.
+	 * @param string $key   Meta key.
+	 *
+	 * @return array<int, string>
+	 */
+	private function map_of( object $order, string $key ): array {
 		if ( ! method_exists( $order, 'get_meta' ) ) {
 			return array();
 		}
 
-		$stored = json_decode( (string) $order->get_meta( Keys::META_RENDER_FILES, true ), true );
+		$stored = json_decode( (string) $order->get_meta( $key, true ), true );
 
 		if ( ! is_array( $stored ) ) {
 			return array();

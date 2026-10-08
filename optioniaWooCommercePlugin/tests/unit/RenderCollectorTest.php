@@ -148,7 +148,8 @@ final class RenderCollectorTest extends TestCase {
 		$second->update_meta_data( Keys::META_RENDER_IDS, (string) wp_json_encode( array( 11 => 'render-2' ) ) );
 		$GLOBALS['optionia_test_orders'][78] = $second;
 
-		$GLOBALS['optionia_test_http_calls'] = array();
+		$GLOBALS['optionia_test_http_calls']  = array();
+		$GLOBALS['optionia_test_http_by_url'] = array();
 
 		$this->collector()->drain();
 
@@ -258,5 +259,133 @@ final class RenderCollectorTest extends TestCase {
 		$GLOBALS['optionia_test_orders'][77] = optionia_test_order( 77 );
 
 		$this->assertSame( 0, $this->collector()->drain() );
+	}
+	/* --- a render the cloud gave up on (M26e.6) ---------------------------- */
+
+	/**
+	 * 🔴 **A 404 on the file route means one of two OPPOSITE things**, and
+	 * guessing cost a merchant their print file. The cloud answers it while a
+	 * job is still rasterising AND after it has been given up on — so treating
+	 * every 404 as "ask again next pass" retried a dead render on every cron
+	 * run for ever, and nothing ever told the merchant.
+	 */
+	public function test_a_failed_render_is_recorded_on_the_order(): void {
+		$order = $this->renderedOrder( 80 );
+
+		$GLOBALS['optionia_test_http_by_url'] = array(
+			'/file'    => array(
+				'status' => 404,
+				'body'   => '{"error":{"code":"NOT_FOUND"}}',
+			),
+			'renders/' => array(
+				'status' => 200,
+				'body'   => '{"data":{"status":"failed","lastError":"the stored scene could not be serialized","attempts":3}}',
+			),
+		);
+
+		$this->assertSame( 0, $this->collector()->drain() );
+
+		$recorded = json_decode( (string) $order->get_meta( Keys::META_RENDER_FAILURES ), true );
+
+		$this->assertIsArray( $recorded );
+		$this->assertStringContainsString( 'could not be serialized', (string) $recorded[11] );
+	}
+
+	/**
+	 * ⚠️ **A line already recorded as failed is never asked about again.** The
+	 * cloud answers 404 for a dead job for ever; without this the collector
+	 * re-asks on every pass, which is the loop M26e.6 exists to stop.
+	 */
+	public function test_a_recorded_failure_is_not_asked_about_again(): void {
+		$order = $this->renderedOrder( 81 );
+
+		$order->update_meta_data(
+			Keys::META_RENDER_FAILURES,
+			(string) wp_json_encode( array( 11 => 'already given up on' ) )
+		);
+
+		$GLOBALS['optionia_test_http_calls'] = array();
+
+		$this->collector()->drain();
+
+		$this->assertSame( 0, count( $GLOBALS['optionia_test_http_calls'] ), 'a dead line must not be re-fetched' );
+	}
+
+	/**
+	 * 📌 **A job still rasterising is NOT a failure.** The same 404, a
+	 * different answer — and recording it would abandon a render that was
+	 * about to succeed.
+	 */
+	public function test_a_render_still_preparing_is_not_recorded_as_failed(): void {
+		$order = $this->renderedOrder( 82 );
+
+		$GLOBALS['optionia_test_http_by_url'] = array(
+			'/file'    => array(
+				'status' => 404,
+				'body'   => '{"error":{"code":"NOT_FOUND"}}',
+			),
+			'renders/' => array(
+				'status' => 200,
+				'body'   => '{"data":{"status":"preparing","lastError":null,"attempts":0}}',
+			),
+		);
+
+		$this->collector()->drain();
+
+		$this->assertSame( '', (string) $order->get_meta( Keys::META_RENDER_FAILURES ) );
+	}
+
+	/**
+	 * ⚠️ **A status this build does not recognise is treated as "not yet".** A
+	 * newer cloud adding a state must not make an older plugin abandon a
+	 * render it would have collected.
+	 */
+	public function test_an_unknown_status_is_not_recorded_as_failed(): void {
+		$order = $this->renderedOrder( 83 );
+
+		$GLOBALS['optionia_test_http_by_url'] = array(
+			'/file'    => array(
+				'status' => 404,
+				'body'   => '{"error":{"code":"NOT_FOUND"}}',
+			),
+			'renders/' => array(
+				'status' => 200,
+				'body'   => '{"data":{"status":"quarantined","lastError":null,"attempts":1}}',
+			),
+		);
+
+		$this->collector()->drain();
+
+		$this->assertSame( '', (string) $order->get_meta( Keys::META_RENDER_FAILURES ) );
+	}
+
+	/**
+	 * 🔴 **A file that arrived missing a layer is recorded as incomplete**
+	 * (F173), and still stored — a print file missing one badge beats no file.
+	 */
+	public function test_an_incomplete_file_is_recorded_as_partial(): void {
+		$order = $this->renderedOrder( 84 );
+
+		$GLOBALS['optionia_test_http_by_url'] = array(
+			'/collected' => array(
+				'status' => 200,
+				'body'   => '{"data":{"collected":true}}',
+			),
+			'/file'      => array(
+				'status' => 200,
+				'body'   => self::PNG,
+			),
+			'renders/'   => array(
+				'status' => 200,
+				'body'   => '{"data":{"status":"ready","lastError":"unreachable: https://cdn.test/badge.png","attempts":1}}',
+			),
+		);
+
+		$this->assertSame( 1, $this->collector()->drain() );
+
+		$partial = json_decode( (string) $order->get_meta( Keys::META_RENDER_PARTIAL ), true );
+
+		$this->assertIsArray( $partial );
+		$this->assertStringContainsString( 'unreachable', (string) $partial[11] );
 	}
 }

@@ -96,6 +96,24 @@ final class RenderCollector {
 	private Logger $logger;
 
 	/**
+	 * Renders the cloud gave up on during this pass, render id to reason.
+	 *
+	 * 📌 **Held for the pass rather than returned**, because `fetch_and_store`
+	 * already answers three things — a filename, "not ready", and "retryable" —
+	 * and a fourth return shape would make every caller re-read it.
+	 *
+	 * @var array<string, string>
+	 */
+	private array $failures = array();
+
+	/**
+	 * Renders that arrived incomplete during this pass, render id to reason.
+	 *
+	 * @var array<string, string>
+	 */
+	private array $partials = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Client      $client API client.
@@ -232,12 +250,26 @@ final class RenderCollector {
 			return 0;
 		}
 
-		$renders = $this->decode_map( $order, Keys::META_RENDER_IDS );
-		$files   = $this->decode_map( $order, Keys::META_RENDER_FILES );
-		$stored  = 0;
+		$renders  = $this->decode_map( $order, Keys::META_RENDER_IDS );
+		$files    = $this->decode_map( $order, Keys::META_RENDER_FILES );
+		$failures = $this->decode_map( $order, Keys::META_RENDER_FAILURES );
+		$stored   = 0;
+
+		$this->failures = array();
+		$this->partials = array();
 
 		foreach ( $renders as $item_id => $render_id ) {
 			if ( isset( $files[ $item_id ] ) ) {
+				continue;
+			}
+
+			/*
+			 * 🔴 **A line the cloud gave up on is never asked about again.**
+			 * The cloud answers 404 for a dead job for ever, so without this
+			 * the collector would re-ask on every cron pass — which is exactly
+			 * what it did before M26e.6.
+			 */
+			if ( isset( $failures[ $item_id ] ) ) {
 				continue;
 			}
 
@@ -259,11 +291,47 @@ final class RenderCollector {
 			$files[ $item_id ] = $outcome;
 			++$stored;
 
+			/*
+			 * ⚠️ **A file that arrived may still be missing a layer** (F173).
+			 * The cloud renders what it can rather than failing the job, so
+			 * the reason is asked for once — here, where the file is known to
+			 * exist — and shown beside a download that works.
+			 */
+			$this->note_if_partial( $render_id );
+
 			$this->confirm( $render_id, $order_id );
+		}
+
+		foreach ( $renders as $item_id => $render_id ) {
+			if ( isset( $this->failures[ $render_id ] ) ) {
+				$failures[ $item_id ] = $this->failures[ $render_id ];
+			}
 		}
 
 		if ( $stored > 0 ) {
 			$this->store_files( $order, $files );
+		}
+
+		/*
+		 * ⚠️ **Written whether or not a file was stored.** An order whose only
+		 * designed line failed stores nothing, and that is precisely the order
+		 * a merchant most needs flagged — M26e.6's *"order flagged for manual
+		 * attention"*.
+		 */
+		if ( array() !== $this->failures ) {
+			$this->store_map( $order, Keys::META_RENDER_FAILURES, $failures );
+		}
+
+		if ( array() !== $this->partials ) {
+			$partials = $this->decode_map( $order, Keys::META_RENDER_PARTIAL );
+
+			foreach ( $renders as $item_id => $render_id ) {
+				if ( isset( $this->partials[ $render_id ] ) ) {
+					$partials[ $item_id ] = $this->partials[ $render_id ];
+				}
+			}
+
+			$this->store_map( $order, Keys::META_RENDER_PARTIAL, $partials );
 		}
 
 		return $stored;
@@ -275,6 +343,7 @@ final class RenderCollector {
 	 * @param string $render_id The cloud's render id.
 	 *
 	 * @return string|null Stored filename, '' when not ready, null when retryable.
+	 *                     A permanent failure is recorded via `$this->failures`.
 	 */
 	private function fetch_and_store( string $render_id ): ?string {
 		$response = $this->client->get_binary( '/store/renders/' . rawurlencode( $render_id ) . '/file' );
@@ -283,8 +352,16 @@ final class RenderCollector {
 			$status = $response->status();
 
 			if ( 404 === $status ) {
-				// Not rendered yet, or already collected. Ask again next pass.
-				return '';
+				/*
+				 * 🔴 **A 404 means one of two opposite things**, and guessing
+				 * cost a merchant their print file. The cloud answers it while
+				 * a job is still rasterising AND after it has been given up on
+				 * — so treating every 404 as "ask again next pass" retried a
+				 * dead render on every cron run for ever, and nothing ever
+				 * told the merchant. Asking which is the whole of M26e.6's
+				 * second row.
+				 */
+				return $this->outcome_of( $render_id );
 			}
 
 			return ( 0 === $status || 429 === $status || $status >= 500 ) ? null : '';
@@ -343,6 +420,92 @@ final class RenderCollector {
 		}
 
 		return $name;
+	}
+
+	/**
+	 * Record why a delivered file is incomplete, when it is (F173).
+	 *
+	 * 📌 **Asked only for a file that ARRIVED.** A render that failed is
+	 * handled by `outcome_of`; this is the quieter case — the print file is
+	 * usable and one layer is missing from it.
+	 *
+	 * @param string $render_id The cloud's render id.
+	 */
+	private function note_if_partial( string $render_id ): void {
+		$response = $this->client->get( '/store/renders/' . rawurlencode( $render_id ) );
+
+		if ( ! $response->is_ok() ) {
+			return;
+		}
+
+		$data   = $response->data();
+		$reason = isset( $data['lastError'] ) && is_scalar( $data['lastError'] ) ? (string) $data['lastError'] : '';
+
+		if ( '' === $reason ) {
+			return;
+		}
+
+		$this->partials[ $render_id ] = $reason;
+
+		$this->logger->warning(
+			'A print file arrived incomplete.',
+			array(
+				'render' => $render_id,
+				'reason' => $reason,
+			)
+		);
+	}
+
+	/**
+	 * Ask what became of a render the file route would not serve.
+	 *
+	 * 🔴 **`failed` is the answer that matters.** The cloud gives up after
+	 * `MAX_RENDER_ATTEMPTS` and keeps the source design; the plugin must stop
+	 * asking and tell the merchant, which is M26e.6's second row. Everything
+	 * else means "not yet", and the next pass asks again.
+	 *
+	 * ⚠️ **A status this build does not recognise is treated as "not yet".**
+	 * A newer cloud adding a state must not make an older plugin abandon a
+	 * render it would have collected.
+	 *
+	 * @param string $render_id The cloud's render id.
+	 *
+	 * @return string '' when the next pass should ask again.
+	 */
+	private function outcome_of( string $render_id ): string {
+		$response = $this->client->get( '/store/renders/' . rawurlencode( $render_id ) );
+
+		if ( ! $response->is_ok() ) {
+			/*
+			 * 📌 **An unanswerable status question is not a failure.** The
+			 * render may be fine and the connection momentarily not; the file
+			 * route will be asked again next pass either way.
+			 */
+			return '';
+		}
+
+		$data   = $response->data();
+		$status = isset( $data['status'] ) && is_scalar( $data['status'] ) ? (string) $data['status'] : '';
+
+		if ( 'failed' !== $status ) {
+			return '';
+		}
+
+		$reason = isset( $data['lastError'] ) && is_scalar( $data['lastError'] ) && '' !== (string) $data['lastError']
+			? (string) $data['lastError']
+			: __( 'The cloud could not render this design.', 'optionia' );
+
+		$this->failures[ $render_id ] = $reason;
+
+		$this->logger->warning(
+			'A render was given up on by the cloud.',
+			array(
+				'render' => $render_id,
+				'reason' => $reason,
+			)
+		);
+
+		return '';
 	}
 
 	/**
@@ -410,11 +573,22 @@ final class RenderCollector {
 	 * @param array<int, string> $files Line item id to stored filename.
 	 */
 	private function store_files( object $order, array $files ): void {
+		$this->store_map( $order, Keys::META_RENDER_FILES, $files );
+	}
+
+	/**
+	 * Write one line-keyed map onto the order.
+	 *
+	 * @param object             $order WooCommerce order.
+	 * @param string             $key   Meta key.
+	 * @param array<int, string> $map   Line item id to value.
+	 */
+	private function store_map( object $order, string $key, array $map ): void {
 		if ( ! method_exists( $order, 'update_meta_data' ) || ! method_exists( $order, 'save' ) ) {
 			return;
 		}
 
-		$order->update_meta_data( Keys::META_RENDER_FILES, (string) wp_json_encode( $files ) );
+		$order->update_meta_data( $key, (string) wp_json_encode( $map ) );
 		$order->save();
 	}
 

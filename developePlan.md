@@ -31452,6 +31452,31 @@ slip, as [Gate 2](#-gate-2--feature-complete) already requires for options gener
 | Render permanently fails                  | Order flagged for manual attention; source design retained so it can be re-rendered        |
 | Product image unidentifiable              | Options render, no overlay (M26e.2)                                                        |
 | Design references a deleted asset         | Render without that layer; flag it in the dashboard                                        |
+| A layer image cannot be fetched (F173)    | Render the rest; `lastError` names it; the order screen shows the download AND what is missing |
+
+#### Status — 2026-10-08
+
+✅ **Row 1 — never block a sale.** The checkout hook does one bounded thing
+(note the order) and cron does the asking; AC3 forbids a network call during a
+page render. A cloud outage costs a late print file, never a purchase.
+
+✅ **Row 2 — a permanent failure is flagged for manual attention.** Built in
+M26e.6: `GET /store/renders/:id` reports `failed` with its reason, the collector
+asks when the file route 404s, and `Design\PrintFiles` shows *"Could not be
+generated. The design is kept, so it can be re-rendered"* beside the line.
+
+🔴 **Row 2 was invisible before this, and worse than silent.** A dead-lettered
+job answers 404 on the file route — indistinguishable from *"not rasterised
+yet"* — so the collector retried it on **every cron pass for ever** while the
+order screen showed nothing at all. The line is now skipped once recorded.
+
+✅ **Row 4 as extended by F173 — a layer that cannot be drawn.** The file is
+still delivered, because a print file missing one badge beats no file; the order
+screen shows the download **and** an *Incomplete* row naming what is missing, so
+a merchant does not discover it at the press.
+
+❌ **Row 3 — product image unidentifiable** is blocked on M26e.2: an overlay
+cannot fall back gracefully before it exists.
 
 **Exit:** a customer personalises a design on a real storefront across the
 [Phase 29](#phase-29--compatibility-matrix) themes, buys, and the merchant retrieves a

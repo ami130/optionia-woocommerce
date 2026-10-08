@@ -1755,6 +1755,22 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 			'method' => $args['method'] ?? 'GET',
 		);
 
+		/*
+		 * 🔴 **A per-URL override, because one caller now makes TWO different
+		 * requests.** `Design\RenderCollector` asks the file route and then,
+		 * on a 404, the status route — and a fixture that answered both
+		 * identically could not tell "not rasterised yet" from "given up on",
+		 * which is the distinction M26e.6 exists for.
+		 *
+		 * 📌 **Matched on a substring**, so a test names the route rather than
+		 * reconstructing a full URL with its base and encoded id.
+		 */
+		foreach ( (array) ( $GLOBALS['optionia_test_http_by_url'] ?? array() ) as $needle => $response ) {
+			if ( is_string( $needle ) && '' !== $needle && false !== strpos( (string) $url, $needle ) ) {
+				return $response;
+			}
+		}
+
 		return $GLOBALS['optionia_test_http'];
 	}
 

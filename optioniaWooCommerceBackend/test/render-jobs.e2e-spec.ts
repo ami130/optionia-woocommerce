@@ -470,6 +470,101 @@ describe('render jobs (e2e)', () => {
     });
   });
 
+  // --- What became of a render ---------------------------------------------
+
+  describe('asking what became of a render', () => {
+    const statusOfJob = (token: string, id: string): request.Test =>
+      request(app.getHttpServer())
+        .get(`/v1/store/renders/${id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+    /**
+     * 🔴 **A dead-lettered job answered 404 on the file route**, which the
+     * plugin reads as *"not rasterised yet, ask again next pass"* — so a
+     * permanently failed render was retried on every cron run for ever while
+     * the merchant's order screen showed nothing. M26e.6's second row requires
+     * the opposite.
+     */
+    it('reports a dead-lettered render as failed, with its reason', async () => {
+      const store = await connected();
+      const response = await ask(store.token, payload()).expect(200);
+      const jobId = response.body.data.id as string;
+
+      await dataSource.query(
+        `UPDATE render_jobs SET deadAt = NOW(3), lastError = ?, attempts = 3 WHERE id = ?`,
+        ['the stored scene could not be serialized', jobId],
+      );
+
+      const outcome = await statusOfJob(store.token, jobId).expect(200);
+
+      expect(outcome.body.data.status).toBe('failed');
+      expect(outcome.body.data.lastError).toContain('could not be serialized');
+      expect(outcome.body.data.attempts).toBe(3);
+    });
+
+    it('reports a fresh render as preparing', async () => {
+      const store = await connected();
+      const response = await ask(store.token, payload()).expect(200);
+
+      const outcome = await statusOfJob(store.token, response.body.data.id).expect(200);
+
+      expect(outcome.body.data.status).toBe('preparing');
+      expect(outcome.body.data.lastError).toBeNull();
+    });
+
+    /*
+     * ⚠️ **A `ready` job may be INCOMPLETE, and that is not a contradiction.**
+     * F173: an image the renderer cannot fetch leaves its layer undrawn and
+     * the file is still worth delivering, so the reason rides alongside the
+     * status rather than implying failure by its presence.
+     */
+    it('carries the reason a ready render is incomplete', async () => {
+      const store = await connected();
+      const response = await ask(store.token, payload()).expect(200);
+      const jobId = response.body.data.id as string;
+
+      await dataSource.query(
+        `UPDATE render_jobs
+            SET processedAt = NOW(3), fileUrl = ?, lastError = ?
+          WHERE id = ?`,
+        ['https://shop.test/print.png', 'unreachable: https://cdn.test/badge.png', jobId],
+      );
+
+      const outcome = await statusOfJob(store.token, jobId).expect(200);
+
+      expect(outcome.body.data.status).toBe('ready');
+      expect(outcome.body.data.lastError).toContain('unreachable');
+    });
+
+    /*
+     * 🔴 **A render is a customer's artwork, and so is the fact it failed.**
+     * One store learning another's job ids by the difference between 404 and
+     * 200 is the same enumeration the file route refuses.
+     */
+    it('refuses another store’s render', async () => {
+      const mine = await connected('a');
+      const theirs = await connected('b');
+      const response = await ask(mine.token, payload()).expect(200);
+
+      await statusOfJob(theirs.token, response.body.data.id).expect(404);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const store = await connected();
+      const response = await ask(store.token, payload()).expect(200);
+
+      await request(app.getHttpServer())
+        .get(`/v1/store/renders/${response.body.data.id}`)
+        .expect(401);
+    });
+
+    it('404s an id that does not exist', async () => {
+      const store = await connected();
+
+      await statusOfJob(store.token, '00000000-0000-0000-0000-000000000000').expect(404);
+    });
+  });
+
   // --- Collection ----------------------------------------------------------
 
   describe('collecting a rendered file', () => {

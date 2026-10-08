@@ -425,6 +425,31 @@ final class Keys {
 	 */
 	public const META_RENDER_IDS = '_optionia_render_ids';
 
+	/**
+	 * Renders the cloud gave up on, keyed by line item id (M26e.6).
+	 *
+	 * 🔴 **A dead-lettered job answers 404 on the file route**, which reads as
+	 * *"not rasterised yet, ask again next pass"* — so without this a
+	 * permanently failed render was retried on every cron pass for ever and the
+	 * merchant was never told. M26e.6's second row requires the order to be
+	 * flagged for manual attention.
+	 *
+	 * ⚠️ **The reason is stored, not just the fact.** *"Something went wrong"*
+	 * on an order screen is a support ticket; *"the stored scene could not be
+	 * serialized"* is something a merchant or this project can act on.
+	 */
+	public const META_RENDER_FAILURES = '_optionia_render_failures';
+
+	/**
+	 * Renders that arrived incomplete, keyed by line item id (F173).
+	 *
+	 * ⚠️ **A `ready` job may still be missing a layer.** An image the renderer
+	 * could not fetch leaves its layer undrawn and the file is still worth
+	 * delivering — so this records what is missing beside a download that
+	 * works, rather than implying the file is unusable.
+	 */
+	public const META_RENDER_PARTIAL = '_optionia_render_partial';
+
 	/** Where the collected print file was stored, keyed by line item id. */
 	public const META_RENDER_FILES = '_optionia_render_files';
 

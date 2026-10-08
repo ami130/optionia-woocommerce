@@ -2217,6 +2217,42 @@ preview for a moment; M26e.6's first rule is that artwork never blocks a sale.
 The serializer's own text names internal structure and is logged rather than
 returned.
 
+### `GET /v1/store/renders/:id` **[built]**
+
+What became of one render (M26e.6). Answers `{ status, lastError, attempts }`.
+
+**Auth:** store credential, `StoreTokenGuard` then `SiteMatchGuard`.
+
+🔴 **Without this a merchant could not be told a render FAILED.** The plugin
+inferred everything from the file route, where a dead-lettered job answers
+`404` — indistinguishable from *"not rasterised yet"*. So a permanently failed
+render was retried on every cron pass for ever while the order screen showed
+nothing, and M26e.6's second row — *"order flagged for manual attention; source
+design retained so it can be re-rendered"* — could not be honoured.
+
+⚠️ **`lastError` is meaningful on a `ready` job too.** F173 made a partial
+render possible: an image the renderer cannot fetch leaves its layer undrawn and
+the file is still worth delivering, so the reason rides alongside the status
+rather than implying failure by its presence.
+
+```jsonc
+// Response — a render that was given up on
+{ "data": { "status": "failed",
+            "lastError": "the stored scene could not be serialized: …",
+            "attempts": 3 } }
+
+// Response — a file that arrived, missing one layer
+{ "data": { "status": "ready",
+            "lastError": "unreachable: https://cdn.example/badge.png",
+            "attempts": 1 } }
+```
+
+⚠️ **A `404` covers no such job and another store's job alike**, the same
+four-way silence the file route keeps: a caller able to tell them apart could
+enumerate other stores' job ids.
+
+**Rate limit:** 600 per hour, matching the other render routes.
+
 ### `GET /v1/store/renders/:id/file` **[built]**
 
 The bytes of one rendered print file (M26e.4, [Decision 3a](../../docs/M26-PRINT-PIPELINE-DECISIONS.md)).

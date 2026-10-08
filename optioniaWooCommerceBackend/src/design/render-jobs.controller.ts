@@ -15,7 +15,11 @@ import { CollectedRenderDto } from './dto/collected-render.dto';
 import { PreviewSceneDto } from './dto/preview-scene.dto';
 import { RequestRenderDto } from './dto/request-render.dto';
 import { buildScene, sceneToSvgString } from '@shared/design/design-scene';
-import { RenderJobsService, type AcceptedRender } from './render-jobs.service';
+import {
+  RenderJobsService,
+  type AcceptedRender,
+  type RenderOutcome,
+} from './render-jobs.service';
 
 /**
  * Render requests from a store (M26e.4).
@@ -188,6 +192,53 @@ export class RenderJobsController {
     }
 
     response.send(svg);
+  }
+
+  /**
+   * What became of one render (M26e.6).
+   *
+   * 🔴 **Without this a merchant could not be told a render FAILED.** The
+   * plugin inferred everything from the file route, where a dead-lettered job
+   * answers 404 — indistinguishable from *"not rasterised yet"* — so a
+   * permanently failed render was retried on every cron pass for ever while
+   * the order screen showed nothing at all. M26e.6's second row requires the
+   * opposite: *"order flagged for manual attention; source design retained so
+   * it can be re-rendered"*.
+   *
+   * ⚠️ **`lastError` is meaningful on a `ready` job too.** F173 made a partial
+   * render possible — an image the renderer cannot fetch leaves its layer
+   * undrawn and the file is still worth delivering — so this carries the
+   * reason beside the status rather than implying failure by its presence.
+   *
+   * ## Rate limit
+   *
+   * 600 an hour, matching the other render routes: a cart with several
+   * designed lines asks once per line, and a retry after a lost response is
+   * normal.
+   */
+  @Get('renders/:id')
+  @Throttle({ default: { limit: 600, ttl: 3_600_000 } })
+  @ApiOkResponse({ description: 'What became of this render.' })
+  @ApiErrors(401, 404, 429)
+  async status(@Param('id') id: string): Promise<RenderOutcome> {
+    const storeId = getStoreId();
+
+    if (!storeId) {
+      throw new DomainException(ErrorCode.UNAUTHENTICATED, 'Authentication required.');
+    }
+
+    const outcome = await this.service.statusFor(storeId, id);
+
+    if (outcome === null) {
+      /*
+       * ⚠️ **The same four-way silence the file route keeps** — no such job,
+       * another store's job, and nothing else. A caller able to tell them
+       * apart could enumerate other stores' job ids.
+       */
+      throw new DomainException(ErrorCode.NOT_FOUND, 'No render with that id.');
+    }
+
+    return outcome;
   }
 
   /**

@@ -209,6 +209,77 @@ final class PrintFilesTest extends TestCase {
 		$this->assertStringContainsString( '_wpnonce=', $this->markup() );
 	}
 
+	/* --- failures and partials (M26e.6, F173) ----------------------------- */
+
+	/**
+	 * 🔴 **A render the cloud gave up on is said plainly.** Until M26e.6 a
+	 * permanently failed render showed NOTHING on the order — the collector
+	 * retried it on every cron pass for ever and the merchant had no way to
+	 * know a print file was never coming.
+	 */
+	public function test_a_failed_render_is_reported_with_its_reason(): void {
+		$order        = optionia_test_order( 94 );
+		$order->items = array( 15 => optionia_test_order_item() );
+
+		$order->update_meta_data(
+			Keys::META_RENDER_FAILURES,
+			(string) wp_json_encode( array( 15 => 'the stored scene could not be serialized' ) )
+		);
+
+		$GLOBALS['optionia_test_orders'][94] = $order;
+
+		$markup = $this->markup( 15 );
+
+		$this->assertStringContainsString( 'Could not be generated', $markup );
+		$this->assertStringContainsString( 'could not be serialized', $markup );
+		$this->assertStringNotContainsString( Keys::ARG_PRINT_LINE . '=', $markup );
+	}
+
+	/**
+	 * 📌 **The merchant is told the design is kept**, so "re-render it" is an
+	 * obvious next step rather than a guess.
+	 */
+	public function test_a_failed_render_says_the_design_is_retained(): void {
+		$order        = optionia_test_order( 95 );
+		$order->items = array( 16 => optionia_test_order_item() );
+
+		$order->update_meta_data(
+			Keys::META_RENDER_FAILURES,
+			(string) wp_json_encode( array( 16 => 'boom' ) )
+		);
+
+		$GLOBALS['optionia_test_orders'][95] = $order;
+
+		$this->assertStringContainsString( 're-rendered', $this->markup( 16 ) );
+	}
+
+	/**
+	 * ⚠️ **A file that arrived missing a layer is still offered** (F173). A
+	 * print file missing one badge beats no file at all — what must not happen
+	 * is the merchant discovering it at the press.
+	 */
+	public function test_an_incomplete_file_is_offered_with_a_warning(): void {
+		$order = $this->orderWithPrintFile();
+
+		$order->update_meta_data(
+			Keys::META_RENDER_PARTIAL,
+			(string) wp_json_encode( array( 11 => 'unreachable: https://cdn.test/badge.png' ) )
+		);
+
+		$markup = $this->markup();
+
+		$this->assertStringContainsString( 'Download', $markup );
+		$this->assertStringContainsString( 'Incomplete', $markup );
+		$this->assertStringContainsString( 'unreachable', $markup );
+	}
+
+	/** A complete file carries no warning. */
+	public function test_a_complete_file_carries_no_warning(): void {
+		$this->orderWithPrintFile();
+
+		$this->assertStringNotContainsString( 'Incomplete', $this->markup() );
+	}
+
 	/*
 	--- the download ----------------------------------------------------
 	 *

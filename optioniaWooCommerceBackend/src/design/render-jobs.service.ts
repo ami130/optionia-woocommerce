@@ -162,6 +162,51 @@ export class RenderJobsService {
   }
 
   /**
+   * What became of one render, for the store that owns it (M26e.6).
+   *
+   * 🔴 **Without this a merchant could not be told a render FAILED.** The
+   * plugin inferred everything from the file route, where a dead-lettered job
+   * answers 404 — indistinguishable from "not rasterised yet" — so a
+   * permanently failed render was retried on every cron pass for ever while
+   * the order screen showed nothing. M26e.6's second row requires the
+   * opposite: *"order flagged for manual attention"*.
+   *
+   * ⚠️ **`lastError` travels with the status**, because a `ready` job may be
+   * INCOMPLETE. An image the renderer could not fetch leaves its layer undrawn
+   * rather than failing the job (F173), and the merchant needs the reason
+   * beside the file rather than in a log they will never read.
+   *
+   * 📌 **Null when the job is not this store's, or does not exist** — the same
+   * four-way silence the file route keeps, for the same anti-enumeration
+   * reason.
+   */
+  async statusFor(storeId: string, jobId: string): Promise<RenderOutcome | null> {
+    const [row]: Array<{
+      processedAt: Date | null;
+      deadAt: Date | null;
+      fileUrl: string | null;
+      lastError: string | null;
+      attempts: number;
+    }> = await this.dataSource.query(
+      `SELECT processedAt, deadAt, fileUrl, lastError, attempts
+         FROM render_jobs
+        WHERE id = ? AND storeId = ?
+        LIMIT 1`,
+      [jobId, storeId],
+    );
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      status: statusOf(row),
+      lastError: row.lastError,
+      attempts: Number(row.attempts),
+    };
+  }
+
+  /**
    * The bytes of one rendered job, for the store that owns it.
    *
    * 🔴 **Scoped to the asking store, always.** A render is a customer's
@@ -209,6 +254,20 @@ export class RenderJobsService {
 
     return result.affectedRows > 0;
   }
+}
+
+/**
+ * What became of one render (M26e.6).
+ *
+ * ⚠️ **`lastError` is meaningful on a `ready` job too.** F173 made a partial
+ * render possible: an image the renderer could not fetch leaves its layer
+ * undrawn and the file is still worth delivering, so the reason rides alongside
+ * the status rather than implying failure.
+ */
+export interface RenderOutcome {
+  readonly status: RenderStatus;
+  readonly lastError: string | null;
+  readonly attempts: number;
 }
 
 /** A rendered file, ready for the plugin to collect. */
