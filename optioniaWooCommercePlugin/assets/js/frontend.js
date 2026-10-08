@@ -1882,6 +1882,18 @@
 		 */
 		var frame = image.parentNode;
 
+		/*
+		 * ✏️ **Equivalent mutant: deleting this changes nothing.** `image` comes
+		 * from `wrapper.querySelectorAll( 'img' )`, so it is by construction a
+		 * descendant of the wrapper and always has a parent. Verified by
+		 * mutation — removing the guard leaves all 200 unit tests and all 5
+		 * browser tests green, and no test can be written that reaches it
+		 * without calling `previewHost` with something `productImage` would
+		 * never return.
+		 *
+		 * Kept because it states the precondition `positionOver` relies on,
+		 * which the call above only implies.
+		 */
 		if ( ! frame ) {
 			return null;
 		}
@@ -2100,6 +2112,15 @@
 	 * an image in never had a preview to lose.
 	 */
 	function watchGallery( root ) {
+		/*
+		 * ✏️ **Unkilled by mutation, and deliberately kept.** Every engine the
+		 * tests run on has `MutationObserver`, so no test can reach this — but
+		 * unlike the frame guard below it is not logically unreachable: it is a
+		 * feature test for a browser nobody here has. Without it such a browser
+		 * throws on the line after, taking the whole runtime down and with it
+		 * the option fields a customer needs to buy. The redraw is the feature
+		 * that degrades; the form is not.
+		 */
 		if ( 'undefined' === typeof MutationObserver ) {
 			return;
 		}
@@ -2140,6 +2161,14 @@
 		 * The gallery as a whole, not the image's own parent: a swap replaces
 		 * that parent, and an observer bound to a removed node stops seeing
 		 * anything.
+		 */
+		/*
+		 * ✏️ **The `||` branch is unkilled by mutation.** Both WooCommerce
+		 * classes are present on every theme tested, so `closest` always
+		 * answers — but a theme that renames its gallery wrapper would
+		 * otherwise observe nothing and lose the redraw entirely. Falling back
+		 * to the image's own parent still catches a swap of the image itself,
+		 * which is the common case.
 		 */
 		var gallery = image.closest( '.woocommerce-product-gallery, .images' ) || image.parentNode;
 
@@ -2184,6 +2213,12 @@
 	function watchForGallery( root ) {
 		var body = root.ownerDocument.body;
 
+		/*
+		 * ✏️ **Unkilled: a document holding an options block always has a
+		 * body.** Kept because `init()` may be called from `DOMContentLoaded`
+		 * on a document still being written, and `observe( null )` throws —
+		 * which would take the runtime down rather than skip a redraw.
+		 */
 		if ( ! body ) {
 			return;
 		}
@@ -2247,7 +2282,31 @@
 	/*
 	 * 🔴 **Not on a real storefront.** `SCRIPT_DEBUG` is false on every
 	 * production install, so a shop never carries this surface; a developer
-	 * running the browser suite does.
+	 * running the browser suite does. Re-verified with the flag off: the
+	 * surface is absent, the preview still draws, one host, no errors.
+	 *
+	 * ⚠️ **It has grown, and growth is the thing to watch.** It began as one
+	 * read-only query and is now four, two of which mutate the page and bind
+	 * observers. Each addition was the cheapest way to test something — and
+	 * "cheapest way to test something" is how a test hook becomes an API.
+	 *
+	 * 📌 **The rule: nothing joins this unless a test needs it AND the defect
+	 * it covers is invisible from outside.** That is what earned the last
+	 * three their place:
+	 *
+	 *   productImage   the finder itself — 12 browser refs, 5 unit
+	 *   previewHost    host ownership per block; reachable only through
+	 *                  `drawPreview`, which needs settings, a scene and the
+	 *                  network before it runs — 11 unit refs
+	 *   watchGallery   observer lifecycle: one per block, replaced not
+	 *                  stacked. A browser test can see the preview come back;
+	 *                  it cannot see whether a second observer was added — 6
+	 *                  unit refs
+	 *   stateFor       the per-block record those assertions read — 5 refs
+	 *
+	 * ✏️ **Anything that can be tested WITHOUT being exposed must be.** The
+	 * unit suite loads this file into jsdom and drives it through the DOM; the
+	 * closure is only opened where that genuinely cannot reach.
 	 */
 	if ( settings.debug ) {
 		window.optioniaTest = {

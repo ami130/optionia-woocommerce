@@ -66,3 +66,20 @@ Thumbs.db
 # repository's history — and it is kept, rather than deleted, so the decision to
 # retire them is reversible by anyone who later disagrees with it.
 /.archive/
+
+# ---------------------------------------------------------------------------
+# Compiled output beside its TypeScript source (added 2026-10-08)
+#
+# 🔴 **A gate run left 18 untracked build artifacts in `shared/design/`** —
+# `.js`, `.d.ts` and `.js.map` emitted next to the `.ts` files that are the real
+# source. Nothing ignored them, so `git add -A` would have committed a second,
+# silently-stale copy of the shared geometry the plugin, dashboard and backend
+# all read from.
+#
+# ⚠️ **Scoped to `shared/`, deliberately.** Each sub-project has its own
+# ignore rules for its own build directory; this covers the one tree that is
+# compiled in place rather than into a `dist/`.
+# ---------------------------------------------------------------------------
+shared/**/*.js
+shared/**/*.js.map
+shared/**/*.d.ts

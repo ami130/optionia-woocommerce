@@ -78,6 +78,20 @@ export default [
   },
 
   {
+    /*
+     * 📌 **The build files lint too.** `vitest.config.js` was the one JavaScript
+     * file in this plugin ESLint could not see — and it is the file that decides
+     * what the test suite runs, so a mistake there silently shrinks the suite.
+     */
+    files: [ '*.config.js', '*.config.mjs' ],
+    ...js.configs.recommended,
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+    },
+  },
+
+  {
     /* The test suite is modern JavaScript run by vitest, not shipped code. */
     files: [ 'tests/js/**/*.js' ],
     ...js.configs.recommended,

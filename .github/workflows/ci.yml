@@ -1,6 +1,7 @@
 name: Cross-repo gates
 
-# The 17 cross-repository gates, on every push.
+# The cross-repository gates, on every push. There are 35 today; `bin/check.sh`
+# discovers them, so this comment does not need updating when one is added.
 #
 # ✅ **Live since 2026-09-22.** This ran nothing for its first day: the four
 # repositories had no remote, and the job tried to check out three sub-repos
@@ -24,7 +25,7 @@ on:
 
 jobs:
   gates:
-    name: 17 cross-repo gates
+    name: cross-repo gates
     runs-on: ubuntu-latest
 
     steps:
@@ -32,13 +33,67 @@ jobs:
         uses: actions/checkout@v4
 
 
-      # 📌 **No Node, no PHP, no Composer.** Verified 2026-09-22 by running the
-      # suite under `env -i` with only /usr/bin and /bin on PATH: all 17 gates
-      # passed. They need shell, awk, sed, grep and python3.
+      # ✏️ **This used to say "No Node, no PHP, no Composer", verified
+      # 2026-09-22.** It was true then and false by M26e: the job passed in ~20
+      # seconds while SKIPPING seven real checks — both projects' lint,
+      # DATABASE.md, and four backend gates — because each skips when its
+      # `node_modules/` is absent. A green tick for checks that never ran is
+      # worse than a red one, and it had been green that way for weeks.
       #
-      # ⚠️ **That list is enforced, not assumed.** `bin/check.sh` refuses to run
-      # if any of the four is missing (F51) — so this job fails with a named
-      # interpreter rather than with a gate failing for the wrong reason. Adding
-      # setup steps "just in case" would hide the day one grows a real dependency.
+      # 🔴 **So the toolchain is installed and the gates actually run.** The job
+      # is slower than 20 seconds; that was the price of the result meaning
+      # something. `bin/check.sh` still refuses to start without shell, awk, sed,
+      # grep and python3 (F51), so a missing interpreter fails by name.
+      # 📌 **24, matching `backend.yml`.** The backend is the project whose
+      # build and typecheck these gates invoke, so its runtime is the one that
+      # has to agree. A bare '22' was tried first and rejected: a transitive
+      # dependency in this tree declares `>=20.19 <22 || >=22.12`, which a
+      # major-only selector can resolve inside the excluded range.
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # ⚠️ **`npm ci` everywhere except the dashboard**, which uses `npm install`
+      # for the reason `dashboard.yml` records at length: `@emnapi/*` are
+      # Linux-only optional dependencies of `@img/sharp-wasm32`, a macOS-written
+      # lockfile never resolves that branch, and `npm ci` refuses with EUSAGE.
+      # Regenerating the lockfile was tried and made it worse. Matching that
+      # workflow rather than inventing a variant — a `npm ci || npm install`
+      # fallback here would attempt a command known to always fail.
+      - name: Backend dependencies
+        run: npm ci
+        working-directory: optioniaWooCommerceBackend
+
+      - name: Dashboard dependencies
+        run: npm install
+        working-directory: optioniaWooCommerceFrontend
+
+      - name: Plugin JavaScript dependencies
+        run: npm ci
+        working-directory: optioniaWooCommercePlugin
+
+      # ✏️ **The first version of this step list installed Node and stopped**,
+      # which fixed the JavaScript half of the very problem this job exists to
+      # solve and left the PHP half exactly as it was: `check-plugin-tests.sh`
+      # skips when `vendor/` is absent, so 1974 plugin tests reported success in
+      # CI having never run.
+      #
+      # 📌 **8.4, matching `plugin.yml`** — the only version the test tooling
+      # resolves on, since PHPUnit 9.6's dependencies now require PHP 8. The
+      # 7.4 floor the plugin header promises is parsed by that workflow's own
+      # `floor` job and is not this job's business.
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+
+      # Dev dependencies included, unlike the `floor` job: PHPUnit is the point.
+      - name: Plugin PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+        working-directory: optioniaWooCommercePlugin
+
       - name: All cross-repo gates
         run: bash bin/check.sh

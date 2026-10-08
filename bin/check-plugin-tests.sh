@@ -64,10 +64,23 @@ else
   fi
 fi
 
+# 🔴 **Skip for a developer; FAIL in CI.** The same rule the JavaScript suite
+# below follows, and for the same measured reason: without it this gate reported
+# success while 1974 tests did not run. `ci.yml` installs PHP and Composer so the
+# skip never fires there — and if that step is ever dropped, this says so rather
+# than going quietly green.
 if [ -z "$PHP" ]; then
-  printf '\033[33mskip\033[0m  the plugin suite: no PHP interpreter found\n'
+  if [ -n "${CI:-}" ]; then
+    fail "no PHP interpreter in CI — the plugin suite did not run (add: setup-php)"
+  else
+    printf '\033[33mskip\033[0m  the plugin suite: no PHP interpreter found\n'
+  fi
 elif [ ! -f "$PLUGIN/vendor/bin/phpunit" ]; then
-  printf '\033[33mskip\033[0m  the plugin suite: dependencies not installed\n'
+  if [ -n "${CI:-}" ]; then
+    fail "vendor/ absent in CI — the plugin suite did not run (add: composer install)"
+  else
+    printf '\033[33mskip\033[0m  the plugin suite: dependencies not installed\n'
+  fi
 else
   if ( cd "$PLUGIN" && "$PHP" vendor/bin/phpunit --testsuite unit ) >/tmp/check-plugin-tests.log 2>&1; then
     COUNT=$(grep -aoE "OK \([0-9]+ tests, [0-9]+ assertions\)" /tmp/check-plugin-tests.log | head -1 || true)

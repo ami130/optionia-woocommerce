@@ -176,3 +176,120 @@ describe('watchGallery', () => {
     expect(state.observer, 'and handed over to the gallery watcher').toBeTruthy();
   });
 });
+
+/**
+ * How the overlay sits on the image (M26e.2, M26e.4).
+ *
+ * 🔴 **Written because mutation testing found every one of these unguarded.**
+ * A 195-test green run survived deleting the positioned-ancestor promotion,
+ * the click-through rule, the stale-host removal and the missing-frame guard.
+ * Each was defensive code nothing exercised — and an audit nearly recorded
+ * three of them as "cannot be tested here" before jsdom was asked.
+ */
+describe('positioning the overlay', () => {
+  const PAGE = `
+    <div class="product post-14">
+      <div class="woocommerce-product-gallery">
+        <div class="woocommerce-product-gallery__image"><img src="shirt.png"></div>
+      </div>
+      <div data-optionia="options" data-optionia-product="14"></div>
+    </div>
+  `;
+
+  async function mounted(html = PAGE) {
+    const loaded = await loadStorefront(html, { debug: true });
+
+    loaded.document.querySelectorAll('img').forEach((image) => size(image, 400, 400));
+
+    return loaded;
+  }
+
+  /**
+   * 🔴 **An absolutely positioned child needs a positioned ancestor.** Without
+   * this the overlay escapes the gallery and lands relative to the page, which
+   * on a long product page puts the design somewhere near the header.
+   *
+   * 📌 **Unreachable on the project's own test theme**, which is why no browser
+   * test covers it: Storefront's `woocommerce-product-gallery__image` is
+   * already `relative` — measured. A theme that is not is exactly who this is
+   * for.
+   */
+  it('promotes a static frame so the overlay can anchor to it', async () => {
+    const { window, document, root } = await mounted();
+    const frame = document.querySelector('.woocommerce-product-gallery__image');
+
+    expect(
+      window.getComputedStyle(frame).position,
+      'the fixture must start static, or this proves nothing'
+    ).toBe('static');
+
+    window.optioniaTest.previewHost(root);
+
+    expect(window.getComputedStyle(frame).position).toBe('relative');
+  });
+
+  /**
+   * ⚠️ **A frame the theme already positioned is left alone.** Overwriting an
+   * `absolute` or `sticky` gallery would move the theme's own layout.
+   */
+  it('leaves a frame the theme already positioned', async () => {
+    const { window, document, root } = await mounted();
+    const frame = document.querySelector('.woocommerce-product-gallery__image');
+
+    frame.style.position = 'absolute';
+
+    window.optioniaTest.previewHost(root);
+
+    expect(window.getComputedStyle(frame).position).toBe('absolute');
+  });
+
+  /**
+   * 🔴 **Clicks belong to the theme.** The gallery's lightbox and zoom are
+   * features the merchant already had, and an overlay that swallowed their
+   * clicks would break them while looking like it worked.
+   */
+  it('lets clicks through to the gallery beneath', async () => {
+    const { window, root } = await mounted();
+    const host = window.optioniaTest.previewHost(root);
+
+    expect(window.getComputedStyle(host).pointerEvents).toBe('none');
+  });
+
+  /**
+   * ⚠️ **A host left behind when the image moves is a second overlay.** The
+   * stale one is removed rather than orphaned.
+   */
+  it('removes the old host when the image is replaced', async () => {
+    const { window, document, root } = await mounted();
+
+    window.optioniaTest.previewHost(root);
+
+    expect(document.querySelectorAll('[data-optionia-preview]').length).toBe(1);
+
+    /*
+     * 🔴 **The image moves to a NEW frame; the old frame survives.** This is
+     * the case the guard is for, and an earlier version of this test missed it:
+     * replacing the whole frame takes the host away with it, so the removal
+     * never ran and deleting it left the suite green. A gallery that reorders
+     * its slides, or moves the active image into a zoom container, leaves the
+     * old frame — and the old host — exactly where they were.
+     */
+    const gallery = document.querySelector('.woocommerce-product-gallery');
+    const newFrame = document.createElement('div');
+
+    newFrame.className = 'woocommerce-product-gallery__image';
+    newFrame.innerHTML = '<img src="other.png">';
+    gallery.appendChild(newFrame);
+
+    /* The new image is larger, so the finder prefers it. */
+    size(document.querySelector('img[src="shirt.png"]'), 100, 100);
+    size(newFrame.querySelector('img'), 400, 400);
+
+    window.optioniaTest.previewHost(root);
+
+    expect(
+      document.querySelectorAll('[data-optionia-preview]').length,
+      'one overlay, not two — the stale host must be removed, not orphaned'
+    ).toBe(1);
+  });
+});

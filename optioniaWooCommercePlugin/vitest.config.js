@@ -46,9 +46,22 @@ export default defineConfig({
      *
      * ✏️ **Mutation testing is this suite's coverage measure instead**, and it
      * is the stronger one: it found seven untested paths behind a green 47-test
-     * run, including a guard whose own dedicated test never exercised it. Every
-     * guard in `frontend.js` has been mutation-probed, and the two that cannot
-     * be killed are documented in place as equivalent mutants.
+     * run, including a guard whose own dedicated test never exercised it.
+     *
+     * 🔴 **An invariant here went stale once, and that is the thing to avoid.**
+     * This note used to read "every guard in `frontend.js` has been
+     * mutation-probed". It was true when written and false three commits later:
+     * M26e.2–M26e.4 added eleven guards and probed six, so five survived behind
+     * a green 195-test run — including the positioned-ancestor promotion the
+     * whole overlay depends on. A claim like that is worse than none, because
+     * the next person trusts it instead of re-measuring.
+     *
+     * 📌 **So the claim is now about the practice, not a completed state.**
+     * Every guard added to `frontend.js` is mutation-probed when it is added,
+     * and a survivor is either given a test or documented in place with the
+     * reason it cannot be killed — `✏️` marks each one. Whether that held for
+     * the most recent change is answered by re-running the probe, not by
+     * reading this comment.
      */
   },
 });
