@@ -182,3 +182,28 @@ export function seedConnectedStore(email: string, storeUrl = 'https://usability.
     { stdio: ['ignore', 'ignore', 'ignore'] },
   );
 }
+
+/**
+ * Serve the plugin's own assets fresh, never from the browser cache.
+ *
+ * 📌 **A precaution against a mutation check answering from the wrong build.**
+ * WordPress versions assets with `?ver=`, which only moves on a release, so
+ * throughout development the URL is byte-for-byte identical while the file
+ * behind it changes freely — a browser that caches it would answer a "does
+ * this test bite?" check with the PREVIOUS build, which is the worst failure a
+ * test can have: reporting on something other than its subject.
+ *
+ * ⚠️ **Added on reasoning, not on an observed failure.** One suspected
+ * instance was investigated and proved to be a race inside the test instead.
+ */
+export async function freshPluginAssets( page: import( '@playwright/test' ).Page ): Promise<void> {
+  await page.route( '**/wp-content/plugins/**/*.js*', async ( route ) => {
+    const response = await route.fetch();
+
+    await route.fulfill( {
+      response,
+      body: await response.text(),
+      headers: { ...response.headers(), 'cache-control': 'no-store' },
+    } );
+  } );
+}

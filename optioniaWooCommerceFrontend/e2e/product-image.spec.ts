@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { freshPluginAssets } from './fixtures';
+
 /**
  * Finding the product's own image, on a real theme (M26e.2).
  *
@@ -91,6 +93,7 @@ async function enlargeARelatedTile( page: import( '@playwright/test' ).Page ) {
 
 test.describe( 'finding the product image', () => {
   test( 'the page really does carry other products’ images', async ( { page } ) => {
+    await freshPluginAssets( page );
     await page.goto( PRODUCT, { waitUntil: 'domcontentloaded' } );
 
     /*
@@ -125,6 +128,7 @@ test.describe( 'finding the product image', () => {
   } );
 
   test( 'picks the gallery image, never a related or pagination tile', async ( { page } ) => {
+    await freshPluginAssets( page );
     await page.goto( PRODUCT, { waitUntil: 'domcontentloaded' } );
     await enlargeARelatedTile( page );
 
@@ -143,6 +147,7 @@ test.describe( 'finding the product image', () => {
   } );
 
   test( 'draws nothing where no options block anchors it', async ( { page } ) => {
+    await freshPluginAssets( page );
     await page.goto( STOREFRONT + '/?post_type=product', { waitUntil: 'domcontentloaded' } );
 
     /*
@@ -150,5 +155,178 @@ test.describe( 'finding the product image', () => {
      * "the" product, so there is nothing to anchor on and nothing is drawn.
      */
     expect( await page.locator( '[data-optionia="options"]' ).count() ).toBe( 0 );
+  } );
+} );
+
+/**
+ * Replaces the gallery image the way a variation change does.
+ *
+ * 🔴 **Measured, not imagined.** WooCommerce does not mutate the `src` of the
+ * existing image — it replaces the image element AND its
+ * `woocommerce-product-gallery__image` wrapper. That destroys the node the
+ * preview is mounted in, which is why the preview vanished entirely until a
+ * watcher was added. A test that only changed `src` would miss this.
+ */
+async function swapGalleryImage( page: import( '@playwright/test' ).Page ) {
+  await page.evaluate( () => {
+    const root = document.querySelector( '[data-optionia="options"]' );
+
+    if ( ! root ) {
+      return;
+    }
+
+    const api = ( window as unknown as {
+      optioniaTest?: { productImage?: ( root: Element ) => HTMLImageElement | null };
+    } ).optioniaTest;
+
+    const image = api?.productImage?.( root );
+    const wrapper = image?.parentElement;
+
+    if ( ! image || ! wrapper?.parentNode ) {
+      return;
+    }
+
+    const replacement = document.createElement( 'div' );
+    replacement.className = 'woocommerce-product-gallery__image';
+
+    const swapped = document.createElement( 'img' );
+    swapped.className = 'wp-post-image';
+    swapped.src = image.src;
+    /* A different size, so "the preview followed" cannot pass by coincidence. */
+    swapped.style.width = '600px';
+    swapped.style.height = '600px';
+
+    replacement.appendChild( swapped );
+    wrapper.parentNode.replaceChild( replacement, wrapper );
+  } );
+}
+
+test.describe( 'the preview survives the theme changing the image (M26e.3)', () => {
+  test( 'redraws onto the new image after a variation swap', async ( { page } ) => {
+    await freshPluginAssets( page );
+    await page.goto( PRODUCT, { waitUntil: 'networkidle' } );
+
+    await page.locator( '[data-optionia="options"] input[type=radio]' )
+      .first().click( { force: true } ).catch( () => {} );
+
+    /*
+     * The preview must exist BEFORE the swap, or the assertion after it would
+     * pass against a page that never drew anything.
+     */
+    await expect(
+      page.locator( '[data-optionia-preview] svg' ),
+      'a design must be on screen before the swap'
+    ).toBeVisible( { timeout: 15000 } );
+
+    await swapGalleryImage( page );
+
+    /*
+     * 🔴 **This is the whole point.** Without the gallery watcher the host is
+     * destroyed with its wrapper and nothing redraws it: measured on a real
+     * page, the design disappeared and never returned, because a variation
+     * change fires no event inside the options block.
+     */
+    await expect(
+      page.locator( '[data-optionia-preview] svg' ),
+      'the design must come back after the theme replaces the image'
+    ).toBeVisible( { timeout: 15000 } );
+
+    const landed = await page.evaluate( () => {
+      const host = document.querySelector( '[data-optionia-preview]' );
+      const root = document.querySelector( '[data-optionia="options"]' );
+      const api = ( window as unknown as {
+        optioniaTest?: { productImage?: ( root: Element ) => HTMLImageElement | null };
+      } ).optioniaTest;
+      const image = root ? api?.productImage?.( root ) : null;
+
+      if ( ! host || ! image ) {
+        return null;
+      }
+
+      const h = host.getBoundingClientRect();
+      const i = image.getBoundingClientRect();
+
+      return {
+        sameParent: host.parentElement === image.parentElement,
+        aligned: Math.abs( h.left - i.left ) < 3 && Math.abs( h.width - i.width ) < 3,
+        width: Math.round( i.width ),
+      };
+    } );
+
+    expect( landed, 'both the host and the image must be findable' ).not.toBeNull();
+
+    /* ⚠️ On the NEW element, not merely still on screen somewhere. */
+    expect( landed?.sameParent, 'the preview must move to the new image' ).toBe( true );
+    expect( landed?.aligned, 'the preview must track the new image’s box' ).toBe( true );
+  } );
+
+  test( 'draws once a gallery that was absent at first paint arrives', async ( { page } ) => {
+    await freshPluginAssets( page );
+    /*
+     * 🔴 **Hidden before the plugin binds**, so `productImage()` finds nothing
+     * at first paint and the gallery watcher has no element to observe. A
+     * lazy-loaded or slider-built gallery is exactly this shape.
+     */
+    await page.addInitScript( () => {
+      document.addEventListener(
+        'DOMContentLoaded',
+        () => {
+          const gallery = document.querySelector< HTMLElement >( '.woocommerce-product-gallery' );
+
+          if ( gallery ) {
+            gallery.setAttribute( 'data-hidden-by-test', '1' );
+            gallery.style.display = 'none';
+          }
+        },
+        { capture: true }
+      );
+    } );
+
+    await page.goto( PRODUCT, { waitUntil: 'networkidle' } );
+
+    /*
+     * ⚠️ **The design is chosen while the gallery is still hidden.** Without
+     * this the test proves nothing: the default selection carries no design,
+     * so there would be no preview to draw and the assertion below would be
+     * measuring an empty page rather than the watcher.
+     */
+    await page.locator( '[data-optionia="options"] input[type=radio]' )
+      .first().click( { force: true } ).catch( () => {} );
+
+    /*
+     * 🔴 **The click's own draw must finish BEFORE the gallery is revealed.**
+     * `drawPreview` is debounced and then waits on the network, so revealing
+     * immediately leaves that draw in flight — it lands after the reveal and
+     * paints the preview, which looks exactly like the watcher working.
+     * Measured: with no settle here the test passed with the watcher deleted.
+     *
+     * A fixed wait is used deliberately. The condition to wait for is "nothing
+     * happened", and there is no event for that; the value is several times the
+     * debounce plus a slow local round trip.
+     */
+    await page.waitForTimeout( 4000 );
+
+    await expect(
+      page.locator( '[data-optionia-preview]' ),
+      'no identifiable image means no overlay, which is the fail-closed half'
+    ).toHaveCount( 0 );
+
+    await page.evaluate( () => {
+      const gallery = document.querySelector< HTMLElement >( '[data-hidden-by-test]' );
+
+      if ( gallery ) {
+        gallery.style.display = '';
+      }
+    } );
+
+    /*
+     * 🔴 **Nothing further is clicked.** The redraw must come from watching the
+     * document, because a customer who has already chosen their options has no
+     * reason to touch them again.
+     */
+    await expect(
+      page.locator( '[data-optionia-preview] svg' ),
+      'the design must appear once the gallery exists'
+    ).toBeVisible( { timeout: 15000 } );
   } );
 } );

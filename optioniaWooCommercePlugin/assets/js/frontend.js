@@ -950,6 +950,16 @@
 		 */
 		schedulePreview( root );
 
+		/*
+		 * 🔴 **The theme can take the preview away, and nothing told us.**
+		 * Measured on a real page: a variation change replaces the gallery's
+		 * image element *and its wrapper*, which destroys the host the preview
+		 * lives in. The customer's design vanished and never came back,
+		 * because `drawPreview` only runs on a change inside the options
+		 * block and a variation swap fires nothing there.
+		 */
+		watchGallery( root );
+
 		// Correct on first paint for a pre-filled default, without waiting for
 		// the customer to type.
 		var counted = root.querySelectorAll( 'input[data-optionia-max]' );
@@ -1924,6 +1934,108 @@
 		previewTimer = setTimeout( function () {
 			drawPreview( root );
 		}, PREVIEW_DEBOUNCE_MS );
+	}
+
+	/**
+	 * Redraw when the theme replaces the product image.
+	 *
+	 * 📌 **The DOM is watched rather than the theme's events.** WooCommerce
+	 * emits `show_variation`, Storefront's gallery emits its own, a block theme
+	 * emits neither, and each is a private contract that can change. What every
+	 * one of them must do is swap the image element — so that is what is
+	 * observed, and the same code covers variations, gallery clicks and themes
+	 * nobody here has seen.
+	 *
+	 * ⚠️ **Does nothing where there is no gallery.** A theme this cannot find
+	 * an image in never had a preview to lose.
+	 */
+	function watchGallery( root ) {
+		if ( 'undefined' === typeof MutationObserver ) {
+			return;
+		}
+
+		var image = productImage( root );
+
+		/*
+		 * 🔴 **No image yet is not "no gallery ever".** Measured: with the
+		 * gallery hidden at first paint the watcher used to return here, so
+		 * when the gallery arrived a moment later NOTHING was observing and no
+		 * preview was ever drawn — the customer saw an empty product unless
+		 * they happened to touch an option again. A lazy-loading or
+		 * slider-driven gallery is exactly this shape, so the document is
+		 * watched until an image exists.
+		 */
+		if ( ! image ) {
+			watchForGallery( root );
+
+			return;
+		}
+
+		/*
+		 * The gallery as a whole, not the image's own parent: a swap replaces
+		 * that parent, and an observer bound to a removed node stops seeing
+		 * anything.
+		 */
+		var gallery = image.closest( '.woocommerce-product-gallery, .images' ) || image.parentNode;
+
+		if ( ! gallery ) {
+			return;
+		}
+
+		var observer = new MutationObserver( function () {
+			/*
+			 * 🔴 **Only when the preview is actually gone or misplaced.**
+			 * Redrawing on every mutation would fire on the plugin's OWN
+			 * insertion of the host and loop forever.
+			 */
+			var host = root.ownerDocument.querySelector( '[data-optionia-preview]' );
+			var current = productImage( root );
+
+			if ( ! current ) {
+				return;
+			}
+
+			if ( host && host.parentNode === current.parentNode ) {
+				return;
+			}
+
+			schedulePreview( root );
+		} );
+
+		observer.observe( gallery, { childList: true, subtree: true } );
+	}
+
+	/**
+	 * Wait for a gallery that is not on the page yet.
+	 *
+	 * ⚠️ **Stops as soon as it finds one.** A document-wide observer is the
+	 * blunt instrument here, so it disconnects the moment the real gallery
+	 * watcher can take over — it exists to bridge a gap, not to run for the
+	 * life of the page.
+	 */
+	function watchForGallery( root ) {
+		var body = root.ownerDocument.body;
+
+		if ( ! body ) {
+			return;
+		}
+
+		var waiting = new MutationObserver( function () {
+			if ( ! productImage( root ) ) {
+				return;
+			}
+
+			waiting.disconnect();
+
+			/*
+			 * Bind the real watcher to the gallery that has now arrived, then
+			 * draw — the customer has touched nothing, so nothing else will.
+			 */
+			watchGallery( root );
+			schedulePreview( root );
+		} );
+
+		waiting.observe( body, { childList: true, subtree: true, attributes: true, attributeFilter: [ 'style', 'class' ] } );
 	}
 
 	function init() {

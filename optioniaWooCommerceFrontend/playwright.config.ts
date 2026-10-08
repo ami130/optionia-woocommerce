@@ -64,6 +64,20 @@ export default defineConfig({
      * setting must go first.
      */
     ignoreHTTPSErrors: true,
+
+    /*
+     * ⚠️ **The plugin's assets are served `no-store` per test**, via
+     * `freshPluginAssets()` in `e2e/fixtures.ts` — Playwright has no
+     * context-level switch for it, so the route handler re-fetches and
+     * re-serves with the header.
+     *
+     * 📌 **A precaution, not a fix for an observed failure.** WordPress busts
+     * its asset cache with `?ver=`, which only moves on a release, so in
+     * development the URL is identical while the bytes behind it change
+     * freely. That is a real way for a browser test to answer from a previous
+     * build; it has not been seen to happen here, and a suspected instance
+     * turned out to be a race in the test rather than a stale asset.
+     */
   },
 
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
