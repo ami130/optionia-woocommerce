@@ -1559,12 +1559,193 @@
 		return scene;
 	}
 
-	/** Where the preview is drawn, created on first use. */
-	function previewHost( root ) {
-		var existing = root.querySelector( '[data-optionia-preview]' );
+	/*
+	 * ---------------------------------------------------------------------
+	 * Finding the product's own image (M26e.2)
+	 * ---------------------------------------------------------------------
+	 *
+	 * 🔴 **A design on the wrong product is worse than no preview**, which is
+	 * M26e.2's own words and the reason every branch here fails CLOSED.
+	 *
+	 * 📌 **Measured on a stock Storefront product page, not assumed.** FIVE
+	 * images on `/product/spider-man/` carry a product thumbnail class: one real
+	 * and four impostors — three "you may also like" tiles and one prev/next
+	 * pagination thumbnail.
+	 *
+	 * 🔴 **All five sit INSIDE the viewed product's own `post-14` element.**
+	 * This was the trap: scoping to the `post-<id>` wrapper looks like an
+	 * identity check and filters nothing, because WooCommerce nests
+	 * `section.related > ul.products > li.post-27` and
+	 * `nav.storefront-product-pagination` within the wrapper. A wrapper-scoped
+	 * largest-image rule agrees with the right answer only while the real image
+	 * happens to be the biggest — it is a coincidence, not a test.
+	 *
+	 * ⚠️ **So attribution is structural.** The wrapper narrows the search; an
+	 * image is then rejected when it sits in a related/upsell/pagination
+	 * container, under a nested `post-<id>` belonging to another product, or
+	 * under a link that leaves for another page. What survives is the gallery's.
+	 */
 
-		if ( existing ) {
+	/**
+	 * The image this block's design should be drawn over, or null.
+	 *
+	 * 🔴 **Null is a correct and common answer.** A theme that does not use
+	 * WooCommerce's conventions, a product with no image, a page whose markup
+	 * this cannot read with confidence — each gets no overlay rather than the
+	 * wrong one.
+	 */
+	function productImage( root ) {
+		var productId = root.getAttribute( 'data-optionia-product' ) || '';
+
+		if ( ! productId ) {
+			return null;
+		}
+
+		/*
+		 * ⚠️ **`closest`, so the wrapper must CONTAIN the options root.** A
+		 * `querySelector` for the same class would match a related product's
+		 * wrapper elsewhere on the page.
+		 */
+		var wrapper = root.closest( '.post-' + productId );
+
+		if ( ! wrapper ) {
+			return null;
+		}
+
+		/*
+		 * 🔴 **The wrapper is NOT a filter — measured on a real page.** On
+		 * Storefront, `post-14` contains the related products and the prev/next
+		 * pagination *inside itself*, so all five of the page's product images
+		 * are within it. Scoping to the wrapper and taking the largest image is
+		 * therefore a largest-on-page rule in disguise: it agrees with the right
+		 * answer only while the real image happens to be the biggest.
+		 */
+		var images = wrapper.querySelectorAll( 'img' );
+		var best = null;
+		var bestArea = 0;
+
+		for ( var i = 0; i < images.length; i++ ) {
+			var image = images[ i ];
+
+			if ( foreignImage( image, wrapper, productId ) ) {
+				continue;
+			}
+
+			/*
+			 * ⚠️ **Measured, not assumed, and a zero-sized image is skipped.**
+			 * A gallery's hidden slides and a lazy placeholder both report no
+			 * area, and overlaying one puts the design where nobody sees it.
+			 */
+			var rect = image.getBoundingClientRect();
+			var area = rect.width * rect.height;
+
+			if ( area > bestArea ) {
+				best = image;
+				bestArea = area;
+			}
+		}
+
+		return bestArea > 0 ? best : null;
+	}
+
+	/**
+	 * Containers that hold OTHER products' images inside this product's wrapper.
+	 *
+	 * 📌 **Every one of these was observed on a stock Storefront page**, nested
+	 * within the viewed product's own `post-<id>` element.
+	 */
+	var FOREIGN_CONTAINERS = [
+		'.related',
+		'.up-sells',
+		'.cross-sells',
+		'.upsells',
+		'.storefront-product-pagination',
+		'.product-pagination',
+		'nav'
+	].join( ',' );
+
+	/**
+	 * Whether an image belongs to some product other than the one being viewed.
+	 *
+	 * 🔴 **Fails closed.** An image this cannot positively attribute to the
+	 * viewed product is foreign. Costing a preview on an unusual theme is a
+	 * smaller harm than drawing a customer's design on a product they did not
+	 * buy, which is M26e.2's founding rule.
+	 */
+	function foreignImage( image, wrapper, productId ) {
+		/*
+		 * 🔴 **Related products, upsells and prev/next links nest INSIDE the
+		 * product wrapper.** This is the check the wrapper scope was wrongly
+		 * assumed to perform.
+		 */
+		if ( image.closest( FOREIGN_CONTAINERS ) ) {
+			return true;
+		}
+
+		/*
+		 * ⚠️ **A nested `post-<id>` that is not ours settles it.** Loop items
+		 * carry their own `post-<id>`; if the nearest one belongs to another
+		 * product, so does the image.
+		 */
+		var owner = image.closest( '[class*="post-"]' );
+
+		if ( owner && owner !== wrapper ) {
+			var owned = ( owner.className || '' ).toString().match( /\bpost-(\d+)\b/ );
+
+			if ( owned && owned[ 1 ] !== productId ) {
+				return true;
+			}
+		}
+
+		/*
+		 * ⚠️ **A link out of the product page is foreign.** A gallery lightbox
+		 * points at the full-size IMAGE file, which is ours; a link to another
+		 * page is not.
+		 */
+		var link = image.closest( 'a[href]' );
+
+		if ( ! link ) {
+			return false;
+		}
+
+		var href = link.getAttribute( 'href' ) || '';
+
+		if ( ! href || 0 === href.indexOf( '#' ) ) {
+			return false;
+		}
+
+		return ! /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test( href );
+	}
+
+	/**
+	 * Where the preview is drawn — over the product image — or null.
+	 *
+	 * 🔴 **Null when the product image cannot be identified**, and the caller
+	 * then draws nothing. Falling back to "somewhere inside the options block"
+	 * would always produce a visible preview, which is precisely the failure
+	 * M26e.2 forbids: a design shown against the wrong picture reads as a
+	 * promise about a product the customer is not buying.
+	 */
+	function previewHost( root ) {
+		var image = productImage( root );
+
+		if ( ! image ) {
+			return null;
+		}
+
+		/*
+		 * ⚠️ **Re-anchored if the image moved.** A gallery swap or a variation
+		 * change replaces the image element, and a host still parented to the
+		 * old one would float over nothing.
+		 */
+		var existing = root.ownerDocument.querySelector( '[data-optionia-preview]' );
+
+		if ( existing && existing.parentNode === image.parentNode ) {
 			return existing;
+		}
+
+		if ( existing && existing.parentNode ) {
+			existing.parentNode.removeChild( existing );
 		}
 
 		var host = document.createElement( 'div' );
@@ -1578,9 +1759,52 @@
 		 * screen-reader user can act on.
 		 */
 		host.setAttribute( 'aria-hidden', 'true' );
-		root.insertBefore( host, root.firstChild );
+
+		/*
+		 * 🔴 **The image's own parent is the frame.** WooCommerce's gallery
+		 * wraps each image in a positioned figure, so overlaying there tracks
+		 * the image through the theme's own responsive sizing instead of this
+		 * plugin guessing coordinates.
+		 */
+		var frame = image.parentNode;
+
+		if ( ! frame ) {
+			return null;
+		}
+
+		positionOver( host, image, frame );
+		frame.appendChild( host );
 
 		return host;
+	}
+
+	/**
+	 * Lay the preview over an image without disturbing the theme's layout.
+	 *
+	 * ⚠️ **Nothing the theme owns is restyled except a static `position`.** An
+	 * absolutely positioned child needs a positioned ancestor; if the frame is
+	 * `static` it is promoted to `relative`, which does not move it. Any other
+	 * value the theme chose is left exactly as it is.
+	 */
+	function positionOver( host, image, frame ) {
+		var view = frame.ownerDocument.defaultView;
+		var framePosition = view ? view.getComputedStyle( frame ).position : '';
+
+		if ( 'static' === framePosition ) {
+			frame.style.position = 'relative';
+		}
+
+		host.style.position = 'absolute';
+		host.style.left = image.offsetLeft + 'px';
+		host.style.top = image.offsetTop + 'px';
+		host.style.width = image.offsetWidth + 'px';
+		host.style.height = image.offsetHeight + 'px';
+		/*
+		 * 📌 **Clicks pass through to the gallery.** The lightbox and zoom
+		 * belong to the theme, and an overlay that swallowed their clicks would
+		 * break a feature the merchant already had.
+		 */
+		host.style.pointerEvents = 'none';
 	}
 
 	/**
@@ -1598,10 +1822,16 @@
 		var scene = composeScene( root );
 
 		if ( ! scene ) {
-			var host = root.querySelector( '[data-optionia-preview]' );
+			/*
+			 * ⚠️ **Searched from the document, not the options root.** The host
+			 * is mounted in the theme's gallery, so a root-scoped query would
+			 * never find it and a stale design would stay on screen after the
+			 * customer cleared their choices.
+			 */
+			var stale = root.ownerDocument.querySelector( '[data-optionia-preview]' );
 
-			if ( host ) {
-				host.innerHTML = '';
+			if ( stale ) {
+				stale.innerHTML = '';
 			}
 
 			return;
@@ -1664,7 +1894,18 @@
 					return;
 				}
 
-				previewHost( root ).innerHTML = svg;
+				var host = previewHost( root );
+
+				/*
+				 * 🔴 **No identifiable product image means no overlay.** The
+				 * SVG is simply dropped — drawing it anywhere else would put
+				 * the customer's design over the wrong picture.
+				 */
+				if ( ! host ) {
+					return;
+				}
+
+				host.innerHTML = svg;
 			} )
 			.catch( function () {
 				/*
@@ -1700,6 +1941,21 @@
 		 */
 		reportViews();
 	}
+
+	/*
+	 * 📌 **A deliberately narrow window onto the image finder.** M26e.2's rule
+	 * can only be proven against a REAL theme's markup, and a browser test
+	 * cannot reach into a closure. Re-implementing the algorithm in the test
+	 * would assert the test's idea of the code rather than the code — the trap
+	 * that let a blank print file pass 1,333 tests on this project.
+	 *
+	 * ⚠️ **Read-only, and nothing depends on it.** Only a pure query is
+	 * exposed: it mutates nothing, so the page behaves identically whether or
+	 * not anything reads it.
+	 */
+	window.optioniaTest = {
+		productImage: productImage
+	};
 
 	if ( 'loading' === document.readyState ) {
 		document.addEventListener( 'DOMContentLoaded', init );
