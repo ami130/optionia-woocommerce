@@ -283,6 +283,97 @@ final class UploadSweeper {
 			$known[ (string) $name ] = true;
 		}
 
+		foreach ( $this->print_file_names() as $name ) {
+			$known[ $name ] = true;
+		}
+
 		return $known;
+	}
+
+	/**
+	 * Print files recorded on orders, which are NOT in the uploads table.
+	 *
+	 * 🔴 **Without this the sweeper deleted every print file it ever
+	 * collected.** `known_names()` read only `TABLE_UPLOADS`, so a render
+	 * stored by `Design\RenderCollector` looked like an orphan and was removed
+	 * the moment it passed the grace period — measured on a live site, where
+	 * both collected print files were gone and only the directory's guard files
+	 * remained. M26e.5's whole purpose is that a merchant can reach the file,
+	 * and a sweeper that cannot see it makes the milestone worthless.
+	 *
+	 * ⚠️ **Read from order meta, because that is where they live.** A print
+	 * file belongs to an order line, not to the upload row a customer created
+	 * — the two systems share a directory and nothing else, which is exactly
+	 * why one could not see the other.
+	 *
+	 * 📌 **One query, not one per order.** The sweeper runs on cron over a
+	 * whole store; asking per order would turn a sweep into N queries.
+	 *
+	 * @return array<int, string>
+	 */
+	private function print_file_names(): array {
+		global $wpdb;
+
+		$names = array();
+
+		foreach ( $this->print_file_meta() as $json ) {
+			$decoded = json_decode( (string) $json, true );
+
+			if ( ! is_array( $decoded ) ) {
+				continue;
+			}
+
+			foreach ( $decoded as $name ) {
+				if ( is_scalar( $name ) && '' !== (string) $name ) {
+					$names[] = (string) $name;
+				}
+			}
+		}
+
+		unset( $wpdb );
+
+		return $names;
+	}
+
+	/**
+	 * Every `META_RENDER_FILES` value on the site.
+	 *
+	 * ⚠️ **Both storage shapes**, because WooCommerce order meta lives in
+	 * `wp_wc_orders_meta` with HPOS on and `wp_postmeta` with it off — and a
+	 * sweeper that read only one would delete every print file on stores using
+	 * the other.
+	 *
+	 * @return array<int, string>
+	 */
+	private function print_file_meta(): array {
+		global $wpdb;
+
+		$values = array();
+		$key    = Keys::META_RENDER_FILES;
+
+		$hpos = $wpdb->prefix . 'wc_orders_meta';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $hpos ) );
+
+		if ( is_string( $exists ) && '' !== $exists ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$rows = $wpdb->get_col( $wpdb->prepare( "SELECT meta_value FROM `{$hpos}` WHERE meta_key = %s", $key ) );
+
+			if ( is_array( $rows ) ) {
+				$values = array_merge( $values, $rows );
+			}
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$legacy = $wpdb->get_col(
+			$wpdb->prepare( "SELECT meta_value FROM `{$wpdb->postmeta}` WHERE meta_key = %s", $key )
+		);
+
+		if ( is_array( $legacy ) ) {
+			$values = array_merge( $values, $legacy );
+		}
+
+		return $values;
 	}
 }

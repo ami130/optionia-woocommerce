@@ -2401,11 +2401,31 @@ if ( ! class_exists( 'Optionia_Test_Wpdb' ) ) {
 		public string $prefix = 'wptests_';
 
 		/**
+		 * The post-meta table, as WordPress exposes it.
+		 *
+		 * 📌 **Present because `Upload\UploadSweeper` reads it.** Print files
+		 * live in ORDER meta rather than the uploads table, and a sweeper that
+		 * could not see them deleted every one it had collected — measured on a
+		 * live site. A stub missing this property makes that read a fatal
+		 * rather than a test.
+		 *
+		 * @var string
+		 */
+		public string $postmeta = 'wptests_postmeta';
+
+		/**
 		 * Statements passed to query().
 		 *
 		 * @var string[]
 		 */
 		public array $queries = array();
+
+		/**
+		 * Rows to return for a `get_col` whose query contains a given string.
+		 *
+		 * @var array<string, array<int, string>>
+		 */
+		public array $columns_by_query = array();
 
 		/**
 		 * Interpolate a query the way `$wpdb->prepare()` does.
@@ -2676,6 +2696,23 @@ if ( ! class_exists( 'Optionia_Test_Wpdb' ) ) {
 		 */
 		public function get_col( string $query = '' ): array {
 			$this->queries[] = $query;
+
+			/*
+			 * 🔴 **A per-query override, because one caller now makes THREE
+			 * different `get_col` calls.** `Upload\UploadSweeper` reads the
+			 * uploads table, then order meta in both HPOS and legacy shapes —
+			 * and a stub answering all three identically could not express the
+			 * defect it exists to prevent: a print file, which is in order meta
+			 * and NOT in the uploads table, being swept as an orphan.
+			 *
+			 * 📌 **Matched on a substring**, so a test names the table rather
+			 * than reconstructing a prepared statement.
+			 */
+			foreach ( $this->columns_by_query as $needle => $rows ) {
+				if ( is_string( $needle ) && '' !== $needle && false !== strpos( $query, $needle ) ) {
+					return $rows;
+				}
+			}
 
 			return $this->columns;
 		}

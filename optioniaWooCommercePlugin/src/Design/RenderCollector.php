@@ -114,6 +114,17 @@ final class RenderCollector {
 	private array $partials = array();
 
 	/**
+	 * Renders already asked about during this pass.
+	 *
+	 * ⚠️ **One order may carry the same render id on two lines** — a retry
+	 * that resolved to the existing job — and asking twice for one answer is
+	 * waste against a bounded allowance.
+	 *
+	 * @var array<string, bool>
+	 */
+	private array $asked = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Client      $client API client.
@@ -257,6 +268,7 @@ final class RenderCollector {
 
 		$this->failures = array();
 		$this->partials = array();
+		$this->asked    = array();
 
 		foreach ( $renders as $item_id => $render_id ) {
 			if ( isset( $files[ $item_id ] ) ) {
@@ -473,6 +485,23 @@ final class RenderCollector {
 	 * @return string '' when the next pass should ask again.
 	 */
 	private function outcome_of( string $render_id ): string {
+		/*
+		 * 📌 **Asked at most once per render, per pass — and only for a line
+		 * that has been waiting.** A fresh request 404s for the seconds before
+		 * the worker claims it, and asking then would double this pass's cloud
+		 * calls to learn "preparing", which the next pass learns for free.
+		 *
+		 * ⚠️ **The cost is real but small, and stated rather than guessed**:
+		 * ten orders a pass, four passes an hour, against a 600/hour ceiling —
+		 * so at most 40 extra calls, roughly 7%. The alternative is a dead
+		 * render retried for ever, which is what this replaced.
+		 */
+		if ( isset( $this->asked[ $render_id ] ) ) {
+			return '';
+		}
+
+		$this->asked[ $render_id ] = true;
+
 		$response = $this->client->get( '/store/renders/' . rawurlencode( $render_id ) );
 
 		if ( ! $response->is_ok() ) {

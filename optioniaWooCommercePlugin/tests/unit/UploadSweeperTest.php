@@ -120,6 +120,47 @@ final class UploadSweeperTest extends TestCase {
 	}
 
 	/**
+	 * 🔴 **A print file is NOT in the uploads table, and must not be swept.**
+	 *
+	 * ⚠️ **This is not hypothetical — it was measured on a live site.** Both
+	 * print files this project had ever collected were gone, and only the
+	 * directory's guard files remained. `known_names()` read only
+	 * `TABLE_UPLOADS`, so a render stored by `Design\RenderCollector` looked
+	 * like an orphan and was deleted the moment it passed the grace period.
+	 * M26e.5's whole purpose is that a merchant can reach the file; a sweeper
+	 * that cannot see it makes the milestone worthless.
+	 */
+	public function test_it_spares_a_print_file_recorded_on_an_order(): void {
+		$print = $this->storedFile( 'abcdef0123456789.png' );
+
+		/* The uploads table knows nothing about it — that is the whole point. */
+		$GLOBALS['wpdb']->columns          = array();
+		$GLOBALS['wpdb']->columns_by_query = array(
+			'postmeta' => array( (string) wp_json_encode( array( 397 => 'abcdef0123456789.png' ) ) ),
+		);
+
+		$this->assertSame( 0, $this->sweeper()->sweep() );
+		$this->assertFileExists( $print, 'a collected print file must survive a sweep' );
+	}
+
+	/**
+	 * 📌 **And a file in NEITHER place is still an orphan.** The fix must not
+	 * turn the sweeper off — a stray file with no row and no order is exactly
+	 * what it exists to remove.
+	 */
+	public function test_it_still_removes_a_file_known_to_nobody(): void {
+		$orphan = $this->storedFile( 'nobody-knows.png' );
+
+		$GLOBALS['wpdb']->columns          = array();
+		$GLOBALS['wpdb']->columns_by_query = array(
+			'postmeta' => array( (string) wp_json_encode( array( 397 => 'a-different-file.png' ) ) ),
+		);
+
+		$this->assertSame( 1, $this->sweeper()->sweep() );
+		$this->assertFileDoesNotExist( $orphan );
+	}
+
+	/**
 	 * 🔴 **The case this class exists for.**
 	 */
 	public function test_it_removes_a_file_with_no_row(): void {
