@@ -293,3 +293,122 @@ describe('positioning the overlay', () => {
     ).toBe(1);
   });
 });
+
+/**
+ * Where the picture is actually painted (M26e.2, the `object-fit` defect).
+ *
+ * 🔴 **M26c.1 lists this among four measured defects and says to fix it**
+ * because it is visible rather than sub-pixel: an overlay sized to the `<img>`
+ * element box sits partly on the letterbox bars that `object-fit: contain`
+ * leaves, or extends past what `cover` clips.
+ *
+ * 📌 **Invisible on this project's own theme**, which is how it survived: the
+ * test storefront paints `object-fit: fill` on a square image, so the element
+ * box and the painted box coincide exactly. These cases are the ones a
+ * different theme produces.
+ */
+describe('the painted box', () => {
+  /** An element box of 400×200 holding a square 100×100 picture. */
+  async function image(fit) {
+    const loaded = await loadStorefront(
+      `<div class="product post-14">
+         <div class="woocommerce-product-gallery">
+           <div class="woocommerce-product-gallery__image"><img src="square.png"></div>
+         </div>
+         <div data-optionia="options" data-optionia-product="14"></div>
+       </div>`,
+      { debug: true },
+    );
+
+    const element = loaded.document.querySelector('img');
+
+    size(element, 400, 200);
+
+    /*
+     * ⚠️ **`offsetWidth` is what `paintBox` reads, and jsdom reports 0 for it
+     * always.** `size()` above stubs `getBoundingClientRect`, which the image
+     * FINDER uses — a different measurement on the same element. Stating only
+     * one of them made every case here return a 0×0 box, which looked like a
+     * defect in the code and was a gap in the fixture.
+     */
+    Object.defineProperty(element, 'offsetWidth', { value: 400, configurable: true });
+    Object.defineProperty(element, 'offsetHeight', { value: 200, configurable: true });
+
+    element.style.objectFit = fit;
+
+    /* jsdom does not decode images; the intrinsic size is stated. */
+    Object.defineProperty(element, 'naturalWidth', { value: 100, configurable: true });
+    Object.defineProperty(element, 'naturalHeight', { value: 100, configurable: true });
+
+    return { ...loaded, element };
+  }
+
+  it('fills the element box when object-fit is fill', async () => {
+    const { window, element } = await image('fill');
+
+    expect(window.optioniaTest.paintBox(element, window)).toEqual({
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 200,
+    });
+  });
+
+  /**
+   * 🔴 **The case that makes the defect visible.** A square picture inside a
+   * 400×200 box paints 200×200 centred, leaving 100px of empty space either
+   * side. An overlay sized to the element box covers that emptiness too.
+   */
+  it('centres and letterboxes when object-fit is contain', async () => {
+    const { window, element } = await image('contain');
+
+    expect(window.optioniaTest.paintBox(element, window)).toEqual({
+      left: 100,
+      top: 0,
+      width: 200,
+      height: 200,
+    });
+  });
+
+  /** ⚠️ **`cover` paints LARGER than the box and clips**, so the offsets are negative. */
+  it('overflows and clips when object-fit is cover', async () => {
+    const { window, element } = await image('cover');
+
+    expect(window.optioniaTest.paintBox(element, window)).toEqual({
+      left: 0,
+      top: -100,
+      width: 400,
+      height: 400,
+    });
+  });
+
+  it('paints at intrinsic size when object-fit is none', async () => {
+    const { window, element } = await image('none');
+
+    expect(window.optioniaTest.paintBox(element, window)).toEqual({
+      left: 150,
+      top: 50,
+      width: 100,
+      height: 100,
+    });
+  });
+
+  /**
+   * ⚠️ **An image that has not loaded reports 0×0**, and dividing by it would
+   * give NaN and an overlay with no size. The element box stands in until the
+   * picture arrives, at which point `trackSize` re-runs this.
+   */
+  it('falls back to the element box before the image has loaded', async () => {
+    const { window, element } = await image('contain');
+
+    Object.defineProperty(element, 'naturalWidth', { value: 0, configurable: true });
+    Object.defineProperty(element, 'naturalHeight', { value: 0, configurable: true });
+
+    expect(window.optioniaTest.paintBox(element, window)).toEqual({
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 200,
+    });
+  });
+});

@@ -1947,6 +1947,89 @@
 	}
 
 	/**
+	 * Where an image's picture is actually painted inside its element.
+	 *
+	 * 🔴 **`object-fit` decouples the two.** The element occupies its layout
+	 * box; the picture is drawn inside it according to the fit mode, and only
+	 * `fill` guarantees they match. A design overlaid on the element box rather
+	 * than the painted box sits partly on empty space.
+	 *
+	 * ⚠️ **Answers in the element's own coordinates**, with `left`/`top` as the
+	 * offset from the element's top-left — so the caller adds them to the
+	 * element's own position rather than recomputing anything.
+	 *
+	 * 📌 **Pre-transform throughout.** `offsetWidth` is a layout value and is
+	 * unaffected by a CSS `transform` on an ancestor, which keeps this in the
+	 * same space as the absolutely-positioned host. Mixing it with
+	 * `getBoundingClientRect` is what makes `optionia-app`'s `planMount` scale
+	 * an overlay by *k²* under a transform; that defect is not reproduced here.
+	 */
+	function paintBox( image, view ) {
+		var width = image.offsetWidth;
+		var height = image.offsetHeight;
+		var whole = { left: 0, top: 0, width: width, height: height };
+
+		if ( ! view ) {
+			return whole;
+		}
+
+		var fit = view.getComputedStyle( image ).objectFit || 'fill';
+
+		/*
+		 * `fill` stretches to the element box, and `none`/`scale-down` without
+		 * intrinsic dimensions cannot be reasoned about — in both cases the
+		 * element box is the best answer available.
+		 */
+		if ( 'fill' === fit ) {
+			return whole;
+		}
+
+		var natural = image.naturalWidth;
+		var naturalHeight = image.naturalHeight;
+
+		/*
+		 * ⚠️ **An image that has not loaded reports 0×0.** Dividing by it would
+		 * produce NaN and an overlay with no size, so the element box stands in
+		 * until the image arrives — at which point `trackSize` re-runs this.
+		 */
+		if ( ! natural || ! naturalHeight || ! width || ! height ) {
+			return whole;
+		}
+
+		var scale;
+
+		if ( 'contain' === fit || 'scale-down' === fit ) {
+			scale = Math.min( width / natural, height / naturalHeight );
+
+			/* `scale-down` is `none` or `contain`, whichever is smaller. */
+			if ( 'scale-down' === fit ) {
+				scale = Math.min( scale, 1 );
+			}
+		} else if ( 'cover' === fit ) {
+			scale = Math.max( width / natural, height / naturalHeight );
+		} else if ( 'none' === fit ) {
+			scale = 1;
+		} else {
+			return whole;
+		}
+
+		var painted = natural * scale;
+		var paintedHeight = naturalHeight * scale;
+
+		/*
+		 * 📌 **Centred, which is `object-position`'s default.** A theme that
+		 * sets `object-position` explicitly would need that read too; nothing
+		 * observed does, and guessing at it would add a branch no test covers.
+		 */
+		return {
+			left: ( width - painted ) / 2,
+			top: ( height - paintedHeight ) / 2,
+			width: painted,
+			height: paintedHeight
+		};
+	}
+
+	/**
 	 * Lay the preview over an image without disturbing the theme's layout.
 	 *
 	 * ⚠️ **Nothing the theme owns is restyled except a static `position`.** An
@@ -1962,11 +2045,26 @@
 			frame.style.position = 'relative';
 		}
 
+		/*
+		 * 🔴 **The painted box, not the element box.** An `<img>` with
+		 * `object-fit: contain` paints its picture inside its element with
+		 * letterboxing either side; `cover` paints it larger and clips. Sizing
+		 * the overlay to `offsetWidth`/`offsetHeight` puts the design over the
+		 * letterbox bars as well as the product — M26c.1 lists this among the
+		 * four measured defects and says to fix it because it is *visible*.
+		 *
+		 * 📌 **Not visible on every theme, which is why it survived.** Measured
+		 * on this project's test theme: `object-fit: fill` with a square image,
+		 * so the painted box and the element box coincide exactly. A theme
+		 * using `contain` or `cover` is where it shows.
+		 */
+		var box = paintBox( image, view );
+
 		host.style.position = 'absolute';
-		host.style.left = image.offsetLeft + 'px';
-		host.style.top = image.offsetTop + 'px';
-		host.style.width = image.offsetWidth + 'px';
-		host.style.height = image.offsetHeight + 'px';
+		host.style.left = ( image.offsetLeft + box.left ) + 'px';
+		host.style.top = ( image.offsetTop + box.top ) + 'px';
+		host.style.width = box.width + 'px';
+		host.style.height = box.height + 'px';
 		/*
 		 * 📌 **Clicks pass through to the gallery.** The lightbox and zoom
 		 * belong to the theme, and an overlay that swallowed their clicks would
@@ -2331,7 +2429,14 @@
 			 * Nothing about that is visible from outside without a handle.
 			 */
 			watchGallery: watchGallery,
-			stateFor: stateFor
+			stateFor: stateFor,
+
+			/*
+			 * The painted box an overlay must match. `object-fit` decouples it
+			 * from the element box, and only a browser can report the computed
+			 * fit mode — so this is driven directly rather than inferred.
+			 */
+			paintBox: paintBox
 		};
 	}
 
