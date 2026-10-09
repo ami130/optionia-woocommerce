@@ -133,6 +133,32 @@ is adjustable; the record of what was actually sold is not. If your integration
 needs that, open an issue with the use case rather than filtering the cart and
 hoping the order follows — it will not.
 
+### `optionia_product_image_selector`
+
+A CSS selector naming the product image, for a theme Optionia cannot read.
+
+```php
+add_filter( 'optionia_product_image_selector', function (): string {
+    return '.my-theme-gallery .main-image img';
+} );
+```
+
+Optionia anchors its live preview on WooCommerce's own
+`.woocommerce-product-gallery__image`, and finds the image without help on any
+theme that keeps it. A theme that renames that markup, or renders the gallery
+outside the product container, leaves it nothing to anchor on — and the
+deliberate result is **no overlay rather than the wrong one**. This is how such
+a theme says where to look.
+
+**It adds a candidate; it does not override the safety rules.** Whatever the
+selector matches is still refused if it sits in a related-products or upsell
+block, under a different product's wrapper, or behind a link to another page. A
+selector pointing at a "you may also like" tile yields no overlay, not somebody
+else's product — a design on the wrong product is worse than no preview.
+
+Only `img` elements are considered, and a selector that is not valid CSS is
+ignored rather than raising.
+
 ### `optionia_cart_item_rows`
 
 The option rows Optionia adds to a cart line, before WooCommerce renders them.

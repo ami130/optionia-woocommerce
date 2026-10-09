@@ -31250,7 +31250,7 @@ product, so a design never leaks onto a "you may also like" tile. Port that logi
 - a merchant-configurable selector override, filtered through the same exclusion rules;
 - **an explicit no-overlay fallback** — if the product image cannot be identified confidently, render the options without a live overlay rather than overlaying the wrong image. A design on the wrong product is worse than no preview.
 
-#### ⚠️ PARTIAL — exclusion logic and no-overlay fallback shipped (2026-10-09)
+#### ✅ DONE — all three requirements met (2026-10-09)
 
 Three commits — `c92b54c`, `cd8e3d8`, `80c3550` — plus their fixes. **Two of
 this milestone's three requirements are met; one is not, and two defects
@@ -31283,16 +31283,36 @@ null when no image can be attributed and the caller draws nothing. Verified by
 making the product id unresolvable on a live page: no host, no overlay, preview
 still absent rather than misplaced.
 
-❌ **The merchant-configurable selector override is NOT built.** Zero references
-in the runtime or `Assets.php`. A theme this cannot read still gets no overlay —
-correct, but the escape hatch the milestone asks for does not exist.
+✅ **The merchant-configurable selector override is built**, as
+`optionia_product_image_selector` — a WordPress filter whose value travels the
+settings payload to the runtime.
 
-❌ **The `object-fit` paint-box defect assigned here is untouched.**
-`positionOver()` sizes the host with `offsetWidth`/`offsetHeight`, which is the
-border box — exactly what the M26c.1 note warns against. ⚠️ **Not currently
-visible**: measured on the test theme, `object-fit: fill` with a square image
-makes border box and paint box identical. A theme using `contain` or `cover`
-would show the overlay spilling past the painted image.
+🔴 **It adds a candidate and cannot bypass exclusion.** The milestone's own
+wording is *"filtered through the same exclusion rules"*, and that is enforced:
+a selector naming a related tile still yields no overlay. Mutation-tested —
+adding a bypass, dropping the lookup, or letting an invalid selector throw each
+kill a test.
+
+⚠️ **It serves a narrower case than first assumed.** A renamed gallery INSIDE
+the product wrapper is already found without help: exclusion rejects what is
+positively foreign, and an unrecognised container is not foreign. The hint is
+for an image the wrapper does not contain at all — a theme rendering its gallery
+in a sibling column.
+
+✅ **The `object-fit` paint-box defect assigned here is fixed.**
+`paintBox()` computes where the picture is actually painted — `contain`
+letterboxes, `cover` overflows and clips, `none` paints at intrinsic size — and
+the overlay is placed there rather than on the element box. Five tests; mutating
+the fit detection kills three.
+
+📌 **M26c.1's OTHER visible defect is not present in this code.** `planMount`
+mixes screen space and pre-transform local space, scaling an overlay by *k²*
+under a CSS transform. This uses `offsetLeft`/`offsetWidth` throughout, which are
+layout values, and the host is positioned inside the same frame — verified in a
+browser: under `scale(2)`, `offsetWidth` stays 200 while the client rect reports
+400. ⚠️ **Avoided by accident rather than design**, and recorded in `paintBox` so
+a later change to `getBoundingClientRect` for apparent precision does not
+reintroduce it.
 
 📌 **What the overlay does do, verified in a real browser:** lands at
 (108, 314) 1254×1254, pixel-identical to the product image, parented into

@@ -400,3 +400,124 @@ describe('the host key', () => {
     expect(loaded.document.querySelectorAll('[data-optionia-preview]').length).toBe(1);
   });
 });
+
+/**
+ * The merchant's selector hint (M26e.2).
+ *
+ * 🔴 **The milestone asks for "a merchant-configurable selector override,
+ * filtered through the same exclusion rules"** — and the second half is the
+ * part that matters. A theme that renames WooCommerce's gallery markup
+ * otherwise gets no overlay and no way to say where its image is; a selector
+ * that could also point at a related product would turn "never draw on the
+ * wrong product" from a rule into a suggestion.
+ */
+describe('the merchant selector hint', () => {
+  const RENAMED_THEME = `
+    <div class="product post-14">
+      <div class="my-custom-gallery">
+        <div class="slide"><img src="theirs.png"></div>
+      </div>
+      <section class="related">
+        <ul class="products"><li class="post-27"><img src="related.png"></li></ul>
+      </section>
+      <div data-optionia="options" data-optionia-product="14"></div>
+    </div>
+  `;
+
+  /**
+   * ✏️ **This test was first named "finds nothing on a renamed gallery" and
+   * its assertion said the opposite.** Probed rather than guessed: the image
+   * IS found. Exclusion rejects what is positively FOREIGN — a related
+   * container, another product's `post-<id>`, a link off the page — and a
+   * renamed gallery is none of those, merely unrecognised. The name was wrong,
+   * not the behaviour.
+   *
+   * 📌 **So the hint is for a narrower case than it first appears**: a theme
+   * that puts its image somewhere this cannot see at all, or outside the
+   * product wrapper entirely.
+   */
+  it('still finds an image in a renamed gallery inside the wrapper', async () => {
+    const loaded = await loadStorefront(RENAMED_THEME, { debug: true });
+
+    size(loaded.document.querySelector('img[src="theirs.png"]'), 400, 400);
+
+    expect(loaded.window.optioniaTest.productImage(loaded.root)?.getAttribute('src')).toBe(
+      'theirs.png',
+    );
+  });
+
+  /**
+   * 🔴 **The case the hint actually serves: an image OUTSIDE the wrapper.**
+   * Some themes render the gallery in a sibling column rather than inside the
+   * product container, and `wrapper.querySelectorAll` cannot reach it.
+   */
+  it('reaches an image the wrapper does not contain', async () => {
+    const outside = `
+      <div class="site-gallery"><img src="outside.png"></div>
+      <div class="product post-14">
+        <div data-optionia="options" data-optionia-product="14"></div>
+      </div>
+    `;
+
+    const without = await loadStorefront(outside, { debug: true });
+
+    size(without.document.querySelector('img[src="outside.png"]'), 400, 400);
+
+    expect(
+      without.window.optioniaTest.productImage(without.root),
+      'unreachable without a hint'
+    ).toBeNull();
+
+    const withHint = await loadStorefront(outside, {
+      debug: true,
+      imageSelector: '.site-gallery img',
+    });
+
+    size(withHint.document.querySelector('img[src="outside.png"]'), 400, 400);
+
+    expect(
+      withHint.window.optioniaTest.productImage(withHint.root)?.getAttribute('src')
+    ).toBe('outside.png');
+  });
+
+  it('accepts an image a merchant points at', async () => {
+    const loaded = await loadStorefront(RENAMED_THEME, {
+      debug: true,
+      imageSelector: '.my-custom-gallery img',
+    });
+
+    size(loaded.document.querySelector('img[src="theirs.png"]'), 400, 400);
+
+    expect(loaded.window.optioniaTest.productImage(loaded.root)?.getAttribute('src')).toBe(
+      'theirs.png',
+    );
+  });
+
+  /**
+   * 🔴 **The rule a filter may not switch off.** A merchant pointing at a
+   * related tile gets no overlay, not somebody else's product.
+   */
+  it('still refuses a related tile the selector names', async () => {
+    const loaded = await loadStorefront(RENAMED_THEME, {
+      debug: true,
+      imageSelector: '.related img',
+    });
+
+    /* Only the related tile has area, so a bypass would select it. */
+    size(loaded.document.querySelector('img[src="related.png"]'), 900, 900);
+
+    expect(loaded.window.optioniaTest.productImage(loaded.root)).toBeNull();
+  });
+
+  /** ⚠️ **A typo in a merchant's filter must not take the runtime down.** */
+  it('ignores a selector that is not valid CSS', async () => {
+    const loaded = await loadStorefront(RENAMED_THEME, {
+      debug: true,
+      imageSelector: ':::not a selector:::',
+    });
+
+    size(loaded.document.querySelector('img[src="theirs.png"]'), 400, 400);
+
+    expect(() => loaded.window.optioniaTest.productImage(loaded.root)).not.toThrow();
+  });
+});

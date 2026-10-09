@@ -106,6 +106,12 @@ export async function loadStorefront(html, options = {}) {
       debug: options.debug ? '1' : '',
 
       /*
+       * `optionia_product_image_selector`, as `Assets.php` sends it: a theme
+       * hint for a merchant whose gallery markup this cannot find.
+       */
+      imageSelector: options.imageSelector ?? '',
+
+      /*
        * What a rule did, for a screen reader. Localised by `Assets.php` because
        * JavaScript cannot call `__()`, so a runtime without these says nothing —
        * which is why they are here rather than defaulted in the script.

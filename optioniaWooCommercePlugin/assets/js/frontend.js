@@ -1676,7 +1676,7 @@
 		 * therefore a largest-on-page rule in disguise: it agrees with the right
 		 * answer only while the real image happens to be the biggest.
 		 */
-		var images = wrapper.querySelectorAll( 'img' );
+		var images = candidates( wrapper );
 		var best = null;
 		var bestArea = 0;
 
@@ -1782,6 +1782,61 @@
 		}
 
 		return ! /\.(jpe?g|png|gif|webp|avif)(\?|#|$)/i.test( href );
+	}
+
+	/**
+	 * The images that might be this product's, before exclusion.
+	 *
+	 * 📌 **Every `<img>` in the wrapper, plus whatever a merchant pointed at.**
+	 * `optionia_product_image_selector` exists for a theme that renames
+	 * WooCommerce's gallery markup: without it such a merchant gets no overlay
+	 * and no way to say where their image is.
+	 *
+	 * 🔴 **It ADDS candidates; it does not bypass anything.** The result goes
+	 * through `foreignImage` exactly as the wrapper's own images do, so a
+	 * selector pointing at `.related img` still yields no overlay. M26e.2's
+	 * rule — *"a design on the wrong product is worse than no preview"* — is
+	 * not something a filter may switch off, and a selector that could would
+	 * make it advisory rather than a rule.
+	 *
+	 * ⚠️ **A bad selector is ignored, not thrown.** `querySelectorAll` raises
+	 * on invalid syntax, and a merchant's typo in a filter must not take the
+	 * storefront runtime down with it.
+	 */
+	function candidates( wrapper ) {
+		var found = [];
+		var i;
+		var within = wrapper.querySelectorAll( 'img' );
+
+		for ( i = 0; i < within.length; i++ ) {
+			found.push( within[ i ] );
+		}
+
+		var selector = settings.imageSelector || '';
+
+		if ( ! selector ) {
+			return found;
+		}
+
+		var hinted;
+
+		try {
+			hinted = wrapper.ownerDocument.querySelectorAll( selector );
+		} catch ( error ) {
+			return found;
+		}
+
+		for ( i = 0; i < hinted.length; i++ ) {
+			/*
+			 * `IMG` only: a selector naming a container would otherwise hand
+			 * `getBoundingClientRect` an element that paints no picture.
+			 */
+			if ( 'IMG' === hinted[ i ].tagName && -1 === found.indexOf( hinted[ i ] ) ) {
+				found.push( hinted[ i ] );
+			}
+		}
+
+		return found;
 	}
 
 	/**

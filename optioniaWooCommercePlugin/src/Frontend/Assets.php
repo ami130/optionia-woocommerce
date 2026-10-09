@@ -103,10 +103,10 @@ final class Assets {
 			Keys::ASSET_FRONTEND_JS,
 			'optioniaSettings',
 			array(
-				'currency' => $this->currency_settings(),
-				'upload'   => $this->upload_settings(),
-				'views'    => $this->view_settings(),
-				'preview'  => $this->preview_settings(),
+				'currency'      => $this->currency_settings(),
+				'upload'        => $this->upload_settings(),
+				'views'         => $this->view_settings(),
+				'preview'       => $this->preview_settings(),
 
 				/*
 				 * Whether the runtime may expose its internals for testing.
@@ -119,7 +119,26 @@ final class Assets {
 				 * shop has no use for that surface, so it is tied to
 				 * `SCRIPT_DEBUG`, which is false on every production install.
 				 */
-				'debug'    => defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG,
+				'debug'         => defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG,
+
+				/*
+				 * A theme whose product image this cannot find (M26e.2).
+				 *
+				 * 🔴 **The fallback is no overlay, which is correct and also a
+				 * dead end for that merchant.** The finder anchors on
+				 * WooCommerce's own `.woocommerce-product-gallery__image`, and
+				 * a theme that renames it gets the options with no live
+				 * preview and no way to say where its image is. This is that
+				 * way.
+				 *
+				 * ⚠️ **A hint, not an override.** The selector only adds a
+				 * candidate; it does NOT bypass the exclusion rules. A merchant
+				 * pointing at `.related img` still gets no overlay, because a
+				 * design on the wrong product is worse than no preview — and a
+				 * filter that could defeat that rule would make the rule
+				 * advisory.
+				 */
+				'imageSelector' => (string) apply_filters( 'optionia_product_image_selector', '' ),
 
 				/*
 				 * What a rule did, for a screen reader (M17.5).
@@ -133,7 +152,7 @@ final class Assets {
 				 *
 				 * Translated here because JavaScript cannot call `__()`.
 				 */
-				'rules'    => array(
+				'rules'         => array(
 					'shown'  => __( 'Some options are now available.', 'optionia' ),
 					'hidden' => __( 'Some options no longer apply and have been removed.', 'optionia' ),
 					'both'   => __( 'The available options have changed.', 'optionia' ),
