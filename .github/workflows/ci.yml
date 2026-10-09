@@ -136,5 +136,25 @@ jobs:
         run: composer install --no-interaction --prefer-dist
         working-directory: optioniaWooCommercePlugin
 
+      # 🔴 **The schema must exist before the gates read it.** `check-docs.sh`
+      # compares `docs/DATABASE.md` against the tables, foreign keys and delete
+      # rules a live database actually holds — its own docblock says it "runs in
+      # CI after migration:run".
+      #
+      # ✏️ **Added after the database itself was.** The previous commit gave this
+      # job MySQL and `JWT_SECRET` and stopped there, which fixed the
+      # ConfigurationError and left the database empty. Measured against an
+      # unmigrated schema, the check does not skip — it reports the
+      # documentation as wrong: *"docs/DATABASE.md states a rule for
+      # email_verification_tokens.user_id, which is not a foreign key in the
+      # schema"*. Three errors naming documentation that was correct all along.
+      #
+      # 📌 **Only `migration:run`, not the up/down/up `backend.yml` performs.**
+      # That workflow proves migrations are REVERSIBLE, which is its business;
+      # this job needs only a schema to read.
+      - name: Apply migrations
+        run: npm run migration:run
+        working-directory: optioniaWooCommerceBackend
+
       - name: All cross-repo gates
         run: bash bin/check.sh
