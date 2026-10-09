@@ -47,14 +47,24 @@ if [ ! -f "$BUILD_GATE" ]; then
 else
   # `|| true` on both: grep exits 1 with no match, and `set -u` would end the
   # script there rather than report — the silent abort this suite has hit before.
-  # ✏️ **The comment filter has to run AFTER the line-number prefix is
-  # stripped.** An earlier version piped `grep -n` output through
-  # `grep -v '^\s*#'`, which never matched: every line now begins with `16:`,
-  # not `#`. It selected line 16 — a comment reading "never `npm run build`" —
-  # and passed only because 16 happens to precede the assertion. A real
-  # reordering would have gone unnoticed.
-  BUILD_LINE=$(grep -n 'npm run build' "$BUILD_GATE" \
-    | awk -F: '{ rest = substr($0, index($0, ":") + 1); if (rest !~ /^[[:space:]]*#/) { print $1; exit } }' || true)
+  # 🔴 **The BACKEND build, named specifically — not "a line mentioning a
+  # build".** This file contains three such mentions: a comment, the backend
+  # build, and the frontend build. Two earlier versions of this check were
+  # defeated by that:
+  #
+  #   1. `grep -n … | grep -v '^\s*#'` never stripped comments, because every
+  #      line already began with `16:` rather than `#`. It selected the comment
+  #      and passed because 16 < 98 by luck.
+  #   2. Taking the first non-comment match still passed with the original
+  #      broken ordering restored, as long as ANY other line mentioning
+  #      `npm run build` sat above the assertion — a `BUILD_CMD` variable, or
+  #      the frontend build moving up. Demonstrated: green with the exact
+  #      defect present.
+  #
+  # Matching `cd "$BACKEND" && npm run build` identifies the one invocation
+  # whose output the assertion reads, so a decoy elsewhere cannot stand in for
+  # it and reordering the two builds cannot either.
+  BUILD_LINE=$(grep -n 'cd "$BACKEND" && npm run build' "$BUILD_GATE" | head -1 | cut -d: -f1 || true)
   ASSERT_LINE=$(grep -n 'DEV_ENTRY\.js' "$BUILD_GATE" | head -1 | cut -d: -f1 || true)
 
   if [ -z "$BUILD_LINE" ] || [ -z "$ASSERT_LINE" ]; then
@@ -72,12 +82,63 @@ SCRIPTS_GATE="$ROOT/optioniaWooCommerceBackend/bin/check-scripts.sh"
 
 if [ ! -f "$SCRIPTS_GATE" ]; then
   fail "check-scripts.sh is missing — this gate's path is stale"
-elif grep -q 'body\.match(/(\^|\\s)' "$SCRIPTS_GATE"; then
-  pass "script paths are matched at a token boundary, not mid-string"
 else
-  fail "check-scripts.sh no longer anchors its path pattern"
-  printf '        an unanchored (src|test|bin)/ matches inside dist/<project>/src/main.js\n'
-  printf '        and reports a correct start:prod as referencing a missing file\n'
+  # 🔴 **The pattern is LIFTED and run, not grepped for.** An earlier version
+  # searched for the literal string `(^|\s)`, which failed a correct rewrite:
+  # spelling the same anchor as `\b` reported "no longer anchors its path
+  # pattern" against code that anchors perfectly well. A check that demands one
+  # spelling teaches people to restore the spelling rather than the property.
+  #
+  # So the regex is extracted from the gate and exercised on two inputs: a
+  # `dist/` path it must ignore, and a real source path it must still find.
+  VERDICT=$(
+    LINE=$(grep 'body\.match(/' "$SCRIPTS_GATE" | head -1 || true)
+
+    if [ -z "$LINE" ]; then
+      printf 'NOPATTERN'
+    else
+      node -e '
+        const line = process.argv[1];
+        const m = line.match(/body\.match\((\/.*\/)([gimsuy]*)\)/);
+
+        if (!m) {
+          process.stdout.write("NOPATTERN");
+        } else {
+          const re = new RegExp(m[1].slice(1, -1), m[2] || "g");
+
+          /* The emitted artefact: its `src/` segment must NOT be taken as a
+             source path, because `src/main.js` does not exist — the source is
+             `main.ts` and the build writes under `dist/`. */
+          const ignoresDist =
+            "node dist/optioniaWooCommerceBackend/src/main.js".match(re) === null;
+
+          /* …while a genuine reference must still be found, or the check would
+             pass by matching nothing at all. */
+          const findsReal =
+            ("jest --config test/jest-e2e.json".match(re) || []).length > 0;
+
+          process.stdout.write(ignoresDist ? (findsReal ? "OK" : "BLIND") : "UNANCHORED");
+        }
+      ' "$LINE" 2>/dev/null || printf 'NOPATTERN'
+    fi
+  )
+
+  case "$VERDICT" in
+    OK)
+      pass "script paths are matched at a token boundary, not mid-string"
+      ;;
+    UNANCHORED)
+      fail "check-scripts.sh matches a path inside dist/<project>/src/main.js"
+      printf '        it will report a correct start:prod as referencing a missing file\n'
+      ;;
+    BLIND)
+      fail "check-scripts.sh no longer matches real source paths"
+      printf '        it would pass by finding nothing, which is not the same as finding nothing wrong\n'
+      ;;
+    *)
+      fail "could not lift the path pattern from check-scripts.sh — this gate's parser is stale, not the code"
+      ;;
+  esac
 fi
 
 if [ "$FAILED" -eq 0 ]; then
