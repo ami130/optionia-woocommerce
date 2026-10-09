@@ -65,6 +65,24 @@ pass "start:prod runs $ENTRY"
 # ⚠️ **A gate that checks only the deploy path leaves the development path to
 # luck.** `entryFile` must name the file that actually exists, because `nest
 # start` defaults to `main` and says nothing about why it cannot find it.
+# 🔴 **A real build, not a typecheck, and it runs FIRST.** `deleteOutDir` is on,
+# so this is the same artefact a deploy would produce.
+#
+# ✏️ **The entryFile check below used to run before this build**, and asserted
+# that `dist/<entryFile>.js` exists. On a developer machine a previous build had
+# already left one there, so it passed; on a clean runner nothing had emitted
+# anything yet and it failed with *"which the build does not emit"* — naming a
+# defect in the code when the only fault was the order of two blocks in this
+# file. It stayed hidden while CI skipped this gate for want of dependencies.
+if ( cd "$BACKEND" && npm run build >/tmp/check-build.log 2>&1 ); then
+  pass "the backend builds"
+else
+  fail "the backend does not build"
+  tail -5 /tmp/check-build.log | sed 's|^|      |'
+  printf '\n\033[31m1 build-output check failed.\033[0m\n'
+  exit 1
+fi
+
 NEST_CLI="$BACKEND/nest-cli.json"
 
 if [ ! -f "$NEST_CLI" ]; then
@@ -84,17 +102,6 @@ else
     printf '        start, start:dev and start:debug all resolve through this\n'
     printf '        set entryFile in nest-cli.json to the emitted path\n'
   fi
-fi
-
-# 🔴 **A real build, not a typecheck.** `deleteOutDir` is on, so this is the
-# same artefact a deploy would produce.
-if ( cd "$BACKEND" && npm run build >/tmp/check-build.log 2>&1 ); then
-  pass "the backend builds"
-else
-  fail "the backend does not build"
-  tail -5 /tmp/check-build.log | sed 's|^|      |'
-  printf '\n\033[31m1 build-output check failed.\033[0m\n'
-  exit 1
 fi
 
 # 1. The entry point exists where the start script looks.

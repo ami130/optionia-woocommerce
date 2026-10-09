@@ -22,12 +22,24 @@ fail() { printf '\033[31mFAIL\033[0m  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 pass() { printf '\033[32mok\033[0m    %s\n' "$1"; }
 
 # Extract every ./src/... , src/... , ./test/... and bin/... path from scripts.
+#
+# ✏️ **Anchored to a token boundary, because it was not.** The pattern matched
+# `(src|test|bin)/…` ANYWHERE in a script body, so
+# `node dist/optioniaWooCommerceBackend/src/main.js` yielded the substring
+# `src/main.js` — a path that does not exist, because the source is `main.ts`
+# and the emitted file lives under `dist/`. The gate reported a correct
+# `start:prod` as broken, naming a defect in the code when the fault was its own
+# reading of it. The build path grew its `dist/<project>/src/` shape when the
+# repositories were merged; this pattern never caught up.
+#
+# A path now counts only where it starts the string or follows a space, which is
+# how a script actually names a file it expects to find in the source tree.
 REFS=$(node -e "
   const s = require('./package.json').scripts || {};
   const seen = new Set();
   for (const body of Object.values(s)) {
-    const m = body.match(/(\.\/)?((src|test|bin)\/[A-Za-z0-9._\/-]+)/g) || [];
-    for (const hit of m) seen.add(hit.replace(/^\.\//, ''));
+    const m = body.match(/(^|\s)(\.\/)?((src|test|bin)\/[A-Za-z0-9._\/-]+)/g) || [];
+    for (const hit of m) seen.add(hit.trim().replace(/^\.\//, ''));
   }
   console.log([...seen].join('\n'));
 ")

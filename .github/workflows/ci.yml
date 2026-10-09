@@ -28,6 +28,47 @@ jobs:
     name: cross-repo gates
     runs-on: ubuntu-latest
 
+    # ✏️ **Added after the first real run of this job failed.** Four gates load
+    # the backend's configuration and query a schema — `check:api`,
+    # `check:isolation`, `check:openapi` and the DATABASE.md check. They had
+    # been skipping for want of `node_modules/`, so nobody had learned they also
+    # need `JWT_SECRET` and a database. Reproduced locally by moving `.env`
+    # aside: `ConfigurationError: Missing required environment variable:
+    # JWT_SECRET`. With these values and no `.env` at all, the docs check passes
+    # — 37 tables, 44 foreign keys.
+    #
+    # 📌 **The same service block `backend.yml` uses**, deliberately duplicated
+    # rather than shared: a composite action would couple two workflows whose
+    # reasons for needing a database are unrelated, and the duplication is six
+    # lines that fail loudly when wrong.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: optionia_woo_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    # ⚠️ **Job-level, so every step sees them.** `bin/check.sh` shells out to
+    # several project scripts, and an env block on the gate step alone would not
+    # reach the ones that re-enter through `npm run`.
+    env:
+      NODE_ENV: test
+      PORT: 4000
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: optionia_woo_test
+      DB_USER: root
+      DB_PASSWORD: ci_root_password
+      DB_SSL: false
+      JWT_SECRET: ci-only-secret-not-used-anywhere-else-min-32-chars
+      CORS_ORIGINS: http://localhost:3000
+
     steps:
       - name: Check out the parent
         uses: actions/checkout@v4

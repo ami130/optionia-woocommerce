@@ -78,9 +78,9 @@ final class ViewCollector {
 	 * protect a number whose whole purpose is a ratio. Losing one view in a
 	 * thousand changes no decision a merchant makes.
 	 *
-	 * @param string               $set_id  The option set the options belong to.
-	 * @param array<int, string>   $options Option keys the customer saw.
-	 * @param string               $day     The store's own date, `Y-m-d`.
+	 * @param string             $set_id  The option set the options belong to.
+	 * @param array<int, string> $options Option keys the customer saw.
+	 * @param string             $day     The store's own date, `Y-m-d`.
 	 * @return int How many option keys were counted.
 	 */
 	public function add( string $set_id, array $options, string $day ): int {

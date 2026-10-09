@@ -34,6 +34,12 @@ function optionia_uninstall_site( string $prefix ): void {
 	// list was written survived uninstall, including a tenant name. The
 	// `check-uninstall` gate now diffs this array against Keys on every run, so
 	// the next addition fails CI instead of leaking.
+	//
+	// It drifted a second time and the gate did its job: M26e.6 added
+	// `optionia_render_queue`, `optionia_last_render_run` and the
+	// `optionia_cron_render_files` event without adding them here. The gate had
+	// been red in CI for exactly that reason — a queue of print-file jobs and a
+	// cron event that fires forever against uninstalled code.
 	$options = array(
 		'optionia_db_version',
 		'optionia_version',
@@ -60,6 +66,8 @@ function optionia_uninstall_site( string $prefix ): void {
 		'optionia_catalogue_cursor',
 		'optionia_product_queue',
 		'optionia_last_reconcile',
+		'optionia_render_queue',
+		'optionia_last_render_run',
 	);
 
 	foreach ( $options as $option ) {
@@ -75,6 +83,7 @@ function optionia_uninstall_site( string $prefix ): void {
 		'optionia_cron_heartbeat',
 		'optionia_cron_push_catalogue',
 		'optionia_cron_reconcile_catalogue',
+		'optionia_cron_render_files',
 	);
 
 	foreach ( $hooks as $hook ) {

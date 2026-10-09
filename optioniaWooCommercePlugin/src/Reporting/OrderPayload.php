@@ -552,6 +552,25 @@ final class OrderPayload {
 		return null;
 	}
 
+	/**
+	 * A JSON object stored in line-item meta, as a PHP array.
+	 *
+	 * ⚠️ **Every failure answers with an empty array, never null.** The meta may
+	 * be absent on an older line, hold a value WooCommerce never wrote, or carry
+	 * JSON that does not decode -- and each caller wants the same thing from all
+	 * three: a map it can iterate without checking. A null here would move that
+	 * check to every call site, which is where it would eventually be forgotten.
+	 *
+	 * 📌 **A scalar decodes to a non-array and is refused too.** `json_decode`
+	 * answers `5` for the string `"5"`, so the `is_array` test is what makes the
+	 * return type honest rather than merely declared.
+	 *
+	 * @param object $item The line item to read. Typed `object` rather than
+	 *                     `WC_Order_Item`, like its sibling methods here, so the
+	 *                     unit suite can pass a stub without loading WooCommerce.
+	 * @param string $key  The meta key holding the encoded map.
+	 * @return array The decoded map, or an empty array.
+	 */
 	private function decode_map( object $item, string $key ): array {
 		$raw = $item->get_meta( $key );
 
