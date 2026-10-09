@@ -31250,11 +31250,107 @@ product, so a design never leaks onto a "you may also like" tile. Port that logi
 - a merchant-configurable selector override, filtered through the same exclusion rules;
 - **an explicit no-overlay fallback** — if the product image cannot be identified confidently, render the options without a live overlay rather than overlaying the wrong image. A design on the wrong product is worse than no preview.
 
+#### ⚠️ PARTIAL — exclusion logic and no-overlay fallback shipped (2026-10-09)
+
+Three commits — `c92b54c`, `cd8e3d8`, `80c3550` — plus their fixes. **Two of
+this milestone's three requirements are met; one is not, and two defects
+assigned here are untouched.** Recorded in that shape rather than ticked.
+
+✅ **Structural exclusion, built on a measurement that corrected the plan.**
+This milestone calls finding the product image *"the hardest problem in this
+Part"*, and the Stage 4B review already doubted that (see the note at
+`optionia-app`'s line-count finding). The review was right. WooCommerce
+standardises `.woocommerce-product-gallery__image`, so the anchor is reliable.
+
+🔴 **But the plan's own description of the exclusion was wrong in a way that
+mattered.** It reads *"an ancestor containing the options root is our product's
+territory; a recommendation card is not"*. Measured on a stock Storefront page:
+**all five** product thumbnails — the real one, three "you may also like" tiles
+and a prev/next pagination thumbnail — sit INSIDE the viewed product's own
+`post-14` element. WooCommerce nests `section.related` and
+`nav.storefront-product-pagination` within the wrapper. Scoping to that ancestor
+filters nothing; it is a largest-image-on-the-page rule in disguise, agreeing
+with the right answer only because the gallery image happens to be 104,855px²
+against the tiles' 53,491px².
+
+Exclusion is therefore structural on the *container*, not the ancestor: an image
+is refused inside `.related`, `.up-sells`, `.cross-sells`, pagination `nav`, a
+nested `post-<id>` belonging to another product, or a link leaving for another
+page.
+
+✅ **The no-overlay fallback is explicit and proven.** `previewHost()` answers
+null when no image can be attributed and the caller draws nothing. Verified by
+making the product id unresolvable on a live page: no host, no overlay, preview
+still absent rather than misplaced.
+
+❌ **The merchant-configurable selector override is NOT built.** Zero references
+in the runtime or `Assets.php`. A theme this cannot read still gets no overlay —
+correct, but the escape hatch the milestone asks for does not exist.
+
+❌ **The `object-fit` paint-box defect assigned here is untouched.**
+`positionOver()` sizes the host with `offsetWidth`/`offsetHeight`, which is the
+border box — exactly what the M26c.1 note warns against. ⚠️ **Not currently
+visible**: measured on the test theme, `object-fit: fill` with a square image
+makes border box and paint box identical. A theme using `contain` or `cover`
+would show the overlay spilling past the painted image.
+
+📌 **What the overlay does do, verified in a real browser:** lands at
+(108, 314) 1254×1254, pixel-identical to the product image, parented into
+`woocommerce-product-gallery__image`, carrying real design SVG; survives the
+theme replacing the image; tracks it through a resize; one host per options
+block; and the test surface it is driven through is absent unless
+`SCRIPT_DEBUG` is on.
+
 ### M26e.3 — Zoom, gallery and variation changes
 
 Themes bring lightboxes, zoom panes, sliders and variation-driven image swaps. Define supported
 behaviour per interaction and verify on the [Phase 29](#phase-29--compatibility-matrix) theme
 set. Document the limits rather than chasing every theme.
+
+#### ⚠️ PARTIAL — the swap is handled; the theme matrix does not exist yet (2026-10-09)
+
+✅ **The defect this milestone implies was real, and found by running it rather
+than testing it.** Measured: when WooCommerce changes the product image it
+replaces the image element *and its `woocommerce-product-gallery__image`
+wrapper*, destroying the node the preview is mounted in. Nothing redrew it —
+`drawPreview` runs on a change inside the options block, and a variation swap
+fires nothing there. The customer's design vanished and stayed gone.
+
+`watchGallery()` now observes the gallery and redraws when the anchored image is
+replaced. **The DOM is watched rather than any theme's events**: WooCommerce
+emits `show_variation`, Storefront's gallery emits its own, a block theme emits
+neither, and each is a private contract. What all of them must do is swap the
+image.
+
+A second gap followed: with no image at first paint the watcher had nothing to
+observe, so a gallery arriving late — lazy-loaded, or built by a slider — was
+never noticed. `watchForGallery()` bridges that and disconnects once the real
+watcher takes over.
+
+❌ **"Verify on the Phase 29 theme set" cannot be done — that set does not
+exist.** Phase 29 is `[ ]`. Verification here is against ONE theme (Storefront)
+plus a faithful DOM simulation of the swap, checked to match the real structure.
+
+❌ **F178 — the genuine WooCommerce variation path has never executed.**
+`Test Variable Tee` (product 23) is a real variable product with a variation
+form and two gallery images, but no option set is assigned to it, so no Optionia
+block renders there. Blocked on a dashboard assignment, not on code.
+
+📌 **Lightboxes and zoom panes are not addressed.** The milestone names them;
+only variation and gallery image swaps are handled. The overlay does set
+`pointer-events: none` so a theme's lightbox still receives its clicks.
+
+#### ✏️ A commit in this Part is mislabelled
+
+`80c3550` is tagged **"(M26e.4)"** and is not M26e.4 work. It fixes storefront
+preview state that was global where it needed to be per-options-block — two
+blocks on one page shared a host, a debounce timer and a staleness token, so the
+second cancelled the first's draw and overwrote its artwork. That belongs to
+M26e.1/M26e.2's overlay, not to cloud-side order rendering, which already ships
+in `render-worker.service.ts`.
+
+Recorded rather than rewritten: the commit is pushed, and a note that survives
+is worth more than a history edit that breaks anyone who has pulled it.
 
 ### M26e.4 — Order image rendering (cloud-side)
 

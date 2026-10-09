@@ -119,8 +119,32 @@ elif [ ! -d "$PLUGIN/node_modules" ]; then
   else
     printf '\033[33mskip\033[0m  the plugin JS suite: dependencies not installed\n'
   fi
+elif [ -z "$PHP" ]; then
+  # The fixtures below need PHP. Without it this cannot run honestly either way.
+  if [ -n "${CI:-}" ]; then
+    fail "no PHP interpreter in CI — the rendered fixtures cannot be generated"
+  else
+    printf '\033[33mskip\033[0m  the plugin JS suite: no PHP to render its fixtures\n'
+  fi
 else
-  if ( cd "$PLUGIN" && npx vitest run ) >/tmp/check-plugin-js.log 2>&1; then
+  # 🔴 **The contract suite reads fixtures that are GENERATED, not committed.**
+  # `tests/js/rendered-fixtures.json` is gitignored and written by
+  # `tests/js/generate-fixtures.php` from the real templates. An earlier version
+  # of this gate ran `npx vitest run` alone, which passed on a developer machine
+  # that already had the file and failed on every fresh clone — measured in CI:
+  # `FAIL tests/js/frontend-contract.test.js`.
+  #
+  # ⚠️ **Regenerated every run, never reused.** The fixtures exist so the
+  # contract tests read what the templates ACTUALLY render; a stale copy would
+  # let the templates drift away from the runtime silently, which is the one
+  # failure this suite exists to catch.
+  #
+  # 📌 **The plugin's own `bin/check-js.sh` does exactly this** (its line ~165).
+  # This gate duplicated the vitest call without the step before it.
+  if ! ( cd "$PLUGIN" && "$PHP" tests/js/generate-fixtures.php ) >/tmp/check-plugin-fixtures.log 2>&1; then
+    fail "could not render the template fixtures the contract tests read"
+    tail -3 /tmp/check-plugin-fixtures.log | sed 's/^/        /' || true
+  elif ( cd "$PLUGIN" && npx vitest run ) >/tmp/check-plugin-js.log 2>&1; then
     JSCOUNT=$(grep -aoE "Tests +[0-9]+ passed" /tmp/check-plugin-js.log | head -1 || true)
     pass "the plugin JS suite passes${JSCOUNT:+ — ${JSCOUNT#Tests }}"
   else
