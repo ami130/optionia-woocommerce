@@ -31442,6 +31442,37 @@ handle as WordPress does. That exposed 95 errors from an unstubbed
 `plugins_url()` — the harness being incomplete, not the code being wrong — and
 with both corrected, removing the fix fails a test.
 
+#### 📊 Theme evidence — four of M29.2's six, measured (2026-10-12)
+
+**Not Phase 29**, which declares `Depends on: Gate 2`. This is the slice of
+M29.2's named set that can be checked now, and it exists because the first two
+themes checked revealed F207.
+
+| Theme | Kind | Options | Assets | Settings | Overlay |
+| ----- | ---- | ------- | ------ | -------- | ------- |
+| Storefront | classic | ✅ | ✅ | ✅ | aligned, SVG drawn |
+| Twenty Twenty-Four | block | ✅ | ✅ | ✅ *(after F207)* | aligned, SVG drawn |
+| Twenty Twenty-Five | block | ✅ | ✅ | ✅ *(after F207)* | aligned, SVG drawn |
+| Astra | classic | ✅ | ✅ | ✅ | aligned, SVG drawn |
+| Kadence | classic | ✅ | ✅ | ✅ | aligned, SVG drawn |
+| Flatsome | — | ⬜ | ⬜ | ⬜ | **premium, not installable here** |
+| Woodmart | — | ⬜ | ⬜ | ⬜ | **premium, not installable here** |
+
+🔴 **The two block themes failed TOTALLY before F207** — settings absent, the
+whole runtime unconfigured, no JavaScript error. The three classic themes were
+unaffected, which is why a year of development on Storefront never surfaced it.
+
+📌 **Astra and Kadence passed first time.** Both are classic-template themes
+that keep WooCommerce's `.woocommerce-product-gallery__image` markup, which is
+exactly what the Stage 4B review predicted when it called M26e.2's *"materially
+harder than on Shopify"* premise wrong.
+
+⚠️ **Flatsome and Woodmart are commercial themes.** They are not in the
+WordPress.org directory, so testing them needs purchased licences — a cost
+decision, not an engineering one. Recorded as unmeasured rather than assumed to
+work: both are heavily-used WooCommerce themes with their own galleries, and
+the only two block themes checked so far both failed.
+
 #### ⚠️ PARTIAL — the swap is handled; the theme matrix does not exist yet (2026-10-09)
 
 ✅ **The defect this milestone implies was real, and found by running it rather
