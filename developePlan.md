@@ -31356,6 +31356,64 @@ Themes bring lightboxes, zoom panes, sliders and variation-driven image swaps. D
 behaviour per interaction and verify on the [Phase 29](#phase-29--compatibility-matrix) theme
 set. Document the limits rather than chasing every theme.
 
+#### 🔴 F207 — the runtime is unconfigured on BLOCK themes (2026-10-12)
+
+**Found while verifying M26e.3 against the three themes already installed.**
+Not Phase 29 — that phase declares `Depends on: Gate 2` and Gate 2 is open —
+but a slice of M29.2's named set that could be checked now.
+
+| Theme | Options render | `frontend.js` | `optioniaSettings` |
+| ----- | -------------- | ------------- | ------------------ |
+| Storefront (classic) | ✅ | ✅ | ✅ |
+| Twenty Twenty-Four (block) | ✅ | ✅ | ❌ **absent** |
+| Twenty Twenty-Five (block) | ✅ | ✅ | ❌ **absent** |
+
+🔴 **It fails silently, which is the worst shape for this.** Measured on
+Twenty Twenty-Four: the options block renders and is **visible and
+interactive**, the add-to-cart button works, and **no JavaScript error is
+raised**. `window.optioniaSettings` is simply `undefined`, so the runtime
+loses its price estimate, uploads, conditional rules, view reporting and the
+M26e.1 preview — everything that needs configuration. A merchant sees a form
+that looks correct and quietly does less than it should.
+
+📌 **Narrowed to the localisation, not the enqueue.** The `<script
+id="optionia-frontend-js">` tag is present on all three themes, in the footer,
+*after* the options markup — the registration comment's claim that *"the
+renderer can enqueue mid-page and WordPress will still print the tag"* holds.
+What is missing on the block themes is its `-extra` sibling, which is where
+`wp_localize_script` writes. Storefront emits both; the block themes emit only
+the script.
+
+✏️ **A first version of this record blamed the renderer's classic-template
+hooks, and the evidence contradicts that.** `Frontend\Renderer` hooks
+`woocommerce_before_add_to_cart_button`, so if that hook had not fired the
+options markup would be absent — and it is present on both block themes.
+Recorded as a hypothesis rather than a cause, which is the only reason this
+plan does not now carry a wrong one.
+
+🔴 **What IS measured: file enqueues survive, inline scripts do not.**
+
+| On Twenty Twenty-Four | Result |
+| --------------------- | ------ |
+| `wp_enqueue_style( ASSET_FRONTEND_CSS )` | ✅ tag present |
+| `wp_enqueue_script( ASSET_FRONTEND_JS )` | ✅ tag present |
+| `wp_localize_script` → `optioniaSettings` | ❌ dropped |
+| `wp_add_inline_script` → `optioniaRules` | ❌ dropped |
+
+That rules out every explanation reached for first. `enqueue_frontend()` ran —
+the stylesheet proves it, since the same method enqueues both and the
+`frontend_enqueued` guard would have skipped both or neither. The single caller
+and the flag being set only inside the method rule out a competing early call.
+The options markup appears once, so there is no discarded first render. The
+block renders at line 1063 and the script tag at 1859, so the enqueue was not
+too late for the footer.
+
+⚠️ **The remaining question is why WordPress drops inline script attached to a
+handle enqueued mid-page under a block theme**, where it keeps the handle
+itself. The block theme renders the form through
+`wp-block-woocommerce-add-to-cart-form`, which is the place to look. **Not yet
+proven, and deliberately not guessed at a second time.**
+
 #### ⚠️ PARTIAL — the swap is handled; the theme matrix does not exist yet (2026-10-09)
 
 ✅ **The defect this milestone implies was real, and found by running it rather

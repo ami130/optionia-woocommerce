@@ -51,7 +51,11 @@ test.beforeAll( async ( { browser } ) => {
           '  Add to your WordPress wp-config.php:\n' +
           "    define( 'SCRIPT_DEBUG', true );\n\n" +
           '  It is a local-only flag: it is false on every production install,\n' +
-          '  which is why the plugin does not expose its internals to a shop.\n'
+          '  which is why the plugin does not expose its internals to a shop.\n\n' +
+          '  NOTE: Studio rewrites wp-config.php when it restarts a site, which\n' +
+          '  reverts this to false. Measured \u2014 a suite that passed yesterday\n' +
+          '  fails today for this reason and nothing else. Re-check it after any\n' +
+          '  `studio start`.\n'
       );
     }
   } finally {
