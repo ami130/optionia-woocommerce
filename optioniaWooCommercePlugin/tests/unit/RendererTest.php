@@ -675,13 +675,13 @@ final class RendererTest extends TestCase {
 										'is_required' => true,
 										'values'      => array(
 											array(
-												'value_key'  => 'front',
-												'label'      => 'Front',
+												'value_key' => 'front',
+												'label' => 'Front',
 												'is_default' => true,
 											),
 											array(
 												'value_key' => 'back',
-												'label'     => 'Back',
+												'label' => 'Back',
 											),
 										),
 									),
