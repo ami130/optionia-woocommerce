@@ -31238,6 +31238,35 @@ milestone, with no storefront to mount it on.** The other two known defects stay
 known issues: the `hhea` baseline belongs to the order renderer (M26e.4), and the ≤0.085px
 canvas rounding residual is below the threshold of anything visible.
 
+#### ✅ DONE — overlay mounted, geometry entirely server-side (2026-10-09)
+
+✅ **"No geometry computed in PHP" holds, and is checkable.** `src/Design/`
+contains no measurement of any kind — the only mention of geometry there is a
+comment in `PreviewEndpoint.php` explaining why moving it into the plugin would
+*"make a customer approve one picture and a press produce another"*. The SVG is
+built by `buildScene` + `sceneToSvgString` in the cloud and arrives resolved.
+
+✅ **It updates live.** `schedulePreview` runs on `change` and `input` within
+the options block and on first paint, debounced, with a per-block staleness
+token so three fast clicks paint only the newest answer.
+
+📌 **Mounting correctness was finished under M26e.2**, which owns the paint box
+and the image-finding rules: the host sits in the image's own frame, tracks it
+through a resize, re-anchors when a theme replaces the image, and is one host
+per options block rather than per page.
+
+✅ **M26c.1's *k²* defect — the one assigned HERE — is not present.**
+`planMount` in `optionia-app` mixes screen space and pre-transform local space,
+so a CSS `scale(k)` on the anchor chain sizes the overlay by *k²*. This code
+uses `offsetLeft`/`offsetWidth` throughout, which are layout values, and the
+host is absolutely positioned inside the same frame. Verified in a browser:
+under `scale(2)`, `offsetWidth` stays 200 while the client rect reports 400.
+
+⚠️ **Avoided rather than fixed** — there was never a port of `planMount` to
+correct. Recorded in `paintBox()` so a later change to `getBoundingClientRect`
+for apparent precision does not introduce the defect this milestone was warned
+about.
+
 ### M26e.2 — Finding the product image in an arbitrary theme
 
 The hardest problem in this Part, and materially harder than on Shopify.
@@ -31554,11 +31583,72 @@ before being patched. Options: resolve layer images to data URIs at compose time
 whose images cannot be resolved. The first keeps the renderer network-free,
 which is the property the SSRF finding protects.
 
+#### ✅ DONE — rendered in the cloud, idempotent, no fonts installed (2026-10-09)
+
+✅ **It never runs on the merchant's server.** The plugin posts a scene and
+collects a URL; rasterising is `render-worker.service.ts` in the cloud, which is
+the division of labour this milestone calls the differentiator. `src/Design/`
+contains no image library of any kind.
+
+✏️ **An earlier version of this record said "`sharp`, Imagick and GD appear
+nowhere in it", and that was false.** `UploadContent.php` calls
+`imagecreatefromstring()` — to check a customer's upload is genuinely an image,
+not to draw one. The milestone forbids *rasterising* on the merchant's server
+and that holds, but a reader could falsify the sentence with one grep, which
+makes every record beside it look unchecked.
+
+📌 **GD is not a dependency either.** `composer.json` requires only `ext-intl`
+and `ext-mbstring`; the single call is `function_exists`-guarded and the
+validator returns true when GD is absent rather than refusing the upload.
+
+✅ **Idempotent.** `uq_render_jobs_line` is a unique index on
+`(storeId, lineRef)`, so a retry claims the existing row rather than producing a
+second file — the migration's own comment names this milestone as the reason.
+
+✏️ **"Text rendered as glyph outlines" was met by not needing them.** The
+requirement exists so no font has to be installed at render time, and the
+assumption behind it was `optionia-app`'s ~470 lines of `opentype.js` outlining.
+`resvg` draws `<textPath>` from a font FILE directly, so the fonts are
+self-hosted and the outlining step does not exist. The *constraint* holds — the
+mechanism named in the milestone turned out to be unnecessary rather than
+unimplemented.
+
+🔴 **Two defects found here by running it, not by testing it**, both recorded
+in full under this Part: a blank print file where `buildScene` was never called
+(1,333 tests passed because every fixture had been written in the resolved
+shape), and F173, where no image layer could ever print because `resvg` renders
+only `data:` URIs while the Design Lab refuses them.
+
+⚠️ **One commit in this Part is labelled M26e.4 and is not** — see the note
+under M26e.3.
+
 ### M26e.5 — Fulfilment output
 
 The merchant needs a print-ready file from the order screen: the flat raster, the source
 design, and a human-readable summary of the customer's inputs. Verify on a real printed packing
 slip, as [Gate 2](#-gate-2--feature-complete) already requires for options generally.
+
+#### ⚠️ PARTIAL — the three outputs exist; the printed check is Gate 2's (2026-10-12)
+
+✅ **The flat raster.** `Design\PrintFiles` adds a download beside each line on
+the order screen, from the collected file. Proven on a live order: #239 produced
+a 318,739-byte print file with real artwork, and #241's survived a real sweep.
+
+✅ **The source design.** Retained rather than discarded after rasterising,
+which is what makes M26e.6's row 2 — *"source design retained so it can be
+re-rendered"* — possible at all.
+
+✅ **The human-readable summary**, by WooCommerce rather than by this plugin.
+`OrderLineItem` writes selections as **order item** meta through the CRUD API,
+which WooCommerce renders natively beneath each line. ⚠️ **Verified in the
+database and on orders #29/#31 under HPOS and legacy, but NOT read back off a
+rendered order screen in this session** — the WordPress database is not
+reachable from where these checks run.
+
+❌ **"Verify on a real printed packing slip" is not done**, and cannot be done
+here: it is a physical check. The milestone defers it to Gate 2, which carries
+the same criterion for options generally — and that criterion is one of the five
+only the project owner can close.
 
 ### M26e.6 — Failure modes
 
@@ -31591,8 +31681,18 @@ still delivered, because a print file missing one badge beats no file; the order
 screen shows the download **and** an *Incomplete* row naming what is missing, so
 a merchant does not discover it at the press.
 
-❌ **Row 3 — product image unidentifiable** is blocked on M26e.2: an overlay
-cannot fall back gracefully before it exists.
+✅ **Row 3 — product image unidentifiable (2026-10-09).** Unblocked by M26e.2
+and proven in both suites: `productImage()` answers null when no image can be
+positively attributed, `previewHost()` then returns null, and the caller draws
+nothing. The options themselves are untouched — a customer can still choose and
+buy, they simply see no live preview.
+
+🔴 **Fail-closed by construction, not by a catch.** Four separate conditions
+reach it — no product id on the block, no wrapper matching that id, every
+candidate refused by exclusion, and no candidate with a drawable area — and each
+returns null rather than falling through to a guess. Verified in a real browser
+by making the product id unresolvable: no host, no overlay, and the preview
+stays absent rather than landing somewhere else.
 
 **Exit:** a customer personalises a design on a real storefront across the
 [Phase 29](#phase-29--compatibility-matrix) themes, buys, and the merchant retrieves a
