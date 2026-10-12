@@ -351,6 +351,21 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 		return true;
 	}
 
+	/**
+	 * An asset URL.
+	 *
+	 * ✏️ **Added with the F207 fix.** `Assets::enqueue_frontend()` now calls
+	 * `register_frontend()` itself — because a block theme renders the product
+	 * template before `wp_enqueue_scripts` fires — and registration resolves a
+	 * URL. Ninety-five tests reached it and died on an undefined function,
+	 * which is the harness being incomplete rather than the code being wrong.
+	 */
+	function plugins_url( string $path = '', string $plugin = '' ): string {
+		unset( $plugin );
+
+		return 'https://example.test/wp-content/plugins/optionia/' . ltrim( $path, '/' );
+	}
+
 	function wp_register_script( string $handle, $src = '', array $deps = array(), $ver = false, $args = false ): bool {
 		unset( $deps, $ver, $args );
 
@@ -640,6 +655,18 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	 * settings" unassertable.
 	 */
 	function wp_localize_script( string $handle, string $object_name, array $data ): bool {
+		/*
+		 * 🔴 **Refuses an unregistered handle, as WordPress does.** The stub
+		 * used to record unconditionally and return true, which made F207
+		 * untestable: a block theme renders the product template BEFORE
+		 * `wp_enqueue_scripts`, so the handle was not yet registered and the
+		 * real `wp_localize_script` attached nothing and returned false — while
+		 * this stub happily recorded it and every test passed.
+		 */
+		if ( ! isset( $GLOBALS['optionia_test_scripts'][ $handle ] ) ) {
+			return false;
+		}
+
 		$GLOBALS['optionia_test_localized'][ $handle ][ $object_name ] = $data;
 
 		return true;

@@ -31356,7 +31356,7 @@ Themes bring lightboxes, zoom panes, sliders and variation-driven image swaps. D
 behaviour per interaction and verify on the [Phase 29](#phase-29--compatibility-matrix) theme
 set. Document the limits rather than chasing every theme.
 
-#### 🔴 F207 — the runtime is unconfigured on BLOCK themes (2026-10-12)
+#### ✅ F207 — FIXED 2026-10-12: the runtime was unconfigured on BLOCK themes
 
 **Found while verifying M26e.3 against the three themes already installed.**
 Not Phase 29 — that phase declares `Depends on: Gate 2` and Gate 2 is open —
@@ -31408,11 +31408,39 @@ The options markup appears once, so there is no discarded first render. The
 block renders at line 1063 and the script tag at 1859, so the enqueue was not
 too late for the footer.
 
-⚠️ **The remaining question is why WordPress drops inline script attached to a
-handle enqueued mid-page under a block theme**, where it keeps the handle
-itself. The block theme renders the form through
-`wp-block-woocommerce-add-to-cart-form`, which is the place to look. **Not yet
-proven, and deliberately not guessed at a second time.**
+✅ **Proven, then fixed.** A temporary mu-plugin logged the script registry at
+three points of a real request — the renderer's hook, footer print, and
+shutdown — because `wp eval` probes do not survive into the next request. The
+order is simply reversed:
+
+| Theme | Order observed |
+| ----- | -------------- |
+| Storefront | `wp_enqueue_scripts` → renderer hook → **registered, 690 bytes of data** |
+| Twenty Twenty-Four | renderer hook → `wp_enqueue_scripts` → **not registered, 0 bytes** |
+
+🔴 **A block theme renders the product template BEFORE `wp_enqueue_scripts`
+fires.** `register()` hooks `register_frontend` to that action at priority 5,
+and the registration comment's claim — *"registering early means the renderer
+can enqueue mid-page"* — is true only when the action has already run.
+
+⚠️ **The two halves then diverge silently.** `wp_enqueue_script()` on an
+unregistered handle is remembered and satisfied later, so the tag still prints;
+`wp_localize_script()` on an unregistered handle **attaches nothing and returns
+false**. Hence a loaded runtime with no settings and no JavaScript error.
+
+📌 **The fix is one call**: `enqueue_frontend()` now invokes
+`register_frontend()` itself. `wp_register_script()` ignores a handle it already
+holds, so it costs nothing on a classic theme. Verified on all three installed
+themes — `optioniaSettings` present on each, and the M26e.1 preview drawing on a
+block theme for the first time — and proven load-bearing: with the call removed,
+the block themes emit zero occurrences.
+
+✏️ **The unit suite could not have caught this, and now can.** The harness's
+`wp_localize_script` stub recorded unconditionally and returned true, so a test
+passed whether or not the handle was registered. It now refuses an unregistered
+handle as WordPress does. That exposed 95 errors from an unstubbed
+`plugins_url()` — the harness being incomplete, not the code being wrong — and
+with both corrected, removing the fix fails a test.
 
 #### ⚠️ PARTIAL — the swap is handled; the theme matrix does not exist yet (2026-10-09)
 

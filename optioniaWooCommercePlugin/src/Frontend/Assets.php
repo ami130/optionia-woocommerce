@@ -84,6 +84,30 @@ final class Assets {
 
 		$this->frontend_enqueued = true;
 
+		/*
+		 * 🔴 **Register here too, because a BLOCK THEME renders the product
+		 * template BEFORE `wp_enqueue_scripts` fires** (F207).
+		 *
+		 * `register()` hooks `register_frontend` to `wp_enqueue_scripts` at
+		 * priority 5, and on a classic theme that runs first — measured on
+		 * Storefront: `wp_enqueue_scripts`, then the renderer's hook, with the
+		 * handle registered and 690 bytes of localised data attached.
+		 *
+		 * ⚠️ **On Twenty Twenty-Four and Twenty Twenty-Five the order is
+		 * reversed**, and the consequence is silent: `wp_enqueue_script()` on an
+		 * unregistered handle is remembered and satisfied later, so the tag
+		 * still prints — but `wp_localize_script()` on an unregistered handle
+		 * **returns false and attaches nothing**. The runtime then loads with
+		 * `optioniaSettings` undefined and no JavaScript error: no price
+		 * estimate, no uploads, no rules, no view reporting, no preview, on a
+		 * form that looks correct.
+		 *
+		 * 📌 **`register_frontend()` is idempotent** — `wp_register_script()`
+		 * ignores a handle it already holds — so calling it here costs nothing
+		 * on a classic theme and is the whole fix on a block one.
+		 */
+		$this->register_frontend();
+
 		wp_enqueue_style( Keys::ASSET_FRONTEND_CSS );
 		wp_enqueue_script( Keys::ASSET_FRONTEND_JS );
 
