@@ -346,6 +346,11 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	function wp_register_style( string $handle, $src = '', array $deps = array(), $ver = false, string $media = 'all' ): bool {
 		unset( $deps, $ver, $media );
 
+		/* Same `WP_Dependencies::add()` path as scripts — see that stub. */
+		if ( isset( $GLOBALS['optionia_test_styles'][ $handle ] ) ) {
+			return false;
+		}
+
 		$GLOBALS['optionia_test_styles'][ $handle ] = $src;
 
 		return true;
@@ -368,6 +373,23 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 
 	function wp_register_script( string $handle, $src = '', array $deps = array(), $ver = false, $args = false ): bool {
 		unset( $deps, $ver, $args );
+
+		/*
+		 * 🔴 **Keeps the FIRST registration and reports false, as WordPress
+		 * does.** `WP_Dependencies::add()` returns early on
+		 * `isset( $this->registered[ $handle ] )` — both scripts and styles
+		 * route through it. A stub that overwrote would let a second
+		 * registration silently replace a source the first call settled, which
+		 * is precisely the kind of divergence that made F207 invisible.
+		 *
+		 * 📌 **The F207 fix relies on this.** `enqueue_frontend()` calls
+		 * `register_frontend()` itself so a block theme gets a registered
+		 * handle; on a classic theme that is the second call and must cost
+		 * nothing.
+		 */
+		if ( isset( $GLOBALS['optionia_test_scripts'][ $handle ] ) ) {
+			return false;
+		}
 
 		$GLOBALS['optionia_test_scripts'][ $handle ] = $src;
 
