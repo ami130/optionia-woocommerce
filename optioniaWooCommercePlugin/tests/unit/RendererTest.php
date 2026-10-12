@@ -35,6 +35,24 @@ final class RendererTest extends TestCase {
 		$GLOBALS['optionia_test_options'] = array();
 		$GLOBALS['optionia_test_actions'] = array();
 		$GLOBALS['product']               = null;
+
+		/*
+		 * 🔴 **The script registry leaked across tests, and that hid F207.**
+		 * `wp_register_script` records into `optionia_test_scripts`, which
+		 * nothing reset — so once any earlier test registered
+		 * `optionia-frontend`, every later test saw a registered handle
+		 * whatever the code under test did.
+		 *
+		 * Measured: with the renderer mutated to publish rules BEFORE the
+		 * enqueue that registers the handle, the rules test passes in the full
+		 * suite and fails when run alone. A fixture that depends on execution
+		 * order is not a fixture.
+		 */
+		$GLOBALS['optionia_test_scripts']        = array();
+		$GLOBALS['optionia_test_styles']         = array();
+		$GLOBALS['optionia_test_localized']      = array();
+		$GLOBALS['optionia_test_inline_scripts'] = array();
+		$GLOBALS['optionia_test_enqueued']       = array();
 	}
 
 	/**
@@ -581,6 +599,115 @@ final class RendererTest extends TestCase {
 		$this->assertStringContainsString(
 			'final price is confirmed at checkout',
 			$this->render_for( 20, 'simple' )
+		);
+	}
+
+	/**
+	 * Conditional rules reach the runtime, and only if the handle is registered
+	 * first.
+	 *
+	 * 🔴 **F207's sibling path, which had no test at all.** Settings travel by
+	 * `wp_localize_script` and rules by `wp_add_inline_script`, and BOTH route
+	 * through `WP_Dependencies::add_data()` — which returns false, attaching
+	 * nothing, when the handle is not yet registered. A block theme renders the
+	 * product template before `wp_enqueue_scripts` fires, so that is not a
+	 * hypothetical ordering.
+	 *
+	 * ⚠️ **Production is protected only by call ORDER.** `publish_rules()` does
+	 * not register; it works because `Renderer` calls `enqueue_frontend()`
+	 * first. Swapping those two lines passed every one of 1,974 tests before
+	 * this one existed — show/hide logic would simply stop reaching the browser,
+	 * silently, on every theme.
+	 */
+	public function test_conditional_rules_reach_the_runtime(): void {
+		$this->cache_options_with_a_rule();
+
+		$assets   = new Assets();
+		$logger   = new Logger( new Settings() );
+		$renderer = new Renderer( new Repository( $logger ), new Templates( $logger ), $assets, $logger );
+
+		$GLOBALS['product'] = optionia_test_product( 20, 'simple' );
+
+		ob_start();
+		$renderer->render();
+		ob_end_clean();
+
+		$inline = $GLOBALS['optionia_test_inline_scripts']['optionia-frontend'] ?? array();
+
+		$this->assertNotEmpty(
+			$inline,
+			'Rules must reach the runtime; an unregistered handle silently drops them.'
+		);
+
+		$payload = implode( ' ', $inline );
+
+		$this->assertStringContainsString( 'optioniaRules', $payload );
+		$this->assertStringContainsString( 'opt-a', $payload, 'the rule target must survive' );
+	}
+
+	/** `cache_options()` with one show/hide rule, which every other fixture omits. */
+	private function cache_options_with_a_rule(): void {
+		( new Repository( new Logger( new Settings() ) ) )->store(
+			array(
+				'schema_version' => 1,
+				'config_version' => 7,
+				'option_sets'    => array(
+					array(
+						'id'          => 'set-a',
+						'assignments' => array(
+							array(
+								'mode'        => 'manual',
+								'target_type' => 'product',
+								'target_ref'  => '20',
+								'priority'    => 0,
+							),
+						),
+						'groups'      => array(
+							array(
+								'id'      => 'group-a',
+								'label'   => 'Customization',
+								'options' => array(
+									array(
+										'id'          => 'opt-a',
+										'key'         => 'placement',
+										'type'        => 'radio',
+										'label'       => 'Print placement',
+										'is_required' => true,
+										'values'      => array(
+											array(
+												'value_key'  => 'front',
+												'label'      => 'Front',
+												'is_default' => true,
+											),
+											array(
+												'value_key' => 'back',
+												'label'     => 'Back',
+											),
+										),
+									),
+								),
+							),
+						),
+						'rules'       => array(
+							array(
+								'target_type' => 'option',
+								'target_id'   => 'opt-a',
+								'action'      => 'hide',
+								'match_type'  => 'all',
+								'conditions'  => array(
+									array(
+										'source_type' => 'option',
+										'source_id'   => 'opt-a',
+										'operator'    => 'equals',
+										'value'       => 'back',
+									),
+								),
+							),
+						),
+					),
+				),
+			),
+			'W/"store-7"'
 		);
 	}
 

@@ -377,6 +377,22 @@ if ( ! function_exists( 'wc_get_price_decimals' ) ) {
 	function wp_add_inline_script( string $handle, string $data, string $position = 'after' ): bool {
 		unset( $position );
 
+		/*
+		 * 🔴 **Refuses an unregistered handle, exactly as `wp_localize_script`
+		 * does.** Both route through `WP_Dependencies::add_data()`, which
+		 * returns false when `$this->registered[ $handle ]` is unset — read
+		 * from WordPress's own source, not assumed.
+		 *
+		 * ⚠️ **The ENQUEUE stubs below are deliberately NOT guarded**, because
+		 * `WP_Dependencies::enqueue()` stores an unregistered handle in
+		 * `queued_before_register` and satisfies it later. That asymmetry is
+		 * F207 itself: the script tag printed while its data silently vanished.
+		 * A stub that guarded both would be wrong in the opposite direction.
+		 */
+		if ( ! isset( $GLOBALS['optionia_test_scripts'][ $handle ] ) ) {
+			return false;
+		}
+
 		$GLOBALS['optionia_test_inline_scripts'][ $handle ][] = $data;
 
 		return true;
