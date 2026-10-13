@@ -783,7 +783,7 @@ function StatusBadge({ status }: { status: OptionSetSummary['status'] }) {
       className={cn(
         'rounded-full px-2 py-0.5 text-xs font-medium',
         status === 'published'
-          ? 'bg-green-100 text-green-900 dark:bg-green-950 dark:text-green-100'
+          ? 'bg-success/15 text-success'
           : 'bg-muted text-muted-foreground',
       )}
     >

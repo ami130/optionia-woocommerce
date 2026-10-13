@@ -725,7 +725,7 @@ export function EditorHeader({
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold">{set.name}</h1>
         {set.status === 'published' ? (
-          <Badge variant="secondary" className="border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400">
+          <Badge variant="secondary" className="border-success/30 bg-success/10 text-success">
             Published · v{set.version}
           </Badge>
         ) : (
